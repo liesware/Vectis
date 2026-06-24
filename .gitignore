@@ -1,0 +1,8 @@
+/target
+.env
+init.json
+*.db
+*.log
+/logs
+routes.json
+.DS_Store

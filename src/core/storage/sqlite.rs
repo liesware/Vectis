@@ -1,0 +1,172 @@
+use crate::core::config;
+use crate::core::storage::OpsKeyRow;
+use crate::error::DynError;
+use sqlx::Row;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
+use std::io;
+use tracing::info;
+
+pub async fn save_ops_keys(id: &str, enc_keys: &str) -> Result<OpsKeyRow, DynError> {
+    let db = ops_db().await?;
+
+    sqlx::query(
+        "
+        INSERT INTO ops_keys (id, enc_keys)
+        VALUES (?, ?)
+        ",
+    )
+    .bind(id)
+    .bind(enc_keys)
+    .execute(&db)
+    .await?;
+    info!(id, "inserted ops keys");
+
+    Ok(OpsKeyRow {
+        id: id.to_string(),
+        enc_keys: enc_keys.to_string(),
+    })
+}
+
+pub async fn get_ops_keys(id: &str) -> Result<OpsKeyRow, DynError> {
+    let db = ops_db().await?;
+    let row = sqlx::query(
+        "
+        SELECT id, enc_keys
+        FROM ops_keys
+        WHERE id = ?
+        ",
+    )
+    .bind(id)
+    .fetch_optional(&db)
+    .await?;
+
+    let Some(row) = row else {
+        return Err(Box::new(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("ops key not found: {id}"),
+        )));
+    };
+
+    Ok(OpsKeyRow {
+        id: row.get("id"),
+        enc_keys: row.get("enc_keys"),
+    })
+}
+
+pub async fn list_ops_keys() -> Result<Vec<OpsKeyRow>, DynError> {
+    let db = ops_db().await?;
+    let rows = sqlx::query(
+        "
+        SELECT id, enc_keys
+        FROM ops_keys
+        ORDER BY id
+        ",
+    )
+    .fetch_all(&db)
+    .await?;
+
+    let mut keys = Vec::new();
+    for row in rows {
+        keys.push(OpsKeyRow {
+            id: row.get("id"),
+            enc_keys: row.get("enc_keys"),
+        });
+    }
+
+    Ok(keys)
+}
+
+async fn ops_db() -> Result<SqlitePool, DynError> {
+    let data_db_path = config::app_config()?.sqlite_path;
+    let options = SqliteConnectOptions::new()
+        .filename(&data_db_path)
+        .create_if_missing(false);
+    let db = SqlitePool::connect_with(options).await?;
+    info!(path = %data_db_path.display(), "connected to ops sqlite");
+
+    validate_ops_keys_schema(&db).await?;
+    info!("validated ops_keys sqlite schema");
+
+    Ok(db)
+}
+
+async fn validate_ops_keys_schema(db: &SqlitePool) -> Result<(), DynError> {
+    let rows = sqlx::query("PRAGMA table_info(ops_keys)")
+        .fetch_all(db)
+        .await?;
+
+    if rows.is_empty() {
+        return Err(Box::new(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "sqlite schema is missing ops_keys table",
+        )));
+    }
+
+    let id = find_column(&rows, "id").ok_or_else(|| {
+        Box::new(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "sqlite schema is missing ops_keys.id column",
+        )) as DynError
+    })?;
+    let enc_keys = find_column(&rows, "enc_keys").ok_or_else(|| {
+        Box::new(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "sqlite schema is missing ops_keys.enc_keys column",
+        )) as DynError
+    })?;
+
+    validate_column(&id, "id", "VARCHAR(128)", false, true)?;
+    validate_column(&enc_keys, "enc_keys", "VARCHAR(10240)", true, false)?;
+
+    Ok(())
+}
+
+struct ColumnInfo {
+    name: String,
+    column_type: String,
+    notnull: bool,
+    primary_key: bool,
+}
+
+fn find_column(rows: &[sqlx::sqlite::SqliteRow], name: &str) -> Option<ColumnInfo> {
+    rows.iter().find_map(|row| {
+        let column_name: String = row.get("name");
+        if column_name != name {
+            return None;
+        }
+
+        let column_type: String = row.get("type");
+        let notnull: i64 = row.get("notnull");
+        let primary_key: i64 = row.get("pk");
+
+        Some(ColumnInfo {
+            name: column_name,
+            column_type,
+            notnull: notnull == 1,
+            primary_key: primary_key == 1,
+        })
+    })
+}
+
+fn validate_column(
+    column: &ColumnInfo,
+    expected_name: &str,
+    expected_type: &str,
+    expected_notnull: bool,
+    expected_primary_key: bool,
+) -> Result<(), DynError> {
+    if column.name != expected_name
+        || !column.column_type.eq_ignore_ascii_case(expected_type)
+        || column.notnull != expected_notnull
+        || column.primary_key != expected_primary_key
+    {
+        return Err(Box::new(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "sqlite schema mismatch for ops_keys.{expected_name}: expected type={expected_type}, notnull={expected_notnull}, primary_key={expected_primary_key}",
+            ),
+        )));
+    }
+
+    Ok(())
+}

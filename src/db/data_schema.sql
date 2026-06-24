@@ -1,0 +1,4 @@
+CREATE TABLE IF NOT EXISTS ops_keys (
+    id VARCHAR(128) PRIMARY KEY,
+    enc_keys VARCHAR(10240) NOT NULL
+);
