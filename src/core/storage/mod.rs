@@ -50,6 +50,12 @@ impl StorageState {
             StorageBackend::Sqlite(sqlite) => sqlite.list_ops_keys().await,
         }
     }
+
+    pub async fn health_check(&self) -> Result<(), DynError> {
+        match &self.backend {
+            StorageBackend::Sqlite(sqlite) => sqlite.health_check().await,
+        }
+    }
 }
 
 fn unsupported_storage<T>(storage: &str) -> Result<T, DynError> {

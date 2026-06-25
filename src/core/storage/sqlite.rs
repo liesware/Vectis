@@ -93,6 +93,12 @@ impl SqliteStorage {
 
         Ok(keys)
     }
+
+    pub async fn health_check(&self) -> Result<(), DynError> {
+        sqlx::query("SELECT 1").execute(&self.pool).await?;
+
+        Ok(())
+    }
 }
 
 async fn validate_ops_keys_schema(db: &SqlitePool) -> Result<(), DynError> {

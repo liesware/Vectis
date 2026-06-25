@@ -500,6 +500,7 @@ def main():
         run_case(rows, name, func)
 
     print_section("HTTP negative", rows)
+    print(f"SUMMARY negative passed={len(rows)} failed=0")
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ servers:
     description: Local default server
 tags:
   - name: Test
+  - name: Health
   - name: Keys
   - name: Public Keys
   - name: Signatures
@@ -19,6 +20,49 @@ tags:
 security: []
 
 paths:
+  /healthz/startup:
+    get:
+      tags: [Health]
+      summary: Startup probe
+      responses:
+        "200":
+          description: Service startup state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StartupHealthOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /healthz/live:
+    get:
+      tags: [Health]
+      summary: Liveness probe
+      responses:
+        "200":
+          description: Service liveness state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LiveHealthOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /healthz/ready:
+    get:
+      tags: [Health]
+      summary: Readiness probe
+      description: Performs a lightweight storage check and returns current state counts.
+      responses:
+        "200":
+          description: Service readiness state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyHealthOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
   /test/init:
     get:
       tags: [Test]
@@ -333,6 +377,39 @@ components:
         error:
           type: string
           example: invalid request
+
+    StartupHealthOutput:
+      type: object
+      required: [status, timestamp]
+      properties:
+        status:
+          const: started
+        timestamp:
+          $ref: "#/components/schemas/Timestamp"
+
+    LiveHealthOutput:
+      type: object
+      required: [status]
+      properties:
+        status:
+          const: ok
+
+    ReadyHealthOutput:
+      type: object
+      required: [status, unsealed, storage, keys_loaded, routes_loaded]
+      properties:
+        status:
+          const: ready
+        unsealed:
+          type: boolean
+        storage:
+          const: ok
+        keys_loaded:
+          type: integer
+          minimum: 0
+        routes_loaded:
+          type: integer
+          minimum: 0
 
     CreateKeysInput:
       type: object

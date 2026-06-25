@@ -2,6 +2,7 @@ use artbox::{
     Alignment, Artbox, Color, ColorStop, Fill, LinearGradient, RenderTarget, Renderer, fonts,
 };
 
+use crate::core::validation;
 use crate::core::{config, routes, storage::StorageState};
 use crate::error::DynError;
 use crate::ops::init::ValidatedInitState;
@@ -14,6 +15,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
     let storage = StorageState::new(&config).await?;
     let keys_db_state = keys::load_keys_db_state(&storage, &init_state).await?;
     let routes_state = routes::load_routes_state(&config);
+    let started_at = validation::current_timestamp()?;
     info!(
         http_bind_addr = %config.http_bind_addr,
         public_addr = %config.public_addr,
@@ -41,6 +43,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         storage,
         keys_db_state,
         routes_state,
+        started_at,
     ));
     let listener = tokio::net::TcpListener::bind(config.http_bind_addr).await?;
 

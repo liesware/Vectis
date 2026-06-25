@@ -7,6 +7,7 @@ use zeroize::Zeroizing;
 mod app;
 mod auth;
 mod error;
+mod health;
 mod keys;
 mod message;
 mod pubkey;
@@ -26,6 +27,7 @@ pub use app::run;
 pub struct HttpState {
     init_state: Arc<ValidatedInitState>,
     storage: Arc<StorageState>,
+    started_at: Arc<String>,
     keys_db_state: Arc<RwLock<Zeroizing<KeysDbState>>>,
     remote_public_keys_state: Arc<RwLock<Zeroizing<RemotePublicKeysState>>>,
     routes_state: Arc<RoutesState>,
@@ -37,10 +39,12 @@ impl HttpState {
         storage: StorageState,
         keys_db_state: Zeroizing<KeysDbState>,
         routes_state: RoutesState,
+        started_at: String,
     ) -> Self {
         Self {
             init_state: Arc::new(init_state),
             storage: Arc::new(storage),
+            started_at: Arc::new(started_at),
             keys_db_state: Arc::new(RwLock::new(keys_db_state)),
             remote_public_keys_state: Arc::new(RwLock::new(Zeroizing::new(
                 RemotePublicKeysState::default(),
@@ -65,6 +69,20 @@ impl HttpState {
 
     fn storage(&self) -> &StorageState {
         &self.storage
+    }
+
+    fn started_at(&self) -> &str {
+        &self.started_at
+    }
+
+    async fn keys_loaded(&self) -> usize {
+        let keys_db_state = self.keys_db_state.read().await;
+
+        keys_db_state.len()
+    }
+
+    fn routes_loaded(&self) -> usize {
+        self.routes_state.len()
     }
 
     async fn with_keys_db_state<T>(&self, f: impl FnOnce(&KeysDbState) -> T) -> T {
@@ -123,6 +141,9 @@ pub fn router(state: HttpState) -> Router {
     debug_assert!(state.key_material_loaded());
 
     Router::new()
+        .route("/healthz/startup", get(health::startup_endpoint))
+        .route("/healthz/live", get(health::live_endpoint))
+        .route("/healthz/ready", get(health::ready_endpoint))
         .route("/test/{id}", get(test::test_endpoint))
         .route("/test/init", get(test::init_endpoint))
         .route("/keys/db", get(keys::refresh_endpoint))

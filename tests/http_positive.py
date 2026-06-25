@@ -179,6 +179,22 @@ def validate_init(response):
         require(field in response, f"test init response must include {field}")
 
 
+def validate_health(client):
+    startup = client.get("/healthz/startup")
+    require(startup.get("status") == "started", "health startup status must be started")
+    require(startup.get("timestamp"), "health startup must include timestamp")
+
+    live = client.get("/healthz/live")
+    require(live.get("status") == "ok", "health live status must be ok")
+
+    ready = client.get("/healthz/ready")
+    require(ready.get("status") == "ready", "health ready status must be ready")
+    require(ready.get("unsealed") is True, "health ready unsealed must be true")
+    require(ready.get("storage") == "ok", "health ready storage must be ok")
+    require(isinstance(ready.get("keys_loaded"), int), "health ready keys_loaded must be an integer")
+    require(isinstance(ready.get("routes_loaded"), int), "health ready routes_loaded must be an integer")
+
+
 def create_key(client, case):
     response = client.post("/keys", case, auth=True)
     key_id = response.get("id")
@@ -445,8 +461,13 @@ def main():
     recipient_host = host_from_base_url(args.base_url)
     message = MESSAGE.encode("utf-8")
 
+    validate_health(client)
+    print("Health: OK\n")
+    passed_count = 1
+
     validate_init(client.get("/test/init"))
     print("Test init: OK\n")
+    passed_count += 1
 
     created = []
     create_rows = []
@@ -465,8 +486,10 @@ def main():
 
     validate_keys_list(client.get("/keys"), [key_id for key_id, _ in created])
     print("List keys: OK\n")
+    passed_count += 1
     validate_keys_list(client.get("/keys/db", auth=True), [key_id for key_id, _ in created])
     print("Refresh keys db: OK\n")
+    passed_count += 1
 
     test_rows = []
     pub_rows = []
@@ -529,6 +552,14 @@ def main():
     print_internal_message(internal_message_rows)
     print_section("sign", sign_rows)
     print_section("sign verification", verify_rows)
+    passed_count += len(create_rows)
+    passed_count += len(test_rows)
+    passed_count += len(pub_rows)
+    passed_count += len(message_rows)
+    passed_count += len(internal_message_rows)
+    passed_count += len(sign_rows)
+    passed_count += len(verify_rows)
+    print(f"SUMMARY positive passed={passed_count} failed=0")
     final_app.shutdown()
 
 
