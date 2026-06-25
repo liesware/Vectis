@@ -1,0 +1,756 @@
+openapi: 3.1.0
+info:
+  title: Vectis HTTP API
+  version: v1
+  description: >
+    Vectis protects data throughout its lifecycle. The API creates key material,
+    validates keys, publishes public keys, signs message hashes, exchanges
+    protected messages between Vectis instances, and encrypts/decrypts internal
+    messages.
+servers:
+  - url: http://127.0.0.1:3000
+    description: Local default server
+tags:
+  - name: Test
+  - name: Keys
+  - name: Public Keys
+  - name: Signatures
+  - name: Messages
+security: []
+
+paths:
+  /test/init:
+    get:
+      tags: [Test]
+      summary: Validate init key material
+      responses:
+        "200":
+          description: Init key material validation result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KeyValidationOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /test/{kid}:
+    get:
+      tags: [Test]
+      summary: Validate an operational key
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+      responses:
+        "200":
+          description: Operational key validation result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KeyValidationOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /keys:
+    get:
+      tags: [Keys]
+      summary: List keys loaded in local memory
+      description: Public endpoint. Lists keys currently loaded in this node's in-memory state.
+      responses:
+        "200":
+          description: Loaded key list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListKeysOutput"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      tags: [Keys]
+      summary: Create operational key material
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateKeysInput"
+            examples:
+              profileOnly:
+                value:
+                  tag: payments
+                  profile: hybrid-high-assurance-v1
+              allowOverrides:
+                value:
+                  tag: dev-key
+                  profile: hybrid-performance-v1
+                  symmetric_algorithm: AES-256/GCM
+      responses:
+        "200":
+          description: Created key id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateKeysResponse"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /keys/db:
+    get:
+      tags: [Keys]
+      summary: Refresh local key state from storage
+      description: Administrative operation. Reloads and decrypts keys from storage into this node's memory.
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: Refreshed loaded key list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListKeysOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /pub/{kid}:
+    get:
+      tags: [Public Keys]
+      summary: Return public keys for a kid
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+      responses:
+        "200":
+          description: Public keys only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicKeysOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /sign/{kid}:
+    post:
+      tags: [Signatures]
+      summary: Sign a message hash with EdDSA and ML-DSA
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignInput"
+      responses:
+        "200":
+          description: Hybrid timestamp token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimestampToken"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /sign/verification:
+    post:
+      tags: [Signatures]
+      summary: Verify a hybrid timestamp token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TimestampToken"
+      responses:
+        "200":
+          description: Signature verification result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerificationOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /message/{sender_kid}:
+    post:
+      tags: [Messages]
+      summary: Send a protected message to another Vectis instance
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: sender_kid
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/Kid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendMessageInput"
+      responses:
+        "200":
+          description: Send status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SendMessageOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /message:
+    post:
+      tags: [Messages]
+      summary: Receive a protected message from another Vectis instance
+      description: Public endpoint. Authenticity is validated with EdDSA and ML-DSA signatures.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProtectedMessageToken"
+      responses:
+        "200":
+          description: Receive status and local encrypted payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReceiveMessageOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /message/decrypt:
+    post:
+      tags: [Messages]
+      summary: Decrypt a final app delivery payload
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecryptMessageInput"
+      responses:
+        "200":
+          description: Decrypted plaintext
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DecryptMessageOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /message/internal/encrypt/{kid}:
+    post:
+      tags: [Messages]
+      summary: Encrypt an internal message with a local key
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InternalEncryptMessageInput"
+      responses:
+        "200":
+          description: Internal encrypted message
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InternalMessageOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /message/internal/decrypt:
+    post:
+      tags: [Messages]
+      summary: Decrypt an internal encrypted message
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InternalMessageOutput"
+      responses:
+        "200":
+          description: Decrypted plaintext
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DecryptMessageOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: Authorization
+
+  parameters:
+    Kid:
+      name: kid
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/Kid"
+
+  responses:
+    Error:
+      description: Public error response
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    Kid:
+      type: string
+      pattern: "^[0-9a-fA-F]{64}$"
+      example: f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed
+
+    HexString:
+      type: string
+      pattern: "^[0-9a-fA-F]+$"
+
+    Timestamp:
+      type: string
+      pattern: "^[0-9]+$"
+      example: "1782058090"
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          example: invalid request
+
+    CreateKeysInput:
+      type: object
+      additionalProperties: false
+      properties:
+        tag:
+          type: string
+          example: payments
+        profile:
+          $ref: "#/components/schemas/CryptoProfile"
+        hash_algorithm:
+          $ref: "#/components/schemas/HashAlgorithm"
+        symmetric_algorithm:
+          $ref: "#/components/schemas/SymmetricAlgorithm"
+        eddsa_algorithm:
+          $ref: "#/components/schemas/EdDsaAlgorithm"
+        xecdh_algorithm:
+          $ref: "#/components/schemas/XecdhAlgorithm"
+        ml_dsa_variant:
+          $ref: "#/components/schemas/MlDsaVariant"
+        ml_kem_variant:
+          $ref: "#/components/schemas/MlKemVariant"
+      description: >
+        When CRYPTO_POLICY=profile-only, only tag and profile are accepted.
+        Individual algorithm fields are accepted only when CRYPTO_POLICY=allow-overrides.
+
+    CreateKeysResponse:
+      type: object
+      required: [id]
+      properties:
+        id:
+          $ref: "#/components/schemas/Kid"
+
+    ListKeysOutput:
+      type: object
+      required: [keys]
+      properties:
+        keys:
+          type: array
+          items:
+            type: object
+            required: [kid, info]
+            properties:
+              kid:
+                $ref: "#/components/schemas/Kid"
+              info:
+                type: string
+                example: version=v1;hostname=localhost;type=ops-keys;cipher=AES-256/GCM;tag=payments;profile=hybrid-high-assurance-v1;timestamp=1782058090
+
+    PublicKeysOutput:
+      type: object
+      required: [info, keys]
+      properties:
+        info:
+          type: string
+        keys:
+          type: object
+          required: [eddsa, xecdh, ml-dsa, ml-kem]
+          properties:
+            eddsa:
+              $ref: "#/components/schemas/PublicDerKey"
+            xecdh:
+              $ref: "#/components/schemas/PublicRawKey"
+            ml-dsa:
+              $ref: "#/components/schemas/PublicDerKey"
+            ml-kem:
+              $ref: "#/components/schemas/PublicDerKey"
+
+    PublicDerKey:
+      type: object
+      required: [alg, public_key_der_hex]
+      properties:
+        alg:
+          type: string
+        public_key_der_hex:
+          $ref: "#/components/schemas/HexString"
+
+    PublicRawKey:
+      type: object
+      required: [alg, public_key_hex]
+      properties:
+        alg:
+          type: string
+        public_key_hex:
+          $ref: "#/components/schemas/HexString"
+
+    KeyValidationOutput:
+      type: object
+      required: [timestamp, aad, hash, symmetric, eddsa, xecdh, ml-dsa, ml-kem]
+      properties:
+        timestamp:
+          $ref: "#/components/schemas/Timestamp"
+        aad:
+          type: string
+        hash:
+          type: object
+          required: [variant, value_hex]
+          properties:
+            variant:
+              $ref: "#/components/schemas/HashAlgorithm"
+            value_hex:
+              $ref: "#/components/schemas/HexString"
+        symmetric:
+          $ref: "#/components/schemas/VariantValidation"
+        eddsa:
+          $ref: "#/components/schemas/VariantValidation"
+        xecdh:
+          $ref: "#/components/schemas/VariantValidation"
+        ml-dsa:
+          $ref: "#/components/schemas/VariantValidation"
+        ml-kem:
+          $ref: "#/components/schemas/VariantValidation"
+
+    VariantValidation:
+      type: object
+      required: [variant, valid]
+      properties:
+        variant:
+          type: string
+        valid:
+          type: boolean
+
+    SignInput:
+      type: object
+      required: [message_hash]
+      properties:
+        message_hash:
+          $ref: "#/components/schemas/MessageHash"
+
+    MessageHash:
+      type: object
+      required: [alg, hex]
+      properties:
+        alg:
+          $ref: "#/components/schemas/HashAlgorithm"
+        hex:
+          $ref: "#/components/schemas/HexString"
+
+    TimestampToken:
+      type: object
+      required: [version, payload, signatures]
+      properties:
+        version:
+          const: v1
+        payload:
+          type: object
+          required: [type, created_at, info, kid, serial, message_hash]
+          properties:
+            type:
+              const: tsp
+            created_at:
+              $ref: "#/components/schemas/Timestamp"
+            info:
+              type: string
+            kid:
+              $ref: "#/components/schemas/Kid"
+            serial:
+              type: string
+              pattern: "^[0-9a-fA-F]{32}$"
+            message_hash:
+              $ref: "#/components/schemas/MessageHash"
+        signatures:
+          $ref: "#/components/schemas/DualSignatures"
+
+    DualSignatures:
+      type: object
+      required: [eddsa, ml-dsa]
+      properties:
+        eddsa:
+          $ref: "#/components/schemas/SignatureBlock"
+        ml-dsa:
+          $ref: "#/components/schemas/SignatureBlock"
+
+    SignatureBlock:
+      type: object
+      required: [alg, sig]
+      properties:
+        alg:
+          type: string
+        sig:
+          $ref: "#/components/schemas/HexString"
+
+    VerificationOutput:
+      type: object
+      required: [status, valid]
+      properties:
+        status:
+          type: object
+          required: [eddsa, ml-dsa]
+          properties:
+            eddsa:
+              enum: [ok, fail]
+            ml-dsa:
+              enum: [ok, fail]
+        valid:
+          enum: [ok, fail]
+
+    SendMessageInput:
+      type: object
+      required: [recipient_host, recipient_kid, message]
+      properties:
+        recipient_host:
+          type: string
+          example: 127.0.0.1:3000
+        recipient_kid:
+          $ref: "#/components/schemas/Kid"
+        message:
+          type: string
+
+    SendMessageOutput:
+      type: object
+      required: [message, symmetric, eddsa, xecdh, ml-dsa, ml-kem]
+      properties:
+        message:
+          type: object
+          required: [valid]
+          properties:
+            valid:
+              type: boolean
+        symmetric:
+          $ref: "#/components/schemas/VariantValidation"
+        eddsa:
+          $ref: "#/components/schemas/VariantValidation"
+        xecdh:
+          $ref: "#/components/schemas/VariantValidation"
+        ml-dsa:
+          $ref: "#/components/schemas/VariantValidation"
+        ml-kem:
+          $ref: "#/components/schemas/VariantValidation"
+
+    ProtectedMessageToken:
+      type: object
+      required: [version, payload, signatures]
+      properties:
+        version:
+          const: v1
+        payload:
+          type: object
+          required: [type, created_at, sender, recipient, kem, cipher]
+          properties:
+            type:
+              const: protected-message
+            created_at:
+              $ref: "#/components/schemas/Timestamp"
+            sender:
+              type: object
+              required: [host, kid]
+              properties:
+                host:
+                  type: string
+                kid:
+                  $ref: "#/components/schemas/Kid"
+            recipient:
+              type: object
+              required: [kid]
+              properties:
+                kid:
+                  $ref: "#/components/schemas/Kid"
+            kem:
+              type: object
+              required: [alg, xecdh_ephemeral_public, ml_kem_ciphertext, ml_kem_salt, hkdf_salt]
+              properties:
+                alg:
+                  type: string
+                  example: X25519+ML-KEM-512
+                xecdh_ephemeral_public:
+                  $ref: "#/components/schemas/HexString"
+                ml_kem_ciphertext:
+                  $ref: "#/components/schemas/HexString"
+                ml_kem_salt:
+                  $ref: "#/components/schemas/HexString"
+                hkdf_salt:
+                  $ref: "#/components/schemas/HexString"
+            cipher:
+              $ref: "#/components/schemas/MessageCipher"
+        signatures:
+          $ref: "#/components/schemas/DualSignatures"
+
+    ReceiveMessageOutput:
+      type: object
+      required: [status, sender_kid, recipient_kid, local_cipher]
+      properties:
+        status:
+          const: ok
+        sender_kid:
+          $ref: "#/components/schemas/Kid"
+        recipient_kid:
+          $ref: "#/components/schemas/Kid"
+        local_cipher:
+          type: object
+          required: [alg, nonce, aad, ct]
+          properties:
+            alg:
+              $ref: "#/components/schemas/SymmetricAlgorithm"
+            nonce:
+              $ref: "#/components/schemas/HexString"
+            aad:
+              type: string
+            ct:
+              $ref: "#/components/schemas/HexString"
+
+    DecryptMessageInput:
+      type: object
+      required: [sender_host, sender_kid, timestamp, message]
+      properties:
+        sender_host:
+          type: string
+        sender_kid:
+          $ref: "#/components/schemas/Kid"
+        timestamp:
+          $ref: "#/components/schemas/Timestamp"
+        message:
+          $ref: "#/components/schemas/DecryptMessageCipher"
+
+    DecryptMessageCipher:
+      type: object
+      required: [ctx, nonce, aad, variant]
+      properties:
+        ctx:
+          $ref: "#/components/schemas/HexString"
+        nonce:
+          $ref: "#/components/schemas/HexString"
+        aad:
+          type: string
+        variant:
+          $ref: "#/components/schemas/SymmetricAlgorithm"
+
+    DecryptMessageOutput:
+      type: object
+      required: [plaintext]
+      properties:
+        plaintext:
+          type: string
+
+    InternalEncryptMessageInput:
+      type: object
+      required: [plaintext]
+      properties:
+        plaintext:
+          type: string
+
+    InternalMessageOutput:
+      type: object
+      required: [timestamp, kid, message]
+      properties:
+        timestamp:
+          $ref: "#/components/schemas/Timestamp"
+        kid:
+          $ref: "#/components/schemas/Kid"
+        message:
+          $ref: "#/components/schemas/InternalMessageCipher"
+
+    InternalMessageCipher:
+      type: object
+      required: [ctx, nonce, aad, variant]
+      properties:
+        ctx:
+          $ref: "#/components/schemas/HexString"
+        nonce:
+          $ref: "#/components/schemas/HexString"
+        aad:
+          type: string
+          example: version=v1;type=internal-message;kid=f55f...;timestamp=1782058090;cipher_alg=AES-256/GCM
+        variant:
+          $ref: "#/components/schemas/SymmetricAlgorithm"
+
+    MessageCipher:
+      type: object
+      required: [alg, nonce, aad, ct]
+      properties:
+        alg:
+          $ref: "#/components/schemas/SymmetricAlgorithm"
+        nonce:
+          $ref: "#/components/schemas/HexString"
+        aad:
+          type: string
+        ct:
+          $ref: "#/components/schemas/HexString"
+
+    CryptoProfile:
+      enum:
+        - hybrid-performance-v1
+        - hybrid-high-assurance-v1
+        - hybrid-long-term-v1
+
+    HashAlgorithm:
+      enum:
+        - BLAKE2b(160)
+        - BLAKE2b(224)
+        - BLAKE2b(256)
+        - BLAKE2b(384)
+        - BLAKE2b(512)
+        - SHA-224
+        - SHA-256
+        - SHA-384
+        - SHA-512
+        - SHA-512-256
+        - SHA-3(224)
+        - SHA-3(256)
+        - SHA-3(384)
+        - SHA-3(512)
+        - Whirlpool
+
+    SymmetricAlgorithm:
+      enum:
+        - ChaCha20Poly1305
+        - AES-128/GCM
+        - AES-192/GCM
+        - AES-256/GCM
+
+    EdDsaAlgorithm:
+      enum: [Ed25519, Ed448]
+
+    XecdhAlgorithm:
+      enum: [X25519, X448]
+
+    MlDsaVariant:
+      enum: [ML-DSA-44, ML-DSA-65, ML-DSA-87]
+
+    MlKemVariant:
+      enum: [ML-KEM-512, ML-KEM-768, ML-KEM-1024]
