@@ -1,15 +1,21 @@
 use super::HttpState;
+use super::auth::authorize_api_key;
 use super::error::{ErrorResponse, error_response};
 use crate::ops;
 use crate::ops::init::InitValidationOutput;
 use axum::Json;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use tracing::{error, info};
 
 pub async fn init_endpoint(
     State(state): State<HttpState>,
+    headers: HeaderMap,
 ) -> Result<Json<InitValidationOutput>, (StatusCode, Json<ErrorResponse>)> {
+    if let Err(response) = authorize_api_key(&headers) {
+        return Err(response);
+    }
+
     info!(endpoint = "GET /test/init", "test init request accepted");
     state
         .validation()
@@ -27,7 +33,12 @@ pub async fn init_endpoint(
 pub async fn test_endpoint(
     State(state): State<HttpState>,
     Path(id): Path<String>,
+    headers: HeaderMap,
 ) -> Result<Json<ops::test::TestOutput>, (StatusCode, Json<ErrorResponse>)> {
+    if let Err(response) = authorize_api_key(&headers) {
+        return Err(response);
+    }
+
     ops::keys::validate_key_id(&id).map_err(|err| error_response(err.as_ref()))?;
     state
         .ensure_keys_db_entry(&id)

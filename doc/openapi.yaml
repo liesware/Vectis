@@ -67,6 +67,8 @@ paths:
     get:
       tags: [Test]
       summary: Validate init key material
+      security:
+        - ApiKeyAuth: []
       responses:
         "200":
           description: Init key material validation result
@@ -81,6 +83,8 @@ paths:
     get:
       tags: [Test]
       summary: Validate an operational key
+      security:
+        - ApiKeyAuth: []
       parameters:
         - $ref: "#/components/parameters/Kid"
       responses:
@@ -138,7 +142,7 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
-  /keys/db:
+  /keys/reload:
     get:
       tags: [Keys]
       summary: Refresh local key state from storage

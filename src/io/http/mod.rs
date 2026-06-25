@@ -146,7 +146,7 @@ pub fn router(state: HttpState) -> Router {
         .route("/healthz/ready", get(health::ready_endpoint))
         .route("/test/{id}", get(test::test_endpoint))
         .route("/test/init", get(test::init_endpoint))
-        .route("/keys/db", get(keys::refresh_endpoint))
+        .route("/keys/reload", get(keys::refresh_endpoint))
         .route(
             "/keys",
             get(keys::list_endpoint).post(keys::create_endpoint),

@@ -465,7 +465,7 @@ def main():
     print("Health: OK\n")
     passed_count = 1
 
-    validate_init(client.get("/test/init"))
+    validate_init(client.get("/test/init", auth=True))
     print("Test init: OK\n")
     passed_count += 1
 
@@ -487,8 +487,8 @@ def main():
     validate_keys_list(client.get("/keys"), [key_id for key_id, _ in created])
     print("List keys: OK\n")
     passed_count += 1
-    validate_keys_list(client.get("/keys/db", auth=True), [key_id for key_id, _ in created])
-    print("Refresh keys db: OK\n")
+    validate_keys_list(client.get("/keys/reload", auth=True), [key_id for key_id, _ in created])
+    print("Reload keys: OK\n")
     passed_count += 1
 
     test_rows = []
@@ -499,7 +499,7 @@ def main():
     verify_rows = []
 
     for key_id, case in created:
-        validate_test_response(client.get(f"/test/{key_id}"), case)
+        validate_test_response(client.get(f"/test/{key_id}", auth=True), case)
         test_rows.append((key_id, "OK"))
 
         validate_pub_response(client.get(f"/pub/{key_id}"), case)

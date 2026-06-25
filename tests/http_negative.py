@@ -31,8 +31,14 @@ class Client:
         self.base_url = base_url.rstrip("/")
         self.apikey = apikey
 
-    def get(self, path, headers=None):
-        return self._request("GET", path, headers=headers)
+    def get(self, path, auth=False, headers=None):
+        request_headers = {}
+        if headers:
+            request_headers.update(headers)
+        if auth:
+            request_headers["Authorization"] = self.apikey
+
+        return self._request("GET", path, headers=request_headers)
 
     def post(self, path, body, auth=False, headers=None):
         request_headers = {"Content-Type": "application/json"}
@@ -195,13 +201,13 @@ def main():
         )
         require_status("POST /keys invalid auth", status, 401)
 
-    def keys_db_without_auth():
-        status, _ = client.get("/keys/db")
-        require_status("GET /keys/db without auth", status, 401)
+    def keys_reload_without_auth():
+        status, _ = client.get("/keys/reload")
+        require_status("GET /keys/reload without auth", status, 401)
 
-    def keys_db_invalid_auth():
-        status, _ = client.get("/keys/db", headers={"Authorization": "00" * 32})
-        require_status("GET /keys/db invalid auth", status, 401)
+    def keys_reload_invalid_auth():
+        status, _ = client.get("/keys/reload", headers={"Authorization": "00" * 32})
+        require_status("GET /keys/reload invalid auth", status, 401)
 
     def keys_tag_not_string():
         request = dict(VALID_KEY_REQUEST)
@@ -236,8 +242,8 @@ def main():
     for name, func in (
         ("POST /keys without auth", keys_without_auth),
         ("POST /keys invalid auth", keys_invalid_auth),
-        ("GET /keys/db without auth", keys_db_without_auth),
-        ("GET /keys/db invalid auth", keys_db_invalid_auth),
+        ("GET /keys/reload without auth", keys_reload_without_auth),
+        ("GET /keys/reload invalid auth", keys_reload_invalid_auth),
         ("POST /keys tag not string", keys_tag_not_string),
         ("POST /keys invalid algorithm", keys_invalid_algorithm),
         ("POST /keys invalid profile", keys_invalid_profile),
@@ -353,12 +359,20 @@ def main():
     ):
         run_case(rows, name, func)
 
+    def test_init_without_auth():
+        status, _ = client.get("/test/init")
+        require_status("GET /test/init without auth", status, 401)
+
+    def test_id_without_auth():
+        status, _ = client.get(f"/test/{key_id}")
+        require_status("GET /test/{id} without auth", status, 401)
+
     def test_id_not_hex():
-        status, _ = client.get("/test/not-hex")
+        status, _ = client.get("/test/not-hex", auth=True)
         require_status("GET /test/{id} not hex", status, 400)
 
     def test_id_wrong_length():
-        status, _ = client.get("/test/abcd")
+        status, _ = client.get("/test/abcd", auth=True)
         require_status("GET /test/{id} wrong length", status, 400)
 
     def pub_id_not_hex():
@@ -421,6 +435,8 @@ def main():
         require_status("POST /sign/{id} hash not hex", status, 400)
 
     for name, func in (
+        ("GET /test/init without auth", test_init_without_auth),
+        ("GET /test/{id} without auth", test_id_without_auth),
         ("GET /test/{id} not hex", test_id_not_hex),
         ("GET /test/{id} wrong length", test_id_wrong_length),
         ("GET /pub/{id} not hex", pub_id_not_hex),

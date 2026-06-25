@@ -119,8 +119,8 @@ pub async fn refresh_endpoint(
     }
 
     info!(
-        endpoint = "GET /keys/db",
-        "keys db refresh request accepted"
+        endpoint = "GET /keys/reload",
+        "keys reload request accepted"
     );
     state
         .reload_keys_db_state()
@@ -133,8 +133,8 @@ pub async fn refresh_endpoint(
         .with_keys_db_state(|keys_db_state| keys_db_state.len())
         .await;
     info!(
-        endpoint = "GET /keys/db",
-        keys_count, "keys db refresh response ready"
+        endpoint = "GET /keys/reload",
+        keys_count, "keys reload response ready"
     );
 
     Ok(Json(response))
