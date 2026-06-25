@@ -10,6 +10,7 @@ pub async fn pub_endpoint(
     State(state): State<HttpState>,
     Path(id): Path<String>,
 ) -> Result<Json<ops::pubkey::PublicKeysOutput>, (StatusCode, Json<ErrorResponse>)> {
+    ops::keys::validate_key_id(&id).map_err(|err| error_response(err.as_ref()))?;
     info!(endpoint = "GET /pub/{id}", kid = %id, "pub request accepted");
     let result = state
         .with_keys_db_state(|keys_db_state| ops::pubkey::public_keys_from_state(keys_db_state, &id))

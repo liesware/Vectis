@@ -81,6 +81,12 @@ impl KeyId {
     }
 }
 
+pub fn validate_key_id(id: &str) -> Result<(), DynError> {
+    KeyId::parse(id)?;
+
+    Ok(())
+}
+
 pub(crate) fn get_loaded_key<'a>(
     keys_db_state: &'a KeysDbState,
     id: &str,

@@ -28,6 +28,7 @@ pub async fn test_endpoint(
     State(state): State<HttpState>,
     Path(id): Path<String>,
 ) -> Result<Json<ops::test::TestOutput>, (StatusCode, Json<ErrorResponse>)> {
+    ops::keys::validate_key_id(&id).map_err(|err| error_response(err.as_ref()))?;
     info!(endpoint = "GET /test/{id}", kid = %id, "test key request accepted");
     let result = state
         .with_keys_db_state(|keys_db_state| ops::test::handle_test_from_state(keys_db_state, &id))

@@ -18,6 +18,7 @@ pub async fn sign_endpoint(
         return Err(response);
     }
 
+    ops::keys::validate_key_id(&id).map_err(|err| error_response(err.as_ref()))?;
     let request =
         ops::sign::parse_sign_input(request).map_err(|err| error_response(err.as_ref()))?;
     info!(
@@ -64,6 +65,7 @@ pub async fn sign_verification_endpoint(
 ) -> Result<Json<ops::sign::VerificationOutput>, (StatusCode, Json<ErrorResponse>)> {
     let request =
         ops::sign::parse_timestamp_token(request).map_err(|err| error_response(err.as_ref()))?;
+    ops::sign::validate_timestamp_token(&request).map_err(|err| error_response(err.as_ref()))?;
 
     let kid = request.kid().to_string();
     info!(
