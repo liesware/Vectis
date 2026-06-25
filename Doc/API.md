@@ -30,6 +30,7 @@ Authorization: <APIKEY>
 Endpoints requiring auth:
 
 - `POST /keys`
+- `GET /keys/db`
 - `POST /sign/{kid}`
 - `POST /message/{sender_kid}`
 - `POST /message/decrypt`
@@ -197,6 +198,25 @@ Response:
 ### GET /keys
 
 Lists keys currently loaded in memory. This endpoint does not require auth.
+
+Response:
+
+```json
+{
+  "keys": [
+    {
+      "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+      "info": "version=v1;hostname=localhost;type=ops-keys;cipher=AES-256/GCM;tag=ACME Corp.;timestamp=1782058090"
+    }
+  ]
+}
+```
+
+### GET /keys/db
+
+Administrative refresh operation. Reloads the local in-memory key state from storage, decrypting the keys this node can load, then returns the refreshed state.
+
+Requires auth.
 
 Response:
 

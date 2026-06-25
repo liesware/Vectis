@@ -1,3 +1,4 @@
+use crate::core::{config, storage::StorageState};
 use crate::error::DynError;
 use crate::io::cli::init;
 use crate::ops;
@@ -16,7 +17,9 @@ pub async fn run_init_test() -> Result<String, DynError> {
 
 pub async fn run_key_test(id: &str) -> Result<String, DynError> {
     let init_state = init::load_init_state()?;
-    let output = ops::test::handle_test(&init_state, id).await?;
+    let config = config::app_config()?;
+    let storage = StorageState::new(&config).await?;
+    let output = ops::test::handle_test(&storage, &init_state, id).await?;
     let json = serde_json::to_string_pretty(&output)?;
 
     println!("{json}");

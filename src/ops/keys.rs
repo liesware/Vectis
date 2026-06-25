@@ -1,4 +1,4 @@
-use crate::core::{config, crypto, storage, validation};
+use crate::core::{config, crypto, storage::StorageState, validation};
 use crate::error::DynError;
 use crate::ops::init::ValidatedInitState;
 use crate::ops::key_material::{
@@ -167,6 +167,7 @@ struct ResolvedKeysInput {
 }
 
 pub async fn create_keys(
+    storage: &StorageState,
     init_state: &ValidatedInitState,
     input: CreateKeysInput,
 ) -> Result<CreateKeysOutput, DynError> {
@@ -205,7 +206,7 @@ pub async fn create_keys(
     let id = create_key_id(&keys_b64)?;
     let enc_keys = format!("{keys_b64}.{nonce_b64}.{aad_b64}");
 
-    storage::save_ops_keys(&id, &enc_keys).await?;
+    storage.save_ops_keys(&id, &enc_keys).await?;
 
     Ok(CreateKeysOutput { id })
 }
@@ -249,9 +250,10 @@ pub fn parse_create_keys_input(request: Value) -> Result<CreateKeysInput, DynErr
 }
 
 pub async fn load_keys_db_state(
+    storage: &StorageState,
     init_state: &ValidatedInitState,
 ) -> Result<Zeroizing<KeysDbState>, DynError> {
-    let rows = storage::list_ops_keys().await?;
+    let rows = storage.list_ops_keys().await?;
     let mut keys_db = Vec::new();
 
     for row in rows {
@@ -274,12 +276,13 @@ pub async fn load_keys_db_state(
 }
 
 pub async fn load_keys_db_entry(
+    storage: &StorageState,
     init_state: &ValidatedInitState,
     id: &str,
 ) -> Result<LoadedOpsKey, DynError> {
     let id = KeyId::parse(id)?;
 
-    let row = storage::get_ops_keys(id.as_str()).await?;
+    let row = storage.get_ops_keys(id.as_str()).await?;
     let decrypted = decrypt_ops_keys_payload(init_state, &row.enc_keys)?;
     info!(id = %row.id, "decrypted ops key loaded from db");
 

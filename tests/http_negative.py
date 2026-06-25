@@ -194,6 +194,14 @@ def main():
         )
         require_status("POST /keys invalid auth", status, 401)
 
+    def keys_db_without_auth():
+        status, _ = client.get("/keys/db")
+        require_status("GET /keys/db without auth", status, 401)
+
+    def keys_db_invalid_auth():
+        status, _ = client.get("/keys/db", headers={"Authorization": "00" * 32})
+        require_status("GET /keys/db invalid auth", status, 401)
+
     def keys_tag_not_string():
         request = dict(VALID_KEY_REQUEST)
         request["tag"] = 1
@@ -221,6 +229,8 @@ def main():
     for name, func in (
         ("POST /keys without auth", keys_without_auth),
         ("POST /keys invalid auth", keys_invalid_auth),
+        ("GET /keys/db without auth", keys_db_without_auth),
+        ("GET /keys/db invalid auth", keys_db_invalid_auth),
         ("POST /keys tag not string", keys_tag_not_string),
         ("POST /keys invalid algorithm", keys_invalid_algorithm),
         ("POST /keys invalid hash algorithm", keys_invalid_hash_algorithm),

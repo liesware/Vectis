@@ -44,10 +44,14 @@ pub async fn create_endpoint(
         "keys create request accepted"
     );
 
-    match ops::keys::create_keys(state.init_state(), request).await {
+    match ops::keys::create_keys(state.storage(), state.init_state(), request).await {
         Ok(output) => {
-            let loaded_key = match ops::keys::load_keys_db_entry(state.init_state(), &output.id)
-                .await
+            let loaded_key = match ops::keys::load_keys_db_entry(
+                state.storage(),
+                state.init_state(),
+                &output.id,
+            )
+            .await
             {
                 Ok(loaded_key) => loaded_key,
                 Err(err) => {
@@ -103,4 +107,34 @@ pub async fn list_endpoint(State(state): State<HttpState>) -> Json<ops::keys::Li
     );
 
     Json(response)
+}
+
+pub async fn refresh_endpoint(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Result<Json<ops::keys::ListKeysOutput>, (StatusCode, Json<ErrorResponse>)> {
+    if let Err(response) = authorize_api_key(&headers) {
+        return Err(response);
+    }
+
+    info!(
+        endpoint = "GET /keys/db",
+        "keys db refresh request accepted"
+    );
+    state
+        .reload_keys_db_state()
+        .await
+        .map_err(|err| error_response(err.as_ref()))?;
+    let response = state
+        .with_keys_db_state(ops::keys::list_keys_from_state)
+        .await;
+    let keys_count = state
+        .with_keys_db_state(|keys_db_state| keys_db_state.len())
+        .await;
+    info!(
+        endpoint = "GET /keys/db",
+        keys_count, "keys db refresh response ready"
+    );
+
+    Ok(Json(response))
 }

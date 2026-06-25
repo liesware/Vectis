@@ -14,6 +14,8 @@ mod sign;
 mod test;
 
 use crate::core::routes::{FinalAppRoute, RoutesState};
+use crate::core::storage::StorageState;
+use crate::error::DynError;
 use crate::ops::init::{InitValidationOutput, ValidatedInitState};
 use crate::ops::keys::{KeysDbState, LoadedOpsKey};
 use crate::ops::message::{RemotePublicKeys, RemotePublicKeysState};
@@ -23,6 +25,7 @@ pub use app::run;
 #[derive(Clone)]
 pub struct HttpState {
     init_state: Arc<ValidatedInitState>,
+    storage: Arc<StorageState>,
     keys_db_state: Arc<RwLock<Zeroizing<KeysDbState>>>,
     remote_public_keys_state: Arc<RwLock<Zeroizing<RemotePublicKeysState>>>,
     routes_state: Arc<RoutesState>,
@@ -31,11 +34,13 @@ pub struct HttpState {
 impl HttpState {
     fn new(
         init_state: ValidatedInitState,
+        storage: StorageState,
         keys_db_state: Zeroizing<KeysDbState>,
         routes_state: RoutesState,
     ) -> Self {
         Self {
             init_state: Arc::new(init_state),
+            storage: Arc::new(storage),
             keys_db_state: Arc::new(RwLock::new(keys_db_state)),
             remote_public_keys_state: Arc::new(RwLock::new(Zeroizing::new(
                 RemotePublicKeysState::default(),
@@ -58,6 +63,10 @@ impl HttpState {
         &self.init_state
     }
 
+    fn storage(&self) -> &StorageState {
+        &self.storage
+    }
+
     async fn with_keys_db_state<T>(&self, f: impl FnOnce(&KeysDbState) -> T) -> T {
         let keys_db_state = self.keys_db_state.read().await;
 
@@ -67,6 +76,31 @@ impl HttpState {
     async fn upsert_keys_db_entry(&self, loaded_key: LoadedOpsKey) {
         let mut keys_db_state = self.keys_db_state.write().await;
         keys_db_state.upsert(loaded_key);
+    }
+
+    async fn ensure_keys_db_entry(&self, id: &str) -> Result<(), DynError> {
+        crate::ops::keys::validate_key_id(id)?;
+        {
+            let keys_db_state = self.keys_db_state.read().await;
+            if keys_db_state.get(id).is_some() {
+                return Ok(());
+            }
+        }
+
+        let loaded_key =
+            crate::ops::keys::load_keys_db_entry(self.storage(), self.init_state(), id).await?;
+        self.upsert_keys_db_entry(loaded_key).await;
+
+        Ok(())
+    }
+
+    async fn reload_keys_db_state(&self) -> Result<(), DynError> {
+        let reloaded =
+            crate::ops::keys::load_keys_db_state(self.storage(), self.init_state()).await?;
+        let mut keys_db_state = self.keys_db_state.write().await;
+        *keys_db_state = reloaded;
+
+        Ok(())
     }
 
     async fn remote_public_keys(&self, host: &str, kid: &str) -> Option<RemotePublicKeys> {
@@ -91,6 +125,7 @@ pub fn router(state: HttpState) -> Router {
     Router::new()
         .route("/test/{id}", get(test::test_endpoint))
         .route("/test/init", get(test::init_endpoint))
+        .route("/keys/db", get(keys::refresh_endpoint))
         .route(
             "/keys",
             get(keys::list_endpoint).post(keys::create_endpoint),

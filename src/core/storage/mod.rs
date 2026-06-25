@@ -13,29 +13,43 @@ pub struct OpsKeyRow {
     pub enc_keys: String,
 }
 
-pub async fn save_ops_keys(id: &str, enc_keys: &str) -> Result<OpsKeyRow, DynError> {
-    match storage_type()?.as_str() {
-        "sqlite" => sqlite::save_ops_keys(id, enc_keys).await,
-        storage => unsupported_storage(storage),
-    }
+pub struct StorageState {
+    backend: StorageBackend,
 }
 
-pub async fn get_ops_keys(id: &str) -> Result<OpsKeyRow, DynError> {
-    match storage_type()?.as_str() {
-        "sqlite" => sqlite::get_ops_keys(id).await,
-        storage => unsupported_storage(storage),
-    }
+enum StorageBackend {
+    Sqlite(sqlite::SqliteStorage),
 }
 
-pub async fn list_ops_keys() -> Result<Vec<OpsKeyRow>, DynError> {
-    match storage_type()?.as_str() {
-        "sqlite" => sqlite::list_ops_keys().await,
-        storage => unsupported_storage(storage),
+impl StorageState {
+    pub async fn new(config: &config::AppConfig) -> Result<Self, DynError> {
+        match config.storage_type.as_str() {
+            "sqlite" => Ok(Self {
+                backend: StorageBackend::Sqlite(
+                    sqlite::SqliteStorage::new(&config.sqlite_path).await?,
+                ),
+            }),
+            storage => unsupported_storage(storage),
+        }
     }
-}
 
-fn storage_type() -> Result<String, DynError> {
-    Ok(config::app_config()?.storage_type)
+    pub async fn save_ops_keys(&self, id: &str, enc_keys: &str) -> Result<OpsKeyRow, DynError> {
+        match &self.backend {
+            StorageBackend::Sqlite(sqlite) => sqlite.save_ops_keys(id, enc_keys).await,
+        }
+    }
+
+    pub async fn get_ops_keys(&self, id: &str) -> Result<OpsKeyRow, DynError> {
+        match &self.backend {
+            StorageBackend::Sqlite(sqlite) => sqlite.get_ops_keys(id).await,
+        }
+    }
+
+    pub async fn list_ops_keys(&self) -> Result<Vec<OpsKeyRow>, DynError> {
+        match &self.backend {
+            StorageBackend::Sqlite(sqlite) => sqlite.list_ops_keys().await,
+        }
+    }
 }
 
 fn unsupported_storage<T>(storage: &str) -> Result<T, DynError> {

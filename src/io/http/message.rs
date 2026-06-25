@@ -18,6 +18,11 @@ pub async fn send_endpoint(
         return Err(response);
     }
 
+    ops::keys::validate_key_id(&sender_kid).map_err(|err| error_response(err.as_ref()))?;
+    state
+        .ensure_keys_db_entry(&sender_kid)
+        .await
+        .map_err(|err| error_response(err.as_ref()))?;
     let request = ops::message::parse_send_message_input(request)
         .map_err(|err| error_response(err.as_ref()))?;
     let prepared = state
@@ -50,6 +55,12 @@ pub async fn receive_endpoint(
     Json(request): Json<Value>,
 ) -> Result<Json<ops::message::ReceiveMessageOutput>, (StatusCode, Json<ErrorResponse>)> {
     let envelope = ops::message::parse_message_envelope(request)
+        .map_err(|err| error_response(err.as_ref()))?;
+    ops::keys::validate_key_id(envelope.recipient_kid())
+        .map_err(|err| error_response(err.as_ref()))?;
+    state
+        .ensure_keys_db_entry(envelope.recipient_kid())
+        .await
         .map_err(|err| error_response(err.as_ref()))?;
     let prepared = state
         .with_keys_db_state(|keys_db_state| {
@@ -89,6 +100,12 @@ pub async fn decrypt_endpoint(
 
     let request = ops::message::parse_decrypt_message_input(request)
         .map_err(|err| error_response(err.as_ref()))?;
+    let recipient_kid = ops::message::decrypt_message_recipient_kid(&request)
+        .map_err(|err| error_response(err.as_ref()))?;
+    state
+        .ensure_keys_db_entry(&recipient_kid)
+        .await
+        .map_err(|err| error_response(err.as_ref()))?;
     let prepared = state
         .with_keys_db_state(|keys_db_state| {
             ops::message::prepare_decrypt_message(keys_db_state, request)
@@ -115,6 +132,11 @@ pub async fn internal_encrypt_endpoint(
         return Err(response);
     }
 
+    ops::keys::validate_key_id(&kid).map_err(|err| error_response(err.as_ref()))?;
+    state
+        .ensure_keys_db_entry(&kid)
+        .await
+        .map_err(|err| error_response(err.as_ref()))?;
     let request = ops::message::parse_internal_encrypt_message_input(request)
         .map_err(|err| error_response(err.as_ref()))?;
     let prepared = state
@@ -143,6 +165,11 @@ pub async fn internal_decrypt_endpoint(
     }
 
     let request = ops::message::parse_internal_decrypt_message_input(request)
+        .map_err(|err| error_response(err.as_ref()))?;
+    ops::keys::validate_key_id(&request.kid).map_err(|err| error_response(err.as_ref()))?;
+    state
+        .ensure_keys_db_entry(&request.kid)
+        .await
         .map_err(|err| error_response(err.as_ref()))?;
     let prepared = state
         .with_keys_db_state(|keys_db_state| {

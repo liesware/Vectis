@@ -462,6 +462,8 @@ def main():
 
     validate_keys_list(client.get("/keys"), [key_id for key_id, _ in created])
     print("List keys: OK\n")
+    validate_keys_list(client.get("/keys/db", auth=True), [key_id for key_id, _ in created])
+    print("Refresh keys db: OK\n")
 
     test_rows = []
     pub_rows = []

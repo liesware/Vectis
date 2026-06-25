@@ -313,6 +313,14 @@ pub fn parse_internal_decrypt_message_input(
     })
 }
 
+pub fn decrypt_message_recipient_kid(input: &DecryptMessageInput) -> Result<String, DynError> {
+    let aad = parse_aad_fields(&input.message.aad)?;
+    let recipient_kid = aad_field(&aad, "recipient_kid")?;
+    keys::KeyId::parse(recipient_kid)?;
+
+    Ok(recipient_kid.to_string())
+}
+
 pub fn prepare_decrypt_message(
     keys_db_state: &KeysDbState,
     input: DecryptMessageInput,

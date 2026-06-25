@@ -1,4 +1,3 @@
-use crate::core::config;
 use crate::core::storage::OpsKeyRow;
 use crate::error::DynError;
 use sqlx::Row;
@@ -6,88 +5,94 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use std::io;
 use tracing::info;
 
-pub async fn save_ops_keys(id: &str, enc_keys: &str) -> Result<OpsKeyRow, DynError> {
-    let db = ops_db().await?;
-
-    sqlx::query(
-        "
-        INSERT INTO ops_keys (id, enc_keys)
-        VALUES (?, ?)
-        ",
-    )
-    .bind(id)
-    .bind(enc_keys)
-    .execute(&db)
-    .await?;
-    info!(id, "inserted ops keys");
-
-    Ok(OpsKeyRow {
-        id: id.to_string(),
-        enc_keys: enc_keys.to_string(),
-    })
+pub struct SqliteStorage {
+    pool: SqlitePool,
 }
 
-pub async fn get_ops_keys(id: &str) -> Result<OpsKeyRow, DynError> {
-    let db = ops_db().await?;
-    let row = sqlx::query(
-        "
-        SELECT id, enc_keys
-        FROM ops_keys
-        WHERE id = ?
-        ",
-    )
-    .bind(id)
-    .fetch_optional(&db)
-    .await?;
+impl SqliteStorage {
+    pub async fn new(path: &std::path::Path) -> Result<Self, DynError> {
+        let options = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(false);
+        let pool = SqlitePool::connect_with(options).await.map_err(|err| {
+            Box::new(io::Error::new(
+                io::ErrorKind::ConnectionRefused,
+                format!("failed to connect to ops sqlite: {err}"),
+            )) as DynError
+        })?;
+        info!(path = %path.display(), "connected to ops sqlite");
 
-    let Some(row) = row else {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("ops key not found: {id}"),
-        )));
-    };
+        validate_ops_keys_schema(&pool).await?;
+        info!("validated ops_keys sqlite schema");
 
-    Ok(OpsKeyRow {
-        id: row.get("id"),
-        enc_keys: row.get("enc_keys"),
-    })
-}
-
-pub async fn list_ops_keys() -> Result<Vec<OpsKeyRow>, DynError> {
-    let db = ops_db().await?;
-    let rows = sqlx::query(
-        "
-        SELECT id, enc_keys
-        FROM ops_keys
-        ORDER BY id
-        ",
-    )
-    .fetch_all(&db)
-    .await?;
-
-    let mut keys = Vec::new();
-    for row in rows {
-        keys.push(OpsKeyRow {
-            id: row.get("id"),
-            enc_keys: row.get("enc_keys"),
-        });
+        Ok(Self { pool })
     }
 
-    Ok(keys)
-}
+    pub async fn save_ops_keys(&self, id: &str, enc_keys: &str) -> Result<OpsKeyRow, DynError> {
+        sqlx::query(
+            "
+            INSERT INTO ops_keys (id, enc_keys)
+            VALUES (?, ?)
+            ",
+        )
+        .bind(id)
+        .bind(enc_keys)
+        .execute(&self.pool)
+        .await?;
+        info!(id, "inserted ops keys");
 
-async fn ops_db() -> Result<SqlitePool, DynError> {
-    let data_db_path = config::app_config()?.sqlite_path;
-    let options = SqliteConnectOptions::new()
-        .filename(&data_db_path)
-        .create_if_missing(false);
-    let db = SqlitePool::connect_with(options).await?;
-    info!(path = %data_db_path.display(), "connected to ops sqlite");
+        Ok(OpsKeyRow {
+            id: id.to_string(),
+            enc_keys: enc_keys.to_string(),
+        })
+    }
 
-    validate_ops_keys_schema(&db).await?;
-    info!("validated ops_keys sqlite schema");
+    pub async fn get_ops_keys(&self, id: &str) -> Result<OpsKeyRow, DynError> {
+        let row = sqlx::query(
+            "
+            SELECT id, enc_keys
+            FROM ops_keys
+            WHERE id = ?
+            ",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
 
-    Ok(db)
+        let Some(row) = row else {
+            return Err(Box::new(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("ops key not found: {id}"),
+            )));
+        };
+
+        Ok(OpsKeyRow {
+            id: row.get("id"),
+            enc_keys: row.get("enc_keys"),
+        })
+    }
+
+    pub async fn list_ops_keys(&self) -> Result<Vec<OpsKeyRow>, DynError> {
+        let rows = sqlx::query(
+            "
+            SELECT id, enc_keys
+            FROM ops_keys
+            ORDER BY id
+            ",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut keys = Vec::new();
+        for row in rows {
+            keys.push(OpsKeyRow {
+                id: row.get("id"),
+                enc_keys: row.get("enc_keys"),
+            });
+        }
+
+        Ok(keys)
+    }
 }
 
 async fn validate_ops_keys_schema(db: &SqlitePool) -> Result<(), DynError> {

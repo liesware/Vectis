@@ -19,6 +19,10 @@ pub async fn sign_endpoint(
     }
 
     ops::keys::validate_key_id(&id).map_err(|err| error_response(err.as_ref()))?;
+    state
+        .ensure_keys_db_entry(&id)
+        .await
+        .map_err(|err| error_response(err.as_ref()))?;
     let request =
         ops::sign::parse_sign_input(request).map_err(|err| error_response(err.as_ref()))?;
     info!(
@@ -68,6 +72,10 @@ pub async fn sign_verification_endpoint(
     ops::sign::validate_timestamp_token(&request).map_err(|err| error_response(err.as_ref()))?;
 
     let kid = request.kid().to_string();
+    state
+        .ensure_keys_db_entry(&kid)
+        .await
+        .map_err(|err| error_response(err.as_ref()))?;
     info!(
         endpoint = "/sign/verification",
         kid = %kid,

@@ -2,7 +2,7 @@ use artbox::{
     Alignment, Artbox, Color, ColorStop, Fill, LinearGradient, RenderTarget, Renderer, fonts,
 };
 
-use crate::core::{config, routes};
+use crate::core::{config, routes, storage::StorageState};
 use crate::error::DynError;
 use crate::ops::init::ValidatedInitState;
 use crate::ops::keys;
@@ -11,7 +11,8 @@ use tracing::info;
 pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
     let config = config::app_config()?;
     let logging = crate::core::logging::logging_config();
-    let keys_db_state = keys::load_keys_db_state(&init_state).await?;
+    let storage = StorageState::new(&config).await?;
+    let keys_db_state = keys::load_keys_db_state(&storage, &init_state).await?;
     let routes_state = routes::load_routes_state(&config);
     info!(
         http_bind_addr = %config.http_bind_addr,
@@ -37,6 +38,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
     );
     let app = super::router(super::HttpState::new(
         init_state,
+        storage,
         keys_db_state,
         routes_state,
     ));
