@@ -147,6 +147,7 @@ struct ListKeysItem {
 #[derive(Deserialize)]
 pub struct CreateKeysInput {
     pub tag: Option<String>,
+    pub profile: Option<String>,
     pub hash_algorithm: Option<String>,
     pub symmetric_algorithm: Option<String>,
     pub eddsa_algorithm: Option<String>,
@@ -158,12 +159,23 @@ pub struct CreateKeysInput {
 struct ResolvedKeysInput {
     tag: String,
     timestamp: String,
+    profile: String,
     hash_algorithm: String,
     symmetric_algorithm: String,
     eddsa_algorithm: String,
     xecdh_algorithm: String,
     ml_dsa_variant: String,
     ml_kem_variant: String,
+}
+
+struct CryptoProfile {
+    name: &'static str,
+    hash_algorithm: &'static str,
+    symmetric_algorithm: &'static str,
+    eddsa_algorithm: &'static str,
+    xecdh_algorithm: &'static str,
+    ml_dsa_variant: &'static str,
+    ml_kem_variant: &'static str,
 }
 
 pub async fn create_keys(
@@ -191,6 +203,7 @@ pub async fn create_keys(
         ("type", "ops-keys"),
         ("cipher", config::INTERNAL_KEYS_CIPHER),
         ("tag", &input.tag),
+        ("profile", &input.profile),
         ("timestamp", &input.timestamp),
     ]);
     let ciphertext = crypto::encrypt_symmetric(
@@ -238,6 +251,14 @@ pub fn parse_create_keys_input(request: Value) -> Result<CreateKeysInput, DynErr
         return Err(Box::new(io::Error::new(
             io::ErrorKind::InvalidInput,
             "tag must be a string",
+        )));
+    }
+    if let Some(profile) = object.get("profile")
+        && !profile.is_string()
+    {
+        return Err(Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "profile must be a string",
         )));
     }
 
@@ -351,45 +372,77 @@ fn resolve_keys_input(
     config: &config::AppConfig,
 ) -> Result<ResolvedKeysInput, DynError> {
     let timestamp = validation::current_timestamp()?;
-    let tag = input.tag.unwrap_or_else(|| timestamp.clone());
+    let tag = input.tag.clone().unwrap_or_else(|| timestamp.clone());
     validation::validate_text_field("tag", &tag)?;
 
-    let hash_algorithm = input
-        .hash_algorithm
-        .unwrap_or_else(|| config.hash_algorithm.clone());
+    let profile_name = input
+        .profile
+        .clone()
+        .unwrap_or_else(|| config.default_crypto_profile.clone());
+    validation::validate_allowed_value("profile", &profile_name, config::CRYPTO_PROFILES)?;
+    let profile = crypto_profile(&profile_name)?;
+    validate_crypto_policy(config, &input)?;
+
+    let hash_algorithm = if config.crypto_policy == "allow-overrides" {
+        input
+            .hash_algorithm
+            .unwrap_or_else(|| profile.hash_algorithm.to_string())
+    } else {
+        profile.hash_algorithm.to_string()
+    };
     validation::validate_allowed_value("hash_algorithm", &hash_algorithm, crypto::HASH_ALGORITHMS)?;
 
-    let symmetric_algorithm = input
-        .symmetric_algorithm
-        .unwrap_or_else(|| config.symmetric_algorithm.clone());
+    let symmetric_algorithm = if config.crypto_policy == "allow-overrides" {
+        input
+            .symmetric_algorithm
+            .unwrap_or_else(|| profile.symmetric_algorithm.to_string())
+    } else {
+        profile.symmetric_algorithm.to_string()
+    };
     validation::validate_allowed_value(
         "symmetric_algorithm",
         &symmetric_algorithm,
         crypto::SYMMETRIC_ALGORITHMS,
     )?;
 
-    let eddsa_algorithm = input
-        .eddsa_algorithm
-        .unwrap_or_else(|| config.eddsa_algorithm.clone());
+    let eddsa_algorithm = if config.crypto_policy == "allow-overrides" {
+        input
+            .eddsa_algorithm
+            .unwrap_or_else(|| profile.eddsa_algorithm.to_string())
+    } else {
+        profile.eddsa_algorithm.to_string()
+    };
     validation::validate_allowed_value("eddsa_algorithm", &eddsa_algorithm, &["Ed25519", "Ed448"])?;
 
-    let xecdh_algorithm = input
-        .xecdh_algorithm
-        .unwrap_or_else(|| config.xecdh_algorithm.clone());
+    let xecdh_algorithm = if config.crypto_policy == "allow-overrides" {
+        input
+            .xecdh_algorithm
+            .unwrap_or_else(|| profile.xecdh_algorithm.to_string())
+    } else {
+        profile.xecdh_algorithm.to_string()
+    };
     validation::validate_allowed_value("xecdh_algorithm", &xecdh_algorithm, &["X25519", "X448"])?;
 
-    let ml_dsa_variant = input
-        .ml_dsa_variant
-        .unwrap_or_else(|| config.ml_dsa_variant.clone());
+    let ml_dsa_variant = if config.crypto_policy == "allow-overrides" {
+        input
+            .ml_dsa_variant
+            .unwrap_or_else(|| profile.ml_dsa_variant.to_string())
+    } else {
+        profile.ml_dsa_variant.to_string()
+    };
     validation::validate_allowed_value(
         "ml_dsa_variant",
         &ml_dsa_variant,
         &["ML-DSA-44", "ML-DSA-65", "ML-DSA-87"],
     )?;
 
-    let ml_kem_variant = input
-        .ml_kem_variant
-        .unwrap_or_else(|| config.ml_kem_variant.clone());
+    let ml_kem_variant = if config.crypto_policy == "allow-overrides" {
+        input
+            .ml_kem_variant
+            .unwrap_or_else(|| profile.ml_kem_variant.to_string())
+    } else {
+        profile.ml_kem_variant.to_string()
+    };
     validation::validate_allowed_value(
         "ml_kem_variant",
         &ml_kem_variant,
@@ -399,6 +452,7 @@ fn resolve_keys_input(
     Ok(ResolvedKeysInput {
         tag,
         timestamp,
+        profile: profile.name.to_string(),
         hash_algorithm,
         symmetric_algorithm,
         eddsa_algorithm,
@@ -406,6 +460,71 @@ fn resolve_keys_input(
         ml_dsa_variant,
         ml_kem_variant,
     })
+}
+
+fn validate_crypto_policy(
+    config: &config::AppConfig,
+    input: &CreateKeysInput,
+) -> Result<(), DynError> {
+    validation::validate_allowed_value(
+        "CRYPTO_POLICY",
+        &config.crypto_policy,
+        config::CRYPTO_POLICIES,
+    )?;
+    if config.crypto_policy != "profile-only" {
+        return Ok(());
+    }
+
+    if input.hash_algorithm.is_some()
+        || input.symmetric_algorithm.is_some()
+        || input.eddsa_algorithm.is_some()
+        || input.xecdh_algorithm.is_some()
+        || input.ml_dsa_variant.is_some()
+        || input.ml_kem_variant.is_some()
+    {
+        return Err(Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "individual algorithm overrides are rejected when CRYPTO_POLICY=profile-only",
+        )));
+    }
+
+    Ok(())
+}
+
+fn crypto_profile(name: &str) -> Result<CryptoProfile, DynError> {
+    match name {
+        "hybrid-performance-v1" => Ok(CryptoProfile {
+            name: "hybrid-performance-v1",
+            hash_algorithm: "BLAKE2b(256)",
+            symmetric_algorithm: "ChaCha20Poly1305",
+            eddsa_algorithm: "Ed25519",
+            xecdh_algorithm: "X25519",
+            ml_dsa_variant: "ML-DSA-44",
+            ml_kem_variant: "ML-KEM-512",
+        }),
+        "hybrid-high-assurance-v1" => Ok(CryptoProfile {
+            name: "hybrid-high-assurance-v1",
+            hash_algorithm: "SHA-3(384)",
+            symmetric_algorithm: "AES-256/GCM",
+            eddsa_algorithm: "Ed25519",
+            xecdh_algorithm: "X25519",
+            ml_dsa_variant: "ML-DSA-65",
+            ml_kem_variant: "ML-KEM-768",
+        }),
+        "hybrid-long-term-v1" => Ok(CryptoProfile {
+            name: "hybrid-long-term-v1",
+            hash_algorithm: "SHA-3(512)",
+            symmetric_algorithm: "AES-256/GCM",
+            eddsa_algorithm: "Ed448",
+            xecdh_algorithm: "X448",
+            ml_dsa_variant: "ML-DSA-87",
+            ml_kem_variant: "ML-KEM-1024",
+        }),
+        _ => Err(Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unsupported crypto profile: {name}"),
+        ))),
+    }
 }
 
 fn create_stored_key_material(input: &ResolvedKeysInput) -> Result<OpsKeysOutput, DynError> {

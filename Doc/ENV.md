@@ -107,6 +107,14 @@ These variables control defaults for operational keys created by `POST /keys`. T
 | `XECDH` | `X25519` | `X25519`, `X448` | Default XECDH algorithm for generated operational keys. |
 | `ML_DSA_VARIANT` | `ML-DSA-44` | `ML-DSA-44`, `ML-DSA-65`, `ML-DSA-87` | Default ML-DSA signature variant. |
 | `ML_KEM_VARIANT` | `ML-KEM-512` | `ML-KEM-512`, `ML-KEM-768`, `ML-KEM-1024` | Default ML-KEM KEM variant. |
+| `DEFAULT_CRYPTO_PROFILE` | `hybrid-performance-v1` | `hybrid-performance-v1`, `hybrid-high-assurance-v1`, `hybrid-long-term-v1` | Default crypto profile for `POST /keys` when the request does not include `profile`. |
+| `CRYPTO_POLICY` | `profile-only` | `profile-only`, `allow-overrides` | Controls whether `POST /keys` accepts individual algorithm fields. `profile-only` rejects overrides; `allow-overrides` accepts them for dev/test. |
+
+Crypto profiles:
+
+- `hybrid-performance-v1`: `BLAKE2b(256)`, `ChaCha20Poly1305`, `Ed25519`, `X25519`, `ML-DSA-44`, `ML-KEM-512`
+- `hybrid-high-assurance-v1`: `SHA-3(384)`, `AES-256/GCM`, `Ed25519`, `X25519`, `ML-DSA-65`, `ML-KEM-768`
+- `hybrid-long-term-v1`: `SHA-3(512)`, `AES-256/GCM`, `Ed448`, `X448`, `ML-DSA-87`, `ML-KEM-1024`
 
 Supported hash algorithms:
 
@@ -159,5 +167,7 @@ EDDSA=Ed25519
 XECDH=X25519
 ML_DSA_VARIANT=ML-DSA-44
 ML_KEM_VARIANT=ML-KEM-512
+DEFAULT_CRYPTO_PROFILE=hybrid-performance-v1
+CRYPTO_POLICY=profile-only
 PLAINTEXT_MESSAGE="You are not special. You are not a beautiful and unique snowflake. You're the same decaying organic matter as everything else."
 ```

@@ -13,6 +13,7 @@ DEFAULT_BASE_URL = "http://127.0.0.1:3000"
 DEFAULT_APIKEY = "20e446d000498e82b056f54e68216d4c8c9bda089a6812d0aa9d82d59f918018"
 VALID_KEY_REQUEST = {
     "tag": "negative-1",
+    "profile": "hybrid-performance-v1",
     "eddsa_algorithm": "Ed25519",
     "xecdh_algorithm": "X25519",
     "ml_dsa_variant": "ML-DSA-44",
@@ -214,6 +215,12 @@ def main():
         status, _ = client.post("/keys", request, auth=True)
         require_status("POST /keys invalid algorithm", status, 400)
 
+    def keys_invalid_profile():
+        request = dict(VALID_KEY_REQUEST)
+        request["profile"] = "hybrid-imaginary-v1"
+        status, _ = client.post("/keys", request, auth=True)
+        require_status("POST /keys invalid profile", status, 400)
+
     def keys_invalid_hash_algorithm():
         request = dict(VALID_KEY_REQUEST)
         request["hash_algorithm"] = "SHA-999"
@@ -233,6 +240,7 @@ def main():
         ("GET /keys/db invalid auth", keys_db_invalid_auth),
         ("POST /keys tag not string", keys_tag_not_string),
         ("POST /keys invalid algorithm", keys_invalid_algorithm),
+        ("POST /keys invalid profile", keys_invalid_profile),
         ("POST /keys invalid hash algorithm", keys_invalid_hash_algorithm),
         ("POST /keys invalid symmetric algorithm", keys_invalid_symmetric_algorithm),
     ):

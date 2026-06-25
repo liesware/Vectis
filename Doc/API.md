@@ -173,6 +173,7 @@ Request:
 ```json
 {
   "tag": "ACME Corp.",
+  "profile": "hybrid-high-assurance-v1",
   "hash_algorithm": "SHA-256",
   "symmetric_algorithm": "AES-256/GCM",
   "eddsa_algorithm": "Ed25519",
@@ -184,8 +185,24 @@ Request:
 
 All fields are optional:
 
-- `tag`: if missing, Vectis uses a timestamp.
-- Algorithm fields: if missing, Vectis uses the configured defaults.
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `tag` | string | No | Human-readable label for the key. If missing, Vectis uses a timestamp. |
+| `profile` | string | No | Crypto profile used as the base algorithm policy. If missing, Vectis uses `DEFAULT_CRYPTO_PROFILE`. |
+| `hash_algorithm` | string | No | Individual hash override. Accepted only when `CRYPTO_POLICY=allow-overrides`. |
+| `symmetric_algorithm` | string | No | Individual symmetric algorithm override. Accepted only when `CRYPTO_POLICY=allow-overrides`. |
+| `eddsa_algorithm` | string | No | Individual EdDSA override. Accepted only when `CRYPTO_POLICY=allow-overrides`. |
+| `xecdh_algorithm` | string | No | Individual XECDH override. Accepted only when `CRYPTO_POLICY=allow-overrides`. |
+| `ml_dsa_variant` | string | No | Individual ML-DSA override. Accepted only when `CRYPTO_POLICY=allow-overrides`. |
+| `ml_kem_variant` | string | No | Individual ML-KEM override. Accepted only when `CRYPTO_POLICY=allow-overrides`. |
+
+When `CRYPTO_POLICY=profile-only`, Vectis rejects all individual algorithm fields and accepts only `tag` and `profile`.
+
+Supported profiles:
+
+- `hybrid-performance-v1`: `BLAKE2b(256)`, `ChaCha20Poly1305`, `Ed25519`, `X25519`, `ML-DSA-44`, `ML-KEM-512`
+- `hybrid-high-assurance-v1`: `SHA-3(384)`, `AES-256/GCM`, `Ed25519`, `X25519`, `ML-DSA-65`, `ML-KEM-768`
+- `hybrid-long-term-v1`: `SHA-3(512)`, `AES-256/GCM`, `Ed448`, `X448`, `ML-DSA-87`, `ML-KEM-1024`
 
 Response:
 

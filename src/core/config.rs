@@ -14,6 +14,12 @@ pub const INTERNAL_KEYS_EDDSA_ALGORITHM: &str = "Ed25519";
 pub const INTERNAL_KEYS_XECDH_ALGORITHM: &str = "X25519";
 pub const INTERNAL_KEYS_ML_DSA_VARIANT: &str = "ML-DSA-44";
 pub const INTERNAL_KEYS_ML_KEM_VARIANT: &str = "ML-KEM-512";
+pub const CRYPTO_PROFILES: &[&str] = &[
+    "hybrid-performance-v1",
+    "hybrid-high-assurance-v1",
+    "hybrid-long-term-v1",
+];
+pub const CRYPTO_POLICIES: &[&str] = &["profile-only", "allow-overrides"];
 
 pub struct AppConfig {
     pub http_bind_addr: SocketAddr,
@@ -27,12 +33,8 @@ pub struct AppConfig {
     pub sqlite_path: PathBuf,
     pub sender_hostname: String,
     pub receiver_hostname: String,
-    pub hash_algorithm: String,
-    pub symmetric_algorithm: String,
-    pub eddsa_algorithm: String,
-    pub xecdh_algorithm: String,
-    pub ml_dsa_variant: String,
-    pub ml_kem_variant: String,
+    pub default_crypto_profile: String,
+    pub crypto_policy: String,
     pub plaintext_message: String,
 }
 
@@ -63,12 +65,15 @@ pub fn app_config() -> Result<AppConfig, DynError> {
     ))?;
     let sender_hostname = config_value(&env_file, "SENDER_HOSTNAME", "localhost.local");
     let receiver_hostname = config_value(&env_file, "RECEIVER_HOSTNAME", "remotehost.local");
-    let hash_algorithm = config_value(&env_file, "HASH", "BLAKE2b(512)");
+    let hash_algorithm = config_value(&env_file, "HASH", "BLAKE2b(256)");
     let symmetric_algorithm = config_value(&env_file, "SYMMETRIC", "ChaCha20Poly1305");
     let eddsa_algorithm = config_value(&env_file, "EDDSA", "Ed25519");
     let xecdh_algorithm = config_value(&env_file, "XECDH", "X25519");
     let ml_dsa_variant = config_value(&env_file, "ML_DSA_VARIANT", "ML-DSA-44");
     let ml_kem_variant = config_value(&env_file, "ML_KEM_VARIANT", "ML-KEM-512");
+    let default_crypto_profile =
+        config_value(&env_file, "DEFAULT_CRYPTO_PROFILE", "hybrid-performance-v1");
+    let crypto_policy = config_value(&env_file, "CRYPTO_POLICY", "profile-only");
     let plaintext_message = config_value(
         &env_file,
         "PLAINTEXT_MESSAGE",
@@ -104,6 +109,12 @@ pub fn app_config() -> Result<AppConfig, DynError> {
         &ml_kem_variant,
         &["ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"],
     )?;
+    validation::validate_allowed_value(
+        "DEFAULT_CRYPTO_PROFILE",
+        &default_crypto_profile,
+        CRYPTO_PROFILES,
+    )?;
+    validation::validate_allowed_value("CRYPTO_POLICY", &crypto_policy, CRYPTO_POLICIES)?;
     validation::validate_text_field("PLAINTEXT_MESSAGE", &plaintext_message)?;
 
     Ok(AppConfig {
@@ -118,12 +129,8 @@ pub fn app_config() -> Result<AppConfig, DynError> {
         sqlite_path,
         sender_hostname,
         receiver_hostname,
-        hash_algorithm,
-        symmetric_algorithm,
-        eddsa_algorithm,
-        xecdh_algorithm,
-        ml_dsa_variant,
-        ml_kem_variant,
+        default_crypto_profile,
+        crypto_policy,
         plaintext_message,
     })
 }

@@ -32,6 +32,7 @@ pub async fn create_endpoint(
     info!(
         endpoint = "POST /keys",
         tag = request.tag.as_deref().unwrap_or("<default>"),
+        profile = request.profile.as_deref().unwrap_or("<default>"),
         hash_algorithm = request.hash_algorithm.as_deref().unwrap_or("<default>"),
         symmetric_algorithm = request
             .symmetric_algorithm

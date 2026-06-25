@@ -6,3 +6,5 @@ init.json
 /logs
 routes.json
 .DS_Store
+*.swp
+.*.swp
