@@ -345,6 +345,21 @@ fn create_key_id(keys_b64: &str) -> Result<String, DynError> {
     )?))
 }
 
+fn validate_key_id_matches_enc_keys(id: &str, enc_keys: &str) -> Result<(), DynError> {
+    KeyId::parse(id)?;
+    let parts = split_internal_payload("enc_keys", enc_keys)?;
+    let expected_id = create_key_id(parts[0])?;
+
+    if id != expected_id {
+        return Err(Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "id does not match INTERNAL_KEYS_HASH(enc_keys payload)",
+        )));
+    }
+
+    Ok(())
+}
+
 pub fn parse_create_keys_input(request: Value) -> Result<CreateKeysInput, DynError> {
     let Some(object) = request.as_object() else {
         return Err(Box::new(io::Error::new(
@@ -419,9 +434,11 @@ fn load_ops_key_from_row(
     init_state: &ValidatedInitState,
     row: crate::core::storage::OpsKeyRow,
 ) -> Result<LoadedOpsKey, DynError> {
+    validate_key_id_matches_enc_keys(&row.id, &row.enc_keys)?;
     let decrypted = decrypt_ops_keys_payload(init_state, &row.enc_keys)?;
     let properties = decrypt_ops_key_properties_payload(init_state, &row.properties)?;
     validate_ops_key_properties(&properties.output)?;
+    validate_loaded_ops_key_binding(&row.id, &decrypted, &properties)?;
 
     Ok(LoadedOpsKey {
         id: row.id,
@@ -463,13 +480,7 @@ fn decrypt_ops_keys_payload(
     init_state: &ValidatedInitState,
     enc_keys: &str,
 ) -> Result<DecryptedOpsKeys, DynError> {
-    let parts = enc_keys.split('.').collect::<Vec<_>>();
-    if parts.len() != 3 {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "enc_keys must have keys.nonce.aad base64 sections",
-        )));
-    }
+    let parts = split_internal_payload("enc_keys", enc_keys)?;
 
     let ciphertext = general_purpose::STANDARD.decode(parts[0])?;
     let nonce = Zeroizing::new(general_purpose::STANDARD.decode(parts[1])?);
@@ -511,13 +522,7 @@ fn decrypt_ops_key_properties_payload(
     init_state: &ValidatedInitState,
     properties: &str,
 ) -> Result<DecryptedOpsKeyProperties, DynError> {
-    let parts = properties.split('.').collect::<Vec<_>>();
-    if parts.len() != 3 {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "properties must have ciphertext.nonce.aad base64 sections",
-        )));
-    }
+    let parts = split_internal_payload("properties", properties)?;
 
     let ciphertext = general_purpose::STANDARD.decode(parts[0])?;
     let nonce = Zeroizing::new(general_purpose::STANDARD.decode(parts[1])?);
@@ -553,6 +558,132 @@ fn decrypt_ops_key_properties_payload(
         aad: aad_text,
         output,
     })
+}
+
+fn split_internal_payload<'a>(field: &str, value: &'a str) -> Result<Vec<&'a str>, DynError> {
+    let parts = value.split('.').collect::<Vec<_>>();
+    if parts.len() != 3 {
+        return Err(Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{field} must have ciphertext.nonce.aad base64 sections"),
+        )));
+    }
+
+    Ok(parts)
+}
+
+fn validate_loaded_ops_key_binding(
+    id: &str,
+    keys: &DecryptedOpsKeys,
+    properties: &DecryptedOpsKeyProperties,
+) -> Result<(), DynError> {
+    let keys_aad = parse_aad_fields(&keys.aad)?;
+    let properties_aad = parse_aad_fields(&properties.aad)?;
+
+    validate_aad_field(
+        "enc_keys.aad.type",
+        aad_field(&keys_aad, "type")?,
+        "ops-keys",
+    )?;
+    validate_aad_field(
+        "enc_keys.aad.cipher",
+        aad_field(&keys_aad, "cipher")?,
+        config::INTERNAL_KEYS_CIPHER,
+    )?;
+    validate_aad_field(
+        "properties.aad.type",
+        aad_field(&properties_aad, "type")?,
+        "ops-key-properties",
+    )?;
+    validate_aad_field(
+        "properties.aad.cipher",
+        aad_field(&properties_aad, "cipher")?,
+        config::INTERNAL_KEYS_CIPHER,
+    )?;
+    validate_aad_field("properties.aad.kid", aad_field(&properties_aad, "kid")?, id)?;
+
+    validate_aad_field(
+        "properties.aad.tag",
+        aad_field(&properties_aad, "tag")?,
+        &properties.output.tag,
+    )?;
+    validate_aad_field(
+        "properties.aad.profile",
+        aad_field(&properties_aad, "profile")?,
+        &properties.output.profile,
+    )?;
+    validate_aad_field(
+        "properties.aad.timestamp",
+        aad_field(&properties_aad, "timestamp")?,
+        &properties.output.created_at,
+    )?;
+
+    validate_aad_field(
+        "enc_keys.aad.tag",
+        aad_field(&keys_aad, "tag")?,
+        aad_field(&properties_aad, "tag")?,
+    )?;
+    validate_aad_field(
+        "enc_keys.aad.timestamp",
+        aad_field(&keys_aad, "timestamp")?,
+        aad_field(&properties_aad, "timestamp")?,
+    )?;
+    validate_aad_field(
+        "enc_keys.aad.version",
+        aad_field(&keys_aad, "version")?,
+        aad_field(&properties_aad, "version")?,
+    )?;
+    validate_aad_field(
+        "enc_keys.aad.hostname",
+        aad_field(&keys_aad, "hostname")?,
+        aad_field(&properties_aad, "hostname")?,
+    )?;
+
+    Ok(())
+}
+
+fn parse_aad_fields(aad: &str) -> Result<Vec<(String, String)>, DynError> {
+    validation::validate_text_field("aad", aad)?;
+    let mut fields = Vec::new();
+
+    for part in aad.split(';') {
+        let Some((key, value)) = part.split_once('=') else {
+            return Err(Box::new(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "aad must contain key=value fields",
+            )));
+        };
+
+        validation::validate_text_field("aad key", key)?;
+        validation::validate_text_field("aad value", value)?;
+        fields.push((key.to_string(), value.to_string()));
+    }
+
+    Ok(fields)
+}
+
+fn aad_field<'a>(fields: &'a [(String, String)], key: &str) -> Result<&'a str, DynError> {
+    fields
+        .iter()
+        .find(|(field_key, _)| field_key == key)
+        .map(|(_, value)| value.as_str())
+        .ok_or_else(|| {
+            Box::new(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("aad missing {key}"),
+            )) as DynError
+        })
+}
+
+fn validate_aad_field(field: &str, actual: &str, expected: &str) -> Result<(), DynError> {
+    if actual != expected {
+        return Err(Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{field} does not match expected value"),
+        )));
+    }
+
+    Ok(())
 }
 
 fn create_ops_key_properties(input: &ResolvedKeysInput) -> OpsKeyProperties {
