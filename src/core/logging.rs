@@ -40,10 +40,10 @@ pub fn init_logging() -> WorkerGuard {
 
 pub fn logging_config() -> LoggingConfig {
     let env_file = load_env_file(".env").unwrap_or_default();
-    let level_text = config_value(&env_file, "LOG_LEVEL", DEFAULT_LOG_LEVEL);
+    let level_text = config_value(&env_file, "VECTIS_LOG_LEVEL", DEFAULT_LOG_LEVEL);
     let level = parse_log_level(&level_text);
-    let dir = config_value(&env_file, "LOG_DIR", DEFAULT_LOG_DIR);
-    let file = config_value(&env_file, "LOG_FILE", DEFAULT_LOG_FILE);
+    let dir = config_value(&env_file, "VECTIS_LOG_DIR", DEFAULT_LOG_DIR);
+    let file = config_value(&env_file, "VECTIS_LOG_FILE", DEFAULT_LOG_FILE);
 
     LoggingConfig { level, dir, file }
 }
@@ -56,7 +56,7 @@ fn parse_log_level(value: &str) -> Level {
         "warn" | "warning" => Level::WARN,
         "error" => Level::ERROR,
         _ => {
-            warn!(value, "invalid LOG_LEVEL, falling back to info");
+            warn!(value, "invalid VECTIS_LOG_LEVEL, falling back to info");
             Level::INFO
         }
     }

@@ -75,7 +75,7 @@ pub fn create_encrypted_init_output_json() -> Result<EncryptedInitJsonOutput, Dy
         config::INTERNAL_KEYS_HASH,
         &api_key_material,
     )?));
-    validation::validate_hash_hex_field("APIKEY", &api_key, config::INTERNAL_KEYS_HASH)?;
+    validation::validate_hash_hex_field("VECTIS_APIKEY", &api_key, config::INTERNAL_KEYS_HASH)?;
     let output = Zeroizing::new(create_init_output()?);
     let plaintext = Zeroizing::new(serde_json::to_string_pretty(&*output)?);
     let encryption_key =
@@ -163,7 +163,7 @@ fn decrypt_encrypted_init_output(
         Box::new(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!(
-                "init.json could not be decrypted: wrong init AES-256 key, stale UNSEAL_KEY, or init.json was regenerated ({err})"
+                "init.json could not be decrypted: wrong init AES-256 key, stale VECTIS_UNSEAL_KEY, or init.json was regenerated ({err})"
             ),
         )) as DynError
     })?;

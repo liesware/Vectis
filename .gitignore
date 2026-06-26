@@ -1,6 +1,7 @@
 /target
 .env
 init.json
+.unseal_key
 *.db
 *.log
 /logs

@@ -133,12 +133,16 @@ fn validate_symmetric_encryption(
 }
 
 fn symmetric_cipher(algorithm: &str) -> Result<crypto::SymmetricCipherSpec, DynError> {
-    validation::validate_allowed_value("SYMMETRIC", algorithm, crypto::SYMMETRIC_ALGORITHMS)?;
+    validation::validate_allowed_value(
+        "symmetric_algorithm",
+        algorithm,
+        crypto::SYMMETRIC_ALGORITHMS,
+    )?;
 
     crypto::symmetric_cipher(algorithm).ok_or_else(|| {
         Box::new(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("invalid SYMMETRIC algorithm: {algorithm}"),
+            format!("invalid symmetric algorithm: {algorithm}"),
         )) as DynError
     })
 }

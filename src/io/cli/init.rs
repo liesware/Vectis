@@ -11,18 +11,18 @@ pub fn run_init() -> Result<String, DynError> {
 
     fs::write(INIT_OUTPUT_PATH, output.json)?;
     info!(path = INIT_OUTPUT_PATH, "init keys written");
-    println!("UNSEAL_KEY={}", &*output.encryption_key_hex);
-    println!("APIKEY={}", &*output.api_key);
-    println!("\n* UNSEAL_KEY should be an env var, after init it must be unset.");
+    println!("VECTIS_UNSEAL_KEY={}", &*output.encryption_key_hex);
+    println!("VECTIS_APIKEY={}", &*output.api_key);
+    println!("\n* VECTIS_UNSEAL_KEY should be an env var, after init it must be unset.");
     println!(
-        "* APIKEY is a reference value your if you want to use your own APIKEY should preserves the same format."
+        "* VECTIS_APIKEY is a reference value your if you want to use your own VECTIS_APIKEY should preserves the same format."
     );
 
     Ok(INIT_OUTPUT_PATH.to_string())
 }
 
 pub fn load_init_state() -> Result<ops::init::ValidatedInitState, DynError> {
-    let key_hex = validation::read_unseal_key("UNSEAL_KEY:")?;
+    let key_hex = validation::read_unseal_key("VECTIS_UNSEAL_KEY:")?;
     let encrypted_json = fs::read_to_string(INIT_OUTPUT_PATH)?;
     let init_state = ops::init::load_validated_init_state(&encrypted_json, &key_hex)?;
 

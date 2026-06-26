@@ -17,14 +17,16 @@ pub async fn run(command: &str, args: Vec<String>) -> Result<(), DynError> {
         return Ok(());
     }
 
+    let (output, args) = parse_output_option(args)?;
+
     match command {
-        "health" => run_health(args).await,
-        "test" => run_test(args).await,
-        "keys" => run_keys(args).await,
-        "routes" => run_routes(args).await,
-        "pub" => run_pub(args).await,
-        "sign" => run_sign(args).await,
-        "message" => run_message(args).await,
+        "health" => run_health(args, output).await,
+        "test" => run_test(args, output).await,
+        "keys" => run_keys(args, output).await,
+        "routes" => run_routes(args, output).await,
+        "pub" => run_pub(args, output).await,
+        "sign" => run_sign(args, output).await,
+        "message" => run_message(args, output).await,
         _ => Err(invalid_input(format!("unknown command: {command}"))),
     }
 }
@@ -42,17 +44,29 @@ pub fn print_help(command: &str) {
     }
 }
 
-async fn run_health(args: Vec<String>) -> Result<(), DynError> {
+#[derive(Clone, Copy)]
+enum OutputFormat {
+    Json,
+    Yaml,
+}
+
+async fn run_health(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let target = expect_one(args, "health target")?;
     validation::validate_allowed_value("health target", &target, &["startup", "live", "ready"])?;
 
     let client = CliHttpClient::from_env()?;
     client
-        .send(Method::GET, &format!("/healthz/{target}"), false, None)
+        .send(
+            Method::GET,
+            &format!("/healthz/{target}"),
+            false,
+            None,
+            output,
+        )
         .await
 }
 
-async fn run_test(args: Vec<String>) -> Result<(), DynError> {
+async fn run_test(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let target = expect_one(args, "test target")?;
     let path = if target == "init" {
         String::from("/self-test/init")
@@ -62,46 +76,54 @@ async fn run_test(args: Vec<String>) -> Result<(), DynError> {
     };
 
     let client = CliHttpClient::from_env()?;
-    client.send(Method::GET, &path, true, None).await
+    client.send(Method::GET, &path, true, None, output).await
 }
 
-async fn run_keys(args: Vec<String>) -> Result<(), DynError> {
+async fn run_keys(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "keys command")?;
     let client = CliHttpClient::from_env()?;
 
     match subcommand.as_str() {
         "list" => {
             expect_no_args(&rest, "keys list")?;
-            client.send(Method::GET, "/keys", false, None).await
+            client.send(Method::GET, "/keys", false, None, output).await
         }
         "reload" => {
             expect_no_args(&rest, "keys reload")?;
-            client.send(Method::POST, "/keys/reload", true, None).await
+            client
+                .send(Method::POST, "/keys/reload", true, None, output)
+                .await
         }
         "properties" => {
             expect_no_args(&rest, "keys properties")?;
             client
-                .send(Method::GET, "/keys/properties", true, None)
+                .send(Method::GET, "/keys/properties", true, None, output)
                 .await
         }
         "create" => {
             let body = parse_keys_create_body(rest)?;
-            client.send(Method::POST, "/keys", true, Some(body)).await
+            client
+                .send(Method::POST, "/keys", true, Some(body), output)
+                .await
         }
         _ => Err(invalid_input(format!("unknown keys command: {subcommand}"))),
     }
 }
 
-async fn run_routes(args: Vec<String>) -> Result<(), DynError> {
+async fn run_routes(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "routes command")?;
     expect_no_args(&rest, &format!("routes {subcommand}"))?;
 
     let client = CliHttpClient::from_env()?;
     match subcommand.as_str() {
-        "list" => client.send(Method::GET, "/routes", true, None).await,
+        "list" => {
+            client
+                .send(Method::GET, "/routes", true, None, output)
+                .await
+        }
         "reload" => {
             client
-                .send(Method::POST, "/routes/reload", true, None)
+                .send(Method::POST, "/routes/reload", true, None, output)
                 .await
         }
         _ => Err(invalid_input(format!(
@@ -110,24 +132,30 @@ async fn run_routes(args: Vec<String>) -> Result<(), DynError> {
     }
 }
 
-async fn run_pub(args: Vec<String>) -> Result<(), DynError> {
+async fn run_pub(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let kid = expect_one(args, "kid")?;
     validate_kid("kid", &kid)?;
 
     let client = CliHttpClient::from_env()?;
     client
-        .send(Method::GET, &format!("/pub/{kid}"), false, None)
+        .send(Method::GET, &format!("/pub/{kid}"), false, None, output)
         .await
 }
 
-async fn run_sign(args: Vec<String>) -> Result<(), DynError> {
+async fn run_sign(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "sign command or kid")?;
     let client = CliHttpClient::from_env()?;
 
     if subcommand == "verify" {
         let body = parse_json_source(rest)?;
         return client
-            .send(Method::POST, "/sign/verification", false, Some(body))
+            .send(
+                Method::POST,
+                "/sign/verification",
+                false,
+                Some(body),
+                output,
+            )
             .await;
     }
 
@@ -139,11 +167,12 @@ async fn run_sign(args: Vec<String>) -> Result<(), DynError> {
             &format!("/sign/{subcommand}"),
             true,
             Some(body),
+            output,
         )
         .await
 }
 
-async fn run_message(args: Vec<String>) -> Result<(), DynError> {
+async fn run_message(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "message command")?;
     let client = CliHttpClient::from_env()?;
 
@@ -153,29 +182,39 @@ async fn run_message(args: Vec<String>) -> Result<(), DynError> {
             validate_kid("sender_kid", &kid)?;
             let body = parse_json_source(rest)?;
             client
-                .send(Method::POST, &format!("/message/{kid}"), true, Some(body))
+                .send(
+                    Method::POST,
+                    &format!("/message/{kid}"),
+                    true,
+                    Some(body),
+                    output,
+                )
                 .await
         }
         "receive" => {
             let body = parse_json_source(rest)?;
             client
-                .send(Method::POST, "/message", false, Some(body))
+                .send(Method::POST, "/message", false, Some(body), output)
                 .await
         }
         "decrypt" => {
             let body = parse_json_source(rest)?;
             client
-                .send(Method::POST, "/message/decrypt", true, Some(body))
+                .send(Method::POST, "/message/decrypt", true, Some(body), output)
                 .await
         }
-        "internal" => run_internal_message(rest, &client).await,
+        "internal" => run_internal_message(rest, &client, output).await,
         _ => Err(invalid_input(format!(
             "unknown message command: {subcommand}"
         ))),
     }
 }
 
-async fn run_internal_message(args: Vec<String>, client: &CliHttpClient) -> Result<(), DynError> {
+async fn run_internal_message(
+    args: Vec<String>,
+    client: &CliHttpClient,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "message internal command")?;
 
     match subcommand.as_str() {
@@ -189,13 +228,20 @@ async fn run_internal_message(args: Vec<String>, client: &CliHttpClient) -> Resu
                     &format!("/message/internal/encrypt/{kid}"),
                     true,
                     Some(body),
+                    output,
                 )
                 .await
         }
         "decrypt" => {
             let body = parse_json_source(rest)?;
             client
-                .send(Method::POST, "/message/internal/decrypt", true, Some(body))
+                .send(
+                    Method::POST,
+                    "/message/internal/decrypt",
+                    true,
+                    Some(body),
+                    output,
+                )
                 .await
         }
         _ => Err(invalid_input(format!(
@@ -233,9 +279,13 @@ impl CliHttpClient {
             ));
         }
 
-        let api_key = config::config_value(&env_file, "APIKEY", "");
+        let api_key = config::config_value(&env_file, "VECTIS_APIKEY", "");
         if !api_key.is_empty() {
-            validation::validate_hash_hex_field("APIKEY", &api_key, config::INTERNAL_KEYS_HASH)?;
+            validation::validate_hash_hex_field(
+                "VECTIS_APIKEY",
+                &api_key,
+                config::INTERNAL_KEYS_HASH,
+            )?;
         }
 
         let client = reqwest::Client::builder()
@@ -255,13 +305,14 @@ impl CliHttpClient {
         path: &str,
         auth: bool,
         body: Option<Value>,
+        output: OutputFormat,
     ) -> Result<(), DynError> {
         let url = self.base_url.join(path.trim_start_matches('/'))?;
         let mut request = self.client.request(method, url);
 
         if auth {
             if self.api_key.is_empty() {
-                return Err(invalid_input("APIKEY is required for this command"));
+                return Err(invalid_input("VECTIS_APIKEY is required for this command"));
             }
             request = request.header("Authorization", &self.api_key);
         }
@@ -278,7 +329,7 @@ impl CliHttpClient {
             return Err(invalid_input(format!("HTTP {status}: {payload}")));
         }
 
-        print_response(&payload)
+        print_response(&payload, output)
     }
 }
 
@@ -382,6 +433,35 @@ fn validate_kid(field: &str, value: &str) -> Result<(), DynError> {
     validation::validate_hash_hex_field(field, value, config::INTERNAL_KEYS_HASH)
 }
 
+fn parse_output_option(args: Vec<String>) -> Result<(OutputFormat, Vec<String>), DynError> {
+    let mut output = OutputFormat::Yaml;
+    let mut rest = Vec::with_capacity(args.len());
+    let mut index = 0;
+
+    while index < args.len() {
+        if args[index] == "--output" {
+            let value = next_flag_value(&args, index, "--output")?;
+            output = parse_output_format(value)?;
+            index += 2;
+        } else {
+            rest.push(args[index].clone());
+            index += 1;
+        }
+    }
+
+    Ok((output, rest))
+}
+
+fn parse_output_format(value: &str) -> Result<OutputFormat, DynError> {
+    validation::validate_allowed_value("output", value, &["yaml", "json"])?;
+
+    match value {
+        "yaml" => Ok(OutputFormat::Yaml),
+        "json" => Ok(OutputFormat::Json),
+        _ => unreachable!("output was already validated"),
+    }
+}
+
 fn expect_one(args: Vec<String>, field: &str) -> Result<String, DynError> {
     if args.len() != 1 {
         return Err(invalid_input(format!(
@@ -421,13 +501,16 @@ fn next_flag_value<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&
         .ok_or_else(|| invalid_input(format!("{flag} requires a value")))
 }
 
-fn print_response(payload: &str) -> Result<(), DynError> {
+fn print_response(payload: &str, output: OutputFormat) -> Result<(), DynError> {
     if payload.trim().is_empty() {
         return Ok(());
     }
 
     match serde_json::from_str::<Value>(payload) {
-        Ok(value) => println!("{}", serde_json::to_string_pretty(&value)?),
+        Ok(value) => match output {
+            OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&value)?),
+            OutputFormat::Yaml => print!("{}", serde_yaml::to_string(&value)?),
+        },
         Err(_) => println!("{payload}"),
     }
 
@@ -447,7 +530,7 @@ fn is_help_request(args: &[String]) -> bool {
 
 fn print_http_help() {
     println!("HTTP client commands:");
-    println!("  {PROGRAM_NAME} health <startup|live|ready>");
+    println!("  {PROGRAM_NAME} health <startup|live|ready> [--output <yaml|json>]");
     println!("  {PROGRAM_NAME} test init");
     println!("  {PROGRAM_NAME} test <kid>");
     println!("  {PROGRAM_NAME} keys create [--tag <tag>] [--profile <profile>]");
@@ -464,6 +547,10 @@ fn print_http_help() {
     println!("  {PROGRAM_NAME} message decrypt (--json <json>|--file <path>)");
     println!("  {PROGRAM_NAME} message internal encrypt <kid> (--json <json>|--file <path>)");
     println!("  {PROGRAM_NAME} message internal decrypt (--json <json>|--file <path>)");
+    println!();
+    println!("Output:");
+    println!("  --output yaml         YAML output, default");
+    println!("  --output json         Pretty JSON output");
 }
 
 fn print_health_help() {
@@ -482,6 +569,7 @@ fn print_health_help() {
     println!("Environment:");
     println!("  VECTIS_API_URL        API base URL, default {DEFAULT_API_URL}");
     println!("  VECTIS_TIMEOUT_SECONDS Request timeout, default {DEFAULT_TIMEOUT_SECONDS}");
+    print_output_help();
 }
 
 fn print_test_help() {
@@ -499,7 +587,8 @@ fn print_test_help() {
     println!("  <kid>                 GET /self-test/keys/{{kid}}");
     println!();
     println!("Required environment:");
-    println!("  APIKEY                64-character hex API key");
+    println!("  VECTIS_APIKEY         64-character hex API key");
+    print_output_help();
 }
 
 fn print_keys_help() {
@@ -512,10 +601,10 @@ fn print_keys_help() {
     println!("Creates, lists, or reloads operational keys through the HTTP API.");
     println!();
     println!("Commands:");
-    println!("  create                POST /keys, requires APIKEY");
+    println!("  create                POST /keys, requires VECTIS_APIKEY");
     println!("  list                  GET /keys, public");
-    println!("  properties            GET /keys/properties, requires APIKEY");
-    println!("  reload                POST /keys/reload, requires APIKEY");
+    println!("  properties            GET /keys/properties, requires VECTIS_APIKEY");
+    println!("  reload                POST /keys/reload, requires VECTIS_APIKEY");
     println!();
     println!("Create options:");
     println!("  --tag <tag>           Optional label for the key");
@@ -531,6 +620,7 @@ fn print_keys_help() {
     println!("  {PROGRAM_NAME} keys list");
     println!("  {PROGRAM_NAME} keys properties");
     println!("  {PROGRAM_NAME} keys reload");
+    print_output_help();
 }
 
 fn print_routes_help() {
@@ -541,12 +631,14 @@ fn print_routes_help() {
     println!("Lists or reloads final app routes through the HTTP API.");
     println!();
     println!("Commands:");
-    println!("  list                  GET /routes, requires APIKEY");
-    println!("  reload                POST /routes/reload, requires APIKEY");
+    println!("  list                  GET /routes, requires VECTIS_APIKEY");
+    println!("  reload                POST /routes/reload, requires VECTIS_APIKEY");
     println!();
     println!("Behavior:");
     println!("  list                  Returns routes currently loaded in memory");
-    println!("  reload                Re-reads ROUTES_PATH and replaces the in-memory routes");
+    println!(
+        "  reload                Re-reads VECTIS_ROUTES_PATH and replaces the in-memory routes"
+    );
     println!();
     println!("Notes:");
     println!(
@@ -554,6 +646,7 @@ fn print_routes_help() {
     );
     println!("  Each route kid must exist in the keys currently loaded in memory.");
     println!("  Invalid routes file or unloaded route kid keeps the previous in-memory routes.");
+    print_output_help();
 }
 
 fn print_pub_help() {
@@ -567,6 +660,7 @@ fn print_pub_help() {
     println!();
     println!("Endpoint:");
     println!("  GET /pub/{{kid}}");
+    print_output_help();
 }
 
 fn print_sign_help() {
@@ -582,12 +676,13 @@ fn print_sign_help() {
     println!(r#"  {{"message_hash":{{"alg":"SHA-256","hex":"<64 hex chars>"}}}}"#);
     println!();
     println!("Endpoints:");
-    println!("  sign <kid>            POST /sign/{{kid}}, requires APIKEY");
+    println!("  sign <kid>            POST /sign/{{kid}}, requires VECTIS_APIKEY");
     println!("  sign verify           POST /sign/verification, public");
     println!();
     println!("Input options:");
     println!("  --json <json>         JSON object as a shell argument");
     println!("  --file <path>         Path to a JSON file");
+    print_output_help();
 }
 
 fn print_message_help() {
@@ -614,13 +709,23 @@ fn print_message_help() {
     println!(r#"  internal encrypt:  {{"plaintext":"hello vectis"}}"#);
     println!();
     println!("Endpoints:");
-    println!("  send                  POST /message/{{sender_kid}}, requires APIKEY");
+    println!("  send                  POST /message/{{sender_kid}}, requires VECTIS_APIKEY");
     println!("  receive               POST /message, public");
-    println!("  decrypt               POST /message/decrypt, requires APIKEY");
-    println!("  internal encrypt      POST /message/internal/encrypt/{{kid}}, requires APIKEY");
-    println!("  internal decrypt      POST /message/internal/decrypt, requires APIKEY");
+    println!("  decrypt               POST /message/decrypt, requires VECTIS_APIKEY");
+    println!(
+        "  internal encrypt      POST /message/internal/encrypt/{{kid}}, requires VECTIS_APIKEY"
+    );
+    println!("  internal decrypt      POST /message/internal/decrypt, requires VECTIS_APIKEY");
     println!();
     println!("Input options:");
     println!("  --json <json>         JSON object as a shell argument");
     println!("  --file <path>         Path to a JSON file");
+    print_output_help();
+}
+
+fn print_output_help() {
+    println!();
+    println!("Output:");
+    println!("  --output yaml         YAML output, default");
+    println!("  --output json         Pretty JSON output");
 }

@@ -67,6 +67,6 @@ impl StorageState {
 fn unsupported_storage<T>(storage: &str) -> Result<T, DynError> {
     Err(Box::new(io::Error::new(
         io::ErrorKind::InvalidInput,
-        format!("unsupported STORAGE: {storage}"),
+        format!("unsupported VECTIS_STORAGE: {storage}"),
     )))
 }

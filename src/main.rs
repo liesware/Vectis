@@ -97,7 +97,7 @@ fn print_help() {
     println!();
     println!("Environment:");
     println!("  VECTIS_API_URL        API base URL, default http://127.0.0.1:3000");
-    println!("  APIKEY                Required for protected API commands");
+    println!("  VECTIS_APIKEY         Required for protected API commands");
     println!("  VECTIS_TIMEOUT_SECONDS Request timeout, default 30");
 }
 
@@ -123,16 +123,17 @@ fn print_serve_help() {
     println!("Starts the Vectis HTTP service.");
     println!();
     println!("Before the server starts, Vectis decrypts and validates init.json.");
-    println!("Provide UNSEAL_KEY as an environment variable or type it at the hidden prompt.");
+    println!("Provide VECTIS_UNSEAL_KEY, VECTIS_UNSEAL_KEY_FILE, or type it at the hidden prompt.");
     println!();
     println!("Required files:");
     println!("  init.json             Encrypted local init key material");
     println!("  src/db/data.db        Default SQLite database in debug builds");
     println!();
     println!("Common environment:");
-    println!("  UNSEAL_KEY            64 hex characters, not read from .env");
-    println!("  HTTP_BIND_ADDR        Listen address, default 127.0.0.1:3000");
-    println!("  APIKEY                Required by protected endpoints");
+    println!("  VECTIS_UNSEAL_KEY     64 hex characters, not read from .env");
+    println!("  VECTIS_UNSEAL_KEY_FILE Path to unseal key file, default .unseal_key");
+    println!("  VECTIS_HTTP_BIND_ADDR Listen address, default 127.0.0.1:3000");
+    println!("  VECTIS_APIKEY         Required by protected endpoints");
 }
 
 fn print_init_help() {
@@ -143,9 +144,9 @@ fn print_init_help() {
     println!();
     println!("Output:");
     println!("  init.json             Encrypted key file");
-    println!("  UNSEAL_KEY=...        Key used later by serve to decrypt init.json");
-    println!("  APIKEY=...            API key for protected HTTP endpoints");
+    println!("  VECTIS_UNSEAL_KEY=... Key used later by serve to decrypt init.json");
+    println!("  VECTIS_APIKEY=...     API key for protected HTTP endpoints");
     println!();
     println!("Security:");
-    println!("  Do not store UNSEAL_KEY in .env for production.");
+    println!("  Do not store VECTIS_UNSEAL_KEY in .env for production.");
 }

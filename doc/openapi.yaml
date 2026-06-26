@@ -181,7 +181,7 @@ paths:
     get:
       tags: [Routes]
       summary: List final app routes loaded in memory
-      description: Administrative endpoint. Lists the current in-memory routes and does not read ROUTES_PATH.
+      description: Administrative endpoint. Lists the current in-memory routes and does not read VECTIS_ROUTES_PATH.
       security:
         - ApiKeyAuth: []
       responses:
@@ -197,8 +197,8 @@ paths:
   /routes/reload:
     post:
       tags: [Routes]
-      summary: Reload final app routes from ROUTES_PATH
-      description: Administrative endpoint. Replaces in-memory routes only after ROUTES_PATH is successfully read and validated. Every route kid must exist in the keys currently loaded in memory. A missing file reloads to an empty route list; an invalid file or unloaded route kid returns an error and keeps the previous in-memory routes.
+      summary: Reload final app routes from VECTIS_ROUTES_PATH
+      description: Administrative endpoint. Replaces in-memory routes only after VECTIS_ROUTES_PATH is successfully read and validated. Every route kid must exist in the keys currently loaded in memory. A missing file reloads to an empty route list; an invalid file or unloaded route kid returns an error and keeps the previous in-memory routes.
       security:
         - ApiKeyAuth: []
       responses:
@@ -489,8 +489,8 @@ components:
         ml_kem_variant:
           $ref: "#/components/schemas/MlKemVariant"
       description: >
-        When CRYPTO_POLICY=profile-only, only tag and profile are accepted.
-        Individual algorithm fields are accepted only when CRYPTO_POLICY=allow-overrides.
+        When VECTIS_CRYPTO_POLICY=profile-only, only tag and profile are accepted.
+        Individual algorithm fields are accepted only when VECTIS_CRYPTO_POLICY=allow-overrides.
 
     CreateKeysResponse:
       type: object

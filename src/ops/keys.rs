@@ -710,7 +710,7 @@ fn validate_crypto_policy(
     input: &CreateKeysInput,
 ) -> Result<(), DynError> {
     validation::validate_allowed_value(
-        "CRYPTO_POLICY",
+        "VECTIS_CRYPTO_POLICY",
         &config.crypto_policy,
         config::CRYPTO_POLICIES,
     )?;
@@ -727,7 +727,7 @@ fn validate_crypto_policy(
     {
         return Err(Box::new(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "individual algorithm overrides are rejected when CRYPTO_POLICY=profile-only",
+            "individual algorithm overrides are rejected when VECTIS_CRYPTO_POLICY=profile-only",
         )));
     }
 

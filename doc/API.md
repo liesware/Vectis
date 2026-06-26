@@ -24,10 +24,10 @@ The `vectis` CLI is an HTTP client for the runtime API, except for `vectis init`
 Protected endpoints require:
 
 ```http
-Authorization: <APIKEY>
+Authorization: <VECTIS_APIKEY>
 ```
 
-`APIKEY` must be valid hex and match the expected length for `INTERNAL_KEYS_HASH`.
+`VECTIS_APIKEY` must be valid hex and match the expected length for `INTERNAL_KEYS_HASH`.
 
 Endpoints requiring auth:
 
@@ -241,15 +241,15 @@ All fields are optional:
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `tag` | string | No | Human-readable label for the key. If missing, Vectis uses a timestamp. |
-| `profile` | string | No | Crypto profile used as the base algorithm policy. If missing, Vectis uses `DEFAULT_CRYPTO_PROFILE`. |
-| `hash_algorithm` | string | No | Individual hash override. Accepted only when `CRYPTO_POLICY=allow-overrides`. |
-| `symmetric_algorithm` | string | No | Individual symmetric algorithm override. Accepted only when `CRYPTO_POLICY=allow-overrides`. |
-| `eddsa_algorithm` | string | No | Individual EdDSA override. Accepted only when `CRYPTO_POLICY=allow-overrides`. |
-| `xecdh_algorithm` | string | No | Individual XECDH override. Accepted only when `CRYPTO_POLICY=allow-overrides`. |
-| `ml_dsa_variant` | string | No | Individual ML-DSA override. Accepted only when `CRYPTO_POLICY=allow-overrides`. |
-| `ml_kem_variant` | string | No | Individual ML-KEM override. Accepted only when `CRYPTO_POLICY=allow-overrides`. |
+| `profile` | string | No | Crypto profile used as the base algorithm policy. If missing, Vectis uses `VECTIS_DEFAULT_CRYPTO_PROFILE`. |
+| `hash_algorithm` | string | No | Individual hash override. Accepted only when `VECTIS_CRYPTO_POLICY=allow-overrides`. |
+| `symmetric_algorithm` | string | No | Individual symmetric algorithm override. Accepted only when `VECTIS_CRYPTO_POLICY=allow-overrides`. |
+| `eddsa_algorithm` | string | No | Individual EdDSA override. Accepted only when `VECTIS_CRYPTO_POLICY=allow-overrides`. |
+| `xecdh_algorithm` | string | No | Individual XECDH override. Accepted only when `VECTIS_CRYPTO_POLICY=allow-overrides`. |
+| `ml_dsa_variant` | string | No | Individual ML-DSA override. Accepted only when `VECTIS_CRYPTO_POLICY=allow-overrides`. |
+| `ml_kem_variant` | string | No | Individual ML-KEM override. Accepted only when `VECTIS_CRYPTO_POLICY=allow-overrides`. |
 
-When `CRYPTO_POLICY=profile-only`, Vectis rejects all individual algorithm fields and accepts only `tag` and `profile`.
+When `VECTIS_CRYPTO_POLICY=profile-only`, Vectis rejects all individual algorithm fields and accepts only `tag` and `profile`.
 
 Supported profiles:
 
@@ -378,7 +378,7 @@ Response:
 
 ### POST /routes/reload
 
-Administrative refresh operation. Reloads final app routes from `ROUTES_PATH` into memory.
+Administrative refresh operation. Reloads final app routes from `VECTIS_ROUTES_PATH` into memory.
 
 Requires auth.
 
@@ -742,7 +742,7 @@ Vectis can route final app delivery per `kid` with a manually maintained routes 
 Default path:
 
 ```env
-ROUTES_PATH=routes.json
+VECTIS_ROUTES_PATH=routes.json
 ```
 
 Expected file shape:
@@ -763,7 +763,7 @@ Routing behavior:
 
 1. Resolve `recipient_kid` in the in-memory routes state.
 2. If a route exists, deliver to that route's `final_app_addr` and `final_app_path`.
-3. If no route exists for the `kid`, deliver to the default `FINAL_APP_ADDR` and `FINAL_APP_PATH`.
+3. If no route exists for the `kid`, deliver to the default `VECTIS_FINAL_APP_ADDR` and `VECTIS_FINAL_APP_PATH`.
 4. A manual route is loaded only if its `kid` exists in the keys currently loaded in memory.
 5. During startup, a missing file, invalid file, or route with an unloaded `kid` starts with an empty manual route list and uses the default final app fallback.
 6. During `POST /routes/reload`, a missing routes file reloads to an empty manual route list; an invalid file or route with an unloaded `kid` returns an error and keeps the previous in-memory routes.
@@ -774,23 +774,28 @@ The routes file is operational configuration. Vectis does not create it automati
 
 Main variables:
 
-- `PUBLIC_ADDR`: public address used as `sender.host` in protected messages.
-- `FINAL_APP_ADDR`: final app host:port.
-- `FINAL_APP_PATH`: final app delivery path.
-- `ROUTES_PATH`: optional manual final app routing file path, relative to the working directory unless absolute.
-- `APIKEY`: HTTP auth key for protected endpoints.
-- `SQLITE_PATH`: sqlite storage path.
-- `HASH`, `SYMMETRIC`, `EDDSA`, `XECDH`, `ML_DSA_VARIANT`, `ML_KEM_VARIANT`: defaults for `POST /keys`.
-- `LOG_LEVEL`, `LOG_DIR`, `LOG_FILE`: logging configuration.
+- `VECTIS_PUBLIC_ADDR`: public address used as `sender.host` in protected messages.
+- `VECTIS_FINAL_APP_ADDR`: final app host:port.
+- `VECTIS_FINAL_APP_PATH`: final app delivery path.
+- `VECTIS_ROUTES_PATH`: optional manual final app routing file path, relative to the working directory unless absolute.
+- `VECTIS_APIKEY`: HTTP auth key for protected endpoints.
+- `VECTIS_SQLITE_PATH`: sqlite storage path.
+- `VECTIS_HASH`, `VECTIS_SYMMETRIC`, `VECTIS_EDDSA`, `VECTIS_XECDH`, `VECTIS_ML_DSA_VARIANT`, `VECTIS_ML_KEM_VARIANT`: defaults for `POST /keys`.
+- `VECTIS_LOG_LEVEL`, `VECTIS_LOG_DIR`, `VECTIS_LOG_FILE`: logging configuration.
 
 Internal defaults for `init` key material:
 
 - `INTERNAL_KEYS_HASH`: `BLAKE2b(256)`
 - `INTERNAL_KEYS_EDDSA_ALGORITHM`: `Ed25519`
+- `INTERNAL_KEYS_XECDH_ALGORITHM`: `X25519`
+- `INTERNAL_KEYS_ML_DSA_VARIANT`: `ML-DSA-44`
+- `INTERNAL_KEYS_ML_KEM_VARIANT`: `ML-KEM-512`
 
 ## CLI Mapping
 
 Runtime CLI commands call the HTTP API:
+
+CLI output defaults to YAML for readability. Add `--output json` to any HTTP client command to print pretty JSON instead. This does not apply to `vectis init`.
 
 | CLI command | HTTP operation | Auth |
 | --- | --- | --- |
@@ -816,8 +821,5 @@ Runtime CLI commands call the HTTP API:
 
 Local commands:
 
-- `vectis init`: creates encrypted `init.json`, prints `UNSEAL_KEY` and `APIKEY`.
-- `vectis serve`: validates `init.json`, loads storage/routes into memory, and starts the HTTP service.
-- `INTERNAL_KEYS_XECDH_ALGORITHM`: `X25519`
-- `INTERNAL_KEYS_ML_DSA_VARIANT`: `ML-DSA-44`
-- `INTERNAL_KEYS_ML_KEM_VARIANT`: `ML-KEM-512`
+- `vectis init`: creates encrypted `init.json`, prints `VECTIS_UNSEAL_KEY` and `VECTIS_APIKEY`.
+- `vectis serve`: validates `init.json`, loads storage/routes into memory, and starts the HTTP service. Unseal key resolution order is `VECTIS_UNSEAL_KEY`, `VECTIS_UNSEAL_KEY_FILE` with default `.unseal_key`, then hidden prompt.

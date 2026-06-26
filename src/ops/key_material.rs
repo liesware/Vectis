@@ -189,7 +189,7 @@ pub(crate) fn create_key_material(spec: &KeyMaterialSpec) -> Result<KeyMaterialO
         crypto::symmetric_cipher(&spec.symmetric_algorithm).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("invalid SYMMETRIC algorithm: {}", spec.symmetric_algorithm),
+                format!("invalid symmetric algorithm: {}", spec.symmetric_algorithm),
             )
         })?;
     let symmetric_key = Zeroizing::new(crypto::random_bytes(symmetric_cipher.key_size_bytes)?);
@@ -204,7 +204,7 @@ pub(crate) fn create_key_material(spec: &KeyMaterialSpec) -> Result<KeyMaterialO
         crypto::MlDsaVariant::from_name(&spec.ml_dsa_variant).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("invalid ML_DSA_VARIANT: {}", spec.ml_dsa_variant),
+                format!("invalid ml_dsa_variant: {}", spec.ml_dsa_variant),
             )
         })?;
     let ml_dsa_private_key = crypto::create_ml_dsa_private_key(&ml_dsa_variant)?;
@@ -214,7 +214,7 @@ pub(crate) fn create_key_material(spec: &KeyMaterialSpec) -> Result<KeyMaterialO
         crypto::MlKemVariant::from_name(&spec.ml_kem_variant).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("invalid ML_KEM_VARIANT: {}", spec.ml_kem_variant),
+                format!("invalid ml_kem_variant: {}", spec.ml_kem_variant),
             )
         })?;
     let ml_kem_private_key = crypto::create_ml_kem_private_key(&ml_kem_variant)?;

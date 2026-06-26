@@ -41,81 +41,91 @@ pub struct AppConfig {
 pub fn app_config() -> Result<AppConfig, DynError> {
     let env_file = load_env_file(".env")?;
     let http_bind_addr = validation::validate_socket_addr(
-        "HTTP_BIND_ADDR",
-        &config_value(&env_file, "HTTP_BIND_ADDR", "127.0.0.1:3000"),
+        "VECTIS_HTTP_BIND_ADDR",
+        &config_value(&env_file, "VECTIS_HTTP_BIND_ADDR", "127.0.0.1:3000"),
     )?;
     let public_addr = validation::validate_host_port(
-        "PUBLIC_ADDR",
-        &config_value(&env_file, "PUBLIC_ADDR", "127.0.0.1:3000"),
+        "VECTIS_PUBLIC_ADDR",
+        &config_value(&env_file, "VECTIS_PUBLIC_ADDR", "127.0.0.1:3000"),
     )?;
     let final_app_addr = validation::validate_host_port(
-        "FINAL_APP_ADDR",
-        &config_value(&env_file, "FINAL_APP_ADDR", "localhost:3999"),
+        "VECTIS_FINAL_APP_ADDR",
+        &config_value(&env_file, "VECTIS_FINAL_APP_ADDR", "localhost:3999"),
     )?;
-    let final_app_path =
-        validate_http_path(&config_value(&env_file, "FINAL_APP_PATH", "/message"))?;
-    let routes_path = validate_routes_path(&config_value(&env_file, "ROUTES_PATH", "routes.json"))?;
-    let api_key = config_value(&env_file, "APIKEY", "");
-    let protocol_version = config_value(&env_file, "PROTOCOL_VERSION", "v1");
-    let storage_type = config_value(&env_file, "STORAGE", "sqlite");
+    let final_app_path = validate_http_path(&config_value(
+        &env_file,
+        "VECTIS_FINAL_APP_PATH",
+        "/message",
+    ))?;
+    let routes_path = validate_routes_path(&config_value(
+        &env_file,
+        "VECTIS_ROUTES_PATH",
+        "routes.json",
+    ))?;
+    let api_key = config_value(&env_file, "VECTIS_APIKEY", "");
+    let protocol_version = config_value(&env_file, "VECTIS_PROTOCOL_VERSION", "v1");
+    let storage_type = config_value(&env_file, "VECTIS_STORAGE", "sqlite");
     let sqlite_path = validate_sqlite_path(&config_value(
         &env_file,
-        "SQLITE_PATH",
+        "VECTIS_SQLITE_PATH",
         &default_sqlite_path(),
     ))?;
-    let sender_hostname = config_value(&env_file, "SENDER_HOSTNAME", "localhost.local");
-    let receiver_hostname = config_value(&env_file, "RECEIVER_HOSTNAME", "remotehost.local");
-    let hash_algorithm = config_value(&env_file, "HASH", "BLAKE2b(256)");
-    let symmetric_algorithm = config_value(&env_file, "SYMMETRIC", "ChaCha20Poly1305");
-    let eddsa_algorithm = config_value(&env_file, "EDDSA", "Ed25519");
-    let xecdh_algorithm = config_value(&env_file, "XECDH", "X25519");
-    let ml_dsa_variant = config_value(&env_file, "ML_DSA_VARIANT", "ML-DSA-44");
-    let ml_kem_variant = config_value(&env_file, "ML_KEM_VARIANT", "ML-KEM-512");
-    let default_crypto_profile =
-        config_value(&env_file, "DEFAULT_CRYPTO_PROFILE", "hybrid-performance-v1");
-    let crypto_policy = config_value(&env_file, "CRYPTO_POLICY", "profile-only");
+    let sender_hostname = config_value(&env_file, "VECTIS_SENDER_HOSTNAME", "localhost.local");
+    let receiver_hostname = config_value(&env_file, "VECTIS_RECEIVER_HOSTNAME", "remotehost.local");
+    let hash_algorithm = config_value(&env_file, "VECTIS_HASH", "BLAKE2b(256)");
+    let symmetric_algorithm = config_value(&env_file, "VECTIS_SYMMETRIC", "ChaCha20Poly1305");
+    let eddsa_algorithm = config_value(&env_file, "VECTIS_EDDSA", "Ed25519");
+    let xecdh_algorithm = config_value(&env_file, "VECTIS_XECDH", "X25519");
+    let ml_dsa_variant = config_value(&env_file, "VECTIS_ML_DSA_VARIANT", "ML-DSA-44");
+    let ml_kem_variant = config_value(&env_file, "VECTIS_ML_KEM_VARIANT", "ML-KEM-512");
+    let default_crypto_profile = config_value(
+        &env_file,
+        "VECTIS_DEFAULT_CRYPTO_PROFILE",
+        "hybrid-performance-v1",
+    );
+    let crypto_policy = config_value(&env_file, "VECTIS_CRYPTO_POLICY", "profile-only");
     let plaintext_message = config_value(
         &env_file,
-        "PLAINTEXT_MESSAGE",
+        "VECTIS_PLAINTEXT_MESSAGE",
         "You are not special. You are not a beautiful and unique snowflake. You're the same decaying organic matter as everything else.",
     );
 
-    validation::validate_allowed_value("PROTOCOL_VERSION", &protocol_version, &["v1"])?;
+    validation::validate_allowed_value("VECTIS_PROTOCOL_VERSION", &protocol_version, &["v1"])?;
     validation::validate_allowed_value(
-        "STORAGE",
+        "VECTIS_STORAGE",
         &storage_type,
         crate::core::storage::STORAGE_TYPES,
     )?;
     if !api_key.is_empty() {
-        validation::validate_hash_hex_field("APIKEY", &api_key, INTERNAL_KEYS_HASH)?;
+        validation::validate_hash_hex_field("VECTIS_APIKEY", &api_key, INTERNAL_KEYS_HASH)?;
     }
-    validation::validate_hostname("SENDER_HOSTNAME", &sender_hostname)?;
-    validation::validate_hostname("RECEIVER_HOSTNAME", &receiver_hostname)?;
-    validation::validate_allowed_value("HASH", &hash_algorithm, crypto::HASH_ALGORITHMS)?;
+    validation::validate_hostname("VECTIS_SENDER_HOSTNAME", &sender_hostname)?;
+    validation::validate_hostname("VECTIS_RECEIVER_HOSTNAME", &receiver_hostname)?;
+    validation::validate_allowed_value("VECTIS_HASH", &hash_algorithm, crypto::HASH_ALGORITHMS)?;
     validation::validate_allowed_value(
-        "SYMMETRIC",
+        "VECTIS_SYMMETRIC",
         &symmetric_algorithm,
         crypto::SYMMETRIC_ALGORITHMS,
     )?;
-    validation::validate_allowed_value("EDDSA", &eddsa_algorithm, &["Ed25519", "Ed448"])?;
-    validation::validate_allowed_value("XECDH", &xecdh_algorithm, &["X25519", "X448"])?;
+    validation::validate_allowed_value("VECTIS_EDDSA", &eddsa_algorithm, &["Ed25519", "Ed448"])?;
+    validation::validate_allowed_value("VECTIS_XECDH", &xecdh_algorithm, &["X25519", "X448"])?;
     validation::validate_allowed_value(
-        "ML_DSA_VARIANT",
+        "VECTIS_ML_DSA_VARIANT",
         &ml_dsa_variant,
         &["ML-DSA-44", "ML-DSA-65", "ML-DSA-87"],
     )?;
     validation::validate_allowed_value(
-        "ML_KEM_VARIANT",
+        "VECTIS_ML_KEM_VARIANT",
         &ml_kem_variant,
         &["ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"],
     )?;
     validation::validate_allowed_value(
-        "DEFAULT_CRYPTO_PROFILE",
+        "VECTIS_DEFAULT_CRYPTO_PROFILE",
         &default_crypto_profile,
         CRYPTO_PROFILES,
     )?;
-    validation::validate_allowed_value("CRYPTO_POLICY", &crypto_policy, CRYPTO_POLICIES)?;
-    validation::validate_text_field("PLAINTEXT_MESSAGE", &plaintext_message)?;
+    validation::validate_allowed_value("VECTIS_CRYPTO_POLICY", &crypto_policy, CRYPTO_POLICIES)?;
+    validation::validate_text_field("VECTIS_PLAINTEXT_MESSAGE", &plaintext_message)?;
 
     Ok(AppConfig {
         http_bind_addr,
@@ -156,37 +166,37 @@ pub fn validate_http_path_field(field: &str, value: &str) -> Result<String, DynE
 }
 
 fn validate_http_path(value: &str) -> Result<String, DynError> {
-    validate_http_path_field("FINAL_APP_PATH", value)
+    validate_http_path_field("VECTIS_FINAL_APP_PATH", value)
 }
 
 fn validate_routes_path(value: &str) -> Result<PathBuf, DynError> {
-    validation::validate_text_field("ROUTES_PATH", value)?;
+    validation::validate_text_field("VECTIS_ROUTES_PATH", value)?;
 
     Ok(PathBuf::from(value))
 }
 
 fn validate_sqlite_path(value: &str) -> Result<PathBuf, DynError> {
-    validation::validate_text_field("SQLITE_PATH", value)?;
+    validation::validate_text_field("VECTIS_SQLITE_PATH", value)?;
 
     let path = PathBuf::from(value);
     let metadata = fs::metadata(&path).map_err(|err| {
         Box::new(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            format!("SQLITE_PATH must exist and be readable: {err}"),
+            format!("VECTIS_SQLITE_PATH must exist and be readable: {err}"),
         )) as DynError
     })?;
 
     if !metadata.is_file() {
         return Err(Box::new(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "SQLITE_PATH must point to a file",
+            "VECTIS_SQLITE_PATH must point to a file",
         )));
     }
 
     if metadata.permissions().readonly() {
         return Err(Box::new(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
-            "SQLITE_PATH must be writable",
+            "VECTIS_SQLITE_PATH must be writable",
         )));
     }
 
@@ -197,7 +207,7 @@ fn validate_sqlite_path(value: &str) -> Result<PathBuf, DynError> {
         .map_err(|err| {
             Box::new(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
-                format!("SQLITE_PATH must allow read/write access: {err}"),
+                format!("VECTIS_SQLITE_PATH must allow read/write access: {err}"),
             )) as DynError
         })?;
 

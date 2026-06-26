@@ -124,7 +124,11 @@ pub fn validate_sign_input(input: SignInput) -> Result<ValidatedSignInput, DynEr
         hash_hex_len = input.message_hash.hex.len(),
         "validating message hash"
     );
-    validation::validate_allowed_value("HASH", &input.message_hash.alg, crypto::HASH_ALGORITHMS)?;
+    validation::validate_allowed_value(
+        "message_hash.alg",
+        &input.message_hash.alg,
+        crypto::HASH_ALGORITHMS,
+    )?;
     validation::validate_hash_hex_field(
         "message_hash.hex",
         &input.message_hash.hex,

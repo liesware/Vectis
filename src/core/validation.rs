@@ -1,11 +1,15 @@
 use crate::core::crypto;
 use crate::error::DynError;
 use std::env;
+use std::fs;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::info;
 use zeroize::Zeroizing;
+
+const DEFAULT_UNSEAL_KEY_FILE: &str = ".unseal_key";
 
 pub fn build_aad(fields: &[(&str, &str)]) -> String {
     fields
@@ -242,24 +246,109 @@ pub fn read_hidden_text(prompt: &str) -> Result<Zeroizing<String>, DynError> {
 }
 
 pub fn read_unseal_key(prompt: &str) -> Result<Zeroizing<String>, DynError> {
-    let key = match env::var("UNSEAL_KEY") {
+    let key = match env::var("VECTIS_UNSEAL_KEY") {
         Ok(value) => {
-            info!("reading init unseal key from UNSEAL_KEY");
+            info!("reading init unseal key from VECTIS_UNSEAL_KEY");
             Zeroizing::new(value.trim().to_string())
         }
         Err(env::VarError::NotPresent) => {
-            info!("reading init unseal key from hidden prompt");
-            read_hidden_text(prompt)?
+            if let Some(key) = read_unseal_key_file()? {
+                key
+            } else {
+                info!("reading init unseal key from hidden prompt");
+                read_hidden_text(prompt)?
+            }
         }
         Err(err) => {
             return Err(Box::new(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("UNSEAL_KEY could not be read: {err}"),
+                format!("VECTIS_UNSEAL_KEY could not be read: {err}"),
             )));
         }
     };
 
-    validate_symmetric_key("UNSEAL_KEY", &key, 32)?;
+    validate_symmetric_key("VECTIS_UNSEAL_KEY", &key, 32)?;
 
     Ok(key)
+}
+
+fn read_unseal_key_file() -> Result<Option<Zeroizing<String>>, DynError> {
+    let (path, explicit_path) = unseal_key_file_path()?;
+    match fs::read_to_string(&path) {
+        Ok(value) => {
+            info!(path = %path.display(), "reading init unseal key from file");
+            let key = Zeroizing::new(value.trim().to_string());
+            validate_symmetric_key("VECTIS_UNSEAL_KEY_FILE", &key, 32)?;
+
+            Ok(Some(key))
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound && !explicit_path => Ok(None),
+        Err(err) => Err(Box::new(io::Error::new(
+            err.kind(),
+            format!(
+                "VECTIS_UNSEAL_KEY_FILE could not be read from {}: {err}",
+                path.display()
+            ),
+        ))),
+    }
+}
+
+fn unseal_key_file_path() -> Result<(PathBuf, bool), DynError> {
+    match env::var("VECTIS_UNSEAL_KEY_FILE") {
+        Ok(value) => {
+            validate_text_field("VECTIS_UNSEAL_KEY_FILE", &value)?;
+
+            Ok((PathBuf::from(value), true))
+        }
+        Err(env::VarError::NotPresent) => {
+            if let Some(value) = env_file_value("VECTIS_UNSEAL_KEY_FILE")? {
+                validate_text_field("VECTIS_UNSEAL_KEY_FILE", &value)?;
+
+                Ok((PathBuf::from(value), true))
+            } else {
+                Ok((PathBuf::from(DEFAULT_UNSEAL_KEY_FILE), false))
+            }
+        }
+        Err(err) => Err(Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("VECTIS_UNSEAL_KEY_FILE could not be read: {err}"),
+        ))),
+    }
+}
+
+fn env_file_value(key: &str) -> Result<Option<String>, DynError> {
+    let content = match fs::read_to_string(".env") {
+        Ok(content) => content,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(Box::new(err)),
+    };
+
+    for line in content.lines() {
+        let line = line.trim();
+
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let Some((env_key, value)) = line.split_once('=') else {
+            continue;
+        };
+
+        if env_key.trim() == key {
+            return Ok(Some(clean_env_value(value.trim())));
+        }
+    }
+
+    Ok(None)
+}
+
+fn clean_env_value(value: &str) -> String {
+    let quoted = (value.starts_with('"') && value.ends_with('"'))
+        || (value.starts_with('\'') && value.ends_with('\''));
+
+    if quoted && value.len() >= 2 {
+        value[1..value.len() - 1].to_string()
+    } else {
+        value.to_string()
+    }
 }
