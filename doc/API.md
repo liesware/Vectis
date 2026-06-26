@@ -41,6 +41,9 @@ Endpoints requiring auth:
 
 Endpoints without auth:
 
+- `GET /healthz/startup`
+- `GET /healthz/live`
+- `GET /healthz/ready`
 - `GET /keys`
 - `GET /pub/{kid}`
 - `POST /sign/verification`
