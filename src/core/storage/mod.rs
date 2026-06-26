@@ -11,6 +11,7 @@ pub const STORAGE_TYPES: &[&str] = &["sqlite"];
 pub struct OpsKeyRow {
     pub id: String,
     pub enc_keys: String,
+    pub properties: String,
 }
 
 pub struct StorageState {
@@ -33,9 +34,14 @@ impl StorageState {
         }
     }
 
-    pub async fn save_ops_keys(&self, id: &str, enc_keys: &str) -> Result<OpsKeyRow, DynError> {
+    pub async fn save_ops_keys(
+        &self,
+        id: &str,
+        enc_keys: &str,
+        properties: &str,
+    ) -> Result<OpsKeyRow, DynError> {
         match &self.backend {
-            StorageBackend::Sqlite(sqlite) => sqlite.save_ops_keys(id, enc_keys).await,
+            StorageBackend::Sqlite(sqlite) => sqlite.save_ops_keys(id, enc_keys, properties).await,
         }
     }
 

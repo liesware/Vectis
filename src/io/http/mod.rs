@@ -99,9 +99,15 @@ impl HttpState {
     }
 
     async fn reload_routes_state(&self) -> Result<(), DynError> {
+        let loaded_key_ids = {
+            let keys_db_state = self.keys_db_state.read().await;
+            keys_db_state.ids()
+        };
         let reloaded = {
             let routes_state = self.routes_state.read().await;
-            routes_state.reload_from_file(&self.routes_path)?
+            routes_state.reload_from_file(&self.routes_path, |kid| {
+                loaded_key_ids.iter().any(|id| id == kid)
+            })?
         };
         let mut routes_state = self.routes_state.write().await;
         *routes_state = reloaded;
@@ -173,6 +179,7 @@ pub fn router(state: HttpState) -> Router {
         .route("/self-test/keys/{id}", get(test::test_endpoint))
         .route("/self-test/init", get(test::init_endpoint))
         .route("/keys/reload", post(keys::refresh_endpoint))
+        .route("/keys/properties", get(keys::list_properties_endpoint))
         .route("/routes", get(routes::list_endpoint))
         .route("/routes/reload", post(routes::reload_endpoint))
         .route(

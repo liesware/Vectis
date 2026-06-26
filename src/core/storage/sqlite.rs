@@ -28,15 +28,21 @@ impl SqliteStorage {
         Ok(Self { pool })
     }
 
-    pub async fn save_ops_keys(&self, id: &str, enc_keys: &str) -> Result<OpsKeyRow, DynError> {
+    pub async fn save_ops_keys(
+        &self,
+        id: &str,
+        enc_keys: &str,
+        properties: &str,
+    ) -> Result<OpsKeyRow, DynError> {
         sqlx::query(
             "
-            INSERT INTO ops_keys (id, enc_keys)
-            VALUES (?, ?)
+            INSERT INTO ops_keys (id, enc_keys, properties)
+            VALUES (?, ?, ?)
             ",
         )
         .bind(id)
         .bind(enc_keys)
+        .bind(properties)
         .execute(&self.pool)
         .await?;
         info!(id, "inserted ops keys");
@@ -44,13 +50,14 @@ impl SqliteStorage {
         Ok(OpsKeyRow {
             id: id.to_string(),
             enc_keys: enc_keys.to_string(),
+            properties: properties.to_string(),
         })
     }
 
     pub async fn get_ops_keys(&self, id: &str) -> Result<OpsKeyRow, DynError> {
         let row = sqlx::query(
             "
-            SELECT id, enc_keys
+            SELECT id, enc_keys, properties
             FROM ops_keys
             WHERE id = ?
             ",
@@ -69,13 +76,14 @@ impl SqliteStorage {
         Ok(OpsKeyRow {
             id: row.get("id"),
             enc_keys: row.get("enc_keys"),
+            properties: row.get("properties"),
         })
     }
 
     pub async fn list_ops_keys(&self) -> Result<Vec<OpsKeyRow>, DynError> {
         let rows = sqlx::query(
             "
-            SELECT id, enc_keys
+            SELECT id, enc_keys, properties
             FROM ops_keys
             ORDER BY id
             ",
@@ -88,6 +96,7 @@ impl SqliteStorage {
             keys.push(OpsKeyRow {
                 id: row.get("id"),
                 enc_keys: row.get("enc_keys"),
+                properties: row.get("properties"),
             });
         }
 
@@ -125,9 +134,16 @@ async fn validate_ops_keys_schema(db: &SqlitePool) -> Result<(), DynError> {
             "sqlite schema is missing ops_keys.enc_keys column",
         )) as DynError
     })?;
+    let properties = find_column(&rows, "properties").ok_or_else(|| {
+        Box::new(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "sqlite schema is missing ops_keys.properties column",
+        )) as DynError
+    })?;
 
     validate_column(&id, "id", "VARCHAR(128)", false, true)?;
     validate_column(&enc_keys, "enc_keys", "VARCHAR(10240)", true, false)?;
+    validate_column(&properties, "properties", "VARCHAR(10240)", true, false)?;
 
     Ok(())
 }

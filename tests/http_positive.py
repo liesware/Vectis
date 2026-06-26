@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import atexit
 import hashlib
 import http.server
 import json
@@ -8,6 +9,7 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:3000"
@@ -15,6 +17,7 @@ DEFAULT_FINAL_APP_ADDR = "localhost:3999"
 DEFAULT_APIKEY = "20e446d000498e82b056f54e68216d4c8c9bda089a6812d0aa9d82d59f918018"
 INTERNAL_KEYS_KID_HEX_LEN = 64
 MESSAGE = "The things you own end up owning you."
+ROUTES_PATH = Path("routes.json")
 
 KEY_CASES = [
     {
@@ -273,6 +276,56 @@ def validate_keys_list(response, key_ids):
         require(key_id in by_kid, f"keys list must include {key_id}")
 
 
+def validate_keys_properties_list(response, key_ids):
+    require(isinstance(response, dict), "keys properties response must be an object")
+    keys = response.get("keys")
+    require(isinstance(keys, list), "keys properties response.keys must be an array")
+    by_kid = {}
+    for item in keys:
+        require(isinstance(item, dict), "keys properties item must be an object")
+        kid = item.get("kid")
+        require_kid(kid, "keys properties item kid")
+        require(isinstance(item.get("info"), str) and item["info"], "keys properties item info")
+        require(
+            isinstance(item.get("properties_info"), str) and item["properties_info"],
+            "keys properties item properties_info",
+        )
+        properties = item.get("properties")
+        require(isinstance(properties, dict), "keys properties item properties must be an object")
+        require(properties.get("version") == 1, "keys properties version must be 1")
+        require(
+            properties.get("profile")
+            in {
+                "hybrid-performance-v1",
+                "hybrid-high-assurance-v1",
+                "hybrid-long-term-v1",
+                "custom",
+            },
+            "keys properties profile must be supported",
+        )
+        require(isinstance(properties.get("tag"), str) and properties["tag"], "keys properties tag")
+        require(
+            isinstance(properties.get("created_at"), str) and properties["created_at"],
+            "keys properties created_at",
+        )
+        lifecycle = properties.get("lifecycle")
+        require(isinstance(lifecycle, dict), "keys properties lifecycle must be an object")
+        require(lifecycle.get("status") == "active", "keys properties lifecycle.status")
+        require(
+            isinstance(lifecycle.get("reason"), str) and lifecycle["reason"],
+            "keys properties lifecycle.reason",
+        )
+        require(
+            isinstance(lifecycle.get("changed_at"), str) and lifecycle["changed_at"],
+            "keys properties lifecycle.changed_at",
+        )
+        require("access" in properties, "keys properties access must exist")
+        by_kid[kid] = properties
+
+    for key_id in key_ids:
+        require(key_id in by_kid, f"keys properties must include {key_id}")
+
+
 def validate_routes_list(response):
     require(isinstance(response, dict), "routes list response must be an object")
     routes = response.get("routes")
@@ -288,6 +341,47 @@ def validate_routes_list(response):
             isinstance(item.get("final_app_path"), str) and item["final_app_path"].startswith("/"),
             "routes list item final_app_path must start with /",
         )
+
+
+def backup_routes_file():
+    if not ROUTES_PATH.exists():
+        return None
+
+    return ROUTES_PATH.read_text(encoding="utf-8")
+
+
+def restore_routes_file(backup):
+    if backup is None:
+        try:
+            ROUTES_PATH.unlink()
+        except FileNotFoundError:
+            pass
+        return
+
+    ROUTES_PATH.write_text(backup, encoding="utf-8")
+
+
+def write_test_routes(key_ids, final_app_addr):
+    routes = {
+        "routes": [
+            {
+                "kid": key_id,
+                "final_app_addr": final_app_addr,
+                "final_app_path": "/message",
+            }
+            for key_id in key_ids
+        ]
+    }
+    ROUTES_PATH.write_text(json.dumps(routes, indent=2), encoding="utf-8")
+
+
+def clear_routes_state(client):
+    backup = backup_routes_file()
+    ROUTES_PATH.write_text('{"routes":[]}\n', encoding="utf-8")
+    try:
+        validate_routes_list(client.post("/routes/reload", {}, auth=True))
+    finally:
+        restore_routes_file(backup)
 
 
 def sign_key(client, key_id, hash_alg, message_hash_hex):
@@ -475,6 +569,8 @@ def main():
 
     final_app = start_final_app(args.final_app_addr)
     client = Client(args.base_url, args.apikey)
+    routes_backup = backup_routes_file()
+    atexit.register(restore_routes_file, routes_backup)
     recipient_host = host_from_base_url(args.base_url)
     message = MESSAGE.encode("utf-8")
 
@@ -504,17 +600,24 @@ def main():
     validate_keys_list(client.get("/keys"), [key_id for key_id, _ in created])
     print("List keys: OK\n")
     passed_count += 1
-    validate_keys_list(
+    validate_keys_properties_list(
+        client.get("/keys/properties", auth=True),
+        [key_id for key_id, _ in created],
+    )
+    print("List keys properties: OK\n")
+    passed_count += 1
+    validate_keys_properties_list(
         client.post("/keys/reload", {}, auth=True),
         [key_id for key_id, _ in created],
     )
     print("Reload keys: OK\n")
     passed_count += 1
-    validate_routes_list(client.get("/routes", auth=True))
-    print("List routes: OK\n")
-    passed_count += 1
+    write_test_routes([key_id for key_id, _ in created], args.final_app_addr)
     validate_routes_list(client.post("/routes/reload", {}, auth=True))
     print("Reload routes: OK\n")
+    passed_count += 1
+    validate_routes_list(client.get("/routes", auth=True))
+    print("List routes: OK\n")
     passed_count += 1
 
     test_rows = []
@@ -586,6 +689,8 @@ def main():
     passed_count += len(sign_rows)
     passed_count += len(verify_rows)
     print(f"SUMMARY positive passed={passed_count} failed=0")
+    restore_routes_file(routes_backup)
+    clear_routes_state(client)
     final_app.shutdown()
 
 

@@ -13,8 +13,9 @@ pub fn run_init() -> Result<String, DynError> {
     info!(path = INIT_OUTPUT_PATH, "init keys written");
     println!("UNSEAL_KEY={}", &*output.encryption_key_hex);
     println!("APIKEY={}", &*output.api_key);
+    println!("\n* UNSEAL_KEY should be an env var, after init it must be unset.");
     println!(
-        "\n*APIKEY is a reference value your if you want to use your own APIKEY should preserves the same format."
+        "* APIKEY is a reference value your if you want to use your own APIKEY should preserves the same format."
     );
 
     Ok(INIT_OUTPUT_PATH.to_string())

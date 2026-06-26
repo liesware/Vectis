@@ -14,7 +14,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
     let logging = crate::core::logging::logging_config();
     let storage = StorageState::new(&config).await?;
     let keys_db_state = keys::load_keys_db_state(&storage, &init_state).await?;
-    let routes_state = routes::load_routes_state(&config);
+    let routes_state = routes::load_routes_state(&config, |kid| keys_db_state.contains_id(kid));
     let started_at = validation::current_timestamp()?;
     info!(
         http_bind_addr = %config.http_bind_addr,

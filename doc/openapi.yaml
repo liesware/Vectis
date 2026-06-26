@@ -102,7 +102,7 @@ paths:
     get:
       tags: [Keys]
       summary: List keys loaded in local memory
-      description: Public endpoint. Lists keys currently loaded in this node's in-memory state.
+      description: Public endpoint. Lists keys currently loaded in this node's in-memory state. Decrypted lifecycle properties are not exposed here.
       responses:
         "200":
           description: Loaded key list
@@ -147,16 +147,33 @@ paths:
     post:
       tags: [Keys]
       summary: Refresh local key state from storage
-      description: Administrative operation. Reloads and decrypts keys from storage into this node's memory. Uses POST because it changes server memory state.
+      description: Administrative operation. Reloads and decrypts keys plus encrypted lifecycle properties from storage into this node's memory. Uses POST because it changes server memory state.
       security:
         - ApiKeyAuth: []
       responses:
         "200":
-          description: Refreshed loaded key list
+          description: Refreshed loaded key list with decrypted properties
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ListKeysOutput"
+                $ref: "#/components/schemas/ListKeysPropertiesOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /keys/properties:
+    get:
+      tags: [Keys]
+      summary: List keys loaded in local memory with properties
+      description: Administrative endpoint. Lists keys and decrypted lifecycle properties currently loaded in this node's in-memory state. The info field is AAD for enc_keys; properties_info is AAD for properties.
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: Loaded key list with properties
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListKeysPropertiesOutput"
         default:
           $ref: "#/components/responses/Error"
 
@@ -181,7 +198,7 @@ paths:
     post:
       tags: [Routes]
       summary: Reload final app routes from ROUTES_PATH
-      description: Administrative endpoint. Replaces in-memory routes only after ROUTES_PATH is successfully read and validated. A missing file reloads to an empty route list; an invalid file returns an error and keeps the previous in-memory routes.
+      description: Administrative endpoint. Replaces in-memory routes only after ROUTES_PATH is successfully read and validated. Every route kid must exist in the keys currently loaded in memory. A missing file reloads to an empty route list; an invalid file or unloaded route kid returns an error and keeps the previous in-memory routes.
       security:
         - ApiKeyAuth: []
       responses:
@@ -497,6 +514,57 @@ components:
               info:
                 type: string
                 example: version=v1;hostname=localhost;type=ops-keys;cipher=AES-256/GCM;tag=payments;profile=hybrid-high-assurance-v1;timestamp=1782058090
+
+    ListKeysPropertiesOutput:
+      type: object
+      required: [keys]
+      properties:
+        keys:
+          type: array
+          items:
+            type: object
+            required: [kid, info, properties_info, properties]
+            properties:
+              kid:
+                $ref: "#/components/schemas/Kid"
+              info:
+                type: string
+              properties_info:
+                type: string
+              properties:
+                $ref: "#/components/schemas/OpsKeyProperties"
+
+    OpsKeyProperties:
+      type: object
+      required: [version, profile, tag, created_at, lifecycle, access]
+      properties:
+        version:
+          const: 1
+        profile:
+          enum:
+            - hybrid-performance-v1
+            - hybrid-high-assurance-v1
+            - hybrid-long-term-v1
+            - custom
+        tag:
+          type: string
+          example: payments-prod
+        created_at:
+          $ref: "#/components/schemas/Timestamp"
+        lifecycle:
+          type: object
+          required: [status, reason, changed_at]
+          properties:
+            status:
+              enum: [active, disabled, revoked, rotated, expired]
+            reason:
+              type: string
+              example: initial creation
+            changed_at:
+              type: string
+              example: "1782058090"
+        access:
+          nullable: true
 
     RoutesOutput:
       type: object

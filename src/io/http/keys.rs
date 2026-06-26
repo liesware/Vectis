@@ -110,10 +110,36 @@ pub async fn list_endpoint(State(state): State<HttpState>) -> Json<ops::keys::Li
     Json(response)
 }
 
+pub async fn list_properties_endpoint(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Result<Json<ops::keys::ListKeysPropertiesOutput>, (StatusCode, Json<ErrorResponse>)> {
+    if let Err(response) = authorize_api_key(&headers) {
+        return Err(response);
+    }
+
+    info!(
+        endpoint = "GET /keys/properties",
+        "keys properties list request accepted"
+    );
+    let response = state
+        .with_keys_db_state(ops::keys::list_keys_properties_from_state)
+        .await;
+    let keys_count = state
+        .with_keys_db_state(|keys_db_state| keys_db_state.len())
+        .await;
+    info!(
+        endpoint = "GET /keys/properties",
+        keys_count, "keys properties list response ready"
+    );
+
+    Ok(Json(response))
+}
+
 pub async fn refresh_endpoint(
     State(state): State<HttpState>,
     headers: HeaderMap,
-) -> Result<Json<ops::keys::ListKeysOutput>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<ops::keys::ListKeysPropertiesOutput>, (StatusCode, Json<ErrorResponse>)> {
     if let Err(response) = authorize_api_key(&headers) {
         return Err(response);
     }
@@ -127,7 +153,7 @@ pub async fn refresh_endpoint(
         .await
         .map_err(|err| error_response(err.as_ref()))?;
     let response = state
-        .with_keys_db_state(ops::keys::list_keys_from_state)
+        .with_keys_db_state(ops::keys::list_keys_properties_from_state)
         .await;
     let keys_count = state
         .with_keys_db_state(|keys_db_state| keys_db_state.len())

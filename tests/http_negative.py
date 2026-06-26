@@ -213,6 +213,14 @@ def main():
         )
         require_status("POST /keys/reload invalid auth", status, 401)
 
+    def keys_properties_without_auth():
+        status, _ = client.get("/keys/properties")
+        require_status("GET /keys/properties without auth", status, 401)
+
+    def keys_properties_invalid_auth():
+        status, _ = client.get("/keys/properties", headers={"Authorization": "00" * 32})
+        require_status("GET /keys/properties invalid auth", status, 401)
+
     def routes_list_without_auth():
         status, _ = client.get("/routes")
         require_status("GET /routes without auth", status, 401)
@@ -268,6 +276,8 @@ def main():
         ("POST /keys invalid auth", keys_invalid_auth),
         ("POST /keys/reload without auth", keys_reload_without_auth),
         ("POST /keys/reload invalid auth", keys_reload_invalid_auth),
+        ("GET /keys/properties without auth", keys_properties_without_auth),
+        ("GET /keys/properties invalid auth", keys_properties_invalid_auth),
         ("GET /routes without auth", routes_list_without_auth),
         ("GET /routes invalid auth", routes_list_invalid_auth),
         ("POST /routes/reload without auth", routes_reload_without_auth),

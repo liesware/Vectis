@@ -78,6 +78,12 @@ async fn run_keys(args: Vec<String>) -> Result<(), DynError> {
             expect_no_args(&rest, "keys reload")?;
             client.send(Method::POST, "/keys/reload", true, None).await
         }
+        "properties" => {
+            expect_no_args(&rest, "keys properties")?;
+            client
+                .send(Method::GET, "/keys/properties", true, None)
+                .await
+        }
         "create" => {
             let body = parse_keys_create_body(rest)?;
             client.send(Method::POST, "/keys", true, Some(body)).await
@@ -446,6 +452,7 @@ fn print_http_help() {
     println!("  {PROGRAM_NAME} test <kid>");
     println!("  {PROGRAM_NAME} keys create [--tag <tag>] [--profile <profile>]");
     println!("  {PROGRAM_NAME} keys list");
+    println!("  {PROGRAM_NAME} keys properties");
     println!("  {PROGRAM_NAME} keys reload");
     println!("  {PROGRAM_NAME} routes list");
     println!("  {PROGRAM_NAME} routes reload");
@@ -499,6 +506,7 @@ fn print_keys_help() {
     println!("Usage:");
     println!("  {PROGRAM_NAME} keys create [--tag <tag>] [--profile <profile>]");
     println!("  {PROGRAM_NAME} keys list");
+    println!("  {PROGRAM_NAME} keys properties");
     println!("  {PROGRAM_NAME} keys reload");
     println!();
     println!("Creates, lists, or reloads operational keys through the HTTP API.");
@@ -506,6 +514,7 @@ fn print_keys_help() {
     println!("Commands:");
     println!("  create                POST /keys, requires APIKEY");
     println!("  list                  GET /keys, public");
+    println!("  properties            GET /keys/properties, requires APIKEY");
     println!("  reload                POST /keys/reload, requires APIKEY");
     println!();
     println!("Create options:");
@@ -520,6 +529,7 @@ fn print_keys_help() {
     println!("Examples:");
     println!("  {PROGRAM_NAME} keys create --tag payments --profile hybrid-high-assurance-v1");
     println!("  {PROGRAM_NAME} keys list");
+    println!("  {PROGRAM_NAME} keys properties");
     println!("  {PROGRAM_NAME} keys reload");
 }
 
@@ -542,7 +552,8 @@ fn print_routes_help() {
     println!(
         "  Missing routes file reloads to an empty route list and keeps default final app fallback."
     );
-    println!("  Invalid routes file returns an error and keeps the previous in-memory routes.");
+    println!("  Each route kid must exist in the keys currently loaded in memory.");
+    println!("  Invalid routes file or unloaded route kid keeps the previous in-memory routes.");
 }
 
 fn print_pub_help() {

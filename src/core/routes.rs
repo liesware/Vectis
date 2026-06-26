@@ -67,8 +67,12 @@ impl RoutesState {
         }
     }
 
-    pub fn reload_from_file(&self, path: &Path) -> Result<RoutesState, DynError> {
-        let routes = match load_routes_file(path) {
+    pub fn reload_from_file(
+        &self,
+        path: &Path,
+        is_loaded_kid: impl Fn(&str) -> bool,
+    ) -> Result<RoutesState, DynError> {
+        let routes = match load_routes_file(path, is_loaded_kid) {
             Ok(routes) => routes,
             Err(err) if is_not_found_error(err.as_ref()) => Vec::new(),
             Err(err) => return Err(err),
@@ -96,8 +100,11 @@ impl FinalAppRoute {
     }
 }
 
-pub fn load_routes_state(config: &config::AppConfig) -> RoutesState {
-    match load_routes_file(&config.routes_path) {
+pub fn load_routes_state(
+    config: &config::AppConfig,
+    is_loaded_kid: impl Fn(&str) -> bool,
+) -> RoutesState {
+    match load_routes_file(&config.routes_path, is_loaded_kid) {
         Ok(routes) => {
             info!(
                 routes_path = %config.routes_path.display(),
@@ -127,7 +134,10 @@ pub fn load_routes_state(config: &config::AppConfig) -> RoutesState {
     }
 }
 
-fn load_routes_file(path: &Path) -> Result<Vec<FinalAppRoute>, DynError> {
+fn load_routes_file(
+    path: &Path,
+    is_loaded_kid: impl Fn(&str) -> bool,
+) -> Result<Vec<FinalAppRoute>, DynError> {
     let content = fs::read_to_string(path).map_err(|err| {
         if err.kind() == io::ErrorKind::NotFound {
             Box::new(io::Error::new(
@@ -145,7 +155,7 @@ fn load_routes_file(path: &Path) -> Result<Vec<FinalAppRoute>, DynError> {
         )) as DynError
     })?;
 
-    validate_routes(routes_file.routes)
+    validate_routes(routes_file.routes, is_loaded_kid)
 }
 
 fn is_not_found_error(err: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
@@ -153,12 +163,25 @@ fn is_not_found_error(err: &(dyn std::error::Error + Send + Sync + 'static)) -> 
         .is_some_and(|err| err.kind() == io::ErrorKind::NotFound)
 }
 
-fn validate_routes(routes: Vec<RouteInput>) -> Result<Vec<FinalAppRoute>, DynError> {
+fn validate_routes(
+    routes: Vec<RouteInput>,
+    is_loaded_kid: impl Fn(&str) -> bool,
+) -> Result<Vec<FinalAppRoute>, DynError> {
     let mut seen = HashSet::new();
     let mut validated = Vec::with_capacity(routes.len());
 
     for route in routes {
         keys::KeyId::parse(&route.kid)?;
+        if !is_loaded_kid(&route.kid) {
+            return Err(Box::new(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "routes file references kid not loaded in memory: {}",
+                    route.kid
+                ),
+            )));
+        }
+
         if !seen.insert(route.kid.clone()) {
             return Err(Box::new(io::Error::new(
                 io::ErrorKind::InvalidInput,

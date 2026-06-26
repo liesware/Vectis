@@ -13,6 +13,12 @@ use zeroize::{Zeroize, Zeroizing};
 
 pub(crate) type OpsKeysOutput = KeyMaterialOutput;
 pub(crate) type OpsKeys = KeyMaterialKeys;
+const PROPERTY_PROFILES: &[&str] = &[
+    "hybrid-performance-v1",
+    "hybrid-high-assurance-v1",
+    "hybrid-long-term-v1",
+    "custom",
+];
 
 #[derive(Serialize)]
 pub struct KeysDbState {
@@ -23,7 +29,9 @@ pub struct KeysDbState {
 pub(crate) struct LoadedOpsKey {
     id: String,
     aad: String,
+    properties_aad: String,
     key_material: OpsKeysOutput,
+    properties: OpsKeyProperties,
 }
 
 impl KeysDbState {
@@ -33,6 +41,17 @@ impl KeysDbState {
 
     pub(crate) fn get(&self, id: &str) -> Option<&LoadedOpsKey> {
         self.keys_db.iter().find(|loaded_key| loaded_key.id == id)
+    }
+
+    pub fn contains_id(&self, id: &str) -> bool {
+        self.keys_db.iter().any(|loaded_key| loaded_key.id == id)
+    }
+
+    pub fn ids(&self) -> Vec<String> {
+        self.keys_db
+            .iter()
+            .map(|loaded_key| loaded_key.id.clone())
+            .collect()
     }
 
     pub(crate) fn upsert(&mut self, loaded_key: LoadedOpsKey) {
@@ -64,6 +83,10 @@ impl LoadedOpsKey {
 
     pub(crate) fn key_material(&self) -> &OpsKeysOutput {
         &self.key_material
+    }
+
+    pub(crate) fn properties(&self) -> &OpsKeyProperties {
+        &self.properties
     }
 }
 
@@ -114,6 +137,21 @@ pub fn list_keys_from_state(keys_db_state: &KeysDbState) -> ListKeysOutput {
     ListKeysOutput { keys }
 }
 
+pub fn list_keys_properties_from_state(keys_db_state: &KeysDbState) -> ListKeysPropertiesOutput {
+    let keys = keys_db_state
+        .keys_db
+        .iter()
+        .map(|loaded_key| ListKeysPropertiesItem {
+            kid: loaded_key.id().to_string(),
+            info: loaded_key.aad().to_string(),
+            properties_info: loaded_key.properties_aad.clone(),
+            properties: loaded_key.properties().clone(),
+        })
+        .collect();
+
+    ListKeysPropertiesOutput { keys }
+}
+
 impl Zeroize for KeysDbState {
     fn zeroize(&mut self) {
         self.keys_db.zeroize();
@@ -124,7 +162,9 @@ impl Zeroize for LoadedOpsKey {
     fn zeroize(&mut self) {
         self.id.zeroize();
         self.aad.zeroize();
+        self.properties_aad.zeroize();
         self.key_material.zeroize();
+        self.properties.zeroize();
     }
 }
 
@@ -144,6 +184,55 @@ struct ListKeysItem {
     info: String,
 }
 
+#[derive(Serialize)]
+pub struct ListKeysPropertiesOutput {
+    keys: Vec<ListKeysPropertiesItem>,
+}
+
+#[derive(Serialize)]
+struct ListKeysPropertiesItem {
+    kid: String,
+    info: String,
+    properties_info: String,
+    properties: OpsKeyProperties,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct OpsKeyProperties {
+    version: u8,
+    profile: String,
+    tag: String,
+    created_at: String,
+    lifecycle: OpsKeyLifecycle,
+    access: Option<Value>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct OpsKeyLifecycle {
+    status: String,
+    reason: String,
+    changed_at: String,
+}
+
+impl Zeroize for OpsKeyProperties {
+    fn zeroize(&mut self) {
+        self.version.zeroize();
+        self.profile.zeroize();
+        self.tag.zeroize();
+        self.created_at.zeroize();
+        self.lifecycle.zeroize();
+        self.access = None;
+    }
+}
+
+impl Zeroize for OpsKeyLifecycle {
+    fn zeroize(&mut self) {
+        self.status.zeroize();
+        self.reason.zeroize();
+        self.changed_at.zeroize();
+    }
+}
+
 #[derive(Deserialize)]
 pub struct CreateKeysInput {
     pub tag: Option<String>,
@@ -160,6 +249,7 @@ struct ResolvedKeysInput {
     tag: String,
     timestamp: String,
     profile: String,
+    properties_profile: String,
     hash_algorithm: String,
     symmetric_algorithm: String,
     eddsa_algorithm: String,
@@ -206,20 +296,38 @@ pub async fn create_keys(
         ("profile", &input.profile),
         ("timestamp", &input.timestamp),
     ]);
-    let ciphertext = crypto::encrypt_symmetric(
-        config::INTERNAL_KEYS_CIPHER,
-        &plaintext,
-        &key,
-        &nonce,
-        aad.as_bytes(),
-    )?;
-    let keys_b64 = general_purpose::STANDARD.encode(ciphertext);
+    let keys_b64 = encrypt_internal_payload(&plaintext, &key, &nonce, &aad)?;
     let nonce_b64 = general_purpose::STANDARD.encode(&*nonce);
     let aad_b64 = general_purpose::STANDARD.encode(aad.as_bytes());
     let id = create_key_id(&keys_b64)?;
     let enc_keys = format!("{keys_b64}.{nonce_b64}.{aad_b64}");
 
-    storage.save_ops_keys(&id, &enc_keys).await?;
+    let properties = Zeroizing::new(create_ops_key_properties(&input));
+    let properties_plaintext = Zeroizing::new(serde_json::to_string_pretty(&*properties)?);
+    let properties_nonce = Zeroizing::new(crypto::random_bytes(
+        config::INTERNAL_KEYS_NONCE_SIZE_BYTES,
+    )?);
+    let properties_aad = validation::build_aad(&[
+        ("version", &config.protocol_version),
+        ("hostname", &config.sender_hostname),
+        ("type", "ops-key-properties"),
+        ("cipher", config::INTERNAL_KEYS_CIPHER),
+        ("kid", &id),
+        ("tag", &input.tag),
+        ("profile", &input.properties_profile),
+        ("timestamp", &input.timestamp),
+    ]);
+    let properties_b64 = encrypt_internal_payload(
+        &properties_plaintext,
+        &key,
+        &properties_nonce,
+        &properties_aad,
+    )?;
+    let properties_nonce_b64 = general_purpose::STANDARD.encode(&*properties_nonce);
+    let properties_aad_b64 = general_purpose::STANDARD.encode(properties_aad.as_bytes());
+    let properties = format!("{properties_b64}.{properties_nonce_b64}.{properties_aad_b64}");
+
+    storage.save_ops_keys(&id, &enc_keys, &properties).await?;
 
     Ok(CreateKeysOutput { id })
 }
@@ -278,17 +386,14 @@ pub async fn load_keys_db_state(
     let mut keys_db = Vec::new();
 
     for row in rows {
-        match decrypt_ops_keys_payload(init_state, &row.enc_keys) {
-            Ok(decrypted) => {
-                info!(id = %row.id, "decrypted ops key loaded from db");
-                keys_db.push(LoadedOpsKey {
-                    id: row.id,
-                    aad: decrypted.aad,
-                    key_material: decrypted.output,
-                });
+        let id = row.id.clone();
+        match load_ops_key_from_row(init_state, row) {
+            Ok(loaded_key) => {
+                info!(id = %loaded_key.id, "decrypted ops key loaded from db");
+                keys_db.push(loaded_key);
             }
             Err(err) => {
-                error!(id = %row.id, error = %err, "failed to decrypt ops key from db");
+                error!(id = %id, error = %err, "failed to decrypt ops key from db");
             }
         }
     }
@@ -304,19 +409,54 @@ pub async fn load_keys_db_entry(
     let id = KeyId::parse(id)?;
 
     let row = storage.get_ops_keys(id.as_str()).await?;
+    let loaded_key = load_ops_key_from_row(init_state, row)?;
+    info!(id = %loaded_key.id, "decrypted ops key loaded from db");
+
+    Ok(loaded_key)
+}
+
+fn load_ops_key_from_row(
+    init_state: &ValidatedInitState,
+    row: crate::core::storage::OpsKeyRow,
+) -> Result<LoadedOpsKey, DynError> {
     let decrypted = decrypt_ops_keys_payload(init_state, &row.enc_keys)?;
-    info!(id = %row.id, "decrypted ops key loaded from db");
+    let properties = decrypt_ops_key_properties_payload(init_state, &row.properties)?;
+    validate_ops_key_properties(&properties.output)?;
 
     Ok(LoadedOpsKey {
         id: row.id,
         aad: decrypted.aad,
+        properties_aad: properties.aad,
         key_material: decrypted.output,
+        properties: properties.output,
     })
 }
 
 struct DecryptedOpsKeys {
     aad: String,
     output: OpsKeysOutput,
+}
+
+struct DecryptedOpsKeyProperties {
+    aad: String,
+    output: OpsKeyProperties,
+}
+
+fn encrypt_internal_payload(
+    plaintext: &str,
+    key: &[u8],
+    nonce: &[u8],
+    aad: &str,
+) -> Result<String, DynError> {
+    let ciphertext = crypto::encrypt_symmetric(
+        config::INTERNAL_KEYS_CIPHER,
+        plaintext,
+        key,
+        nonce,
+        aad.as_bytes(),
+    )?;
+
+    Ok(general_purpose::STANDARD.encode(ciphertext))
 }
 
 fn decrypt_ops_keys_payload(
@@ -367,6 +507,91 @@ fn decrypt_ops_keys_payload(
     })
 }
 
+fn decrypt_ops_key_properties_payload(
+    init_state: &ValidatedInitState,
+    properties: &str,
+) -> Result<DecryptedOpsKeyProperties, DynError> {
+    let parts = properties.split('.').collect::<Vec<_>>();
+    if parts.len() != 3 {
+        return Err(Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "properties must have ciphertext.nonce.aad base64 sections",
+        )));
+    }
+
+    let ciphertext = general_purpose::STANDARD.decode(parts[0])?;
+    let nonce = Zeroizing::new(general_purpose::STANDARD.decode(parts[1])?);
+    let aad = general_purpose::STANDARD.decode(parts[2])?;
+    let aad_text = String::from_utf8(aad.clone())?;
+    validation::validate_encrypted_payload(
+        "properties ciphertext",
+        &hex::encode(&ciphertext),
+        "properties nonce",
+        &hex::encode(&*nonce),
+        "properties aad",
+        &aad_text,
+        config::INTERNAL_KEYS_NONCE_SIZE_BYTES,
+    )?;
+    validation::validate_symmetric_key(
+        "init symmetric key",
+        init_state.symmetric_key_hex(),
+        config::INTERNAL_KEYS_KEY_SIZE_BYTES,
+    )?;
+
+    let key = Zeroizing::new(hex::decode(init_state.symmetric_key_hex())?);
+    let plaintext_bytes = Zeroizing::new(crypto::decrypt_symmetric(
+        config::INTERNAL_KEYS_CIPHER,
+        &ciphertext,
+        &key,
+        &nonce,
+        &aad,
+    )?);
+    let plaintext = Zeroizing::new(String::from_utf8((*plaintext_bytes).clone())?);
+    let output = serde_json::from_str(&plaintext)?;
+
+    Ok(DecryptedOpsKeyProperties {
+        aad: aad_text,
+        output,
+    })
+}
+
+fn create_ops_key_properties(input: &ResolvedKeysInput) -> OpsKeyProperties {
+    OpsKeyProperties {
+        version: 1,
+        profile: input.properties_profile.clone(),
+        tag: input.tag.clone(),
+        created_at: input.timestamp.clone(),
+        lifecycle: OpsKeyLifecycle {
+            status: String::from("active"),
+            reason: String::from("initial creation"),
+            changed_at: input.timestamp.clone(),
+        },
+        access: None,
+    }
+}
+
+fn validate_ops_key_properties(properties: &OpsKeyProperties) -> Result<(), DynError> {
+    validation::validate_allowed_value(
+        "properties.profile",
+        &properties.profile,
+        PROPERTY_PROFILES,
+    )?;
+    validation::validate_text_field("properties.tag", &properties.tag)?;
+    validation::validate_text_field("properties.created_at", &properties.created_at)?;
+    validation::validate_allowed_value(
+        "properties.lifecycle.status",
+        &properties.lifecycle.status,
+        &["active", "disabled", "revoked", "rotated", "expired"],
+    )?;
+    validation::validate_text_field("properties.lifecycle.reason", &properties.lifecycle.reason)?;
+    validation::validate_text_field(
+        "properties.lifecycle.changed_at",
+        &properties.lifecycle.changed_at,
+    )?;
+
+    Ok(())
+}
+
 fn resolve_keys_input(
     input: CreateKeysInput,
     config: &config::AppConfig,
@@ -382,6 +607,12 @@ fn resolve_keys_input(
     validation::validate_allowed_value("profile", &profile_name, config::CRYPTO_PROFILES)?;
     let profile = crypto_profile(&profile_name)?;
     validate_crypto_policy(config, &input)?;
+    let has_overrides = input.hash_algorithm.is_some()
+        || input.symmetric_algorithm.is_some()
+        || input.eddsa_algorithm.is_some()
+        || input.xecdh_algorithm.is_some()
+        || input.ml_dsa_variant.is_some()
+        || input.ml_kem_variant.is_some();
 
     let hash_algorithm = if config.crypto_policy == "allow-overrides" {
         input
@@ -449,10 +680,22 @@ fn resolve_keys_input(
         &["ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"],
     )?;
 
+    let properties_profile = if config.crypto_policy == "allow-overrides" && has_overrides {
+        String::from("custom")
+    } else {
+        profile.name.to_string()
+    };
+    validation::validate_allowed_value(
+        "properties.profile",
+        &properties_profile,
+        PROPERTY_PROFILES,
+    )?;
+
     Ok(ResolvedKeysInput {
         tag,
         timestamp,
         profile: profile.name.to_string(),
+        properties_profile,
         hash_algorithm,
         symmetric_algorithm,
         eddsa_algorithm,
