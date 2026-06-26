@@ -451,7 +451,7 @@ Response:
 {
   "version": "v1",
   "payload": {
-    "type": "tsp",
+    "type": "vectis-sign",
     "created_at": "1782058090",
     "info": "version=v1;hostname=localhost;type=ops-keys;cipher=AES-256/GCM;tag=ACME Corp.;timestamp=1782058090",
     "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
@@ -810,6 +810,7 @@ CLI output defaults to YAML for readability. Add `--output json` to any HTTP cli
 | `vectis keys reload` | `POST /keys/reload` | Yes |
 | `vectis routes list` | `GET /routes` | Yes |
 | `vectis routes reload` | `POST /routes/reload` | Yes |
+| `vectis routes sign` | Local `routes_sign.json` update | No HTTP |
 | `vectis pub <kid>` | `GET /pub/{kid}` | No |
 | `vectis sign <kid>` | `POST /sign/{kid}` | Yes |
 | `vectis sign verify` | `POST /sign/verification` | No |
@@ -823,3 +824,60 @@ Local commands:
 
 - `vectis init`: creates encrypted `init.json`, prints `VECTIS_UNSEAL_KEY` and `VECTIS_APIKEY`.
 - `vectis serve`: validates `init.json`, loads storage/routes into memory, and starts the HTTP service. Unseal key resolution order is `VECTIS_UNSEAL_KEY`, `VECTIS_UNSEAL_KEY_FILE` with default `.unseal_key`, then hidden prompt.
+- `vectis routes sign`: reads `VECTIS_ROUTES_PATH`, signs its canonical JSON with init EdDSA and init ML-DSA, and writes `VECTIS_ROUTES_SIGN_PATH`.
+
+## Route Signature
+
+When `routes.json` exists, Vectis requires a matching route signature before loading manual routes.
+
+Default paths:
+
+```env
+VECTIS_ROUTES_PATH=routes.json
+VECTIS_ROUTES_SIGN_PATH=routes_sign.json
+```
+
+Create or update the signature:
+
+```bash
+vectis routes sign
+```
+
+`routes_sign.json` uses the same signed payload structure as `POST /sign/{kid}`:
+
+```json
+{
+  "version": "v1",
+  "payload": {
+    "type": "vectis-routes",
+    "created_at": "1782058090",
+    "info": "version=v1;type=vectis-routes;path=routes.json",
+    "kid": "init-keys",
+    "serial": "INTERNAL_KEYS_HASH(created_at + random_bytes)",
+    "message_hash": {
+      "alg": "BLAKE2b(256)",
+      "hex": "hash of canonical routes.json"
+    }
+  },
+  "signatures": {
+    "eddsa": {
+      "alg": "Ed25519",
+      "sig": "..."
+    },
+    "ml-dsa": {
+      "alg": "ML-DSA-44",
+      "sig": "..."
+    }
+  }
+}
+```
+
+Validation rules:
+
+- `payload.type` must be `vectis-routes`.
+- `payload.kid` must be `init-keys`.
+- `payload.message_hash` must match canonical `routes.json` using `INTERNAL_KEYS_HASH`.
+- EdDSA and ML-DSA signatures must verify with init public keys.
+- Startup with missing `routes.json` uses default routing.
+- Startup with invalid route signature uses default routing and logs the error.
+- `POST /routes/reload` rejects invalid signatures and keeps the previous in-memory routes.

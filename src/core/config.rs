@@ -27,6 +27,7 @@ pub struct AppConfig {
     pub final_app_addr: String,
     pub final_app_path: String,
     pub routes_path: PathBuf,
+    pub routes_sign_path: PathBuf,
     pub api_key: String,
     pub protocol_version: String,
     pub storage_type: String,
@@ -61,6 +62,11 @@ pub fn app_config() -> Result<AppConfig, DynError> {
         &env_file,
         "VECTIS_ROUTES_PATH",
         "routes.json",
+    ))?;
+    let routes_sign_path = validate_routes_path(&config_value(
+        &env_file,
+        "VECTIS_ROUTES_SIGN_PATH",
+        "routes_sign.json",
     ))?;
     let api_key = config_value(&env_file, "VECTIS_APIKEY", "");
     let protocol_version = config_value(&env_file, "VECTIS_PROTOCOL_VERSION", "v1");
@@ -133,6 +139,7 @@ pub fn app_config() -> Result<AppConfig, DynError> {
         final_app_addr,
         final_app_path,
         routes_path,
+        routes_sign_path,
         api_key,
         protocol_version,
         storage_type,

@@ -198,7 +198,7 @@ paths:
     post:
       tags: [Routes]
       summary: Reload final app routes from VECTIS_ROUTES_PATH
-      description: Administrative endpoint. Replaces in-memory routes only after VECTIS_ROUTES_PATH is successfully read and validated. Every route kid must exist in the keys currently loaded in memory. A missing file reloads to an empty route list; an invalid file or unloaded route kid returns an error and keeps the previous in-memory routes.
+      description: Administrative endpoint. Replaces in-memory routes only after VECTIS_ROUTES_PATH and VECTIS_ROUTES_SIGN_PATH are successfully read, verified, and validated. Every route kid must exist in the keys currently loaded in memory. A missing routes file reloads to an empty route list; an invalid signature, invalid file, or unloaded route kid returns an error and keeps the previous in-memory routes.
       security:
         - ApiKeyAuth: []
       responses:
@@ -688,7 +688,7 @@ components:
           required: [type, created_at, info, kid, serial, message_hash]
           properties:
             type:
-              const: tsp
+              const: vectis-sign
             created_at:
               $ref: "#/components/schemas/Timestamp"
             info:

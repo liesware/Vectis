@@ -1,7 +1,9 @@
 use crate::core::{config, validation};
 use crate::error::DynError;
+use crate::io::cli::init;
+use crate::ops;
 use reqwest::{Method, Url};
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -112,8 +114,12 @@ async fn run_keys(args: Vec<String>, output: OutputFormat) -> Result<(), DynErro
 
 async fn run_routes(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "routes command")?;
-    expect_no_args(&rest, &format!("routes {subcommand}"))?;
+    if subcommand == "sign" {
+        expect_no_args(&rest, "routes sign")?;
+        return run_routes_sign(output);
+    }
 
+    expect_no_args(&rest, &format!("routes {subcommand}"))?;
     let client = CliHttpClient::from_env()?;
     match subcommand.as_str() {
         "list" => {
@@ -130,6 +136,31 @@ async fn run_routes(args: Vec<String>, output: OutputFormat) -> Result<(), DynEr
             "unknown routes command: {subcommand}"
         ))),
     }
+}
+
+fn run_routes_sign(output: OutputFormat) -> Result<(), DynError> {
+    let config = config::app_config()?;
+    let init_state = init::load_init_state()?;
+    let routes_content = fs::read_to_string(&config.routes_path).map_err(|err| {
+        invalid_input(format!(
+            "VECTIS_ROUTES_PATH could not be read from {}: {err}",
+            config.routes_path.display()
+        ))
+    })?;
+    let token = ops::sign::sign_routes_file(&init_state, &config.routes_path, &routes_content)?;
+    let routes_sign_path =
+        crate::core::routes::routes_signature_path(&config.routes_path, &config.routes_sign_path);
+    let token_json = serde_json::to_string_pretty(&token)?;
+    fs::write(&routes_sign_path, token_json)?;
+
+    print_response(
+        &serde_json::to_string(&json!({
+            "status": "updated",
+            "routes_path": config.routes_path.display().to_string(),
+            "routes_sign_path": routes_sign_path.display().to_string(),
+        }))?,
+        output,
+    )
 }
 
 async fn run_pub(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
@@ -539,6 +570,7 @@ fn print_http_help() {
     println!("  {PROGRAM_NAME} keys reload");
     println!("  {PROGRAM_NAME} routes list");
     println!("  {PROGRAM_NAME} routes reload");
+    println!("  {PROGRAM_NAME} routes sign");
     println!("  {PROGRAM_NAME} pub <kid>");
     println!("  {PROGRAM_NAME} sign <kid> (--json <json>|--file <path>)");
     println!("  {PROGRAM_NAME} sign verify (--json <json>|--file <path>)");
@@ -627,12 +659,14 @@ fn print_routes_help() {
     println!("Usage:");
     println!("  {PROGRAM_NAME} routes list");
     println!("  {PROGRAM_NAME} routes reload");
+    println!("  {PROGRAM_NAME} routes sign");
     println!();
     println!("Lists or reloads final app routes through the HTTP API.");
     println!();
     println!("Commands:");
     println!("  list                  GET /routes, requires VECTIS_APIKEY");
     println!("  reload                POST /routes/reload, requires VECTIS_APIKEY");
+    println!("  sign                  Signs VECTIS_ROUTES_PATH with init keys");
     println!();
     println!("Behavior:");
     println!("  list                  Returns routes currently loaded in memory");

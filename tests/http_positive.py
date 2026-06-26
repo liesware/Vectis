@@ -4,6 +4,7 @@ import atexit
 import hashlib
 import http.server
 import json
+import subprocess
 import sys
 import threading
 import urllib.error
@@ -18,6 +19,7 @@ DEFAULT_APIKEY = "20e446d000498e82b056f54e68216d4c8c9bda089a6812d0aa9d82d59f9180
 INTERNAL_KEYS_KID_HEX_LEN = 64
 MESSAGE = "The things you own end up owning you."
 ROUTES_PATH = Path("routes.json")
+ROUTES_SIGN_PATH = Path("routes_sign.json")
 
 KEY_CASES = [
     {
@@ -343,22 +345,38 @@ def validate_routes_list(response):
         )
 
 
-def backup_routes_file():
-    if not ROUTES_PATH.exists():
+def backup_file(path):
+    if not path.exists():
         return None
 
-    return ROUTES_PATH.read_text(encoding="utf-8")
+    return path.read_text(encoding="utf-8")
 
 
-def restore_routes_file(backup):
+def restore_file(path, backup):
     if backup is None:
         try:
-            ROUTES_PATH.unlink()
+            path.unlink()
         except FileNotFoundError:
             pass
         return
 
-    ROUTES_PATH.write_text(backup, encoding="utf-8")
+    path.write_text(backup, encoding="utf-8")
+
+
+def backup_routes_file():
+    return backup_file(ROUTES_PATH)
+
+
+def backup_routes_sign_file():
+    return backup_file(ROUTES_SIGN_PATH)
+
+
+def restore_routes_file(backup):
+    restore_file(ROUTES_PATH, backup)
+
+
+def restore_routes_sign_file(backup):
+    restore_file(ROUTES_SIGN_PATH, backup)
 
 
 def write_test_routes(key_ids, final_app_addr):
@@ -373,15 +391,32 @@ def write_test_routes(key_ids, final_app_addr):
         ]
     }
     ROUTES_PATH.write_text(json.dumps(routes, indent=2), encoding="utf-8")
+    sign_routes()
+
+
+def sign_routes():
+    result = subprocess.run(
+        ["cargo", "run", "--", "routes", "sign", "--output", "json"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise WorkflowError(
+            f"vectis routes sign failed: stdout={result.stdout} stderr={result.stderr}"
+        )
 
 
 def clear_routes_state(client):
     backup = backup_routes_file()
+    sign_backup = backup_routes_sign_file()
     ROUTES_PATH.write_text('{"routes":[]}\n', encoding="utf-8")
+    sign_routes()
     try:
         validate_routes_list(client.post("/routes/reload", {}, auth=True))
     finally:
         restore_routes_file(backup)
+        restore_routes_sign_file(sign_backup)
 
 
 def sign_key(client, key_id, hash_alg, message_hash_hex):
@@ -570,7 +605,9 @@ def main():
     final_app = start_final_app(args.final_app_addr)
     client = Client(args.base_url, args.apikey)
     routes_backup = backup_routes_file()
+    routes_sign_backup = backup_routes_sign_file()
     atexit.register(restore_routes_file, routes_backup)
+    atexit.register(restore_routes_sign_file, routes_sign_backup)
     recipient_host = host_from_base_url(args.base_url)
     message = MESSAGE.encode("utf-8")
 
@@ -690,6 +727,7 @@ def main():
     passed_count += len(verify_rows)
     print(f"SUMMARY positive passed={passed_count} failed=0")
     restore_routes_file(routes_backup)
+    restore_routes_sign_file(routes_sign_backup)
     clear_routes_state(client)
     final_app.shutdown()
 

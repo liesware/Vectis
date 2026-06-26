@@ -72,6 +72,10 @@ fn public_error_message_for_error(
 ) -> String {
     let detail = err.to_string();
 
+    if status == StatusCode::BAD_REQUEST {
+        return detail;
+    }
+
     if detail.contains("recipient_kid not found in remote /pub response") {
         return String::from("recipent kid not found");
     }

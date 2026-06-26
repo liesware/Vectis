@@ -34,6 +34,7 @@ pub struct HttpState {
     remote_public_keys_state: Arc<RwLock<Zeroizing<RemotePublicKeysState>>>,
     routes_state: Arc<RwLock<RoutesState>>,
     routes_path: Arc<PathBuf>,
+    routes_sign_path: Arc<PathBuf>,
 }
 
 impl HttpState {
@@ -43,6 +44,7 @@ impl HttpState {
         keys_db_state: Zeroizing<KeysDbState>,
         routes_state: RoutesState,
         routes_path: PathBuf,
+        routes_sign_path: PathBuf,
         started_at: String,
     ) -> Self {
         Self {
@@ -55,6 +57,7 @@ impl HttpState {
             ))),
             routes_state: Arc::new(RwLock::new(routes_state)),
             routes_path: Arc::new(routes_path),
+            routes_sign_path: Arc::new(routes_sign_path),
         }
     }
 
@@ -105,9 +108,23 @@ impl HttpState {
         };
         let reloaded = {
             let routes_state = self.routes_state.read().await;
-            routes_state.reload_from_file(&self.routes_path, |kid| {
-                loaded_key_ids.iter().any(|id| id == kid)
-            })?
+            routes_state.reload_from_file(
+                &self.routes_path,
+                |routes_path, routes_content| {
+                    let routes_sign_path = crate::core::routes::routes_signature_path(
+                        routes_path,
+                        &self.routes_sign_path,
+                    );
+                    let signature_content = std::fs::read_to_string(&routes_sign_path)?;
+                    crate::ops::sign::verify_routes_file_signature(
+                        self.init_state(),
+                        routes_path,
+                        routes_content,
+                        &signature_content,
+                    )
+                },
+                |kid| loaded_key_ids.iter().any(|id| id == kid),
+            )?
         };
         let mut routes_state = self.routes_state.write().await;
         *routes_state = reloaded;

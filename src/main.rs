@@ -72,7 +72,7 @@ fn print_help() {
     println!("  health                Call the health probe endpoints");
     println!("  test                  Call protected test endpoints through HTTP");
     println!("  keys                  Create, list, or reload operational keys through HTTP");
-    println!("  routes                List or reload final app routes through HTTP");
+    println!("  routes                List, reload, or sign final app routes");
     println!("  pub                   Fetch public keys through HTTP");
     println!("  sign                  Create or verify timestamp signatures through HTTP");
     println!("  message               Send, receive, encrypt, or decrypt messages through HTTP");

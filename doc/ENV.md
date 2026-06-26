@@ -48,6 +48,7 @@ These variables are used by CLI commands that call the HTTP API. `serve` and `in
 | `VECTIS_FINAL_APP_ADDR` | `localhost:3999` | Valid host:port | Default final app destination used when no manual route exists for a `kid`. |
 | `VECTIS_FINAL_APP_PATH` | `/message` | HTTP path beginning with `/`, no spaces | Default final app path. |
 | `VECTIS_ROUTES_PATH` | `routes.json` | Non-empty file path | Optional manual routing file. Startup falls back to default final app delivery if the file is missing or invalid. Runtime reload keeps the previous routes if the file exists but is invalid. |
+| `VECTIS_ROUTES_SIGN_PATH` | `routes_sign.json` | Non-empty file path | Signature token for `VECTIS_ROUTES_PATH`, created by `vectis routes sign`. |
 
 Manual routes file shape:
 
@@ -64,11 +65,13 @@ Manual routes file shape:
 ```
 
 `routes.json` is manual operational configuration. Vectis does not create it and `POST /keys` does not modify it.
+If `routes.json` exists, `routes_sign.json` must exist and verify before routes are loaded.
 
 Runtime route operations:
 
 - `GET /routes` lists routes currently loaded in memory and requires `VECTIS_APIKEY`.
 - `POST /routes/reload` reloads `VECTIS_ROUTES_PATH` and requires `VECTIS_APIKEY`.
+- `vectis routes sign` signs `VECTIS_ROUTES_PATH` locally with init keys and updates `VECTIS_ROUTES_SIGN_PATH`.
 - Every route `kid` must exist in the keys currently loaded in memory.
 - A missing file reloads to an empty manual route list.
 - An invalid existing file, or a route with an unloaded `kid`, returns an error and keeps the previous in-memory routes.
@@ -190,6 +193,7 @@ VECTIS_PUBLIC_ADDR=localhost:3000
 VECTIS_FINAL_APP_ADDR=localhost:3999
 VECTIS_FINAL_APP_PATH=/message
 VECTIS_ROUTES_PATH=routes.json
+VECTIS_ROUTES_SIGN_PATH=routes_sign.json
 VECTIS_LOG_LEVEL=info
 VECTIS_LOG_DIR=logs
 VECTIS_LOG_FILE=vectis.log

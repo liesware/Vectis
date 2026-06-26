@@ -14,7 +14,21 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
     let logging = crate::core::logging::logging_config();
     let storage = StorageState::new(&config).await?;
     let keys_db_state = keys::load_keys_db_state(&storage, &init_state).await?;
-    let routes_state = routes::load_routes_state(&config, |kid| keys_db_state.contains_id(kid));
+    let routes_state = routes::load_routes_state(
+        &config,
+        |routes_path, routes_content| {
+            let routes_sign_path =
+                routes::routes_signature_path(routes_path, &config.routes_sign_path);
+            let signature_content = std::fs::read_to_string(&routes_sign_path)?;
+            crate::ops::sign::verify_routes_file_signature(
+                &init_state,
+                routes_path,
+                routes_content,
+                &signature_content,
+            )
+        },
+        |kid| keys_db_state.contains_id(kid),
+    );
     let started_at = validation::current_timestamp()?;
     info!(
         http_bind_addr = %config.http_bind_addr,
@@ -22,6 +36,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         final_app_addr = %config.final_app_addr,
         final_app_path = %config.final_app_path,
         routes_path = %config.routes_path.display(),
+        routes_sign_path = %config.routes_sign_path.display(),
         storage_type = %config.storage_type,
         sqlite_path = %config.sqlite_path.display(),
         protocol_version = %config.protocol_version,
@@ -44,6 +59,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         keys_db_state,
         routes_state,
         config.routes_path.clone(),
+        config.routes_sign_path.clone(),
         started_at,
     ));
     let listener = tokio::net::TcpListener::bind(config.http_bind_addr).await?;
