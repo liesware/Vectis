@@ -72,7 +72,7 @@ pub async fn receive_endpoint(
     let sender_kid = prepared.sender_kid().to_string();
     let recipient_kid = prepared.recipient_kid().to_string();
     let cached_sender = state.remote_public_keys(&sender_host, &sender_kid).await;
-    let final_app_route = state.final_app_route_for(&recipient_kid);
+    let final_app_route = state.final_app_route_for(&recipient_kid).await;
 
     match ops::message::receive_message(prepared, cached_sender, final_app_route).await {
         Ok(result) => {

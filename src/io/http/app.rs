@@ -43,6 +43,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         storage,
         keys_db_state,
         routes_state,
+        config.routes_path.clone(),
         started_at,
     ));
     let listener = tokio::net::TcpListener::bind(config.http_bind_addr).await?;

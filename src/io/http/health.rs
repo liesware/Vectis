@@ -52,6 +52,6 @@ pub async fn ready_endpoint(
         unsealed: state.key_material_loaded(),
         storage: String::from("ok"),
         keys_loaded: state.keys_loaded().await,
-        routes_loaded: state.routes_loaded(),
+        routes_loaded: state.routes_loaded().await,
     }))
 }

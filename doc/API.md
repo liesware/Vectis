@@ -31,6 +31,8 @@ Endpoints requiring auth:
 
 - `POST /keys`
 - `POST /keys/reload`
+- `GET /routes`
+- `POST /routes/reload`
 - `GET /self-test/init`
 - `GET /self-test/keys/{kid}`
 - `POST /sign/{kid}`
@@ -295,6 +297,44 @@ Response:
       "info": "version=v1;hostname=localhost;type=ops-keys;cipher=AES-256/GCM;tag=ACME Corp.;timestamp=1782058090"
     }
   ]
+}
+```
+
+## Routes
+
+### GET /routes
+
+Lists the final app routes currently loaded in memory. It does not read `routes.json`.
+
+Requires auth.
+
+Response:
+
+```json
+{
+  "routes": [
+    {
+      "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+      "final_app_addr": "127.0.0.1:3999",
+      "final_app_path": "/message"
+    }
+  ]
+}
+```
+
+### POST /routes/reload
+
+Administrative refresh operation. Reloads final app routes from `ROUTES_PATH` into memory.
+
+Requires auth.
+
+If the routes file does not exist, Vectis reloads to an empty route list and keeps using the default final app fallback. If the file exists but is invalid, the request fails and the previous in-memory routes remain active.
+
+Response:
+
+```json
+{
+  "routes": []
 }
 ```
 

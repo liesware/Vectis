@@ -213,6 +213,26 @@ def main():
         )
         require_status("POST /keys/reload invalid auth", status, 401)
 
+    def routes_list_without_auth():
+        status, _ = client.get("/routes")
+        require_status("GET /routes without auth", status, 401)
+
+    def routes_list_invalid_auth():
+        status, _ = client.get("/routes", headers={"Authorization": "00" * 32})
+        require_status("GET /routes invalid auth", status, 401)
+
+    def routes_reload_without_auth():
+        status, _ = client.post("/routes/reload", {})
+        require_status("POST /routes/reload without auth", status, 401)
+
+    def routes_reload_invalid_auth():
+        status, _ = client.post(
+            "/routes/reload",
+            {},
+            headers={"Authorization": "00" * 32},
+        )
+        require_status("POST /routes/reload invalid auth", status, 401)
+
     def keys_tag_not_string():
         request = dict(VALID_KEY_REQUEST)
         request["tag"] = 1
@@ -248,6 +268,10 @@ def main():
         ("POST /keys invalid auth", keys_invalid_auth),
         ("POST /keys/reload without auth", keys_reload_without_auth),
         ("POST /keys/reload invalid auth", keys_reload_invalid_auth),
+        ("GET /routes without auth", routes_list_without_auth),
+        ("GET /routes invalid auth", routes_list_invalid_auth),
+        ("POST /routes/reload without auth", routes_reload_without_auth),
+        ("POST /routes/reload invalid auth", routes_reload_invalid_auth),
         ("POST /keys tag not string", keys_tag_not_string),
         ("POST /keys invalid algorithm", keys_invalid_algorithm),
         ("POST /keys invalid profile", keys_invalid_profile),

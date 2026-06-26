@@ -1,18 +1,29 @@
 use crate::core::{config, validation};
 use crate::error::DynError;
 use crate::ops::keys;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::Path;
 use tracing::{info, warn};
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct FinalAppRoute {
     kid: String,
     final_app_addr: String,
     final_app_path: String,
+}
+
+#[derive(Serialize)]
+pub struct ListRoutesOutput {
+    routes: Vec<FinalAppRoute>,
+}
+
+impl ListRoutesOutput {
+    pub fn routes_len(&self) -> usize {
+        self.routes.len()
+    }
 }
 
 pub struct RoutesState {
@@ -48,6 +59,26 @@ impl RoutesState {
 
     pub fn len(&self) -> usize {
         self.routes.len()
+    }
+
+    pub fn list(&self) -> ListRoutesOutput {
+        ListRoutesOutput {
+            routes: self.routes.clone(),
+        }
+    }
+
+    pub fn reload_from_file(&self, path: &Path) -> Result<RoutesState, DynError> {
+        let routes = match load_routes_file(path) {
+            Ok(routes) => routes,
+            Err(err) if is_not_found_error(err.as_ref()) => Vec::new(),
+            Err(err) => return Err(err),
+        };
+
+        Ok(RoutesState {
+            default_addr: self.default_addr.clone(),
+            default_path: self.default_path.clone(),
+            routes,
+        })
     }
 }
 
@@ -115,6 +146,11 @@ fn load_routes_file(path: &Path) -> Result<Vec<FinalAppRoute>, DynError> {
     })?;
 
     validate_routes(routes_file.routes)
+}
+
+fn is_not_found_error(err: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
+    err.downcast_ref::<io::Error>()
+        .is_some_and(|err| err.kind() == io::ErrorKind::NotFound)
 }
 
 fn validate_routes(routes: Vec<RouteInput>) -> Result<Vec<FinalAppRoute>, DynError> {

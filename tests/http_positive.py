@@ -273,6 +273,23 @@ def validate_keys_list(response, key_ids):
         require(key_id in by_kid, f"keys list must include {key_id}")
 
 
+def validate_routes_list(response):
+    require(isinstance(response, dict), "routes list response must be an object")
+    routes = response.get("routes")
+    require(isinstance(routes, list), "routes list response.routes must be an array")
+    for item in routes:
+        require(isinstance(item, dict), "routes list item must be an object")
+        require_kid(item.get("kid"), "routes list item kid")
+        require(
+            isinstance(item.get("final_app_addr"), str) and item["final_app_addr"],
+            "routes list item final_app_addr must be a non-empty string",
+        )
+        require(
+            isinstance(item.get("final_app_path"), str) and item["final_app_path"].startswith("/"),
+            "routes list item final_app_path must start with /",
+        )
+
+
 def sign_key(client, key_id, hash_alg, message_hash_hex):
     body = {
         "message_hash": {
@@ -492,6 +509,12 @@ def main():
         [key_id for key_id, _ in created],
     )
     print("Reload keys: OK\n")
+    passed_count += 1
+    validate_routes_list(client.get("/routes", auth=True))
+    print("List routes: OK\n")
+    passed_count += 1
+    validate_routes_list(client.post("/routes/reload", {}, auth=True))
+    print("Reload routes: OK\n")
     passed_count += 1
 
     test_rows = []

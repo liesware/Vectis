@@ -21,6 +21,7 @@ pub async fn run(command: &str, args: Vec<String>) -> Result<(), DynError> {
         "health" => run_health(args).await,
         "test" => run_test(args).await,
         "keys" => run_keys(args).await,
+        "routes" => run_routes(args).await,
         "pub" => run_pub(args).await,
         "sign" => run_sign(args).await,
         "message" => run_message(args).await,
@@ -33,6 +34,7 @@ pub fn print_help(command: &str) {
         "health" => print_health_help(),
         "test" => print_test_help(),
         "keys" => print_keys_help(),
+        "routes" => print_routes_help(),
         "pub" => print_pub_help(),
         "sign" => print_sign_help(),
         "message" => print_message_help(),
@@ -81,6 +83,24 @@ async fn run_keys(args: Vec<String>) -> Result<(), DynError> {
             client.send(Method::POST, "/keys", true, Some(body)).await
         }
         _ => Err(invalid_input(format!("unknown keys command: {subcommand}"))),
+    }
+}
+
+async fn run_routes(args: Vec<String>) -> Result<(), DynError> {
+    let (subcommand, rest) = split_subcommand(args, "routes command")?;
+    expect_no_args(&rest, &format!("routes {subcommand}"))?;
+
+    let client = CliHttpClient::from_env()?;
+    match subcommand.as_str() {
+        "list" => client.send(Method::GET, "/routes", true, None).await,
+        "reload" => {
+            client
+                .send(Method::POST, "/routes/reload", true, None)
+                .await
+        }
+        _ => Err(invalid_input(format!(
+            "unknown routes command: {subcommand}"
+        ))),
     }
 }
 
@@ -427,6 +447,8 @@ fn print_http_help() {
     println!("  {PROGRAM_NAME} keys create [--tag <tag>] [--profile <profile>]");
     println!("  {PROGRAM_NAME} keys list");
     println!("  {PROGRAM_NAME} keys reload");
+    println!("  {PROGRAM_NAME} routes list");
+    println!("  {PROGRAM_NAME} routes reload");
     println!("  {PROGRAM_NAME} pub <kid>");
     println!("  {PROGRAM_NAME} sign <kid> (--json <json>|--file <path>)");
     println!("  {PROGRAM_NAME} sign verify (--json <json>|--file <path>)");
@@ -499,6 +521,28 @@ fn print_keys_help() {
     println!("  {PROGRAM_NAME} keys create --tag payments --profile hybrid-high-assurance-v1");
     println!("  {PROGRAM_NAME} keys list");
     println!("  {PROGRAM_NAME} keys reload");
+}
+
+fn print_routes_help() {
+    println!("Usage:");
+    println!("  {PROGRAM_NAME} routes list");
+    println!("  {PROGRAM_NAME} routes reload");
+    println!();
+    println!("Lists or reloads final app routes through the HTTP API.");
+    println!();
+    println!("Commands:");
+    println!("  list                  GET /routes, requires APIKEY");
+    println!("  reload                POST /routes/reload, requires APIKEY");
+    println!();
+    println!("Behavior:");
+    println!("  list                  Returns routes currently loaded in memory");
+    println!("  reload                Re-reads ROUTES_PATH and replaces the in-memory routes");
+    println!();
+    println!("Notes:");
+    println!(
+        "  Missing routes file reloads to an empty route list and keeps default final app fallback."
+    );
+    println!("  Invalid routes file returns an error and keeps the previous in-memory routes.");
 }
 
 fn print_pub_help() {
