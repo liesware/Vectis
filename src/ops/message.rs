@@ -429,10 +429,9 @@ pub async fn send_message(
 }
 
 fn recipient_delivery_error(host: &str, err: DynError) -> DynError {
-    Box::new(io::Error::new(
-        io::ErrorKind::Other,
-        format!("recipient can't be reached: host={host}, error={err}"),
-    ))
+    Box::new(io::Error::other(format!(
+        "recipient can't be reached: host={host}, error={err}"
+    )))
 }
 
 pub async fn receive_message(
@@ -1108,10 +1107,9 @@ async fn deliver_message_to_final_app(
 }
 
 fn final_app_delivery_error(addr: &str, path: &str, err: DynError) -> DynError {
-    Box::new(io::Error::new(
-        io::ErrorKind::Other,
-        format!("final app can't be reached: addr={addr}, path={path}, error={err}"),
-    ))
+    Box::new(io::Error::other(format!(
+        "final app can't be reached: addr={addr}, path={path}, error={err}"
+    )))
 }
 
 fn sign_message_payload(

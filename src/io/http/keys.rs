@@ -19,9 +19,7 @@ pub async fn create_endpoint(
     headers: HeaderMap,
     Json(request): Json<Value>,
 ) -> Result<Json<CreateKeysResponse>, (StatusCode, Json<ErrorResponse>)> {
-    if let Err(response) = authorize_api_key(&headers) {
-        return Err(response);
-    }
+    authorize_api_key(&headers)?;
 
     let request = match ops::keys::parse_create_keys_input(request) {
         Ok(request) => request,
@@ -114,9 +112,7 @@ pub async fn list_properties_endpoint(
     State(state): State<HttpState>,
     headers: HeaderMap,
 ) -> Result<Json<ops::keys::ListKeysPropertiesOutput>, (StatusCode, Json<ErrorResponse>)> {
-    if let Err(response) = authorize_api_key(&headers) {
-        return Err(response);
-    }
+    authorize_api_key(&headers)?;
 
     info!(
         endpoint = "GET /keys/properties",
@@ -140,9 +136,7 @@ pub async fn refresh_endpoint(
     State(state): State<HttpState>,
     headers: HeaderMap,
 ) -> Result<Json<ops::keys::ListKeysPropertiesOutput>, (StatusCode, Json<ErrorResponse>)> {
-    if let Err(response) = authorize_api_key(&headers) {
-        return Err(response);
-    }
+    authorize_api_key(&headers)?;
 
     info!(
         endpoint = "POST /keys/reload",

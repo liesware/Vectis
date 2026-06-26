@@ -12,9 +12,7 @@ pub async fn init_endpoint(
     State(state): State<HttpState>,
     headers: HeaderMap,
 ) -> Result<Json<InitValidationOutput>, (StatusCode, Json<ErrorResponse>)> {
-    if let Err(response) = authorize_api_key(&headers) {
-        return Err(response);
-    }
+    authorize_api_key(&headers)?;
 
     info!(
         endpoint = "GET /self-test/init",
@@ -41,9 +39,7 @@ pub async fn test_endpoint(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<ops::test::TestOutput>, (StatusCode, Json<ErrorResponse>)> {
-    if let Err(response) = authorize_api_key(&headers) {
-        return Err(response);
-    }
+    authorize_api_key(&headers)?;
 
     ops::keys::validate_key_id(&id).map_err(|err| error_response(err.as_ref()))?;
     state

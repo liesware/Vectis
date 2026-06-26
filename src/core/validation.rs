@@ -183,7 +183,7 @@ pub fn validate_hex_field(field: &str, value: &str) -> Result<(), DynError> {
         )));
     }
 
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return Err(Box::new(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("{field} must have an even number of hex characters"),

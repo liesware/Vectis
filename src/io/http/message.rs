@@ -14,9 +14,7 @@ pub async fn send_endpoint(
     headers: HeaderMap,
     Json(request): Json<Value>,
 ) -> Result<Json<ops::message::SendMessageOutput>, (StatusCode, Json<ErrorResponse>)> {
-    if let Err(response) = authorize_api_key(&headers) {
-        return Err(response);
-    }
+    authorize_api_key(&headers)?;
 
     ops::keys::validate_key_id(&sender_kid).map_err(|err| error_response(err.as_ref()))?;
     state
@@ -94,9 +92,7 @@ pub async fn decrypt_endpoint(
     headers: HeaderMap,
     Json(request): Json<Value>,
 ) -> Result<Json<ops::message::DecryptMessageOutput>, (StatusCode, Json<ErrorResponse>)> {
-    if let Err(response) = authorize_api_key(&headers) {
-        return Err(response);
-    }
+    authorize_api_key(&headers)?;
 
     let request = ops::message::parse_decrypt_message_input(request)
         .map_err(|err| error_response(err.as_ref()))?;
@@ -128,9 +124,7 @@ pub async fn internal_encrypt_endpoint(
     headers: HeaderMap,
     Json(request): Json<Value>,
 ) -> Result<Json<ops::message::InternalMessageOutput>, (StatusCode, Json<ErrorResponse>)> {
-    if let Err(response) = authorize_api_key(&headers) {
-        return Err(response);
-    }
+    authorize_api_key(&headers)?;
 
     ops::keys::validate_key_id(&kid).map_err(|err| error_response(err.as_ref()))?;
     state
@@ -160,9 +154,7 @@ pub async fn internal_decrypt_endpoint(
     headers: HeaderMap,
     Json(request): Json<Value>,
 ) -> Result<Json<ops::message::DecryptMessageOutput>, (StatusCode, Json<ErrorResponse>)> {
-    if let Err(response) = authorize_api_key(&headers) {
-        return Err(response);
-    }
+    authorize_api_key(&headers)?;
 
     let request = ops::message::parse_internal_decrypt_message_input(request)
         .map_err(|err| error_response(err.as_ref()))?;
