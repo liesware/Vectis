@@ -32,6 +32,15 @@ Notes:
 - `HTTP_BIND_ADDR` must be a socket address.
 - `PUBLIC_ADDR` is a host:port value and may use hostnames such as `localhost:3000`.
 
+## CLI Client
+
+These variables are used by CLI commands that call the HTTP API. `serve` and `init` remain local bootstrap/server commands.
+
+| Variable | Default | Expected value | Purpose |
+| --- | --- | --- | --- |
+| `VECTIS_API_URL` | `http://127.0.0.1:3000` | Valid `http` or `https` URL without query or fragment | Base URL used by CLI commands such as `keys`, `test`, `sign`, `message`, `pub`, and `health`. |
+| `VECTIS_TIMEOUT_SECONDS` | `30` | Positive integer | HTTP request timeout used by the CLI client. |
+
 ## Final App Delivery
 
 | Variable | Default | Expected value | Purpose |
@@ -127,7 +136,7 @@ Supported hash algorithms:
 
 | Variable | Default | Expected value | Purpose |
 | --- | --- | --- | --- |
-| `PLAINTEXT_MESSAGE` | `You are not special. You are not a beautiful and unique snowflake. You're the same decaying organic matter as everything else.` | Non-empty string | Plaintext used by key validation flows (`test init`, `test {kid}`, HTTP validation endpoints). |
+| `PLAINTEXT_MESSAGE` | `You are not special. You are not a beautiful and unique snowflake. You're the same decaying organic matter as everything else.` | Non-empty string | Plaintext used by key validation flows (`vectis test init`, `vectis test <kid>`, and HTTP self-test endpoints). |
 
 ## Internal Constants
 
@@ -148,6 +157,8 @@ These are not environment variables. They are compile-time constants used by Vec
 
 ```env
 HTTP_BIND_ADDR=127.0.0.1:3000
+VECTIS_API_URL=http://127.0.0.1:3000
+VECTIS_TIMEOUT_SECONDS=30
 PUBLIC_ADDR=localhost:3000
 FINAL_APP_ADDR=localhost:3999
 FINAL_APP_PATH=/message

@@ -63,9 +63,9 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
-  /test/init:
+  /self-test/init:
     get:
-      tags: [Test]
+      tags: [Self Test]
       summary: Validate init key material
       security:
         - ApiKeyAuth: []
@@ -79,9 +79,9 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
-  /test/{kid}:
+  /self-test/keys/{kid}:
     get:
-      tags: [Test]
+      tags: [Self Test]
       summary: Validate an operational key
       security:
         - ApiKeyAuth: []
@@ -143,10 +143,10 @@ paths:
           $ref: "#/components/responses/Error"
 
   /keys/reload:
-    get:
+    post:
       tags: [Keys]
       summary: Refresh local key state from storage
-      description: Administrative operation. Reloads and decrypts keys from storage into this node's memory.
+      description: Administrative operation. Reloads and decrypts keys from storage into this node's memory. Uses POST because it changes server memory state.
       security:
         - ApiKeyAuth: []
       responses:

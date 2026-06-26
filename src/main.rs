@@ -7,12 +7,14 @@ use crate::error::DynError;
 use std::env;
 use tracing::{error, info};
 
+const PROGRAM_NAME: &str = "vectis";
+
 #[tokio::main]
 async fn main() -> Result<(), DynError> {
     let _guard = core::logging::init_logging();
 
     let mut args = env::args();
-    let program = args.next().unwrap_or_else(|| String::from("tmp"));
+    let _program = args.next();
 
     match args.next().as_deref() {
         Some("serve") => {
@@ -29,9 +31,10 @@ async fn main() -> Result<(), DynError> {
             info!("application finished successfully");
         }
         Some("init") => match args.next().as_deref() {
+            Some("help" | "-h" | "--help") => print_init_help(),
             Some(command) => {
                 eprintln!("unknown init command: {command}\n");
-                print_help(&program);
+                print_init_help();
             }
             None => {
                 info!("initializing local key material");
@@ -41,54 +44,105 @@ async fn main() -> Result<(), DynError> {
                 info!(path, "init completed successfully");
             }
         },
-        Some("test") => match args.next() {
-            Some(command) if command == "init" => {
-                if let Some(extra) = args.next() {
-                    eprintln!("unexpected argument for test init: {extra}\n");
-                    print_help(&program);
-                    return Ok(());
-                }
-
-                info!("testing local init key material");
-                io::cli::test::run_init_test().await?;
-                info!("init test completed successfully");
-            }
-            Some(id) => {
-                if let Some(extra) = args.next() {
-                    eprintln!("unexpected argument for test {id}: {extra}\n");
-                    print_help(&program);
-                    return Ok(());
-                }
-
-                info!(id, "testing stored ops key material");
-                io::cli::test::run_key_test(&id).await?;
-                info!(id, "stored ops key test completed successfully");
-            }
-            None => {
-                eprintln!("missing test target\n");
-                print_help(&program);
-            }
+        Some(command @ ("health" | "test" | "keys" | "pub" | "sign" | "message")) => {
+            io::cli::http::run(command, args.collect()).await?;
+        }
+        Some("help") => match args.next().as_deref() {
+            Some(command) => print_command_help(command),
+            None => print_help(),
         },
-        Some("-h" | "--help") | None => print_help(&program),
+        Some("-h" | "--help") | None => print_help(),
         Some(command) => {
             eprintln!("unknown command: {command}\n");
-            print_help(&program);
+            print_help();
         }
     }
 
     Ok(())
 }
 
-fn print_help(program: &str) {
+fn print_help() {
     println!("Usage:");
-    println!("  {program} serve");
-    println!("  {program} init");
-    println!("  {program} test init");
-    println!("  {program} test <id>");
+    println!("  {PROGRAM_NAME} <command> [options]");
+    println!("  {PROGRAM_NAME} help [command]");
     println!();
     println!("Commands:");
-    println!("  serve           Start the HTTP service");
-    println!("  init            Generate local key material in init.json");
-    println!("  test init       Validate local key material from init.json");
-    println!("  test <id>       Validate stored key material from configured storage");
+    println!("  serve                 Start the HTTP service");
+    println!("  init                  Generate local key material in init.json");
+    println!("  health                Call the health probe endpoints");
+    println!("  test                  Call protected test endpoints through HTTP");
+    println!("  keys                  Create, list, or reload operational keys through HTTP");
+    println!("  pub                   Fetch public keys through HTTP");
+    println!("  sign                  Create or verify timestamp signatures through HTTP");
+    println!("  message               Send, receive, encrypt, or decrypt messages through HTTP");
+    println!();
+    println!("Examples:");
+    println!("  {PROGRAM_NAME} init");
+    println!("  {PROGRAM_NAME} serve");
+    println!("  {PROGRAM_NAME} health ready");
+    println!("  {PROGRAM_NAME} keys create --tag payments --profile hybrid-high-assurance-v1");
+    println!("  {PROGRAM_NAME} sign <kid> --file sign-request.json");
+    println!();
+    println!("Help:");
+    println!("  {PROGRAM_NAME} help init");
+    println!("  {PROGRAM_NAME} help health");
+    println!("  {PROGRAM_NAME} help test");
+    println!("  {PROGRAM_NAME} help keys");
+    println!("  {PROGRAM_NAME} help pub");
+    println!("  {PROGRAM_NAME} help sign");
+    println!("  {PROGRAM_NAME} help message");
+    println!();
+    println!("Environment:");
+    println!("  VECTIS_API_URL        API base URL, default http://127.0.0.1:3000");
+    println!("  APIKEY                Required for protected API commands");
+    println!("  VECTIS_TIMEOUT_SECONDS Request timeout, default 30");
+}
+
+fn print_command_help(command: &str) {
+    match command {
+        "serve" => print_serve_help(),
+        "init" => print_init_help(),
+        "health" | "test" | "keys" | "pub" | "sign" | "message" => {
+            io::cli::http::print_help(command)
+        }
+        "-h" | "--help" | "help" => print_help(),
+        command => {
+            eprintln!("unknown help command: {command}\n");
+            print_help();
+        }
+    }
+}
+
+fn print_serve_help() {
+    println!("Usage:");
+    println!("  {PROGRAM_NAME} serve");
+    println!();
+    println!("Starts the Vectis HTTP service.");
+    println!();
+    println!("Before the server starts, Vectis decrypts and validates init.json.");
+    println!("Provide UNSEAL_KEY as an environment variable or type it at the hidden prompt.");
+    println!();
+    println!("Required files:");
+    println!("  init.json             Encrypted local init key material");
+    println!("  src/db/data.db        Default SQLite database in debug builds");
+    println!();
+    println!("Common environment:");
+    println!("  UNSEAL_KEY            64 hex characters, not read from .env");
+    println!("  HTTP_BIND_ADDR        Listen address, default 127.0.0.1:3000");
+    println!("  APIKEY                Required by protected endpoints");
+}
+
+fn print_init_help() {
+    println!("Usage:");
+    println!("  {PROGRAM_NAME} init");
+    println!();
+    println!("Generates local bootstrap key material and writes encrypted init.json.");
+    println!();
+    println!("Output:");
+    println!("  init.json             Encrypted key file");
+    println!("  UNSEAL_KEY=...        Key used later by serve to decrypt init.json");
+    println!("  APIKEY=...            API key for protected HTTP endpoints");
+    println!();
+    println!("Security:");
+    println!("  Do not store UNSEAL_KEY in .env for production.");
 }

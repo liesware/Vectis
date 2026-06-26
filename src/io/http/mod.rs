@@ -144,9 +144,9 @@ pub fn router(state: HttpState) -> Router {
         .route("/healthz/startup", get(health::startup_endpoint))
         .route("/healthz/live", get(health::live_endpoint))
         .route("/healthz/ready", get(health::ready_endpoint))
-        .route("/test/{id}", get(test::test_endpoint))
-        .route("/test/init", get(test::init_endpoint))
-        .route("/keys/reload", get(keys::refresh_endpoint))
+        .route("/self-test/keys/{id}", get(test::test_endpoint))
+        .route("/self-test/init", get(test::init_endpoint))
+        .route("/keys/reload", post(keys::refresh_endpoint))
         .route(
             "/keys",
             get(keys::list_endpoint).post(keys::create_endpoint),

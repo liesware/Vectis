@@ -222,7 +222,7 @@ fn default_sqlite_path() -> String {
     }
 }
 
-fn load_env_file(path: &str) -> Result<HashMap<String, String>, DynError> {
+pub fn load_env_file(path: &str) -> Result<HashMap<String, String>, DynError> {
     let content = match fs::read_to_string(path) {
         Ok(content) => content,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
@@ -251,14 +251,14 @@ fn load_env_file(path: &str) -> Result<HashMap<String, String>, DynError> {
     Ok(values)
 }
 
-fn config_value(env_file: &HashMap<String, String>, key: &str, default: &str) -> String {
+pub fn config_value(env_file: &HashMap<String, String>, key: &str, default: &str) -> String {
     env::var(key)
         .ok()
         .or_else(|| env_file.get(key).cloned())
         .unwrap_or_else(|| default.to_string())
 }
 
-fn clean_env_value(value: &str) -> String {
+pub fn clean_env_value(value: &str) -> String {
     let quoted = (value.starts_with('"') && value.ends_with('"'))
         || (value.starts_with('\'') && value.ends_with('\''));
 

@@ -16,16 +16,22 @@ pub async fn init_endpoint(
         return Err(response);
     }
 
-    info!(endpoint = "GET /test/init", "test init request accepted");
+    info!(
+        endpoint = "GET /self-test/init",
+        "self-test init request accepted"
+    );
     state
         .validation()
         .with_current_timestamp()
         .map(|response| {
-            info!(endpoint = "GET /test/init", "test init response ready");
+            info!(
+                endpoint = "GET /self-test/init",
+                "self-test init response ready"
+            );
             Json(response)
         })
         .map_err(|err| {
-            error!(error = %err, "test init endpoint failed");
+            error!(error = %err, "self-test init endpoint failed");
             error_response(err.as_ref())
         })
 }
@@ -44,18 +50,26 @@ pub async fn test_endpoint(
         .ensure_keys_db_entry(&id)
         .await
         .map_err(|err| error_response(err.as_ref()))?;
-    info!(endpoint = "GET /test/{id}", kid = %id, "test key request accepted");
+    info!(
+        endpoint = "GET /self-test/keys/{id}",
+        kid = %id,
+        "self-test key request accepted"
+    );
     let result = state
         .with_keys_db_state(|keys_db_state| ops::test::handle_test_from_state(keys_db_state, &id))
         .await;
 
     match result {
         Ok(response) => {
-            info!(endpoint = "GET /test/{id}", kid = %id, "test key response ready");
+            info!(
+                endpoint = "GET /self-test/keys/{id}",
+                kid = %id,
+                "self-test key response ready"
+            );
             Ok(Json(response))
         }
         Err(err) => {
-            error!(error = %err, "test endpoint failed");
+            error!(error = %err, "self-test endpoint failed");
             Err(error_response(err.as_ref()))
         }
     }

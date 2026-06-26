@@ -202,12 +202,16 @@ def main():
         require_status("POST /keys invalid auth", status, 401)
 
     def keys_reload_without_auth():
-        status, _ = client.get("/keys/reload")
-        require_status("GET /keys/reload without auth", status, 401)
+        status, _ = client.post("/keys/reload", {})
+        require_status("POST /keys/reload without auth", status, 401)
 
     def keys_reload_invalid_auth():
-        status, _ = client.get("/keys/reload", headers={"Authorization": "00" * 32})
-        require_status("GET /keys/reload invalid auth", status, 401)
+        status, _ = client.post(
+            "/keys/reload",
+            {},
+            headers={"Authorization": "00" * 32},
+        )
+        require_status("POST /keys/reload invalid auth", status, 401)
 
     def keys_tag_not_string():
         request = dict(VALID_KEY_REQUEST)
@@ -242,8 +246,8 @@ def main():
     for name, func in (
         ("POST /keys without auth", keys_without_auth),
         ("POST /keys invalid auth", keys_invalid_auth),
-        ("GET /keys/reload without auth", keys_reload_without_auth),
-        ("GET /keys/reload invalid auth", keys_reload_invalid_auth),
+        ("POST /keys/reload without auth", keys_reload_without_auth),
+        ("POST /keys/reload invalid auth", keys_reload_invalid_auth),
         ("POST /keys tag not string", keys_tag_not_string),
         ("POST /keys invalid algorithm", keys_invalid_algorithm),
         ("POST /keys invalid profile", keys_invalid_profile),
@@ -360,20 +364,20 @@ def main():
         run_case(rows, name, func)
 
     def test_init_without_auth():
-        status, _ = client.get("/test/init")
-        require_status("GET /test/init without auth", status, 401)
+        status, _ = client.get("/self-test/init")
+        require_status("GET /self-test/init without auth", status, 401)
 
     def test_id_without_auth():
-        status, _ = client.get(f"/test/{key_id}")
-        require_status("GET /test/{id} without auth", status, 401)
+        status, _ = client.get(f"/self-test/keys/{key_id}")
+        require_status("GET /self-test/keys/{id} without auth", status, 401)
 
     def test_id_not_hex():
-        status, _ = client.get("/test/not-hex", auth=True)
-        require_status("GET /test/{id} not hex", status, 400)
+        status, _ = client.get("/self-test/keys/not-hex", auth=True)
+        require_status("GET /self-test/keys/{id} not hex", status, 400)
 
     def test_id_wrong_length():
-        status, _ = client.get("/test/abcd", auth=True)
-        require_status("GET /test/{id} wrong length", status, 400)
+        status, _ = client.get("/self-test/keys/abcd", auth=True)
+        require_status("GET /self-test/keys/{id} wrong length", status, 400)
 
     def pub_id_not_hex():
         status, _ = client.get("/pub/not-hex")
@@ -435,10 +439,10 @@ def main():
         require_status("POST /sign/{id} hash not hex", status, 400)
 
     for name, func in (
-        ("GET /test/init without auth", test_init_without_auth),
-        ("GET /test/{id} without auth", test_id_without_auth),
-        ("GET /test/{id} not hex", test_id_not_hex),
-        ("GET /test/{id} wrong length", test_id_wrong_length),
+        ("GET /self-test/init without auth", test_init_without_auth),
+        ("GET /self-test/keys/{id} without auth", test_id_without_auth),
+        ("GET /self-test/keys/{id} not hex", test_id_not_hex),
+        ("GET /self-test/keys/{id} wrong length", test_id_wrong_length),
         ("GET /pub/{id} not hex", pub_id_not_hex),
         ("GET /pub/{id} no private keys", pub_no_private_keys),
         ("POST /sign/{id} without auth", sign_without_auth),
