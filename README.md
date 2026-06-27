@@ -68,7 +68,7 @@ Current capabilities include:
 ```text
 Application A
     |
-    | clinical record / sensitive payload
+    | private record / sensitive payload
     v
 Vectis A
     |
@@ -82,7 +82,7 @@ Application B
     |
     | local decrypt through Vectis B
     v
-Recovered payload
+Recovered private record / sensitive payload
 ```
 
 The receiving application does not receive remote plaintext directly. It receives
