@@ -1,0 +1,76 @@
+{
+  "records": {
+    "nip": "7930",
+    "username": "Wile E. Coyote",
+    "Personal Information": {
+      "Full Name": "Wile E. Coyote",
+      "Date of Birth": "September 17, 1949",
+      "Gender": "Male",
+      "Blood Type": "O-",
+      "Address": "The Desert, Southwestern USA",
+      "Email": "wile.e.coyote@acme.com",
+      "Phone Number": "+1 800 555 ACME",
+      "Photo": "link-to-photo.jpg",
+      "Ethnicity": "Cartoon",
+      "Preferred Language": "English",
+      "Nationality": "Cartoonland",
+      "ID TYPE": "ID ACME",
+      "ID": "ACME123456"
+    },
+    "Emergency Contact": [
+      {
+        "Name": "ACME Customer Service Global",
+        "Relationship": "Supplier",
+        "Phone": "555-ACME GLOBAL"
+      },
+      {
+        "Name": "ACME Customer Service USA",
+        "Relationship": "Supplier",
+        "Phone": "777-ACME USA"
+      }
+    ],
+    "Medical History": {
+      "Known Allergies": "None",
+      "Past Surgeries": "Recovery from cartoonish injuries, Acme Hospital",
+      "Chronic Conditions": "Unsuccessful hunting syndrome, Frustration",
+      "Family Medical History": "Not available",
+      "Vaccination History": "Up-to-date on all cartoon vaccinations",
+      "Previous Hospitalizations": "Multiple due to chase mishaps"
+    },
+    "Contraindicated Medications": "None",
+    "Personal Physician Contact": {
+      "Name": "Dr. Looney, ACME Hospital",
+      "Phone": "555-1234"
+    },
+    "Current Medications": [
+      {
+        "Medication": "ACME Instant Pain Relief",
+        "Dosage": "As needed",
+        "Frequency": "After mishaps"
+      },
+      {
+        "Medication": "ACME Instant Pain Relief - Xtreme",
+        "Dosage": "As needed",
+        "Frequency": "After hardest mishaps"
+      }
+    ],
+    "Medical Insurance Information": {
+      "Provider": "ACME Health Insurance",
+      "Policy Number": "ACME123456",
+      "Coverage": "Comprehensive Cartoon Plan",
+      "Policy Details": "Covers all injuries related to chases and mishaps",
+      "Insurance Contact": "555-INSURE-ACME"
+    },
+    "Doctor's Notes": {
+      "Date of Visit": "Often",
+      "Reason for Visit": "Post-chase recovery",
+      "Recommendations": "Try different strategies, avoid high cliffs"
+    },
+    "Organ Donation": {
+      "Status": "Not applicable",
+      "Additional information": "Not applicable"
+    },
+    "Advance Directives": "None",
+    "Additional Notes": "Mr. Coyote is a frequent customer of ACME products and is often involved in high-speed chases and elaborate schemes."
+  }
+}

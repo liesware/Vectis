@@ -1,0 +1,10 @@
+bin/
+site-*/.env
+site-*/.unseal_key
+site-*/app.env
+site-*/init.json
+site-*/routes.json
+site-*/routes_sign.json
+site-*/db/*.db
+site-*/logs/
+__pycache__
