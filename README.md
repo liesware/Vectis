@@ -1,86 +1,298 @@
 # Vectis
 
-> “Vectis” in Roman context means a lever, crowbar, handspike, or similar bar used to lift, pry, or move heavy objects. In Latin sources it’s a general term for a strong pole or bar used with leverage, and it could also refer to a bar for fastening a door or a carrying pole.
+> In Latin, *vectis* can mean a lever, crowbar, fastening bar, or carrying pole:
+> a simple tool used to move something heavy with controlled force.
 
-Vectis is an personal open source project for sensitive data lifecycle protection.
+Vectis is a personal open source project for **Sensitive Data Lifecycle
+Protection**.
 
-The goal is simple: explore how to reduce the exposure of sensitive data while it moves through applications, services, storage systems and internal infrastructure.
+The core idea is simple: TLS protects the connection, but sensitive data often
+continues moving through applications, services, queues, storage, logs, workers,
+and final systems after the transport session is over. Vectis explores how to
+protect the data object itself across that lifecycle.
 
-This is an early project and the first public version should be treated as a work in progress.
-
-## Why Vectis?
-
-Many systems already use TLS, encrypted disks, secrets managers, KMS, HSMs or vaults.
-
-Those tools are important, but sensitive data can still appear in plaintext inside:
-
-- application payloads
-- logs
-- queues
-- databases
-- backups
-- internal APIs
-- temporary processing steps
-
-Vectis is an attempt to explore a different question:
-
-> What if data would be protected during its life cycle?
-
-## What Vectis is
-
-Vectis aims to become a small, modular cryptographic layer for protecting sensitive data flows.
-
-Possible areas of work include:
-
-- encrypted payloads
-- signed messages
-- cryptographic metadata
-- timestamping
-- gateway-based protection
-- integration with external key systems
-- hybrid and post-quantum cryptography experiments
-
-The project is being built in Rust because Rust is a good fit for security-oriented infrastructure where correctness, safety and performance matter.
-
-## What Vectis is not
-
-Vectis is not a replacement for:
-
-- HashiCorp Vault
-- cloud KMS services
-- HSMs
-- traditional DLP tools
-- TLS
-- database encryption
-- access control systems
-
-The intention is to complement existing security infrastructure, not replace it.
-
-## Current status
-
-Vectis is in a very early stage.
-
-At this point, the project should be considered:
-
-- experimental
-- incomplete
-- not audited
-- not production-ready
-- subject to major design changes
+This project is experimental and should be treated as a work in progress.
 
 **Do not use Vectis to protect real sensitive data yet.**
 
-## Example idea
+## Why Vectis?
 
-A future Vectis flow may look like this:
+Modern systems already use important security controls:
+
+- TLS;
+- encrypted disks;
+- cloud KMS;
+- HSMs;
+- secrets managers;
+- access control;
+- database encryption;
+- traditional DLP tools.
+
+Those controls are necessary, but sensitive data can still appear in plaintext
+inside application payloads, logs, queues, databases, backups, internal APIs, and
+temporary processing steps.
+
+Vectis explores a different question:
+
+> What if sensitive data stayed protected as a data object while it moves
+> through its lifecycle?
+
+## What Vectis Does Today
+
+Vectis currently provides a small HTTP service and CLI for experimenting with
+protected data flows between Vectis instances.
+
+Current capabilities include:
+
+- encrypted local init key material;
+- operational key creation and validation;
+- public key publication by `kid`;
+- protected messages between Vectis instances;
+- hybrid key establishment with XECDH + ML-KEM;
+- EdDSA and ML-DSA signatures;
+- authenticated encryption for protected payloads;
+- local re-encryption before final app delivery;
+- internal encrypt/decrypt endpoints for local protected data;
+- signed route files for per-key final app delivery;
+- SQLite-backed operational key storage;
+- storage abstraction designed for future backends;
+- startup, liveness, and readiness health probes;
+- CLI commands that act as an HTTP API client;
+- OpenAPI and environment variable documentation.
+
+## High-Level Flow
 
 ```text
-Application
+Application A
     |
-    | sensitive payload
+    | clinical record / sensitive payload
     v
-Vectis
+Vectis A
     |
-    | encrypted and signed payload
+    | hybrid KEM + authenticated encryption + signatures
     v
-Database / Queue / API / Storage
+Vectis B
+    |
+    | verify + decrypt + local re-encrypt
+    v
+Application B
+    |
+    | local decrypt through Vectis B
+    v
+Recovered payload
+```
+
+The receiving application does not receive remote plaintext directly. It receives
+a local encrypted delivery and must ask its local Vectis instance to decrypt it.
+
+## Clinical Data Exchange Demo
+
+The repository includes a two-site clinical demo:
+
+- Clinic A reads a patient record JSON file.
+- Vectis A protects and sends the record.
+- Vectis B verifies, decrypts, and re-encrypts the record for Clinic B.
+- Clinic B's final app calls local Vectis to decrypt and print the recovered
+  record.
+
+See [demo/README.md](demo/README.md).
+
+Quick demo setup:
+
+```sh
+bash demo/setup.sh
+bash demo/create-keys.sh
+bash demo/configure-routes.sh
+```
+
+Then run the four demo processes:
+
+```sh
+bash demo/start-vectis-a.sh
+bash demo/start-vectis-b.sh
+bash demo/start-app-a.sh
+bash demo/start-app-b.sh
+```
+
+In the Clinic A terminal:
+
+```text
+clinic-a file: ../personaldata.json
+```
+
+## Architecture
+
+Vectis follows a simple three-layer structure:
+
+- `core`: infrastructure and reusable primitives such as configuration,
+  validation, crypto helpers, logging, storage, routes, and database access.
+- `ops`: application operations and business flows such as init, key creation,
+  signing, validation, protected messaging, and tests.
+- `io`: input/output adapters such as HTTP endpoints and CLI commands.
+
+The intent is to keep protocol and business logic out of HTTP handlers, and to
+keep low-level reusable primitives out of higher-level operation flows.
+
+## Quick Start
+
+Requirements:
+
+- Rust toolchain with `cargo`;
+- SQLite CLI (`sqlite3`).
+
+Build the project:
+
+```sh
+cargo build
+```
+
+Initialize local encrypted key material:
+
+```sh
+cargo run -- init
+```
+
+The command prints:
+
+- `VECTIS_UNSEAL_KEY`: used to decrypt `init.json`;
+- `VECTIS_APIKEY`: used by protected HTTP endpoints.
+
+For local development, save the unseal key in `.unseal_key`:
+
+```sh
+printf '%s\n' '<VECTIS_UNSEAL_KEY>' > .unseal_key
+chmod 600 .unseal_key
+```
+
+Create a SQLite database file and schema:
+
+```sh
+mkdir -p src/db
+sqlite3 src/db/data.db < src/db/data_schema.sql
+```
+
+Start the HTTP service:
+
+```sh
+cargo run -- serve
+```
+
+Check readiness:
+
+```sh
+cargo run -- health ready
+```
+
+Create an operational key:
+
+```sh
+cargo run -- keys create --tag payments --profile hybrid-performance-v1
+```
+
+List public keys loaded in memory:
+
+```sh
+cargo run -- keys list
+```
+
+## CLI And API
+
+The CLI is primarily an HTTP client for the local Vectis service.
+
+Examples:
+
+```sh
+vectis health ready
+vectis keys create --tag payments --profile hybrid-high-assurance-v1
+vectis keys list
+vectis pub <kid>
+vectis message send <sender_kid> --file send-message.json
+vectis message decrypt --file encrypted-message.json
+vectis routes sign
+```
+
+See the full API documentation in [Doc/API.md](Doc/API.md).
+
+## Configuration
+
+Vectis reads configuration from process environment variables first, then from
+`.env`, then from built-in defaults.
+
+All Vectis-specific variables use the `VECTIS_` prefix.
+
+Important variables include:
+
+- `VECTIS_HTTP_BIND_ADDR`;
+- `VECTIS_PUBLIC_ADDR`;
+- `VECTIS_API_URL`;
+- `VECTIS_APIKEY`;
+- `VECTIS_UNSEAL_KEY`;
+- `VECTIS_UNSEAL_KEY_FILE`;
+- `VECTIS_SQLITE_PATH`;
+- `VECTIS_ROUTES_PATH`;
+- `VECTIS_ROUTES_SIGN_PATH`;
+- `VECTIS_DEFAULT_CRYPTO_PROFILE`;
+- `VECTIS_CRYPTO_POLICY`.
+
+See [Doc/ENV.md](Doc/ENV.md).
+
+## Crypto Profiles
+
+`POST /keys` supports crypto profiles:
+
+- `hybrid-performance-v1`;
+- `hybrid-high-assurance-v1`;
+- `hybrid-long-term-v1`.
+
+By default, Vectis uses profile-only policy:
+
+```text
+VECTIS_DEFAULT_CRYPTO_PROFILE=hybrid-performance-v1
+VECTIS_CRYPTO_POLICY=profile-only
+```
+
+In development and tests, individual algorithm overrides can be enabled with:
+
+```text
+VECTIS_CRYPTO_POLICY=allow-overrides
+```
+
+## Documentation
+
+- [Doc/API.md](Doc/API.md): HTTP API and CLI mapping.
+- [Doc/ENV.md](Doc/ENV.md): environment variables and expected values.
+- [Doc/openapi.yaml](Doc/openapi.yaml): OpenAPI specification.
+- [demo/README.md](demo/README.md): clinical data exchange demo.
+
+## What Vectis Is Not
+
+Vectis is not a replacement for:
+
+- TLS;
+- KMS;
+- HSMs;
+- HashiCorp Vault;
+- secrets managers;
+- database encryption;
+- access control;
+- traditional DLP products.
+
+Vectis is intended to complement existing security controls by exploring
+object-level protection for sensitive data flows.
+
+## Security Status
+
+Vectis is currently:
+
+- experimental;
+- incomplete;
+- not audited;
+- not production-ready;
+- subject to major design changes.
+
+Do not use Vectis with real patient data, production secrets, financial records,
+or any other real sensitive data.
+
+## License
+
+Apache-2.0.
