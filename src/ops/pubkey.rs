@@ -35,6 +35,7 @@ pub fn public_keys_from_state(
     id: &str,
 ) -> Result<PublicKeysOutput, DynError> {
     let loaded_key = keys::get_loaded_key(keys_db_state, id)?;
+    keys::require_lifecycle_for_public_keys(loaded_key)?;
 
     Ok(public_keys(loaded_key))
 }

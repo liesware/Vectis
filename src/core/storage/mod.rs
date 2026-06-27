@@ -57,6 +57,18 @@ impl StorageState {
         }
     }
 
+    pub async fn update_ops_key_properties(
+        &self,
+        id: &str,
+        properties: &str,
+    ) -> Result<OpsKeyRow, DynError> {
+        match &self.backend {
+            StorageBackend::Sqlite(sqlite) => {
+                sqlite.update_ops_key_properties(id, properties).await
+            }
+        }
+    }
+
     pub async fn health_check(&self) -> Result<(), DynError> {
         match &self.backend {
             StorageBackend::Sqlite(sqlite) => sqlite.health_check().await,

@@ -221,6 +221,53 @@ def main():
         status, _ = client.get("/keys/properties", headers={"Authorization": "00" * 32})
         require_status("GET /keys/properties invalid auth", status, 401)
 
+    def key_properties_without_auth():
+        status, _ = client.get(f"/keys/properties/{key_id}")
+        require_status("GET /keys/properties/{id} without auth", status, 401)
+
+    def key_properties_invalid_kid():
+        status, _ = client.get("/keys/properties/not-hex", auth=True)
+        require_status("GET /keys/properties/{id} invalid kid", status, 400)
+
+    def lifecycle_without_auth():
+        status, _ = client.post(
+            f"/lifecycle/{key_id}",
+            {"status": "disabled", "reason": "maintenance"},
+        )
+        require_status("POST /lifecycle/{id} without auth", status, 401)
+
+    def lifecycle_invalid_kid():
+        status, _ = client.post(
+            "/lifecycle/not-hex",
+            {"status": "disabled", "reason": "maintenance"},
+            auth=True,
+        )
+        require_status("POST /lifecycle/{id} invalid kid", status, 400)
+
+    def lifecycle_status_not_string():
+        status, _ = client.post(
+            f"/lifecycle/{key_id}",
+            {"status": 1, "reason": "maintenance"},
+            auth=True,
+        )
+        require_status("POST /lifecycle/{id} status not string", status, 400)
+
+    def lifecycle_invalid_status():
+        status, _ = client.post(
+            f"/lifecycle/{key_id}",
+            {"status": "paused", "reason": "maintenance"},
+            auth=True,
+        )
+        require_status("POST /lifecycle/{id} invalid status", status, 400)
+
+    def lifecycle_reason_not_string():
+        status, _ = client.post(
+            f"/lifecycle/{key_id}",
+            {"status": "disabled", "reason": 1},
+            auth=True,
+        )
+        require_status("POST /lifecycle/{id} reason not string", status, 400)
+
     def routes_list_without_auth():
         status, _ = client.get("/routes")
         require_status("GET /routes without auth", status, 401)
@@ -271,6 +318,8 @@ def main():
         status, _ = client.post("/keys", request, auth=True)
         require_status("POST /keys invalid symmetric algorithm", status, 400)
 
+    key_id = create_valid_key(client)
+
     for name, func in (
         ("POST /keys without auth", keys_without_auth),
         ("POST /keys invalid auth", keys_invalid_auth),
@@ -278,6 +327,13 @@ def main():
         ("POST /keys/reload invalid auth", keys_reload_invalid_auth),
         ("GET /keys/properties without auth", keys_properties_without_auth),
         ("GET /keys/properties invalid auth", keys_properties_invalid_auth),
+        ("GET /keys/properties/{id} without auth", key_properties_without_auth),
+        ("GET /keys/properties/{id} invalid kid", key_properties_invalid_kid),
+        ("POST /lifecycle/{id} without auth", lifecycle_without_auth),
+        ("POST /lifecycle/{id} invalid kid", lifecycle_invalid_kid),
+        ("POST /lifecycle/{id} status not string", lifecycle_status_not_string),
+        ("POST /lifecycle/{id} invalid status", lifecycle_invalid_status),
+        ("POST /lifecycle/{id} reason not string", lifecycle_reason_not_string),
         ("GET /routes without auth", routes_list_without_auth),
         ("GET /routes invalid auth", routes_list_invalid_auth),
         ("POST /routes/reload without auth", routes_reload_without_auth),
@@ -290,9 +346,165 @@ def main():
     ):
         run_case(rows, name, func)
 
-    key_id = create_valid_key(client)
     token = create_valid_token(client, key_id)
     internal_message = create_valid_internal_message(client, key_id)
+    disabled_key_id = create_valid_key(client)
+    disabled_internal_message = create_valid_internal_message(client, disabled_key_id)
+    retired_key_id = create_valid_key(client)
+    retired_token = create_valid_token(client, retired_key_id)
+    retired_internal_message = create_valid_internal_message(client, retired_key_id)
+    compromised_key_id = create_valid_key(client)
+    compromised_token = create_valid_token(client, compromised_key_id)
+    compromised_internal_message = create_valid_internal_message(client, compromised_key_id)
+    destroyed_key_id = create_valid_key(client)
+    destroyed_token = create_valid_token(client, destroyed_key_id)
+    destroyed_internal_message = create_valid_internal_message(client, destroyed_key_id)
+
+    def set_lifecycle(kid, status):
+        response_status, _ = client.post(
+            f"/lifecycle/{kid}",
+            {"status": status, "reason": f"negative test {status}"},
+            auth=True,
+        )
+        require_status(f"set lifecycle {status}", response_status, 200)
+
+    def disabled_blocks_sign():
+        set_lifecycle(disabled_key_id, "disabled")
+        status, _ = client.post(
+            f"/sign/{disabled_key_id}",
+            {
+                "message_hash": {
+                    "alg": "SHA-256",
+                    "hex": hashlib.sha256(VALID_MESSAGE).hexdigest(),
+                }
+            },
+            auth=True,
+        )
+        require_status("disabled key blocks sign", status, 403)
+
+    def disabled_blocks_pub():
+        status, _ = client.get(f"/pub/{disabled_key_id}")
+        require_status("disabled key blocks pub", status, 403)
+
+    def disabled_blocks_internal_decrypt():
+        status, _ = client.post("/message/internal/decrypt", disabled_internal_message, auth=True)
+        require_status("disabled key blocks internal decrypt", status, 403)
+
+    def assert_blocks_sign(kid, label):
+        status, _ = client.post(
+            f"/sign/{kid}",
+            {
+                "message_hash": {
+                    "alg": "SHA-256",
+                    "hex": hashlib.sha256(VALID_MESSAGE).hexdigest(),
+                }
+            },
+            auth=True,
+        )
+        require_status(f"{label} key blocks sign", status, 403)
+
+    def assert_blocks_pub(kid, label):
+        status, _ = client.get(f"/pub/{kid}")
+        require_status(f"{label} key blocks pub", status, 403)
+
+    def assert_blocks_internal_decrypt(message, label):
+        status, _ = client.post("/message/internal/decrypt", message, auth=True)
+        require_status(f"{label} key blocks internal decrypt", status, 403)
+
+    def assert_blocks_verification(token_value, label):
+        status, _ = client.post("/sign/verification", token_value)
+        require_status(f"{label} key blocks verification", status, 403)
+
+    def retired_blocks_sign():
+        set_lifecycle(retired_key_id, "retired")
+        assert_blocks_sign(retired_key_id, "retired")
+
+    def retired_blocks_pub():
+        assert_blocks_pub(retired_key_id, "retired")
+
+    def retired_allows_verification():
+        status, response = client.post("/sign/verification", retired_token)
+        require_status("retired key allows verification", status, 200)
+        require(response.get("valid") == "ok", "retired key verification must remain valid")
+
+    def retired_allows_internal_decrypt():
+        status, response = client.post(
+            "/message/internal/decrypt",
+            retired_internal_message,
+            auth=True,
+        )
+        require_status("retired key allows internal decrypt", status, 200)
+        require(response.get("plaintext") == "negative internal message", "retired decrypt plaintext")
+
+    def compromised_blocks_crypto():
+        set_lifecycle(compromised_key_id, "compromised")
+        assert_blocks_sign(compromised_key_id, "compromised")
+        assert_blocks_pub(compromised_key_id, "compromised")
+        assert_blocks_internal_decrypt(compromised_internal_message, "compromised")
+        assert_blocks_verification(compromised_token, "compromised")
+
+    def destroyed_blocks_crypto():
+        set_lifecycle(destroyed_key_id, "destroyed")
+        assert_blocks_sign(destroyed_key_id, "destroyed")
+        assert_blocks_pub(destroyed_key_id, "destroyed")
+        assert_blocks_internal_decrypt(destroyed_internal_message, "destroyed")
+        assert_blocks_verification(destroyed_token, "destroyed")
+
+    def lifecycle_rejects_same_state():
+        same_state_key_id = create_valid_key(client)
+        status, _ = client.post(
+            f"/lifecycle/{same_state_key_id}",
+            {"status": "active", "reason": "same state"},
+            auth=True,
+        )
+        require_status("POST /lifecycle/{id} active to active", status, 400)
+
+    def lifecycle_rejects_terminal_transition():
+        terminal_key_id = create_valid_key(client)
+        set_lifecycle(terminal_key_id, "retired")
+        status, _ = client.post(
+            f"/lifecycle/{terminal_key_id}",
+            {"status": "active", "reason": "restore retired"},
+            auth=True,
+        )
+        require_status("POST /lifecycle/{id} retired to active", status, 400)
+
+    def lifecycle_rejects_compromised_to_active():
+        terminal_key_id = create_valid_key(client)
+        set_lifecycle(terminal_key_id, "compromised")
+        status, _ = client.post(
+            f"/lifecycle/{terminal_key_id}",
+            {"status": "active", "reason": "restore compromised"},
+            auth=True,
+        )
+        require_status("POST /lifecycle/{id} compromised to active", status, 400)
+
+    def lifecycle_rejects_destroyed_to_active():
+        terminal_key_id = create_valid_key(client)
+        set_lifecycle(terminal_key_id, "destroyed")
+        status, _ = client.post(
+            f"/lifecycle/{terminal_key_id}",
+            {"status": "active", "reason": "restore destroyed"},
+            auth=True,
+        )
+        require_status("POST /lifecycle/{id} destroyed to active", status, 400)
+
+    for name, func in (
+        ("disabled key blocks sign", disabled_blocks_sign),
+        ("disabled key blocks pub", disabled_blocks_pub),
+        ("disabled key blocks internal decrypt", disabled_blocks_internal_decrypt),
+        ("retired key blocks sign", retired_blocks_sign),
+        ("retired key blocks pub", retired_blocks_pub),
+        ("retired key allows verification", retired_allows_verification),
+        ("retired key allows internal decrypt", retired_allows_internal_decrypt),
+        ("compromised key blocks crypto", compromised_blocks_crypto),
+        ("destroyed key blocks crypto", destroyed_blocks_crypto),
+        ("POST /lifecycle/{id} active to active", lifecycle_rejects_same_state),
+        ("POST /lifecycle/{id} retired to active", lifecycle_rejects_terminal_transition),
+        ("POST /lifecycle/{id} compromised to active", lifecycle_rejects_compromised_to_active),
+        ("POST /lifecycle/{id} destroyed to active", lifecycle_rejects_destroyed_to_active),
+    ):
+        run_case(rows, name, func)
 
     def message_without_auth():
         status, _ = client.post(

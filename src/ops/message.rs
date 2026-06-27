@@ -269,6 +269,7 @@ pub fn prepare_send_message(
 
     let input = validate_send_message_input(input)?;
     let sender_key = keys::get_loaded_key(keys_db_state, sender_kid)?.clone();
+    keys::require_lifecycle_for_new_use(&sender_key)?;
 
     Ok(PreparedSendMessage { sender_key, input })
 }
@@ -329,6 +330,7 @@ pub fn prepare_decrypt_message(
     let aad = parse_aad_fields(&input.input.message.aad)?;
     let recipient_kid = aad_field(&aad, "recipient_kid")?;
     let recipient_key = keys::get_loaded_key(keys_db_state, recipient_kid)?.clone();
+    keys::require_lifecycle_for_decrypt_or_verify(&recipient_key)?;
 
     Ok(PreparedDecryptMessage {
         recipient_key,
@@ -345,6 +347,7 @@ pub fn prepare_internal_encrypt_message(
 
     let input = validate_internal_encrypt_message_input(input)?;
     let key = keys::get_loaded_key(keys_db_state, kid)?.clone();
+    keys::require_lifecycle_for_new_use(&key)?;
 
     Ok(PreparedInternalEncryptMessage { key, input })
 }
@@ -355,6 +358,7 @@ pub fn prepare_internal_decrypt_message(
 ) -> Result<PreparedInternalDecryptMessage, DynError> {
     let input = validate_internal_decrypt_message_input(input)?;
     let key = keys::get_loaded_key(keys_db_state, &input.input.kid)?.clone();
+    keys::require_lifecycle_for_decrypt_or_verify(&key)?;
 
     Ok(PreparedInternalDecryptMessage { key, input })
 }
@@ -365,6 +369,7 @@ pub fn prepare_receive_message(
 ) -> Result<PreparedReceiveMessage, DynError> {
     validate_message_envelope(&envelope)?;
     let recipient_key = keys::get_loaded_key(keys_db_state, envelope.recipient_kid())?.clone();
+    keys::require_lifecycle_for_decrypt_or_verify(&recipient_key)?;
 
     Ok(PreparedReceiveMessage {
         recipient_key,

@@ -196,7 +196,9 @@ pub fn router(state: HttpState) -> Router {
         .route("/self-test/keys/{id}", get(test::test_endpoint))
         .route("/self-test/init", get(test::init_endpoint))
         .route("/keys/reload", post(keys::refresh_endpoint))
+        .route("/keys/properties/{kid}", get(keys::get_properties_endpoint))
         .route("/keys/properties", get(keys::list_properties_endpoint))
+        .route("/lifecycle/{kid}", post(keys::update_lifecycle_endpoint))
         .route("/routes", get(routes::list_endpoint))
         .route("/routes/reload", post(routes::reload_endpoint))
         .route(

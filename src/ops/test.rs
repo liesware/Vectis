@@ -11,6 +11,7 @@ pub fn handle_test_from_state(
     id: &str,
 ) -> Result<TestOutput, DynError> {
     let loaded_key = keys::get_loaded_key(keys_db_state, id)?;
+    keys::require_lifecycle_for_new_use(loaded_key)?;
 
     build_test_output(loaded_key.key_material(), loaded_key.aad())
 }

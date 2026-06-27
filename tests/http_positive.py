@@ -312,7 +312,11 @@ def validate_keys_properties_list(response, key_ids):
         )
         lifecycle = properties.get("lifecycle")
         require(isinstance(lifecycle, dict), "keys properties lifecycle must be an object")
-        require(lifecycle.get("status") == "active", "keys properties lifecycle.status")
+        require(
+            lifecycle.get("status")
+            in {"active", "disabled", "retired", "compromised", "destroyed"},
+            "keys properties lifecycle.status",
+        )
         require(
             isinstance(lifecycle.get("reason"), str) and lifecycle["reason"],
             "keys properties lifecycle.reason",
@@ -326,6 +330,45 @@ def validate_keys_properties_list(response, key_ids):
 
     for key_id in key_ids:
         require(key_id in by_kid, f"keys properties must include {key_id}")
+
+
+def validate_key_properties_item(response, key_id, expected_status=None):
+    require(isinstance(response, dict), "key properties response must be an object")
+    require(response.get("kid") == key_id, "key properties kid mismatch")
+    require(isinstance(response.get("info"), str) and response["info"], "key properties info")
+    require(
+        isinstance(response.get("properties_info"), str) and response["properties_info"],
+        "key properties properties_info",
+    )
+    properties = response.get("properties")
+    require(isinstance(properties, dict), "key properties properties must be an object")
+    lifecycle = properties.get("lifecycle")
+    require(isinstance(lifecycle, dict), "key properties lifecycle must be an object")
+    if expected_status is not None:
+        require(
+            lifecycle.get("status") == expected_status,
+            f"key properties lifecycle.status must be {expected_status}",
+        )
+    return properties
+
+
+def validate_lifecycle_response(response, key_id, expected_status):
+    require(isinstance(response, dict), "lifecycle response must be an object")
+    require(response.get("kid") == key_id, "lifecycle response kid mismatch")
+    lifecycle = response.get("lifecycle")
+    require(isinstance(lifecycle, dict), "lifecycle response lifecycle must be an object")
+    require(
+        lifecycle.get("status") == expected_status,
+        f"lifecycle status must be {expected_status}",
+    )
+    require(
+        isinstance(lifecycle.get("reason"), str) and lifecycle["reason"],
+        "lifecycle reason must be a non-empty string",
+    )
+    require(
+        isinstance(lifecycle.get("changed_at"), str) and lifecycle["changed_at"],
+        "lifecycle changed_at must be a non-empty string",
+    )
 
 
 def validate_routes_list(response):
@@ -642,6 +685,39 @@ def main():
         [key_id for key_id, _ in created],
     )
     print("List keys properties: OK\n")
+    passed_count += 1
+    first_key_id = created[0][0]
+    validate_key_properties_item(
+        client.get(f"/keys/properties/{first_key_id}", auth=True),
+        first_key_id,
+        expected_status="active",
+    )
+    print("Get key properties: OK\n")
+    passed_count += 1
+    validate_lifecycle_response(
+        client.post(
+            f"/lifecycle/{first_key_id}",
+            {"status": "disabled", "reason": "positive test maintenance window"},
+            auth=True,
+        ),
+        first_key_id,
+        "disabled",
+    )
+    validate_key_properties_item(
+        client.get(f"/keys/properties/{first_key_id}", auth=True),
+        first_key_id,
+        expected_status="disabled",
+    )
+    validate_lifecycle_response(
+        client.post(
+            f"/lifecycle/{first_key_id}",
+            {"status": "active", "reason": "positive test restored"},
+            auth=True,
+        ),
+        first_key_id,
+        "active",
+    )
+    print("Update lifecycle: OK\n")
     passed_count += 1
     validate_keys_properties_list(
         client.post("/keys/reload", {}, auth=True),

@@ -103,6 +103,34 @@ impl SqliteStorage {
         Ok(keys)
     }
 
+    pub async fn update_ops_key_properties(
+        &self,
+        id: &str,
+        properties: &str,
+    ) -> Result<OpsKeyRow, DynError> {
+        let result = sqlx::query(
+            "
+            UPDATE ops_keys
+            SET properties = ?
+            WHERE id = ?
+            ",
+        )
+        .bind(properties)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(Box::new(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("ops key not found: {id}"),
+            )));
+        }
+
+        info!(id, "updated ops key properties");
+        self.get_ops_keys(id).await
+    }
+
     pub async fn health_check(&self) -> Result<(), DynError> {
         sqlx::query("SELECT 1").execute(&self.pool).await?;
 

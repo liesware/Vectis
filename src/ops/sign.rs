@@ -26,6 +26,7 @@ pub fn sign_timestamp(
     loaded_key: &LoadedOpsKey,
     input: ValidatedSignInput,
 ) -> Result<TimestampToken, DynError> {
+    keys::require_lifecycle_for_new_use(loaded_key)?;
     debug!(
         kid = %loaded_key.id(),
         hash_alg = %input.input.message_hash.alg,
@@ -283,6 +284,7 @@ pub fn verify_timestamp(
     loaded_key: &LoadedOpsKey,
     token: &TimestampToken,
 ) -> Result<VerificationOutput, DynError> {
+    keys::require_lifecycle_for_decrypt_or_verify(loaded_key)?;
     debug!(
         kid = %loaded_key.id(),
         token_kid = %token.kid(),

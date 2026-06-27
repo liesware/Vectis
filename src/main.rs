@@ -44,7 +44,10 @@ async fn main() -> Result<(), DynError> {
                 info!(path, "init completed successfully");
             }
         },
-        Some(command @ ("health" | "test" | "keys" | "routes" | "pub" | "sign" | "message")) => {
+        Some(
+            command @ ("health" | "test" | "keys" | "lifecycle" | "routes" | "pub" | "sign"
+            | "message"),
+        ) => {
             io::cli::http::run(command, args.collect()).await?;
         }
         Some("help") => match args.next().as_deref() {
@@ -72,6 +75,7 @@ fn print_help() {
     println!("  health                Call the health probe endpoints");
     println!("  test                  Call protected test endpoints through HTTP");
     println!("  keys                  Create, list, or reload operational keys through HTTP");
+    println!("  lifecycle             Update operational key lifecycle metadata");
     println!("  routes                List, reload, or sign final app routes");
     println!("  pub                   Fetch public keys through HTTP");
     println!("  sign                  Create or verify timestamp signatures through HTTP");
@@ -82,6 +86,7 @@ fn print_help() {
     println!("  {PROGRAM_NAME} serve");
     println!("  {PROGRAM_NAME} health ready");
     println!("  {PROGRAM_NAME} keys create --tag payments --profile hybrid-high-assurance-v1");
+    println!("  {PROGRAM_NAME} lifecycle <kid> --status disabled --reason maintenance");
     println!("  {PROGRAM_NAME} routes list");
     println!("  {PROGRAM_NAME} sign <kid> --file sign-request.json");
     println!();
@@ -90,6 +95,7 @@ fn print_help() {
     println!("  {PROGRAM_NAME} help health");
     println!("  {PROGRAM_NAME} help test");
     println!("  {PROGRAM_NAME} help keys");
+    println!("  {PROGRAM_NAME} help lifecycle");
     println!("  {PROGRAM_NAME} help routes");
     println!("  {PROGRAM_NAME} help pub");
     println!("  {PROGRAM_NAME} help sign");
@@ -105,7 +111,7 @@ fn print_command_help(command: &str) {
     match command {
         "serve" => print_serve_help(),
         "init" => print_init_help(),
-        "health" | "test" | "keys" | "routes" | "pub" | "sign" | "message" => {
+        "health" | "test" | "keys" | "lifecycle" | "routes" | "pub" | "sign" | "message" => {
             io::cli::http::print_help(command)
         }
         "-h" | "--help" | "help" => print_help(),

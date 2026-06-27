@@ -19,6 +19,7 @@ const PROPERTY_PROFILES: &[&str] = &[
     "hybrid-long-term-v1",
     "custom",
 ];
+const LIFECYCLE_STATUSES: &[&str] = &["active", "disabled", "retired", "compromised", "destroyed"];
 
 #[derive(Serialize)]
 pub struct KeysDbState {
@@ -88,6 +89,10 @@ impl LoadedOpsKey {
     pub(crate) fn properties(&self) -> &OpsKeyProperties {
         &self.properties
     }
+
+    pub(crate) fn lifecycle_status(&self) -> &str {
+        self.properties.lifecycle.status()
+    }
 }
 
 pub(crate) struct KeyId(String);
@@ -108,6 +113,53 @@ pub fn validate_key_id(id: &str) -> Result<(), DynError> {
     KeyId::parse(id)?;
 
     Ok(())
+}
+
+pub(crate) fn require_lifecycle_for_new_use(loaded_key: &LoadedOpsKey) -> Result<(), DynError> {
+    match loaded_key.lifecycle_status() {
+        "active" => Ok(()),
+        "retired" => {
+            lifecycle_error("key is retired and can only be used for decrypt or verification")
+        }
+        status => blocked_lifecycle_error(status),
+    }
+}
+
+pub(crate) fn require_lifecycle_for_decrypt_or_verify(
+    loaded_key: &LoadedOpsKey,
+) -> Result<(), DynError> {
+    match loaded_key.lifecycle_status() {
+        "active" | "retired" => Ok(()),
+        status => blocked_lifecycle_error(status),
+    }
+}
+
+pub(crate) fn require_lifecycle_for_public_keys(loaded_key: &LoadedOpsKey) -> Result<(), DynError> {
+    match loaded_key.lifecycle_status() {
+        "active" => Ok(()),
+        "retired" => {
+            lifecycle_error("key is retired and can only be used for decrypt or verification")
+        }
+        status => blocked_lifecycle_error(status),
+    }
+}
+
+fn blocked_lifecycle_error(status: &str) -> Result<(), DynError> {
+    match status {
+        "disabled" => lifecycle_error("key is currently disabled"),
+        "compromised" => {
+            lifecycle_error("key is compromised and cannot be used for security reasons")
+        }
+        "destroyed" => lifecycle_error("key is logically destroyed and cannot be used"),
+        _ => lifecycle_error("key lifecycle status does not allow this operation"),
+    }
+}
+
+fn lifecycle_error(message: &str) -> Result<(), DynError> {
+    Err(Box::new(io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        message,
+    )))
 }
 
 pub(crate) fn get_loaded_key<'a>(
@@ -150,6 +202,25 @@ pub fn list_keys_properties_from_state(keys_db_state: &KeysDbState) -> ListKeysP
         .collect();
 
     ListKeysPropertiesOutput { keys }
+}
+
+fn key_properties_output(loaded_key: &LoadedOpsKey) -> KeyPropertiesOutput {
+    KeyPropertiesOutput {
+        kid: loaded_key.id().to_string(),
+        info: loaded_key.aad().to_string(),
+        properties_info: loaded_key.properties_aad.clone(),
+        properties: loaded_key.properties().clone(),
+    }
+}
+
+pub fn key_properties_from_state(
+    keys_db_state: &KeysDbState,
+    id: &str,
+) -> Result<KeyPropertiesOutput, DynError> {
+    let id = KeyId::parse(id)?;
+    let loaded_key = get_loaded_key(keys_db_state, id.as_str())?;
+
+    Ok(key_properties_output(loaded_key))
 }
 
 impl Zeroize for KeysDbState {
@@ -197,6 +268,14 @@ struct ListKeysPropertiesItem {
     properties: OpsKeyProperties,
 }
 
+#[derive(Serialize)]
+pub struct KeyPropertiesOutput {
+    kid: String,
+    info: String,
+    properties_info: String,
+    properties: OpsKeyProperties,
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 pub struct OpsKeyProperties {
     version: u8,
@@ -208,10 +287,34 @@ pub struct OpsKeyProperties {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
-struct OpsKeyLifecycle {
+pub struct OpsKeyLifecycle {
     status: String,
     reason: String,
     changed_at: String,
+}
+
+impl OpsKeyLifecycle {
+    pub fn status(&self) -> &str {
+        &self.status
+    }
+}
+
+#[derive(Deserialize)]
+pub struct UpdateLifecycleInput {
+    status: String,
+    reason: String,
+}
+
+impl UpdateLifecycleInput {
+    pub fn status(&self) -> &str {
+        &self.status
+    }
+}
+
+#[derive(Serialize)]
+pub struct UpdateLifecycleOutput {
+    kid: String,
+    lifecycle: OpsKeyLifecycle,
 }
 
 impl Zeroize for OpsKeyProperties {
@@ -393,6 +496,29 @@ pub fn parse_create_keys_input(request: Value) -> Result<CreateKeysInput, DynErr
     })
 }
 
+pub fn parse_update_lifecycle_input(request: Value) -> Result<UpdateLifecycleInput, DynError> {
+    let Some(object) = request.as_object() else {
+        return Err(Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "request body must be a JSON object",
+        )));
+    };
+
+    validate_json_string_field(object, "status")?;
+    validate_json_string_field(object, "reason")?;
+
+    let input: UpdateLifecycleInput = serde_json::from_value(request).map_err(|err| {
+        Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid lifecycle request: {err}"),
+        )) as DynError
+    })?;
+    validate_lifecycle_status("status", &input.status)?;
+    validation::validate_text_field("reason", &input.reason)?;
+
+    Ok(input)
+}
+
 pub async fn load_keys_db_state(
     storage: &StorageState,
     init_state: &ValidatedInitState,
@@ -428,6 +554,42 @@ pub async fn load_keys_db_entry(
     info!(id = %loaded_key.id, "decrypted ops key loaded from db");
 
     Ok(loaded_key)
+}
+
+pub async fn update_key_lifecycle(
+    storage: &StorageState,
+    init_state: &ValidatedInitState,
+    id: &str,
+    input: UpdateLifecycleInput,
+) -> Result<UpdateLifecycleOutput, DynError> {
+    let id = KeyId::parse(id)?;
+    let row = storage.get_ops_keys(id.as_str()).await?;
+    validate_key_id_matches_enc_keys(&row.id, &row.enc_keys)?;
+
+    let decrypted = decrypt_ops_keys_payload(init_state, &row.enc_keys)?;
+    let mut properties = decrypt_ops_key_properties_payload(init_state, &row.properties)?;
+    validate_ops_key_properties(&properties.output)?;
+    validate_loaded_ops_key_binding(&row.id, &decrypted, &properties)?;
+
+    validate_lifecycle_transition(&properties.output.lifecycle.status, &input.status)?;
+    let changed_at = validation::current_timestamp()?;
+    properties.output.lifecycle = OpsKeyLifecycle {
+        status: input.status,
+        reason: input.reason,
+        changed_at,
+    };
+    validate_ops_key_properties(&properties.output)?;
+
+    let encrypted_properties =
+        encrypt_ops_key_properties_payload(init_state, &properties.output, &properties.aad)?;
+    storage
+        .update_ops_key_properties(id.as_str(), &encrypted_properties)
+        .await?;
+
+    Ok(UpdateLifecycleOutput {
+        kid: id.as_str().to_string(),
+        lifecycle: properties.output.lifecycle,
+    })
 }
 
 fn load_ops_key_from_row(
@@ -474,6 +636,28 @@ fn encrypt_internal_payload(
     )?;
 
     Ok(general_purpose::STANDARD.encode(ciphertext))
+}
+
+fn encrypt_ops_key_properties_payload(
+    init_state: &ValidatedInitState,
+    properties: &OpsKeyProperties,
+    aad: &str,
+) -> Result<String, DynError> {
+    validation::validate_symmetric_key(
+        "init symmetric key",
+        init_state.symmetric_key_hex(),
+        config::INTERNAL_KEYS_KEY_SIZE_BYTES,
+    )?;
+    let key = Zeroizing::new(hex::decode(init_state.symmetric_key_hex())?);
+    let plaintext = Zeroizing::new(serde_json::to_string_pretty(properties)?);
+    let nonce = Zeroizing::new(crypto::random_bytes(
+        config::INTERNAL_KEYS_NONCE_SIZE_BYTES,
+    )?);
+    let properties_b64 = encrypt_internal_payload(&plaintext, &key, &nonce, aad)?;
+    let nonce_b64 = general_purpose::STANDARD.encode(&*nonce);
+    let aad_b64 = general_purpose::STANDARD.encode(aad.as_bytes());
+
+    Ok(format!("{properties_b64}.{nonce_b64}.{aad_b64}"))
 }
 
 fn decrypt_ops_keys_payload(
@@ -709,11 +893,7 @@ fn validate_ops_key_properties(properties: &OpsKeyProperties) -> Result<(), DynE
     )?;
     validation::validate_text_field("properties.tag", &properties.tag)?;
     validation::validate_text_field("properties.created_at", &properties.created_at)?;
-    validation::validate_allowed_value(
-        "properties.lifecycle.status",
-        &properties.lifecycle.status,
-        &["active", "disabled", "revoked", "rotated", "expired"],
-    )?;
+    validate_lifecycle_status("properties.lifecycle.status", &properties.lifecycle.status)?;
     validation::validate_text_field("properties.lifecycle.reason", &properties.lifecycle.reason)?;
     validation::validate_text_field(
         "properties.lifecycle.changed_at",
@@ -721,6 +901,45 @@ fn validate_ops_key_properties(properties: &OpsKeyProperties) -> Result<(), DynE
     )?;
 
     Ok(())
+}
+
+fn validate_lifecycle_status(field: &str, status: &str) -> Result<(), DynError> {
+    validation::validate_allowed_value(field, status, LIFECYCLE_STATUSES)
+}
+
+fn validate_lifecycle_transition(current: &str, next: &str) -> Result<(), DynError> {
+    let allowed = match current {
+        "active" => matches!(next, "disabled" | "retired" | "compromised" | "destroyed"),
+        "disabled" => next == "active",
+        "retired" | "compromised" | "destroyed" => false,
+        _ => false,
+    };
+
+    if allowed {
+        return Ok(());
+    }
+
+    Err(Box::new(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("invalid lifecycle transition: {current} -> {next}"),
+    )))
+}
+
+fn validate_json_string_field(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+) -> Result<(), DynError> {
+    match object.get(field) {
+        Some(value) if value.is_string() => Ok(()),
+        Some(_) => Err(Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{field} must be a string"),
+        ))),
+        None => Err(Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{field} is required"),
+        ))),
+    }
 }
 
 fn resolve_keys_input(

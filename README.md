@@ -49,6 +49,7 @@ Current capabilities include:
 
 - encrypted local init key material;
 - operational key creation and validation;
+- encrypted key lifecycle metadata and runtime lifecycle enforcement;
 - public key publication by `kid`;
 - protected messages between Vectis instances;
 - hybrid key establishment with XECDH + ML-KEM;

@@ -177,6 +177,55 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
+  /keys/properties/{kid}:
+    get:
+      tags: [Keys]
+      summary: Return decrypted properties for one key
+      description: Administrative endpoint. Returns decrypted lifecycle properties for one key. If the key is not currently loaded in memory, Vectis attempts to load it from storage first.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+      responses:
+        "200":
+          description: Key properties
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KeyPropertiesOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /lifecycle/{kid}:
+    post:
+      tags: [Keys]
+      summary: Update key lifecycle metadata
+      description: Administrative endpoint. Updates encrypted lifecycle metadata for an operational key. Lifecycle status is enforced by cryptographic operations. Allowed transitions are active to disabled/retired/compromised/destroyed, and disabled to active. Retired, compromised, and destroyed are terminal states. Same-status transitions are rejected.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateLifecycleInput"
+            examples:
+              disabled:
+                value:
+                  status: disabled
+                  reason: maintenance window
+      responses:
+        "200":
+          description: Updated lifecycle
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdateLifecycleOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
   /routes:
     get:
       tags: [Routes]
@@ -215,6 +264,7 @@ paths:
     get:
       tags: [Public Keys]
       summary: Return public keys for a kid
+      description: Returns public keys for active keys only. Disabled, retired, compromised, and destroyed keys are rejected to avoid enabling new use.
       parameters:
         - $ref: "#/components/parameters/Kid"
       responses:
@@ -534,6 +584,19 @@ components:
               properties:
                 $ref: "#/components/schemas/OpsKeyProperties"
 
+    KeyPropertiesOutput:
+      type: object
+      required: [kid, info, properties_info, properties]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        info:
+          type: string
+        properties_info:
+          type: string
+        properties:
+          $ref: "#/components/schemas/OpsKeyProperties"
+
     OpsKeyProperties:
       type: object
       required: [version, profile, tag, created_at, lifecycle, access]
@@ -552,19 +615,46 @@ components:
         created_at:
           $ref: "#/components/schemas/Timestamp"
         lifecycle:
-          type: object
-          required: [status, reason, changed_at]
-          properties:
-            status:
-              enum: [active, disabled, revoked, rotated, expired]
-            reason:
-              type: string
-              example: initial creation
-            changed_at:
-              type: string
-              example: "1782058090"
+          $ref: "#/components/schemas/OpsKeyLifecycle"
         access:
           nullable: true
+
+    OpsKeyLifecycle:
+      type: object
+      required: [status, reason, changed_at]
+      properties:
+        status:
+          $ref: "#/components/schemas/LifecycleStatus"
+        reason:
+          type: string
+          example: initial creation
+        changed_at:
+          type: string
+          example: "1782058090"
+
+    LifecycleStatus:
+      type: string
+      enum: [active, disabled, retired, compromised, destroyed]
+
+    UpdateLifecycleInput:
+      type: object
+      additionalProperties: false
+      required: [status, reason]
+      properties:
+        status:
+          $ref: "#/components/schemas/LifecycleStatus"
+        reason:
+          type: string
+          example: maintenance window
+
+    UpdateLifecycleOutput:
+      type: object
+      required: [kid, lifecycle]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        lifecycle:
+          $ref: "#/components/schemas/OpsKeyLifecycle"
 
     RoutesOutput:
       type: object

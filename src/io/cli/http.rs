@@ -25,6 +25,7 @@ pub async fn run(command: &str, args: Vec<String>) -> Result<(), DynError> {
         "health" => run_health(args, output).await,
         "test" => run_test(args, output).await,
         "keys" => run_keys(args, output).await,
+        "lifecycle" => run_lifecycle(args, output).await,
         "routes" => run_routes(args, output).await,
         "pub" => run_pub(args, output).await,
         "sign" => run_sign(args, output).await,
@@ -38,6 +39,7 @@ pub fn print_help(command: &str) {
         "health" => print_health_help(),
         "test" => print_test_help(),
         "keys" => print_keys_help(),
+        "lifecycle" => print_lifecycle_help(),
         "routes" => print_routes_help(),
         "pub" => print_pub_help(),
         "sign" => print_sign_help(),
@@ -97,10 +99,14 @@ async fn run_keys(args: Vec<String>, output: OutputFormat) -> Result<(), DynErro
                 .await
         }
         "properties" => {
-            expect_no_args(&rest, "keys properties")?;
-            client
-                .send(Method::GET, "/keys/properties", true, None, output)
-                .await
+            let path = if rest.is_empty() {
+                String::from("/keys/properties")
+            } else {
+                let kid = expect_one(rest, "kid")?;
+                validate_kid("kid", &kid)?;
+                format!("/keys/properties/{kid}")
+            };
+            client.send(Method::GET, &path, true, None, output).await
         }
         "create" => {
             let body = parse_keys_create_body(rest)?;
@@ -110,6 +116,23 @@ async fn run_keys(args: Vec<String>, output: OutputFormat) -> Result<(), DynErro
         }
         _ => Err(invalid_input(format!("unknown keys command: {subcommand}"))),
     }
+}
+
+async fn run_lifecycle(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+    let (kid, rest) = split_subcommand(args, "kid")?;
+    validate_kid("kid", &kid)?;
+    let body = parse_lifecycle_body(rest)?;
+
+    let client = CliHttpClient::from_env()?;
+    client
+        .send(
+            Method::POST,
+            &format!("/lifecycle/{kid}"),
+            true,
+            Some(body),
+            output,
+        )
+        .await
 }
 
 async fn run_routes(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
@@ -402,6 +425,44 @@ fn parse_keys_create_body(args: Vec<String>) -> Result<Value, DynError> {
     Ok(Value::Object(body))
 }
 
+fn parse_lifecycle_body(args: Vec<String>) -> Result<Value, DynError> {
+    let mut status = None;
+    let mut reason = None;
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--status" => {
+                let value = next_flag_value(&args, index, "--status")?;
+                validation::validate_allowed_value(
+                    "status",
+                    value,
+                    &["active", "disabled", "retired", "compromised", "destroyed"],
+                )?;
+                status = Some(value.to_string());
+                index += 2;
+            }
+            "--reason" => {
+                let value = next_flag_value(&args, index, "--reason")?;
+                validation::validate_text_field("reason", value)?;
+                reason = Some(value.to_string());
+                index += 2;
+            }
+            value => {
+                return Err(invalid_input(format!("unknown lifecycle option: {value}")));
+            }
+        }
+    }
+
+    let status = status.ok_or_else(|| invalid_input("--status is required"))?;
+    let reason = reason.ok_or_else(|| invalid_input("--reason is required"))?;
+
+    Ok(json!({
+        "status": status,
+        "reason": reason,
+    }))
+}
+
 fn parse_json_source(args: Vec<String>) -> Result<Value, DynError> {
     if args.len() != 2 {
         return Err(invalid_input(
@@ -566,8 +627,9 @@ fn print_http_help() {
     println!("  {PROGRAM_NAME} test <kid>");
     println!("  {PROGRAM_NAME} keys create [--tag <tag>] [--profile <profile>]");
     println!("  {PROGRAM_NAME} keys list");
-    println!("  {PROGRAM_NAME} keys properties");
+    println!("  {PROGRAM_NAME} keys properties [kid]");
     println!("  {PROGRAM_NAME} keys reload");
+    println!("  {PROGRAM_NAME} lifecycle <kid> --status <status> --reason <reason>");
     println!("  {PROGRAM_NAME} routes list");
     println!("  {PROGRAM_NAME} routes reload");
     println!("  {PROGRAM_NAME} routes sign");
@@ -628,6 +690,7 @@ fn print_keys_help() {
     println!("  {PROGRAM_NAME} keys create [--tag <tag>] [--profile <profile>]");
     println!("  {PROGRAM_NAME} keys list");
     println!("  {PROGRAM_NAME} keys properties");
+    println!("  {PROGRAM_NAME} keys properties <kid>");
     println!("  {PROGRAM_NAME} keys reload");
     println!();
     println!("Creates, lists, or reloads operational keys through the HTTP API.");
@@ -636,6 +699,7 @@ fn print_keys_help() {
     println!("  create                POST /keys, requires VECTIS_APIKEY");
     println!("  list                  GET /keys, public");
     println!("  properties            GET /keys/properties, requires VECTIS_APIKEY");
+    println!("  properties <kid>      GET /keys/properties/{{kid}}, requires VECTIS_APIKEY");
     println!("  reload                POST /keys/reload, requires VECTIS_APIKEY");
     println!();
     println!("Create options:");
@@ -651,7 +715,30 @@ fn print_keys_help() {
     println!("  {PROGRAM_NAME} keys create --tag payments --profile hybrid-high-assurance-v1");
     println!("  {PROGRAM_NAME} keys list");
     println!("  {PROGRAM_NAME} keys properties");
+    println!("  {PROGRAM_NAME} keys properties <kid>");
     println!("  {PROGRAM_NAME} keys reload");
+    print_output_help();
+}
+
+fn print_lifecycle_help() {
+    println!("Usage:");
+    println!("  {PROGRAM_NAME} lifecycle <kid> --status <status> --reason <reason>");
+    println!();
+    println!("Updates encrypted lifecycle metadata for an operational key.");
+    println!();
+    println!("Arguments:");
+    println!("  kid                   64-character hex key id");
+    println!();
+    println!("Options:");
+    println!("  --status <status>     active, disabled, retired, compromised, or destroyed");
+    println!("  --reason <reason>     Non-empty reason for the lifecycle change");
+    println!();
+    println!("Endpoint:");
+    println!("  POST /lifecycle/{{kid}}, requires VECTIS_APIKEY");
+    println!();
+    println!("Examples:");
+    println!("  {PROGRAM_NAME} lifecycle <kid> --status disabled --reason maintenance");
+    println!("  {PROGRAM_NAME} lifecycle <kid> --status active --reason restored");
     print_output_help();
 }
 

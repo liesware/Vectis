@@ -33,7 +33,9 @@ Endpoints requiring auth:
 
 - `POST /keys`
 - `GET /keys/properties`
+- `GET /keys/properties/{kid}`
 - `POST /keys/reload`
+- `POST /lifecycle/{kid}`
 - `GET /routes`
 - `POST /routes/reload`
 - `GET /self-test/init`
@@ -354,6 +356,92 @@ Response:
 }
 ```
 
+### GET /keys/properties/{kid}
+
+Returns decrypted lifecycle properties for one key. If the key is not currently
+loaded in memory, Vectis attempts to load and decrypt it from storage first.
+
+Requires auth.
+
+Response:
+
+```json
+{
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "info": "version=v1;hostname=localhost;type=ops-keys;cipher=AES-256/GCM;tag=payments-prod;profile=hybrid-high-assurance-v1;timestamp=1782058090",
+  "properties_info": "version=v1;hostname=localhost;type=ops-key-properties;cipher=AES-256/GCM;kid=f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed;tag=payments-prod;profile=hybrid-high-assurance-v1;timestamp=1782058090",
+  "properties": {
+    "version": 1,
+    "profile": "hybrid-high-assurance-v1",
+    "tag": "payments-prod",
+    "created_at": "1782058090",
+    "lifecycle": {
+      "status": "active",
+      "reason": "initial creation",
+      "changed_at": "1782058090"
+    },
+    "access": null
+  }
+}
+```
+
+### POST /lifecycle/{kid}
+
+Updates encrypted lifecycle metadata for an operational key. Lifecycle status is
+enforced by cryptographic operations.
+
+Requires auth.
+
+Request:
+
+```json
+{
+  "status": "disabled",
+  "reason": "maintenance window"
+}
+```
+
+Allowed `status` values:
+
+- `active`
+- `disabled`
+- `retired`
+- `compromised`
+- `destroyed`
+
+Lifecycle behavior:
+
+- `active`: normal use.
+- `disabled`: blocked for all cryptographic operations.
+- `retired`: allowed only for decrypt and verification; blocked for new
+  encryption/signing/sending operations and `/pub`.
+- `compromised`: blocked for all cryptographic operations.
+- `destroyed`: logically destroyed; administrative metadata is retained, but
+  cryptographic operations are blocked.
+
+Allowed transitions:
+
+- `active` -> `disabled`, `retired`, `compromised`, `destroyed`
+- `disabled` -> `active`
+- `retired` -> no transitions
+- `compromised` -> no transitions
+- `destroyed` -> no transitions
+
+Transitions to the same status are rejected.
+
+Response:
+
+```json
+{
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "lifecycle": {
+    "status": "disabled",
+    "reason": "maintenance window",
+    "changed_at": "1782059000"
+  }
+}
+```
+
 ## Routes
 
 ### GET /routes
@@ -397,6 +485,11 @@ Response:
 ### GET /pub/{kid}
 
 Returns public keys only. This endpoint does not require auth.
+
+Lifecycle behavior:
+
+- `active`: public keys are returned.
+- `disabled`, `retired`, `compromised`, `destroyed`: request is rejected.
 
 Response:
 
@@ -807,7 +900,9 @@ CLI output defaults to YAML for readability. Add `--output json` to any HTTP cli
 | `vectis keys create` | `POST /keys` | Yes |
 | `vectis keys list` | `GET /keys` | No |
 | `vectis keys properties` | `GET /keys/properties` | Yes |
+| `vectis keys properties <kid>` | `GET /keys/properties/{kid}` | Yes |
 | `vectis keys reload` | `POST /keys/reload` | Yes |
+| `vectis lifecycle <kid>` | `POST /lifecycle/{kid}` | Yes |
 | `vectis routes list` | `GET /routes` | Yes |
 | `vectis routes reload` | `POST /routes/reload` | Yes |
 | `vectis routes sign` | Local `routes_sign.json` update | No HTTP |

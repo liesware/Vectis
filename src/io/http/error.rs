@@ -53,6 +53,7 @@ pub fn status_for_error(err: &(dyn std::error::Error + 'static)) -> StatusCode {
     match io_err.kind() {
         io::ErrorKind::InvalidInput => StatusCode::BAD_REQUEST,
         io::ErrorKind::NotFound => StatusCode::NOT_FOUND,
+        io::ErrorKind::PermissionDenied => StatusCode::FORBIDDEN,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
@@ -61,6 +62,7 @@ pub fn public_error_message(status: StatusCode) -> String {
     match status {
         StatusCode::BAD_REQUEST => String::from("invalid request"),
         StatusCode::UNAUTHORIZED => String::from("unauthorized"),
+        StatusCode::FORBIDDEN => String::from("forbidden"),
         StatusCode::NOT_FOUND => String::from("not found"),
         _ => String::from("internal server error"),
     }
@@ -72,7 +74,7 @@ fn public_error_message_for_error(
 ) -> String {
     let detail = err.to_string();
 
-    if status == StatusCode::BAD_REQUEST {
+    if status == StatusCode::BAD_REQUEST || status == StatusCode::FORBIDDEN {
         return detail;
     }
 

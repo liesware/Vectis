@@ -3,7 +3,7 @@ use super::auth::authorize_api_key;
 use super::error::{ErrorResponse, error_response, public_error_message};
 use crate::ops;
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use serde::Serialize;
 use serde_json::Value;
@@ -132,6 +132,73 @@ pub async fn list_properties_endpoint(
     Ok(Json(response))
 }
 
+pub async fn get_properties_endpoint(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<ops::keys::KeyPropertiesOutput>, (StatusCode, Json<ErrorResponse>)> {
+    authorize_api_key(&headers)?;
+    info!(
+        endpoint = "GET /keys/properties/{kid}",
+        kid = %id,
+        "keys properties get request accepted"
+    );
+
+    state
+        .ensure_keys_db_entry(&id)
+        .await
+        .map_err(|err| error_response(err.as_ref()))?;
+    let response = state
+        .with_keys_db_state(|keys_db_state| {
+            ops::keys::key_properties_from_state(keys_db_state, &id)
+        })
+        .await
+        .map_err(|err| error_response(err.as_ref()))?;
+
+    info!(
+        endpoint = "GET /keys/properties/{kid}",
+        kid = %id,
+        "keys properties get response ready"
+    );
+
+    Ok(Json(response))
+}
+
+pub async fn update_lifecycle_endpoint(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<Value>,
+) -> Result<Json<ops::keys::UpdateLifecycleOutput>, (StatusCode, Json<ErrorResponse>)> {
+    authorize_api_key(&headers)?;
+    let request = ops::keys::parse_update_lifecycle_input(request)
+        .map_err(|err| error_response(err.as_ref()))?;
+
+    info!(
+        endpoint = "POST /lifecycle/{kid}",
+        kid = %id,
+        status = %request_status(&request),
+        "lifecycle update request accepted"
+    );
+
+    let response =
+        ops::keys::update_key_lifecycle(state.storage(), state.init_state(), &id, request)
+            .await
+            .map_err(|err| error_response(err.as_ref()))?;
+    let loaded_key = ops::keys::load_keys_db_entry(state.storage(), state.init_state(), &id)
+        .await
+        .map_err(|err| error_response(err.as_ref()))?;
+    state.upsert_keys_db_entry(loaded_key).await;
+
+    info!(
+        endpoint = "POST /lifecycle/{kid}",
+        kid = %id,
+        "lifecycle update response ready"
+    );
+
+    Ok(Json(response))
+}
+
 pub async fn refresh_endpoint(
     State(state): State<HttpState>,
     headers: HeaderMap,
@@ -158,4 +225,8 @@ pub async fn refresh_endpoint(
     );
 
     Ok(Json(response))
+}
+
+fn request_status(request: &ops::keys::UpdateLifecycleInput) -> &str {
+    request.status()
 }
