@@ -1,8 +1,5 @@
 # Vectis
 
-> In Latin, *vectis* can mean a lever, crowbar, fastening bar, or carrying pole:
-> a simple tool used to move something heavy with controlled force.
-
 Vectis is a personal open source project for **Sensitive Data Lifecycle
 Protection**.
 
@@ -14,6 +11,12 @@ protect the data object itself across that lifecycle.
 This project is experimental and should be treated as a work in progress.
 
 **Do not use Vectis to protect real sensitive data yet.**
+<p align="left">
+  <img width="300" alt="OpenBao Mascot" src="logo.png">
+</p>
+
+> In Latin, *vectis* can mean a lever, crowbar, fastening bar, or carrying pole:
+> a simple tool used to move something heavy with controlled force.
 
 ## Why Vectis?
 
