@@ -1,16 +1,14 @@
-use crate::core::{config, crypto, routes::FinalAppRoute, validation};
+use crate::core::{config, crypto, http_client, routes::FinalAppRoute, validation};
 use crate::error::DynError;
 use crate::ops::contracts::{
     MessageCipher, MessageKem, MessageRecipient, MessageSender, ProtectedMessagePayload,
     ProtectedMessageToken, PublicKeysOutput, SendMessageInput, SignatureBlock, TimestampSignatures,
 };
 use crate::ops::keys::{self, KeysDbState, LoadedOpsKey};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
-use tracing::{info, warn};
+use tracing::info;
 use zeroize::{Zeroize, Zeroizing};
 
 const PROTECTED_MESSAGE_TYPE: &str = "protected-message";
@@ -415,10 +413,13 @@ pub async fn send_message(
         &recipient_public_keys,
         &prepared.input,
     )?;
-    let response =
-        post_json::<_, ReceiveMessageOutput>(&prepared.input.recipient_host, "/message", &envelope)
-            .await
-            .map_err(|err| recipient_delivery_error(&prepared.input.recipient_host, err))?;
+    let response = http_client::post_json::<_, ReceiveMessageOutput>(
+        &prepared.input.recipient_host,
+        "/message",
+        &envelope,
+    )
+    .await
+    .map_err(|err| recipient_delivery_error(&prepared.input.recipient_host, err))?;
     let output = build_send_message_output(&prepared.sender_key, &prepared.input, &response);
     info!(
         sender_kid = %prepared.sender_key.id(),
@@ -1102,11 +1103,13 @@ async fn deliver_message_to_final_app(
         },
     };
 
-    post_json::<_, serde_json::Value>(route.final_app_addr(), route.final_app_path(), &delivery)
-        .await
-        .map_err(|err| {
-            final_app_delivery_error(route.final_app_addr(), route.final_app_path(), err)
-        })?;
+    http_client::post_json::<_, serde_json::Value>(
+        route.final_app_addr(),
+        route.final_app_path(),
+        &delivery,
+    )
+    .await
+    .map_err(|err| final_app_delivery_error(route.final_app_addr(), route.final_app_path(), err))?;
 
     Ok(())
 }
@@ -1445,7 +1448,7 @@ async fn fetch_remote_public_keys(host: &str, kid: &str) -> Result<RemotePublicK
     keys::KeyId::parse(kid)?;
 
     let path = format!("/pub/{kid}");
-    let keys = get_json::<PublicKeysOutput>(host, &path)
+    let keys = http_client::get_json::<PublicKeysOutput>(host, &path)
         .await
         .map_err(|err| remote_public_key_error(host, kid, err))?;
     let remote_key = RemotePublicKeys {
@@ -1476,91 +1479,4 @@ fn remote_public_key_error(host: &str, kid: &str, err: DynError) -> DynError {
     };
 
     Box::new(io::Error::new(kind, message))
-}
-
-async fn get_json<T>(host: &str, path: &str) -> Result<T, DynError>
-where
-    T: DeserializeOwned,
-{
-    let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {host}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
-    );
-    let body = send_http_request(host, &request).await?;
-
-    Ok(serde_json::from_slice(&body)?)
-}
-
-async fn post_json<TRequest, TResponse>(
-    host: &str,
-    path: &str,
-    body: &TRequest,
-) -> Result<TResponse, DynError>
-where
-    TRequest: Serialize,
-    TResponse: DeserializeOwned,
-{
-    let body = serde_json::to_vec(body)?;
-    let request = format!(
-        "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        body.len(),
-        std::str::from_utf8(&body)?,
-    );
-    let body = send_http_request(host, &request).await?;
-
-    Ok(serde_json::from_slice(&body)?)
-}
-
-async fn send_http_request(host: &str, request: &str) -> Result<Vec<u8>, DynError> {
-    let mut stream = TcpStream::connect(host).await?;
-    stream.write_all(request.as_bytes()).await?;
-
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response).await?;
-    let split_at = response
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .ok_or_else(|| {
-            Box::new(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "invalid HTTP response",
-            )) as DynError
-        })?;
-    let headers = std::str::from_utf8(&response[..split_at])?;
-    let status_line = headers.lines().next().ok_or_else(|| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid HTTP response status",
-        )) as DynError
-    })?;
-    let status_code = status_line
-        .split_whitespace()
-        .nth(1)
-        .ok_or_else(|| {
-            Box::new(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "missing HTTP response status code",
-            )) as DynError
-        })?
-        .parse::<u16>()?;
-
-    if !(200..300).contains(&status_code) {
-        warn!(
-            host = %host,
-            status_code,
-            "remote HTTP request returned non-success status"
-        );
-        let error_kind = match status_code {
-            400 => io::ErrorKind::InvalidInput,
-            401 | 403 => io::ErrorKind::PermissionDenied,
-            404 => io::ErrorKind::NotFound,
-            _ => io::ErrorKind::InvalidData,
-        };
-
-        return Err(Box::new(io::Error::new(
-            error_kind,
-            format!("remote HTTP request failed with status {status_code}"),
-        )));
-    }
-
-    Ok(response[split_at + 4..].to_vec())
 }
