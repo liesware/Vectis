@@ -271,7 +271,6 @@ Vectis is not a replacement for:
 - TLS;
 - KMS;
 - HSMs;
-- HashiCorp Vault;
 - secrets managers;
 - database encryption;
 - access control;
