@@ -104,7 +104,7 @@ Security notes:
 - Do not put `VECTIS_UNSEAL_KEY` in `.env`.
 - Do not commit `.unseal_key`; it is listed in `.gitignore`.
 - `VECTIS_APIKEY` is a client secret. Do not place it in server-only environments unless the same process also acts as a client.
-- `VECTIS_APIKEY_HASH` lets the server verify `X-API-Key` without storing the API key in plaintext.
+- `VECTIS_APIKEY_HASH` lets the server verify `X-API-Key` without storing the API key in plaintext. It is `HMAC-SHA256(api_auth_key, VECTIS_APIKEY)`, where `api_auth_key` is derived from the init symmetric key with HKDF-SHA256.
 
 ## Storage
 
@@ -123,7 +123,13 @@ CREATE TABLE IF NOT EXISTS ops_keys (
 );
 ```
 
-`enc_keys` and `properties` are encrypted with the internal init symmetric key. `enc_keys` stores operational key material; `properties` stores lifecycle metadata.
+The init symmetric key is a root key. Vectis derives separate internal keys from it with HKDF-SHA256:
+
+- `db_key` encrypts and decrypts `ops_keys.enc_keys`;
+- `properties_key` encrypts and decrypts `ops_keys.properties`;
+- `api_auth_key` verifies `X-API-Key` against `VECTIS_APIKEY_HASH`.
+
+`enc_keys` stores operational key material; `properties` stores lifecycle metadata.
 
 ## Logging
 
@@ -184,8 +190,8 @@ These are not environment variables. They are compile-time constants used by Vec
 
 | Constant | Value | Purpose |
 | --- | --- | --- |
-| `INTERNAL_KEYS_CIPHER` | `AES-256/GCM` | Cipher used to encrypt `init.json` key material and stored operational key payloads. |
-| `INTERNAL_KEYS_KEY_SIZE_BYTES` | `32` | Internal AES-256 key size. |
+| `INTERNAL_KEYS_CIPHER` | `AES-256/GCM` | Cipher used to encrypt `init.json` key material and stored operational key payloads. Stored operational payloads use HKDF-derived internal keys. |
+| `INTERNAL_KEYS_KEY_SIZE_BYTES` | `32` | Internal AES-256 key size and HKDF-derived internal key size. |
 | `INTERNAL_KEYS_NONCE_SIZE_BYTES` | `12` | AES-GCM nonce size used for internal key encryption. |
 | `INTERNAL_KEYS_HASH` | `BLAKE2b(256)` | Hash used for API key validation length and generated `kid` values. |
 | `INTERNAL_KEYS_EDDSA_ALGORITHM` | `Ed25519` | Internal init EdDSA default. |

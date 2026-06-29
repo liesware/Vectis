@@ -203,7 +203,7 @@ pub fn router(state: HttpState) -> Router {
         .route("/healthz/startup", get(health::startup_endpoint))
         .route("/healthz/live", get(health::live_endpoint))
         .route("/healthz/ready", get(health::ready_endpoint))
-        .route("/self-test/keys/{id}", get(test::test_endpoint))
+        .route("/self-test/keys/{kid}", get(test::test_endpoint))
         .route("/self-test/init", get(test::init_endpoint))
         .route("/keys/reload", post(keys::refresh_endpoint))
         .route("/keys/properties/{kid}", get(keys::get_properties_endpoint))
@@ -216,8 +216,8 @@ pub fn router(state: HttpState) -> Router {
             get(keys::list_endpoint).post(keys::create_endpoint),
         )
         .route("/sign/verification", post(sign::sign_verification_endpoint))
-        .route("/sign/{id}", post(sign::sign_endpoint))
-        .route("/pub/{id}", get(pubkey::pub_endpoint))
+        .route("/sign/{kid}", post(sign::sign_endpoint))
+        .route("/pub/{kid}", get(pubkey::pub_endpoint))
         .route(
             "/message/internal/encrypt/{kid}",
             post(message::internal_encrypt_endpoint),

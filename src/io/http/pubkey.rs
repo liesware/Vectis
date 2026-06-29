@@ -15,7 +15,7 @@ pub async fn pub_endpoint(
         .ensure_keys_db_entry(&id)
         .await
         .map_err(|err| error_response(err.as_ref()))?;
-    info!(endpoint = "GET /pub/{id}", kid = %id, "pub request accepted");
+    info!(endpoint = "GET /pub/{kid}", kid = %id, "pub request accepted");
     let result = state
         .with_keys_db_state(|keys_db_state| ops::pubkey::public_keys_from_state(keys_db_state, &id))
         .await;
@@ -23,7 +23,7 @@ pub async fn pub_endpoint(
     match result {
         Ok(response) => {
             info!(
-                endpoint = "GET /pub/{id}",
+                endpoint = "GET /pub/{kid}",
                 kid = %id,
                 info = %response.info,
                 eddsa_alg = %response.keys.eddsa.alg,

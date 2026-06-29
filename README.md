@@ -48,6 +48,7 @@ protected data flows between Vectis instances.
 Current capabilities include:
 
 - encrypted local init key material;
+- HKDF-derived internal keys for storage encryption and API key verification;
 - operational key creation and validation;
 - encrypted key lifecycle metadata and runtime lifecycle enforcement;
 - public key publication by `kid`;
