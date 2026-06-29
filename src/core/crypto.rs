@@ -1,5 +1,5 @@
 use crate::error::DynError;
-use botan::{Cipher, CipherDirection};
+use botan::{Cipher, CipherDirection, MsgAuthCode};
 use botan::{
     HashFunction, KeyDecapsulation, KeyEncapsulation, Privkey, Pubkey, RandomNumberGenerator,
     Signer, Verifier,
@@ -49,6 +49,27 @@ pub fn hkdf_sha256(
     output_len: usize,
 ) -> Result<Vec<u8>, botan::Error> {
     botan::kdf("HKDF(SHA-256)", output_len, input_key_material, salt, info)
+}
+
+pub fn hmac_sha256(key: &[u8], message: &[u8]) -> Result<Vec<u8>, botan::Error> {
+    let mut mac = MsgAuthCode::new("HMAC(SHA-256)")?;
+    mac.set_key(key)?;
+    mac.update(message)?;
+
+    mac.finish()
+}
+
+pub fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+
+    let mut diff = 0u8;
+    for (left, right) in left.iter().zip(right.iter()) {
+        diff |= left ^ right;
+    }
+
+    diff == 0
 }
 
 pub fn encrypt_symmetric(

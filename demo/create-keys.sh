@@ -93,12 +93,15 @@ prepare_site() {
   init_output="$(cd "${site_dir}" && ../bin/vectis init)"
   local unseal_key
   local apikey
+  local apikey_hash
   unseal_key="$(printf '%s\n' "${init_output}" | extract_init_value "VECTIS_UNSEAL_KEY")"
   apikey="$(printf '%s\n' "${init_output}" | extract_init_value "VECTIS_APIKEY")"
+  apikey_hash="$(printf '%s\n' "${init_output}" | extract_init_value "VECTIS_APIKEY_HASH")"
 
   printf '%s\n' "${unseal_key}" > "${site_dir}/.unseal_key"
   chmod 600 "${site_dir}/.unseal_key"
   set_env_value "${site_dir}/.env" "VECTIS_APIKEY" "${apikey}"
+  set_env_value "${site_dir}/.env" "VECTIS_APIKEY_HASH" "${apikey_hash}"
 }
 
 start_vectis() {

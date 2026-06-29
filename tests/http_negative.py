@@ -7,10 +7,10 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from test_config import require_apikey
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:3000"
-DEFAULT_APIKEY = "20e446d000498e82b056f54e68216d4c8c9bda089a6812d0aa9d82d59f918018"
 VALID_KEY_REQUEST = {
     "tag": "negative-1",
     "profile": "hybrid-performance-v1",
@@ -182,10 +182,11 @@ def run_case(rows, name, func):
 def main():
     parser = argparse.ArgumentParser(description="Run negative HTTP contract tests.")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
-    parser.add_argument("--apikey", default=DEFAULT_APIKEY)
+    parser.add_argument("--apikey")
     args = parser.parse_args()
 
-    client = Client(args.base_url, args.apikey)
+    apikey = require_apikey(args.apikey)
+    client = Client(args.base_url, apikey)
     recipient_host = host_from_base_url(args.base_url)
     rows = []
 

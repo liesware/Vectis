@@ -37,6 +37,10 @@ impl InternalDerivedKeysState {
     pub fn properties_key(&self) -> &[u8] {
         &self.properties_key
     }
+
+    pub fn api_key_hash(&self, api_key: &str) -> Result<String, DynError> {
+        api_key_hash_with_key(&self.api_auth_key, api_key)
+    }
 }
 
 impl Zeroize for InternalDerivedKeysState {
@@ -53,5 +57,29 @@ fn derive_internal_key(root_key: &[u8], info: &[u8]) -> Result<Zeroizing<Vec<u8>
         INTERNAL_HKDF_SALT,
         info,
         config::INTERNAL_KEYS_KEY_SIZE_BYTES,
+    )?))
+}
+
+pub fn api_key_hash_from_root_key_hex(
+    root_key_hex: &str,
+    api_key: &str,
+) -> Result<String, DynError> {
+    validation::validate_symmetric_key(
+        "init symmetric key",
+        root_key_hex,
+        config::INTERNAL_KEYS_KEY_SIZE_BYTES,
+    )?;
+    let root_key = Zeroizing::new(hex::decode(root_key_hex)?);
+    let api_auth_key = derive_internal_key(&root_key, API_AUTH_KEY_INFO)?;
+
+    api_key_hash_with_key(&api_auth_key, api_key)
+}
+
+fn api_key_hash_with_key(api_auth_key: &[u8], api_key: &str) -> Result<String, DynError> {
+    validation::validate_hash_hex_field("VECTIS_APIKEY", api_key, config::INTERNAL_KEYS_HASH)?;
+
+    Ok(hex::encode(crypto::hmac_sha256(
+        api_auth_key,
+        api_key.as_bytes(),
     )?))
 }

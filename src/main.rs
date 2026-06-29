@@ -103,7 +103,7 @@ fn print_help() {
     println!();
     println!("Environment:");
     println!("  VECTIS_API_URL        API base URL, default http://127.0.0.1:3000");
-    println!("  VECTIS_APIKEY         Required for protected API commands");
+    println!("  VECTIS_APIKEY         Client secret for protected API commands");
     println!("  VECTIS_TIMEOUT_SECONDS Request timeout, default 30");
     println!("  VECTIS_TLS_SKIP_VERIFY Disable outbound TLS verification, default false");
 }
@@ -143,7 +143,7 @@ fn print_serve_help() {
     println!("  VECTIS_SERVER_SCHEME  Server transport, http or https, default http");
     println!("  VECTIS_TLS_CERT_PATH  PEM certificate path when using https");
     println!("  VECTIS_TLS_KEY_PATH   PEM private key path when using https");
-    println!("  VECTIS_APIKEY         Required by protected endpoints");
+    println!("  VECTIS_APIKEY_HASH    Required by protected endpoints");
 }
 
 fn print_init_help() {
@@ -155,7 +155,8 @@ fn print_init_help() {
     println!("Output:");
     println!("  init.json             Encrypted key file");
     println!("  VECTIS_UNSEAL_KEY=... Key used later by serve to decrypt init.json");
-    println!("  VECTIS_APIKEY=...     API key for protected HTTP endpoints");
+    println!("  VECTIS_APIKEY=...     Client API key for protected HTTP endpoints");
+    println!("  VECTIS_APIKEY_HASH=... Server-side API key hash for protected HTTP endpoints");
     println!();
     println!("Security:");
     println!("  Do not store VECTIS_UNSEAL_KEY in .env for production.");

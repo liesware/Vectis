@@ -13,9 +13,10 @@ pub fn run_init() -> Result<String, DynError> {
     info!(path = INIT_OUTPUT_PATH, "init keys written");
     println!("VECTIS_UNSEAL_KEY={}", &*output.encryption_key_hex);
     println!("VECTIS_APIKEY={}", &*output.api_key);
+    println!("VECTIS_APIKEY_HASH={}", &*output.api_key_hash);
     println!("\n* VECTIS_UNSEAL_KEY should be an env var, after init it must be unset.");
     println!(
-        "* VECTIS_APIKEY is a reference value your if you want to use your own VECTIS_APIKEY should preserves the same format."
+        "* VECTIS_APIKEY is the client secret. VECTIS_APIKEY_HASH is the server-side value for protected endpoints."
     );
 
     Ok(INIT_OUTPUT_PATH.to_string())

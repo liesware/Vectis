@@ -11,11 +11,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from test_config import require_apikey
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:3000"
 DEFAULT_FINAL_APP_ADDR = "localhost:3999"
-DEFAULT_APIKEY = "20e446d000498e82b056f54e68216d4c8c9bda089a6812d0aa9d82d59f918018"
 INTERNAL_KEYS_KID_HEX_LEN = 64
 MESSAGE = "The things you own end up owning you."
 ROUTES_PATH = Path("routes.json")
@@ -641,12 +641,13 @@ def send_message(client, message_number, sender_key_id, recipient_host, recipien
 def main():
     parser = argparse.ArgumentParser(description="Run the standard HTTP workflow.")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
-    parser.add_argument("--apikey", default=DEFAULT_APIKEY)
+    parser.add_argument("--apikey")
     parser.add_argument("--final-app-addr", default=DEFAULT_FINAL_APP_ADDR)
     args = parser.parse_args()
 
     final_app = start_final_app(args.final_app_addr)
-    client = Client(args.base_url, args.apikey)
+    apikey = require_apikey(args.apikey)
+    client = Client(args.base_url, apikey)
     routes_backup = backup_routes_file()
     routes_sign_backup = backup_routes_sign_file()
     atexit.register(restore_routes_file, routes_backup)

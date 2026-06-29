@@ -11,7 +11,7 @@ pub async fn list_endpoint(
     State(state): State<HttpState>,
     headers: HeaderMap,
 ) -> Result<Json<ListRoutesOutput>, (StatusCode, Json<ErrorResponse>)> {
-    authorize_api_key(&headers)?;
+    authorize_api_key(&headers, state.internal_keys())?;
 
     info!(endpoint = "GET /routes", "routes list request accepted");
     let response = state.routes_output().await;
@@ -28,7 +28,7 @@ pub async fn reload_endpoint(
     State(state): State<HttpState>,
     headers: HeaderMap,
 ) -> Result<Json<ListRoutesOutput>, (StatusCode, Json<ErrorResponse>)> {
-    authorize_api_key(&headers)?;
+    authorize_api_key(&headers, state.internal_keys())?;
 
     info!(
         endpoint = "POST /routes/reload",

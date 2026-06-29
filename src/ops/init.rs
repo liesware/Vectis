@@ -27,6 +27,7 @@ pub struct EncryptedInitJsonOutput {
     pub json: String,
     pub encryption_key_hex: Zeroizing<String>,
     pub api_key: Zeroizing<String>,
+    pub api_key_hash: Zeroizing<String>,
 }
 
 pub struct ValidatedInitState {
@@ -77,6 +78,10 @@ pub fn create_encrypted_init_output_json() -> Result<EncryptedInitJsonOutput, Dy
     )?));
     validation::validate_hash_hex_field("VECTIS_APIKEY", &api_key, config::INTERNAL_KEYS_HASH)?;
     let output = Zeroizing::new(create_init_output()?);
+    let api_key_hash = Zeroizing::new(crate::ops::internal_keys::api_key_hash_from_root_key_hex(
+        output.keys.symmetric.key_hex.as_str(),
+        &api_key,
+    )?);
     let plaintext = Zeroizing::new(serde_json::to_string_pretty(&*output)?);
     let encryption_key =
         Zeroizing::new(crypto::random_bytes(config::INTERNAL_KEYS_KEY_SIZE_BYTES)?);
@@ -102,6 +107,7 @@ pub fn create_encrypted_init_output_json() -> Result<EncryptedInitJsonOutput, Dy
         json,
         encryption_key_hex,
         api_key,
+        api_key_hash,
     })
 }
 

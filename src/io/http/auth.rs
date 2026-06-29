@@ -1,11 +1,15 @@
 use super::error::{ErrorResponse, public_error_message};
-use crate::core::{config, validation};
+use crate::core::{config, crypto, validation};
+use crate::ops::internal_keys::InternalDerivedKeysState;
 use axum::Json;
 use axum::http::{HeaderMap, HeaderName, StatusCode};
 
 const API_KEY_HEADER: HeaderName = HeaderName::from_static("x-api-key");
 
-pub fn authorize_api_key(headers: &HeaderMap) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+pub fn authorize_api_key(
+    headers: &HeaderMap,
+    internal_keys: &InternalDerivedKeysState,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
     let config = config::app_config().map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -15,7 +19,7 @@ pub fn authorize_api_key(headers: &HeaderMap) -> Result<(), (StatusCode, Json<Er
         )
     })?;
 
-    if config.api_key.is_empty() {
+    if config.api_key_hash.is_empty() {
         return Err((
             StatusCode::UNAUTHORIZED,
             Json(ErrorResponse::new(public_error_message(
@@ -52,7 +56,32 @@ pub fn authorize_api_key(headers: &HeaderMap) -> Result<(), (StatusCode, Json<Er
         ));
     }
 
-    if value != config.api_key {
+    let candidate_hash = internal_keys.api_key_hash(value).map_err(|_| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorResponse::new(public_error_message(
+                StatusCode::UNAUTHORIZED,
+            ))),
+        )
+    })?;
+    let expected_hash = hex::decode(&config.api_key_hash).map_err(|_| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorResponse::new(public_error_message(
+                StatusCode::UNAUTHORIZED,
+            ))),
+        )
+    })?;
+    let candidate_hash = hex::decode(candidate_hash).map_err(|_| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorResponse::new(public_error_message(
+                StatusCode::UNAUTHORIZED,
+            ))),
+        )
+    })?;
+
+    if !crypto::constant_time_eq(&candidate_hash, &expected_hash) {
         return Err((
             StatusCode::UNAUTHORIZED,
             Json(ErrorResponse::new(public_error_message(

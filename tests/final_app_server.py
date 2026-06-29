@@ -2,18 +2,16 @@
 import argparse
 import http.server
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
 
 
-DEFAULT_APIKEY = "20e446d000498e82b056f54e68216d4c8c9bda089a6812d0aa9d82d59f918018"
-
-
 class FinalAppHandler(http.server.BaseHTTPRequestHandler):
     expected_path = "/message"
     vectis_url = "http://127.0.0.1:3000"
-    apikey = DEFAULT_APIKEY
+    apikey = ""
 
     def do_POST(self):
         if self.path != self.expected_path:
@@ -106,13 +104,15 @@ def main():
     parser.add_argument("--addr", default="127.0.0.1:4999")
     parser.add_argument("--path", default="/message")
     parser.add_argument("--vectis-url", default="http://127.0.0.1:3000")
-    parser.add_argument("--apikey", default=DEFAULT_APIKEY)
+    parser.add_argument("--apikey")
     args = parser.parse_args()
 
     host, port = parse_addr(args.addr)
     FinalAppHandler.expected_path = args.path
     FinalAppHandler.vectis_url = args.vectis_url.rstrip("/")
-    FinalAppHandler.apikey = args.apikey
+    FinalAppHandler.apikey = args.apikey or os.environ.get("VECTIS_APIKEY", "").strip()
+    if not FinalAppHandler.apikey:
+        raise RuntimeError("VECTIS_APIKEY must be provided with --apikey or environment")
 
     server = http.server.ThreadingHTTPServer((host, port), FinalAppHandler)
     print(f"Final app server listening on http://{args.addr}{args.path}")

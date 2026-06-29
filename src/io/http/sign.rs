@@ -14,7 +14,7 @@ pub async fn sign_endpoint(
     headers: HeaderMap,
     Json(request): Json<Value>,
 ) -> Result<Json<ops::sign::TimestampToken>, (StatusCode, Json<ErrorResponse>)> {
-    authorize_api_key(&headers)?;
+    authorize_api_key(&headers, state.internal_keys())?;
 
     ops::keys::validate_key_id(&id).map_err(|err| error_response(err.as_ref()))?;
     state

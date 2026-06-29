@@ -4,10 +4,10 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from test_config import require_apikey
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:3000"
-DEFAULT_APIKEY = "20e446d000498e82b056f54e68216d4c8c9bda089a6812d0aa9d82d59f918018"
 SUMMARY_RE = re.compile(r"^SUMMARY (?P<name>\w+) passed=(?P<passed>\d+) failed=(?P<failed>\d+)$")
 
 
@@ -70,13 +70,14 @@ def print_summary(summaries):
 def main():
     parser = argparse.ArgumentParser(description="Run positive and negative HTTP workflows.")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
-    parser.add_argument("--apikey", default=DEFAULT_APIKEY)
+    parser.add_argument("--apikey")
     args = parser.parse_args()
 
+    apikey = require_apikey(args.apikey)
     tests_dir = Path(__file__).resolve().parent
     summaries = {}
     for script in (tests_dir / "http_positive.py", tests_dir / "http_negative.py"):
-        name, passed, failed = run_script(script, args.base_url, args.apikey)
+        name, passed, failed = run_script(script, args.base_url, apikey)
         summaries[name] = (name, passed, failed)
 
     print_summary(summaries)

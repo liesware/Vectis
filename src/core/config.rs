@@ -35,7 +35,7 @@ pub struct AppConfig {
     pub tls_skip_verify: bool,
     pub routes_path: PathBuf,
     pub routes_sign_path: PathBuf,
-    pub api_key: String,
+    pub api_key_hash: String,
     pub protocol_version: String,
     pub storage_type: String,
     pub sqlite_path: PathBuf,
@@ -93,7 +93,7 @@ pub fn app_config() -> Result<AppConfig, DynError> {
         "VECTIS_ROUTES_SIGN_PATH",
         "routes_sign.json",
     ))?;
-    let api_key = config_value(&env_file, "VECTIS_APIKEY", "");
+    let api_key_hash = config_value(&env_file, "VECTIS_APIKEY_HASH", "");
     let protocol_version = config_value(&env_file, "VECTIS_PROTOCOL_VERSION", "v1");
     let storage_type = config_value(&env_file, "VECTIS_STORAGE", "sqlite");
     let sqlite_path = validate_sqlite_path(&config_value(
@@ -133,8 +133,8 @@ pub fn app_config() -> Result<AppConfig, DynError> {
         &storage_type,
         crate::core::storage::STORAGE_TYPES,
     )?;
-    if !api_key.is_empty() {
-        validation::validate_hash_hex_field("VECTIS_APIKEY", &api_key, INTERNAL_KEYS_HASH)?;
+    if !api_key_hash.is_empty() {
+        validation::validate_symmetric_key("VECTIS_APIKEY_HASH", &api_key_hash, 32)?;
     }
     validation::validate_hostname("VECTIS_SENDER_HOSTNAME", &sender_hostname)?;
     validation::validate_hostname("VECTIS_RECEIVER_HOSTNAME", &receiver_hostname)?;
@@ -177,7 +177,7 @@ pub fn app_config() -> Result<AppConfig, DynError> {
         tls_skip_verify,
         routes_path,
         routes_sign_path,
-        api_key,
+        api_key_hash,
         protocol_version,
         storage_type,
         sqlite_path,
