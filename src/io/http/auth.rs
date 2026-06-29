@@ -1,7 +1,9 @@
 use super::error::{ErrorResponse, public_error_message};
 use crate::core::{config, validation};
 use axum::Json;
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{HeaderMap, HeaderName, StatusCode};
+
+const API_KEY_HEADER: HeaderName = HeaderName::from_static("x-api-key");
 
 pub fn authorize_api_key(headers: &HeaderMap) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
     let config = config::app_config().map_err(|_| {
@@ -22,7 +24,7 @@ pub fn authorize_api_key(headers: &HeaderMap) -> Result<(), (StatusCode, Json<Er
         ));
     }
 
-    let Some(value) = headers.get(header::AUTHORIZATION) else {
+    let Some(value) = headers.get(API_KEY_HEADER) else {
         return Err((
             StatusCode::UNAUTHORIZED,
             Json(ErrorResponse::new(public_error_message(
@@ -40,8 +42,7 @@ pub fn authorize_api_key(headers: &HeaderMap) -> Result<(), (StatusCode, Json<Er
         ));
     };
 
-    if validation::validate_hash_hex_field("Authorization", value, config::INTERNAL_KEYS_HASH)
-        .is_err()
+    if validation::validate_hash_hex_field("X-API-Key", value, config::INTERNAL_KEYS_HASH).is_err()
     {
         return Err((
             StatusCode::UNAUTHORIZED,

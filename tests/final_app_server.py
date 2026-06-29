@@ -53,7 +53,7 @@ class FinalAppHandler(http.server.BaseHTTPRequestHandler):
             f"{self.vectis_url}/message/decrypt",
             data=body,
             headers={
-                "Authorization": self.apikey,
+                "X-API-Key": self.apikey,
                 "Content-Type": "application/json",
                 "Accept": "application/json",
             },

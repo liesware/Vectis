@@ -54,7 +54,7 @@ def request_json(method, url, apikey=None, payload=None):
         data = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
     if apikey:
-        headers["Authorization"] = apikey
+        headers["X-API-Key"] = apikey
 
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:

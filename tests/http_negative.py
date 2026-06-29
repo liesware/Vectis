@@ -36,7 +36,7 @@ class Client:
         if headers:
             request_headers.update(headers)
         if auth:
-            request_headers["Authorization"] = self.apikey
+            request_headers["X-API-Key"] = self.apikey
 
         return self._request("GET", path, headers=request_headers)
 
@@ -45,7 +45,7 @@ class Client:
         if headers:
             request_headers.update(headers)
         if auth:
-            request_headers["Authorization"] = self.apikey
+            request_headers["X-API-Key"] = self.apikey
 
         return self._request("POST", path, body=body, headers=request_headers)
 
@@ -197,7 +197,7 @@ def main():
         status, _ = client.post(
             "/keys",
             VALID_KEY_REQUEST,
-            headers={"Authorization": "00" * 32},
+            headers={"X-API-Key": "00" * 32},
         )
         require_status("POST /keys invalid auth", status, 401)
 
@@ -209,7 +209,7 @@ def main():
         status, _ = client.post(
             "/keys/reload",
             {},
-            headers={"Authorization": "00" * 32},
+            headers={"X-API-Key": "00" * 32},
         )
         require_status("POST /keys/reload invalid auth", status, 401)
 
@@ -218,7 +218,7 @@ def main():
         require_status("GET /keys/properties without auth", status, 401)
 
     def keys_properties_invalid_auth():
-        status, _ = client.get("/keys/properties", headers={"Authorization": "00" * 32})
+        status, _ = client.get("/keys/properties", headers={"X-API-Key": "00" * 32})
         require_status("GET /keys/properties invalid auth", status, 401)
 
     def key_properties_without_auth():
@@ -273,7 +273,7 @@ def main():
         require_status("GET /routes without auth", status, 401)
 
     def routes_list_invalid_auth():
-        status, _ = client.get("/routes", headers={"Authorization": "00" * 32})
+        status, _ = client.get("/routes", headers={"X-API-Key": "00" * 32})
         require_status("GET /routes invalid auth", status, 401)
 
     def routes_reload_without_auth():
@@ -284,7 +284,7 @@ def main():
         status, _ = client.post(
             "/routes/reload",
             {},
-            headers={"Authorization": "00" * 32},
+            headers={"X-API-Key": "00" * 32},
         )
         require_status("POST /routes/reload invalid auth", status, 401)
 

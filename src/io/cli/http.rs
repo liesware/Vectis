@@ -373,7 +373,7 @@ impl CliHttpClient {
             if self.api_key.is_empty() {
                 return Err(invalid_input("VECTIS_APIKEY is required for this command"));
             }
-            request = request.header("Authorization", &self.api_key);
+            request = request.header("X-API-Key", &self.api_key);
         }
 
         if let Some(body) = body {

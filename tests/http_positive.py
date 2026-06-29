@@ -73,14 +73,14 @@ class Client:
     def get(self, path, auth=False):
         headers = {}
         if auth:
-            headers["Authorization"] = self.apikey
+            headers["X-API-Key"] = self.apikey
 
         return self._request("GET", path, headers=headers)
 
     def post(self, path, body, auth=False):
         headers = {"Content-Type": "application/json"}
         if auth:
-            headers["Authorization"] = self.apikey
+            headers["X-API-Key"] = self.apikey
 
         return self._request("POST", path, body=body, headers=headers)
 

@@ -63,7 +63,7 @@ site. It receives a local encrypted delivery and must call its local Vectis
 
    ```http
    POST /message/{clinic_a_kid}
-   Authorization: <clinic-a apikey>
+   X-API-Key: <clinic-a apikey>
    ```
 
    ```json
@@ -118,7 +118,7 @@ site. It receives a local encrypted delivery and must call its local Vectis
 
     ```http
     POST /message/decrypt
-    Authorization: <clinic-b apikey>
+    X-API-Key: <clinic-b apikey>
     ```
 
 11. Clinic B prints the recovered clinical record.

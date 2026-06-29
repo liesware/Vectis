@@ -24,7 +24,7 @@ The `vectis` CLI is an HTTP client for the runtime API, except for `vectis init`
 Protected endpoints require:
 
 ```http
-Authorization: <VECTIS_APIKEY>
+X-API-Key: <VECTIS_APIKEY>
 ```
 
 `VECTIS_APIKEY` must be valid hex and match the expected length for `INTERNAL_KEYS_HASH`.
