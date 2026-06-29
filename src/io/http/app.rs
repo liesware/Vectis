@@ -7,7 +7,9 @@ use crate::core::{config, routes, storage::StorageState};
 use crate::error::DynError;
 use crate::ops::init::ValidatedInitState;
 use crate::ops::keys;
-use tracing::info;
+use std::io;
+use std::time::Duration;
+use tracing::{info, warn};
 
 pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
     let config = config::app_config()?;
@@ -32,6 +34,9 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
     let started_at = validation::current_timestamp()?;
     info!(
         http_bind_addr = %config.http_bind_addr,
+        server_scheme = %config.server_scheme,
+        remote_scheme = %config.remote_scheme,
+        final_app_scheme = %config.final_app_scheme,
         public_addr = %config.public_addr,
         final_app_addr = %config.final_app_addr,
         final_app_path = %config.final_app_path,
@@ -43,6 +48,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         log_level = %logging.level,
         log_dir = %logging.dir,
         log_file = %logging.file,
+        tls_skip_verify = config.tls_skip_verify,
         "http service configuration loaded"
     );
     info!(
@@ -62,10 +68,6 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         config.routes_sign_path.clone(),
         started_at,
     ));
-    let listener = tokio::net::TcpListener::bind(config.http_bind_addr).await?;
-
-    info!(addr = %config.http_bind_addr, "server listening");
-
     let renderer = Renderer::new(fonts::family("slant").unwrap())
         .with_alignment(Alignment::Center)
         .with_plain_fallback()
@@ -87,9 +89,42 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
     println!("\nby Liesware Corp.");
     println!("\nComplexity is inevitable, simplicity is intentional.");
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    if config.server_scheme == "https" {
+        let cert_path = config.tls_cert_path.as_ref().ok_or_else(|| {
+            Box::new(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "VECTIS_TLS_CERT_PATH is required when VECTIS_SERVER_SCHEME=https",
+            )) as DynError
+        })?;
+        let key_path = config.tls_key_path.as_ref().ok_or_else(|| {
+            Box::new(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "VECTIS_TLS_KEY_PATH is required when VECTIS_SERVER_SCHEME=https",
+            )) as DynError
+        })?;
+        let tls_config =
+            axum_server::tls_rustls::RustlsConfig::from_pem_file(cert_path, key_path).await?;
+        let handle = axum_server::Handle::new();
+        let shutdown_handle = handle.clone();
+        tokio::spawn(async move {
+            shutdown_signal().await;
+            shutdown_handle.graceful_shutdown(Some(Duration::from_secs(10)));
+        });
+
+        info!(addr = %config.http_bind_addr, scheme = %config.server_scheme, "server listening");
+        axum_server::bind_rustls(config.http_bind_addr, tls_config)
+            .handle(handle)
+            .serve(app.into_make_service())
+            .await?;
+    } else {
+        warn!("server running without TLS because VECTIS_SERVER_SCHEME=http");
+        let listener = tokio::net::TcpListener::bind(config.http_bind_addr).await?;
+
+        info!(addr = %config.http_bind_addr, scheme = %config.server_scheme, "server listening");
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal())
+            .await?;
+    }
 
     Ok(())
 }

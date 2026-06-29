@@ -37,6 +37,10 @@ write_env() {
 
   cat > "${SCRIPT_DIR}/${site}/.env" <<ENV
 VECTIS_HTTP_BIND_ADDR=${bind_addr}
+VECTIS_SERVER_SCHEME=http
+VECTIS_REMOTE_SCHEME=http
+VECTIS_FINAL_APP_SCHEME=http
+VECTIS_TLS_SKIP_VERIFY=false
 VECTIS_API_URL=http://${bind_addr}
 VECTIS_TIMEOUT_SECONDS=30
 VECTIS_PUBLIC_ADDR=${public_addr}

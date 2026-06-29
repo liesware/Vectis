@@ -341,9 +341,14 @@ impl CliHttpClient {
                 config::INTERNAL_KEYS_HASH,
             )?;
         }
+        let tls_skip_verify = config::validate_bool_field(
+            "VECTIS_TLS_SKIP_VERIFY",
+            &config::config_value(&env_file, "VECTIS_TLS_SKIP_VERIFY", "false"),
+        )?;
 
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(timeout_seconds))
+            .danger_accept_invalid_certs(tls_skip_verify)
             .build()?;
 
         Ok(Self {

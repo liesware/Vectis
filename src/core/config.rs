@@ -20,12 +20,19 @@ pub const CRYPTO_PROFILES: &[&str] = &[
     "hybrid-long-term-v1",
 ];
 pub const CRYPTO_POLICIES: &[&str] = &["profile-only", "allow-overrides"];
+pub const HTTP_SCHEMES: &[&str] = &["http", "https"];
 
 pub struct AppConfig {
     pub http_bind_addr: SocketAddr,
+    pub server_scheme: String,
+    pub remote_scheme: String,
+    pub final_app_scheme: String,
     pub public_addr: String,
     pub final_app_addr: String,
     pub final_app_path: String,
+    pub tls_cert_path: Option<PathBuf>,
+    pub tls_key_path: Option<PathBuf>,
+    pub tls_skip_verify: bool,
     pub routes_path: PathBuf,
     pub routes_sign_path: PathBuf,
     pub api_key: String,
@@ -45,6 +52,12 @@ pub fn app_config() -> Result<AppConfig, DynError> {
         "VECTIS_HTTP_BIND_ADDR",
         &config_value(&env_file, "VECTIS_HTTP_BIND_ADDR", "127.0.0.1:3000"),
     )?;
+    let server_scheme =
+        validate_http_scheme(&config_value(&env_file, "VECTIS_SERVER_SCHEME", "http"))?;
+    let remote_scheme =
+        validate_http_scheme(&config_value(&env_file, "VECTIS_REMOTE_SCHEME", "http"))?;
+    let final_app_scheme =
+        validate_http_scheme(&config_value(&env_file, "VECTIS_FINAL_APP_SCHEME", "http"))?;
     let public_addr = validation::validate_host_port(
         "VECTIS_PUBLIC_ADDR",
         &config_value(&env_file, "VECTIS_PUBLIC_ADDR", "127.0.0.1:3000"),
@@ -58,6 +71,18 @@ pub fn app_config() -> Result<AppConfig, DynError> {
         "VECTIS_FINAL_APP_PATH",
         "/message",
     ))?;
+    let tls_cert_path = validate_optional_tls_path(
+        "VECTIS_TLS_CERT_PATH",
+        &config_value(&env_file, "VECTIS_TLS_CERT_PATH", ""),
+    )?;
+    let tls_key_path = validate_optional_tls_path(
+        "VECTIS_TLS_KEY_PATH",
+        &config_value(&env_file, "VECTIS_TLS_KEY_PATH", ""),
+    )?;
+    let tls_skip_verify = validate_bool_field(
+        "VECTIS_TLS_SKIP_VERIFY",
+        &config_value(&env_file, "VECTIS_TLS_SKIP_VERIFY", "false"),
+    )?;
     let routes_path = validate_routes_path(&config_value(
         &env_file,
         "VECTIS_ROUTES_PATH",
@@ -97,6 +122,12 @@ pub fn app_config() -> Result<AppConfig, DynError> {
     );
 
     validation::validate_allowed_value("VECTIS_PROTOCOL_VERSION", &protocol_version, &["v1"])?;
+    if server_scheme == "https" && (tls_cert_path.is_none() || tls_key_path.is_none()) {
+        return Err(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "VECTIS_TLS_CERT_PATH and VECTIS_TLS_KEY_PATH are required when VECTIS_SERVER_SCHEME=https",
+        )));
+    }
     validation::validate_allowed_value(
         "VECTIS_STORAGE",
         &storage_type,
@@ -135,9 +166,15 @@ pub fn app_config() -> Result<AppConfig, DynError> {
 
     Ok(AppConfig {
         http_bind_addr,
+        server_scheme,
+        remote_scheme,
+        final_app_scheme,
         public_addr,
         final_app_addr,
         final_app_path,
+        tls_cert_path,
+        tls_key_path,
+        tls_skip_verify,
         routes_path,
         routes_sign_path,
         api_key,
@@ -150,6 +187,36 @@ pub fn app_config() -> Result<AppConfig, DynError> {
         crypto_policy,
         plaintext_message,
     })
+}
+
+pub struct HttpClientConfig {
+    pub remote_scheme: String,
+    pub final_app_scheme: String,
+    pub tls_skip_verify: bool,
+}
+
+pub fn http_client_config() -> Result<HttpClientConfig, DynError> {
+    let env_file = load_env_file(".env")?;
+    let remote_scheme =
+        validate_http_scheme(&config_value(&env_file, "VECTIS_REMOTE_SCHEME", "http"))?;
+    let final_app_scheme =
+        validate_http_scheme(&config_value(&env_file, "VECTIS_FINAL_APP_SCHEME", "http"))?;
+    let tls_skip_verify = validate_bool_field(
+        "VECTIS_TLS_SKIP_VERIFY",
+        &config_value(&env_file, "VECTIS_TLS_SKIP_VERIFY", "false"),
+    )?;
+
+    Ok(HttpClientConfig {
+        remote_scheme,
+        final_app_scheme,
+        tls_skip_verify,
+    })
+}
+
+pub fn validate_http_scheme(value: &str) -> Result<String, DynError> {
+    validation::validate_allowed_value("HTTP scheme", value, HTTP_SCHEMES)?;
+
+    Ok(value.to_string())
 }
 
 pub fn validate_http_path_field(field: &str, value: &str) -> Result<String, DynError> {
@@ -174,6 +241,46 @@ pub fn validate_http_path_field(field: &str, value: &str) -> Result<String, DynE
 
 fn validate_http_path(value: &str) -> Result<String, DynError> {
     validate_http_path_field("VECTIS_FINAL_APP_PATH", value)
+}
+
+fn validate_optional_tls_path(field: &str, value: &str) -> Result<Option<PathBuf>, DynError> {
+    if value.trim().is_empty() {
+        return Ok(None);
+    }
+
+    validation::validate_text_field(field, value)?;
+    let path = PathBuf::from(value);
+    let metadata = fs::metadata(&path).map_err(|err| {
+        Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{field} must exist and be readable: {err}"),
+        )) as DynError
+    })?;
+
+    if !metadata.is_file() {
+        return Err(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{field} must point to a file"),
+        )));
+    }
+
+    fs::OpenOptions::new()
+        .read(true)
+        .open(&path)
+        .map_err(|err| {
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!("{field} must allow read access: {err}"),
+            )) as DynError
+        })?;
+
+    Ok(Some(path))
+}
+
+pub fn validate_bool_field(field: &str, value: &str) -> Result<bool, DynError> {
+    validation::validate_allowed_value(field, value, &["true", "false"])?;
+
+    Ok(value == "true")
 }
 
 fn validate_routes_path(value: &str) -> Result<PathBuf, DynError> {

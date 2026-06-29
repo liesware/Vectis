@@ -7,6 +7,7 @@ edition = "2024"
 addr = "0.15.6"
 artbox = "0.3.0"
 axum = "0.8.8"
+axum-server = { version = "0.7.2", features = ["tls-rustls"] }
 base64 = "0.22.1"
 botan = { version = "0.13.0", features = ["vendored"] }
 hex = "0.4.3"

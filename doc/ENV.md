@@ -24,6 +24,12 @@ cargo run -- serve
 | Variable | Default | Expected value | Purpose |
 | --- | --- | --- | --- |
 | `VECTIS_HTTP_BIND_ADDR` | `127.0.0.1:3000` | Valid socket address, for example `127.0.0.1:3000` or `0.0.0.0:3000` | Address where the Vectis HTTP server listens. |
+| `VECTIS_SERVER_SCHEME` | `http` | `http` or `https` | Transport used by the local Vectis server. If `https`, TLS cert and key paths are required. |
+| `VECTIS_REMOTE_SCHEME` | `http` | `http` or `https` | Transport used by this Vectis instance when calling another Vectis instance. |
+| `VECTIS_FINAL_APP_SCHEME` | `http` | `http` or `https` | Transport used when delivering protected messages to the final application. |
+| `VECTIS_TLS_CERT_PATH` | Empty | Readable PEM certificate file path | Server certificate used when `VECTIS_SERVER_SCHEME=https`. |
+| `VECTIS_TLS_KEY_PATH` | Empty | Readable PEM private key file path | Server private key used when `VECTIS_SERVER_SCHEME=https`. |
+| `VECTIS_TLS_SKIP_VERIFY` | `false` | `true` or `false` | Disables TLS certificate verification for outbound clients. Intended only for local development with self-signed certificates. |
 | `VECTIS_PUBLIC_ADDR` | `127.0.0.1:3000` | Valid host:port, for example `localhost:3000` or `vectis-a.example.com:443` | Public address advertised as `sender.host` in protected messages. Useful when Vectis runs behind a load balancer. |
 | `VECTIS_PROTOCOL_VERSION` | `v1` | `v1` | Protocol version used by generated payloads and AAD. Currently only `v1` is supported. |
 
@@ -31,6 +37,7 @@ Notes:
 
 - `VECTIS_HTTP_BIND_ADDR` must be a socket address.
 - `VECTIS_PUBLIC_ADDR` is a host:port value and may use hostnames such as `localhost:3000`.
+- `VECTIS_SERVER_SCHEME`, `VECTIS_REMOTE_SCHEME`, and `VECTIS_FINAL_APP_SCHEME` are intentionally separate. A common deployment is HTTPS between Vectis instances and HTTP for a local final app.
 
 ## CLI Client
 
@@ -40,6 +47,7 @@ These variables are used by CLI commands that call the HTTP API. `serve` and `in
 | --- | --- | --- | --- |
 | `VECTIS_API_URL` | `http://127.0.0.1:3000` | Valid `http` or `https` URL without query or fragment | Base URL used by CLI commands such as `health`, `test`, `keys`, `routes`, `pub`, `sign`, and `message`. |
 | `VECTIS_TIMEOUT_SECONDS` | `30` | Positive integer | HTTP request timeout used by the CLI client. |
+| `VECTIS_TLS_SKIP_VERIFY` | `false` | `true` or `false` | Also affects the CLI client when `VECTIS_API_URL` uses HTTPS. Use only for local self-signed certificates. |
 
 ## Final App Delivery
 
@@ -187,6 +195,12 @@ These are not environment variables. They are compile-time constants used by Vec
 
 ```env
 VECTIS_HTTP_BIND_ADDR=127.0.0.1:3000
+VECTIS_SERVER_SCHEME=http
+VECTIS_REMOTE_SCHEME=http
+VECTIS_FINAL_APP_SCHEME=http
+VECTIS_TLS_CERT_PATH=
+VECTIS_TLS_KEY_PATH=
+VECTIS_TLS_SKIP_VERIFY=false
 VECTIS_API_URL=http://127.0.0.1:3000
 VECTIS_TIMEOUT_SECONDS=30
 VECTIS_PUBLIC_ADDR=localhost:3000

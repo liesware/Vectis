@@ -413,7 +413,7 @@ pub async fn send_message(
         &recipient_public_keys,
         &prepared.input,
     )?;
-    let response = http_client::post_json::<_, ReceiveMessageOutput>(
+    let response = http_client::post_remote_json::<_, ReceiveMessageOutput>(
         &prepared.input.recipient_host,
         "/message",
         &envelope,
@@ -1103,7 +1103,7 @@ async fn deliver_message_to_final_app(
         },
     };
 
-    http_client::post_json::<_, serde_json::Value>(
+    http_client::post_final_app_json::<_, serde_json::Value>(
         route.final_app_addr(),
         route.final_app_path(),
         &delivery,
@@ -1448,7 +1448,7 @@ async fn fetch_remote_public_keys(host: &str, kid: &str) -> Result<RemotePublicK
     keys::KeyId::parse(kid)?;
 
     let path = format!("/pub/{kid}");
-    let keys = http_client::get_json::<PublicKeysOutput>(host, &path)
+    let keys = http_client::get_remote_json::<PublicKeysOutput>(host, &path)
         .await
         .map_err(|err| remote_public_key_error(host, kid, err))?;
     let remote_key = RemotePublicKeys {
