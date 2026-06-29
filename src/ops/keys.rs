@@ -1,6 +1,6 @@
 use crate::core::{config, crypto, storage::StorageState, validation};
 use crate::error::DynError;
-use crate::ops::init::ValidatedInitState;
+use crate::ops::internal_keys::InternalDerivedKeysState;
 use crate::ops::key_material::{
     KeyMaterialKeys, KeyMaterialOutput, KeyMaterialSpec, create_key_material,
 };
@@ -373,19 +373,13 @@ struct CryptoProfile {
 
 pub async fn create_keys(
     storage: &StorageState,
-    init_state: &ValidatedInitState,
+    internal_keys: &InternalDerivedKeysState,
     input: CreateKeysInput,
 ) -> Result<CreateKeysOutput, DynError> {
     let config = config::app_config()?;
     let input = resolve_keys_input(input, &config)?;
     let keys = Zeroizing::new(create_stored_key_material(&input)?);
     let plaintext = Zeroizing::new(serde_json::to_string_pretty(&*keys)?);
-    let key = Zeroizing::new(hex::decode(init_state.symmetric_key_hex())?);
-    validation::validate_symmetric_key(
-        "init symmetric key",
-        init_state.symmetric_key_hex(),
-        config::INTERNAL_KEYS_KEY_SIZE_BYTES,
-    )?;
 
     let nonce = Zeroizing::new(crypto::random_bytes(
         config::INTERNAL_KEYS_NONCE_SIZE_BYTES,
@@ -399,7 +393,7 @@ pub async fn create_keys(
         ("profile", &input.profile),
         ("timestamp", &input.timestamp),
     ]);
-    let keys_b64 = encrypt_internal_payload(&plaintext, &key, &nonce, &aad)?;
+    let keys_b64 = encrypt_internal_payload(&plaintext, internal_keys.db_key(), &nonce, &aad)?;
     let nonce_b64 = general_purpose::STANDARD.encode(&*nonce);
     let aad_b64 = general_purpose::STANDARD.encode(aad.as_bytes());
     let id = create_key_id(&keys_b64)?;
@@ -422,7 +416,7 @@ pub async fn create_keys(
     ]);
     let properties_b64 = encrypt_internal_payload(
         &properties_plaintext,
-        &key,
+        internal_keys.properties_key(),
         &properties_nonce,
         &properties_aad,
     )?;
@@ -521,14 +515,14 @@ pub fn parse_update_lifecycle_input(request: Value) -> Result<UpdateLifecycleInp
 
 pub async fn load_keys_db_state(
     storage: &StorageState,
-    init_state: &ValidatedInitState,
+    internal_keys: &InternalDerivedKeysState,
 ) -> Result<Zeroizing<KeysDbState>, DynError> {
     let rows = storage.list_ops_keys().await?;
     let mut keys_db = Vec::new();
 
     for row in rows {
         let id = row.id.clone();
-        match load_ops_key_from_row(init_state, row) {
+        match load_ops_key_from_row(internal_keys, row) {
             Ok(loaded_key) => {
                 info!(id = %loaded_key.id, "decrypted ops key loaded from db");
                 keys_db.push(loaded_key);
@@ -544,13 +538,13 @@ pub async fn load_keys_db_state(
 
 pub async fn load_keys_db_entry(
     storage: &StorageState,
-    init_state: &ValidatedInitState,
+    internal_keys: &InternalDerivedKeysState,
     id: &str,
 ) -> Result<LoadedOpsKey, DynError> {
     let id = KeyId::parse(id)?;
 
     let row = storage.get_ops_keys(id.as_str()).await?;
-    let loaded_key = load_ops_key_from_row(init_state, row)?;
+    let loaded_key = load_ops_key_from_row(internal_keys, row)?;
     info!(id = %loaded_key.id, "decrypted ops key loaded from db");
 
     Ok(loaded_key)
@@ -558,7 +552,7 @@ pub async fn load_keys_db_entry(
 
 pub async fn update_key_lifecycle(
     storage: &StorageState,
-    init_state: &ValidatedInitState,
+    internal_keys: &InternalDerivedKeysState,
     id: &str,
     input: UpdateLifecycleInput,
 ) -> Result<UpdateLifecycleOutput, DynError> {
@@ -566,8 +560,8 @@ pub async fn update_key_lifecycle(
     let row = storage.get_ops_keys(id.as_str()).await?;
     validate_key_id_matches_enc_keys(&row.id, &row.enc_keys)?;
 
-    let decrypted = decrypt_ops_keys_payload(init_state, &row.enc_keys)?;
-    let mut properties = decrypt_ops_key_properties_payload(init_state, &row.properties)?;
+    let decrypted = decrypt_ops_keys_payload(internal_keys, &row.enc_keys)?;
+    let mut properties = decrypt_ops_key_properties_payload(internal_keys, &row.properties)?;
     validate_ops_key_properties(&properties.output)?;
     validate_loaded_ops_key_binding(&row.id, &decrypted, &properties)?;
 
@@ -581,7 +575,7 @@ pub async fn update_key_lifecycle(
     validate_ops_key_properties(&properties.output)?;
 
     let encrypted_properties =
-        encrypt_ops_key_properties_payload(init_state, &properties.output, &properties.aad)?;
+        encrypt_ops_key_properties_payload(internal_keys, &properties.output, &properties.aad)?;
     storage
         .update_ops_key_properties(id.as_str(), &encrypted_properties)
         .await?;
@@ -593,12 +587,12 @@ pub async fn update_key_lifecycle(
 }
 
 fn load_ops_key_from_row(
-    init_state: &ValidatedInitState,
+    internal_keys: &InternalDerivedKeysState,
     row: crate::core::storage::OpsKeyRow,
 ) -> Result<LoadedOpsKey, DynError> {
     validate_key_id_matches_enc_keys(&row.id, &row.enc_keys)?;
-    let decrypted = decrypt_ops_keys_payload(init_state, &row.enc_keys)?;
-    let properties = decrypt_ops_key_properties_payload(init_state, &row.properties)?;
+    let decrypted = decrypt_ops_keys_payload(internal_keys, &row.enc_keys)?;
+    let properties = decrypt_ops_key_properties_payload(internal_keys, &row.properties)?;
     validate_ops_key_properties(&properties.output)?;
     validate_loaded_ops_key_binding(&row.id, &decrypted, &properties)?;
 
@@ -639,21 +633,16 @@ fn encrypt_internal_payload(
 }
 
 fn encrypt_ops_key_properties_payload(
-    init_state: &ValidatedInitState,
+    internal_keys: &InternalDerivedKeysState,
     properties: &OpsKeyProperties,
     aad: &str,
 ) -> Result<String, DynError> {
-    validation::validate_symmetric_key(
-        "init symmetric key",
-        init_state.symmetric_key_hex(),
-        config::INTERNAL_KEYS_KEY_SIZE_BYTES,
-    )?;
-    let key = Zeroizing::new(hex::decode(init_state.symmetric_key_hex())?);
     let plaintext = Zeroizing::new(serde_json::to_string_pretty(properties)?);
     let nonce = Zeroizing::new(crypto::random_bytes(
         config::INTERNAL_KEYS_NONCE_SIZE_BYTES,
     )?);
-    let properties_b64 = encrypt_internal_payload(&plaintext, &key, &nonce, aad)?;
+    let properties_b64 =
+        encrypt_internal_payload(&plaintext, internal_keys.properties_key(), &nonce, aad)?;
     let nonce_b64 = general_purpose::STANDARD.encode(&*nonce);
     let aad_b64 = general_purpose::STANDARD.encode(aad.as_bytes());
 
@@ -661,7 +650,7 @@ fn encrypt_ops_key_properties_payload(
 }
 
 fn decrypt_ops_keys_payload(
-    init_state: &ValidatedInitState,
+    internal_keys: &InternalDerivedKeysState,
     enc_keys: &str,
 ) -> Result<DecryptedOpsKeys, DynError> {
     let parts = split_internal_payload("enc_keys", enc_keys)?;
@@ -679,17 +668,10 @@ fn decrypt_ops_keys_payload(
         &aad_text,
         config::INTERNAL_KEYS_NONCE_SIZE_BYTES,
     )?;
-    validation::validate_symmetric_key(
-        "init symmetric key",
-        init_state.symmetric_key_hex(),
-        config::INTERNAL_KEYS_KEY_SIZE_BYTES,
-    )?;
-
-    let key = Zeroizing::new(hex::decode(init_state.symmetric_key_hex())?);
     let plaintext_bytes = Zeroizing::new(crypto::decrypt_symmetric(
         config::INTERNAL_KEYS_CIPHER,
         &ciphertext,
-        &key,
+        internal_keys.db_key(),
         &nonce,
         &aad,
     )?);
@@ -703,7 +685,7 @@ fn decrypt_ops_keys_payload(
 }
 
 fn decrypt_ops_key_properties_payload(
-    init_state: &ValidatedInitState,
+    internal_keys: &InternalDerivedKeysState,
     properties: &str,
 ) -> Result<DecryptedOpsKeyProperties, DynError> {
     let parts = split_internal_payload("properties", properties)?;
@@ -721,17 +703,10 @@ fn decrypt_ops_key_properties_payload(
         &aad_text,
         config::INTERNAL_KEYS_NONCE_SIZE_BYTES,
     )?;
-    validation::validate_symmetric_key(
-        "init symmetric key",
-        init_state.symmetric_key_hex(),
-        config::INTERNAL_KEYS_KEY_SIZE_BYTES,
-    )?;
-
-    let key = Zeroizing::new(hex::decode(init_state.symmetric_key_hex())?);
     let plaintext_bytes = Zeroizing::new(crypto::decrypt_symmetric(
         config::INTERNAL_KEYS_CIPHER,
         &ciphertext,
-        &key,
+        internal_keys.properties_key(),
         &nonce,
         &aad,
     )?);

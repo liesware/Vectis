@@ -43,11 +43,11 @@ pub async fn create_endpoint(
         "keys create request accepted"
     );
 
-    match ops::keys::create_keys(state.storage(), state.init_state(), request).await {
+    match ops::keys::create_keys(state.storage(), state.internal_keys(), request).await {
         Ok(output) => {
             let loaded_key = match ops::keys::load_keys_db_entry(
                 state.storage(),
-                state.init_state(),
+                state.internal_keys(),
                 &output.id,
             )
             .await
@@ -182,10 +182,10 @@ pub async fn update_lifecycle_endpoint(
     );
 
     let response =
-        ops::keys::update_key_lifecycle(state.storage(), state.init_state(), &id, request)
+        ops::keys::update_key_lifecycle(state.storage(), state.internal_keys(), &id, request)
             .await
             .map_err(|err| error_response(err.as_ref()))?;
-    let loaded_key = ops::keys::load_keys_db_entry(state.storage(), state.init_state(), &id)
+    let loaded_key = ops::keys::load_keys_db_entry(state.storage(), state.internal_keys(), &id)
         .await
         .map_err(|err| error_response(err.as_ref()))?;
     state.upsert_keys_db_entry(loaded_key).await;

@@ -10,12 +10,16 @@ use crate::ops::keys;
 use std::io;
 use std::time::Duration;
 use tracing::{info, warn};
+use zeroize::Zeroizing;
 
 pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
     let config = config::app_config()?;
     let logging = crate::core::logging::logging_config();
     let storage = StorageState::new(&config).await?;
-    let keys_db_state = keys::load_keys_db_state(&storage, &init_state).await?;
+    let internal_keys = Zeroizing::new(
+        crate::ops::internal_keys::InternalDerivedKeysState::from_init_state(&init_state)?,
+    );
+    let keys_db_state = keys::load_keys_db_state(&storage, &internal_keys).await?;
     let routes_state = routes::load_routes_state(
         &config,
         |routes_path, routes_content| {
@@ -59,15 +63,16 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         loaded_routes = routes_state.len(),
         "final app routes loaded into http state"
     );
-    let app = super::router(super::HttpState::new(
+    let app = super::router(super::HttpState::new(super::HttpStateInput {
         init_state,
+        internal_keys,
         storage,
         keys_db_state,
         routes_state,
-        config.routes_path.clone(),
-        config.routes_sign_path.clone(),
+        routes_path: config.routes_path.clone(),
+        routes_sign_path: config.routes_sign_path.clone(),
         started_at,
-    ));
+    }));
     let renderer = Renderer::new(fonts::family("slant").unwrap())
         .with_alignment(Alignment::Center)
         .with_plain_fallback()

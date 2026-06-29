@@ -19,6 +19,7 @@ use crate::core::routes::{FinalAppRoute, RoutesState};
 use crate::core::storage::StorageState;
 use crate::error::DynError;
 use crate::ops::init::{InitValidationOutput, ValidatedInitState};
+use crate::ops::internal_keys::InternalDerivedKeysState;
 use crate::ops::keys::{KeysDbState, LoadedOpsKey};
 use crate::ops::message::{RemotePublicKeys, RemotePublicKeysState};
 use std::path::PathBuf;
@@ -28,6 +29,7 @@ pub use app::run;
 #[derive(Clone)]
 pub struct HttpState {
     init_state: Arc<ValidatedInitState>,
+    internal_keys: Arc<Zeroizing<InternalDerivedKeysState>>,
     storage: Arc<StorageState>,
     started_at: Arc<String>,
     keys_db_state: Arc<RwLock<Zeroizing<KeysDbState>>>,
@@ -37,27 +39,31 @@ pub struct HttpState {
     routes_sign_path: Arc<PathBuf>,
 }
 
+struct HttpStateInput {
+    init_state: ValidatedInitState,
+    internal_keys: Zeroizing<InternalDerivedKeysState>,
+    storage: StorageState,
+    keys_db_state: Zeroizing<KeysDbState>,
+    routes_state: RoutesState,
+    routes_path: PathBuf,
+    routes_sign_path: PathBuf,
+    started_at: String,
+}
+
 impl HttpState {
-    fn new(
-        init_state: ValidatedInitState,
-        storage: StorageState,
-        keys_db_state: Zeroizing<KeysDbState>,
-        routes_state: RoutesState,
-        routes_path: PathBuf,
-        routes_sign_path: PathBuf,
-        started_at: String,
-    ) -> Self {
+    fn new(input: HttpStateInput) -> Self {
         Self {
-            init_state: Arc::new(init_state),
-            storage: Arc::new(storage),
-            started_at: Arc::new(started_at),
-            keys_db_state: Arc::new(RwLock::new(keys_db_state)),
+            init_state: Arc::new(input.init_state),
+            internal_keys: Arc::new(input.internal_keys),
+            storage: Arc::new(input.storage),
+            started_at: Arc::new(input.started_at),
+            keys_db_state: Arc::new(RwLock::new(input.keys_db_state)),
             remote_public_keys_state: Arc::new(RwLock::new(Zeroizing::new(
                 RemotePublicKeysState::default(),
             ))),
-            routes_state: Arc::new(RwLock::new(routes_state)),
-            routes_path: Arc::new(routes_path),
-            routes_sign_path: Arc::new(routes_sign_path),
+            routes_state: Arc::new(RwLock::new(input.routes_state)),
+            routes_path: Arc::new(input.routes_path),
+            routes_sign_path: Arc::new(input.routes_sign_path),
         }
     }
 
@@ -73,6 +79,10 @@ impl HttpState {
 
     fn init_state(&self) -> &ValidatedInitState {
         &self.init_state
+    }
+
+    fn internal_keys(&self) -> &InternalDerivedKeysState {
+        &self.internal_keys
     }
 
     fn storage(&self) -> &StorageState {
@@ -153,7 +163,7 @@ impl HttpState {
         }
 
         let loaded_key =
-            crate::ops::keys::load_keys_db_entry(self.storage(), self.init_state(), id).await?;
+            crate::ops::keys::load_keys_db_entry(self.storage(), self.internal_keys(), id).await?;
         self.upsert_keys_db_entry(loaded_key).await;
 
         Ok(())
@@ -161,7 +171,7 @@ impl HttpState {
 
     async fn reload_keys_db_state(&self) -> Result<(), DynError> {
         let reloaded =
-            crate::ops::keys::load_keys_db_state(self.storage(), self.init_state()).await?;
+            crate::ops::keys::load_keys_db_state(self.storage(), self.internal_keys()).await?;
         let mut keys_db_state = self.keys_db_state.write().await;
         *keys_db_state = reloaded;
 

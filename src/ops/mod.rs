@@ -1,5 +1,6 @@
 pub mod contracts;
 pub mod init;
+pub mod internal_keys;
 pub mod key_material;
 pub mod key_validation;
 pub mod keys;
