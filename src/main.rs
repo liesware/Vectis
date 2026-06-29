@@ -44,6 +44,9 @@ async fn main() -> Result<(), DynError> {
                 info!(path, "init completed successfully");
             }
         },
+        Some("apikey") => {
+            io::cli::apikey::run(args.collect())?;
+        }
         Some(
             command @ ("health" | "test" | "keys" | "lifecycle" | "routes" | "pub" | "sign"
             | "message"),
@@ -72,6 +75,7 @@ fn print_help() {
     println!("Commands:");
     println!("  serve                 Start the HTTP service");
     println!("  init                  Generate local key material in init.json");
+    println!("  apikey                Create additional local API keys");
     println!("  health                Call the health probe endpoints");
     println!("  test                  Call protected test endpoints through HTTP");
     println!("  keys                  Create, list, or reload operational keys through HTTP");
@@ -83,6 +87,7 @@ fn print_help() {
     println!();
     println!("Examples:");
     println!("  {PROGRAM_NAME} init");
+    println!("  {PROGRAM_NAME} apikey create");
     println!("  {PROGRAM_NAME} serve");
     println!("  {PROGRAM_NAME} health ready");
     println!("  {PROGRAM_NAME} keys create --tag payments --profile hybrid-high-assurance-v1");
@@ -92,6 +97,7 @@ fn print_help() {
     println!();
     println!("Help:");
     println!("  {PROGRAM_NAME} help init");
+    println!("  {PROGRAM_NAME} help apikey");
     println!("  {PROGRAM_NAME} help health");
     println!("  {PROGRAM_NAME} help test");
     println!("  {PROGRAM_NAME} help keys");
@@ -112,6 +118,7 @@ fn print_command_help(command: &str) {
     match command {
         "serve" => print_serve_help(),
         "init" => print_init_help(),
+        "apikey" => io::cli::apikey::print_help(),
         "health" | "test" | "keys" | "lifecycle" | "routes" | "pub" | "sign" | "message" => {
             io::cli::http::print_help(command)
         }

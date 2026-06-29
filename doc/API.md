@@ -2,7 +2,7 @@
 
 Vectis protects data throughout its lifecycle. The HTTP API exposes operations to create key material, validate keys, publish public keys, sign message hashes, exchange protected messages between Vectis instances, and encrypt/decrypt internal messages.
 
-The `vectis` CLI is an HTTP client for the runtime API, except for `vectis init` and `vectis serve`, which are local bootstrap/server commands.
+The `vectis` CLI is an HTTP client for the runtime API, except for `vectis init`, `vectis serve`, `vectis apikey create`, and `vectis routes sign`, which are local commands.
 
 ## Conventions
 
@@ -894,10 +894,11 @@ Internal defaults for `init` key material:
 
 Runtime CLI commands call the HTTP API:
 
-CLI output defaults to YAML for readability. Add `--output json` to any HTTP client command to print pretty JSON instead. This does not apply to `vectis init`.
+CLI output defaults to YAML for readability. Add `--output json` to HTTP client commands and to `vectis apikey create` to print pretty JSON instead. This does not apply to `vectis init`.
 
 | CLI command | HTTP operation | Auth |
 | --- | --- | --- |
+| `vectis apikey create` | Local API key generation | No HTTP |
 | `vectis health startup` | `GET /healthz/startup` | No |
 | `vectis health live` | `GET /healthz/live` | No |
 | `vectis health ready` | `GET /healthz/ready` | No |
@@ -924,6 +925,7 @@ CLI output defaults to YAML for readability. Add `--output json` to any HTTP cli
 Local commands:
 
 - `vectis init`: creates encrypted `init.json`, prints `VECTIS_UNSEAL_KEY`, `VECTIS_APIKEY`, and `VECTIS_APIKEY_HASH`.
+- `vectis apikey create`: decrypts `init.json`, derives the internal API auth key, prints a new `VECTIS_APIKEY` and matching `VECTIS_APIKEY_HASH`, and does not write files.
 - `vectis serve`: validates `init.json`, loads storage/routes into memory, and starts the HTTP service. Unseal key resolution order is `VECTIS_UNSEAL_KEY`, `VECTIS_UNSEAL_KEY_FILE` with default `.unseal_key`, then hidden prompt.
 - `vectis routes sign`: reads `VECTIS_ROUTES_PATH`, signs its canonical JSON with init EdDSA and init ML-DSA, and writes `VECTIS_ROUTES_SIGN_PATH`.
 

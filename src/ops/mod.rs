@@ -1,3 +1,4 @@
+pub mod apikey;
 pub mod contracts;
 pub mod init;
 pub mod internal_keys;

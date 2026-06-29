@@ -209,6 +209,7 @@ Examples:
 
 ```sh
 vectis health ready
+vectis apikey create
 vectis keys create --tag payments --profile hybrid-high-assurance-v1
 vectis keys list
 vectis pub <kid>
