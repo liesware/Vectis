@@ -3,6 +3,7 @@ pub mod crypto;
 pub mod http_client;
 pub mod logging;
 pub mod permissions;
+pub mod remote_routes;
 pub mod routes;
 pub mod storage;
 pub mod validation;

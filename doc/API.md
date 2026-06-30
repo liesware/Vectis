@@ -40,6 +40,8 @@ Endpoints requiring auth:
 - `POST /lifecycle/{kid}`
 - `GET /routes`
 - `POST /routes/reload`
+- `GET /remote-routes`
+- `POST /remote-routes/reload`
 - `POST /permissions/reload`
 - `GET /self-test/init`
 - `GET /self-test/keys/{kid}`
@@ -483,6 +485,42 @@ Response:
 }
 ```
 
+### GET /remote-routes
+
+Administrative endpoint. Lists authorized remote Vectis routes currently loaded in memory.
+
+Requires auth.
+
+Response:
+
+```json
+{
+  "routes": [
+    {
+      "kid": "b01cbe33187916f0f1367d07bc986d71bb0d91d7047ccd790c13fc9d85fe7259",
+      "name": "site-b",
+      "remote_addr": "vectis-b.example.com:443"
+    }
+  ]
+}
+```
+
+### POST /remote-routes/reload
+
+Administrative refresh operation. Reloads authorized remote Vectis routes from `VECTIS_REMOTE_ROUTES_PATH` into memory.
+
+Requires auth.
+
+If the remote routes file does not exist, Vectis reloads to an empty route list. If the file exists but is invalid or unsigned, the request fails and the previous in-memory remote routes remain active.
+
+Response:
+
+```json
+{
+  "routes": []
+}
+```
+
 ## API Key Permissions
 
 Permissions are configured with a manually maintained signed file:
@@ -518,7 +556,7 @@ Permission mapping:
 
 | Permission | Endpoints |
 | --- | --- |
-| `admin` | `POST /keys`, `POST /keys/reload`, `GET /keys/properties`, `GET /routes`, `POST /routes/reload`, `POST /permissions/reload`, `GET /self-test/init` |
+| `admin` | `POST /keys`, `POST /keys/reload`, `GET /keys/properties`, `GET /routes`, `POST /routes/reload`, `GET /remote-routes`, `POST /remote-routes/reload`, `POST /permissions/reload`, `GET /self-test/init` |
 | `keys` | `GET /keys/properties/{kid}` |
 | `lifecycle` | `POST /lifecycle/{kid}` |
 | `self-test` | `GET /self-test/keys/{kid}` |
@@ -696,7 +734,6 @@ Request:
 
 ```json
 {
-  "recipient_host": "127.0.0.1:3000",
   "recipient_kid": "b01cbe33187916f0f1367d07bc986d71bb0d91d7047ccd790c13fc9d85fe7259",
   "message": "hello vectis"
 }
@@ -704,13 +741,14 @@ Request:
 
 Flow:
 
-1. Validate `sender_kid`, `recipient_host`, `recipient_kid`, and `message`.
-2. If the recipient public key is not cached, call `GET /pub/{recipient_kid}` on `recipient_host`.
-3. Create a hybrid secret with XECDH + ML-KEM.
-4. Derive `message_key` with HKDF.
-5. Encrypt the message.
-6. Sign the payload with EdDSA and ML-DSA.
-7. Send the envelope to `POST /message` on the recipient.
+1. Validate `sender_kid`, `recipient_kid`, and `message`.
+2. Resolve `recipient_kid` through signed `remote_routes.json`.
+3. If the recipient public key is not cached, call `GET /pub/{recipient_kid}` on the authorized `remote_addr`.
+4. Create a hybrid secret with XECDH + ML-KEM.
+5. Derive `message_key` with HKDF.
+6. Encrypt the message.
+7. Sign the payload with EdDSA and ML-DSA.
+8. Send the envelope to `POST /message` on the recipient.
 
 Response:
 
@@ -950,6 +988,27 @@ Routing behavior:
 
 The routes file is operational configuration. Vectis does not create it automatically and `POST /keys` does not modify it.
 
+Remote Vectis destinations are controlled separately with a signed remote routes file:
+
+```env
+VECTIS_REMOTE_ROUTES_PATH=remote_routes.json
+VECTIS_REMOTE_ROUTES_SIGN_PATH=remote_routes_sign.json
+```
+
+```json
+{
+  "routes": [
+    {
+      "kid": "b01cbe33187916f0f1367d07bc986d71bb0d91d7047ccd790c13fc9d85fe7259",
+      "name": "site-b",
+      "remote_addr": "vectis-b.example.com:443"
+    }
+  ]
+}
+```
+
+`POST /message/{sender_kid}` never accepts a destination host from the request body; it resolves `recipient_kid` through this signed file.
+
 ## Related Configuration
 
 Main variables:
@@ -998,6 +1057,9 @@ CLI output defaults to YAML for readability. Add `--output json` to HTTP client 
 | `vectis routes list` | `GET /routes` | Yes |
 | `vectis routes reload` | `POST /routes/reload` | Yes |
 | `vectis routes sign` | Local `routes_sign.json` update | No HTTP |
+| `vectis remote-routes list` | `GET /remote-routes` | Yes |
+| `vectis remote-routes reload` | `POST /remote-routes/reload` | Yes |
+| `vectis remote-routes sign` | Local `remote_routes_sign.json` update | No HTTP |
 | `vectis permissions reload` | `POST /permissions/reload` | Yes |
 | `vectis permissions sign` | Local `permissions_sign.json` update | No HTTP |
 | `vectis pub <kid>` | `GET /pub/{kid}` | No |
@@ -1015,6 +1077,7 @@ Local commands:
 - `vectis apikey create`: decrypts `init.json`, derives the internal API auth key, prints a new `VECTIS_APIKEY` and matching `VECTIS_APIKEY_HASH`, and does not write files.
 - `vectis serve`: validates `init.json`, loads storage/routes into memory, and starts the HTTP service. Unseal key resolution order is `VECTIS_UNSEAL_KEY`, `VECTIS_UNSEAL_KEY_FILE` with default `.unseal_key`, then hidden prompt.
 - `vectis routes sign`: reads `VECTIS_ROUTES_PATH`, signs its canonical JSON with init EdDSA and init ML-DSA, and writes `VECTIS_ROUTES_SIGN_PATH`.
+- `vectis remote-routes sign`: reads `VECTIS_REMOTE_ROUTES_PATH`, signs its canonical JSON with init EdDSA and init ML-DSA, and writes `VECTIS_REMOTE_ROUTES_SIGN_PATH`.
 - `vectis permissions sign`: reads `VECTIS_PERMISSIONS_PATH`, signs its canonical JSON with init EdDSA and init ML-DSA, and writes `VECTIS_PERMISSIONS_SIGN_PATH`.
 
 ## Route Signature

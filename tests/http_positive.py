@@ -20,6 +20,8 @@ INTERNAL_KEYS_KID_HEX_LEN = 64
 MESSAGE = "The things you own end up owning you."
 ROUTES_PATH = Path("routes.json")
 ROUTES_SIGN_PATH = Path("routes_sign.json")
+REMOTE_ROUTES_PATH = Path("remote_routes.json")
+REMOTE_ROUTES_SIGN_PATH = Path("remote_routes_sign.json")
 PERMISSIONS_PATH = Path("permissions.json")
 PERMISSIONS_SIGN_PATH = Path("permissions_sign.json")
 
@@ -390,6 +392,23 @@ def validate_routes_list(response):
         )
 
 
+def validate_remote_routes_list(response):
+    require(isinstance(response, dict), "remote routes list response must be an object")
+    routes = response.get("routes")
+    require(isinstance(routes, list), "remote routes list response.routes must be an array")
+    for item in routes:
+        require(isinstance(item, dict), "remote routes list item must be an object")
+        require_kid(item.get("kid"), "remote routes list item kid")
+        require(
+            isinstance(item.get("name"), str) and item["name"],
+            "remote routes list item name must be a non-empty string",
+        )
+        require(
+            isinstance(item.get("remote_addr"), str) and item["remote_addr"],
+            "remote routes list item remote_addr must be a non-empty string",
+        )
+
+
 def backup_file(path):
     if not path.exists():
         return None
@@ -416,6 +435,14 @@ def backup_routes_sign_file():
     return backup_file(ROUTES_SIGN_PATH)
 
 
+def backup_remote_routes_file():
+    return backup_file(REMOTE_ROUTES_PATH)
+
+
+def backup_remote_routes_sign_file():
+    return backup_file(REMOTE_ROUTES_SIGN_PATH)
+
+
 def backup_permissions_file():
     return backup_file(PERMISSIONS_PATH)
 
@@ -430,6 +457,14 @@ def restore_routes_file(backup):
 
 def restore_routes_sign_file(backup):
     restore_file(ROUTES_SIGN_PATH, backup)
+
+
+def restore_remote_routes_file(backup):
+    restore_file(REMOTE_ROUTES_PATH, backup)
+
+
+def restore_remote_routes_sign_file(backup):
+    restore_file(REMOTE_ROUTES_SIGN_PATH, backup)
 
 
 def restore_permissions_file(backup):
@@ -455,6 +490,21 @@ def write_test_routes(key_ids, final_app_addr):
     sign_routes()
 
 
+def write_test_remote_routes(key_ids, recipient_host):
+    routes = {
+        "routes": [
+            {
+                "kid": key_id,
+                "name": f"positive-{index}",
+                "remote_addr": recipient_host,
+            }
+            for index, key_id in enumerate(key_ids, start=1)
+        ]
+    }
+    REMOTE_ROUTES_PATH.write_text(json.dumps(routes, indent=2), encoding="utf-8")
+    sign_remote_routes()
+
+
 def sign_routes():
     result = subprocess.run(
         ["cargo", "run", "--", "routes", "sign", "--output", "json"],
@@ -465,6 +515,19 @@ def sign_routes():
     if result.returncode != 0:
         raise WorkflowError(
             f"vectis routes sign failed: stdout={result.stdout} stderr={result.stderr}"
+        )
+
+
+def sign_remote_routes():
+    result = subprocess.run(
+        ["cargo", "run", "--", "remote-routes", "sign", "--output", "json"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise WorkflowError(
+            f"vectis remote-routes sign failed: stdout={result.stdout} stderr={result.stderr}"
         )
 
 
@@ -551,6 +614,18 @@ def clear_routes_state(client):
     finally:
         restore_routes_file(backup)
         restore_routes_sign_file(sign_backup)
+
+
+def clear_remote_routes_state(client):
+    backup = backup_remote_routes_file()
+    sign_backup = backup_remote_routes_sign_file()
+    REMOTE_ROUTES_PATH.write_text('{"routes":[]}\n', encoding="utf-8")
+    sign_remote_routes()
+    try:
+        validate_remote_routes_list(client.post("/remote-routes/reload", {}, auth=True))
+    finally:
+        restore_remote_routes_file(backup)
+        restore_remote_routes_sign_file(sign_backup)
 
 
 def sign_key(client, key_id, hash_alg, message_hash_hex):
@@ -746,13 +821,12 @@ def validate_permissions_flow(base_url, root_client, key_id, case):
     ]
 
 
-def send_message(client, message_number, sender_key_id, recipient_host, recipient_key_id, case):
+def send_message(client, message_number, sender_key_id, recipient_key_id, case):
     before = len(FinalAppHandler.deliveries)
     plaintext_message = MESSAGE + str(message_number)
     response = client.post(
         f"/message/{sender_key_id}",
         {
-            "recipient_host": recipient_host,
             "recipient_kid": recipient_key_id,
             "message": plaintext_message,
         },
@@ -787,10 +861,14 @@ def main():
     client = Client(args.base_url, apikey)
     routes_backup = backup_routes_file()
     routes_sign_backup = backup_routes_sign_file()
+    remote_routes_backup = backup_remote_routes_file()
+    remote_routes_sign_backup = backup_remote_routes_sign_file()
     permissions_backup = backup_permissions_file()
     permissions_sign_backup = backup_permissions_sign_file()
     atexit.register(restore_routes_file, routes_backup)
     atexit.register(restore_routes_sign_file, routes_sign_backup)
+    atexit.register(restore_remote_routes_file, remote_routes_backup)
+    atexit.register(restore_remote_routes_sign_file, remote_routes_sign_backup)
     atexit.register(restore_permissions_file, permissions_backup)
     atexit.register(restore_permissions_sign_file, permissions_sign_backup)
     recipient_host = host_from_base_url(args.base_url)
@@ -874,6 +952,13 @@ def main():
     validate_routes_list(client.get("/routes", auth=True))
     print("List routes: OK\n")
     passed_count += 1
+    write_test_remote_routes([key_id for key_id, _ in created], recipient_host)
+    validate_remote_routes_list(client.post("/remote-routes/reload", {}, auth=True))
+    print("Reload remote routes: OK\n")
+    passed_count += 1
+    validate_remote_routes_list(client.get("/remote-routes", auth=True))
+    print("List remote routes: OK\n")
+    passed_count += 1
 
     permission_rows = validate_permissions_flow(args.base_url, client, created[0][0], created[0][1])
     print_section("permissions", permission_rows)
@@ -897,7 +982,6 @@ def main():
             client,
             len(message_rows) + 1,
             key_id,
-            recipient_host,
             key_id,
             case,
         )
@@ -951,6 +1035,9 @@ def main():
     restore_routes_file(routes_backup)
     restore_routes_sign_file(routes_sign_backup)
     clear_routes_state(client)
+    restore_remote_routes_file(remote_routes_backup)
+    restore_remote_routes_sign_file(remote_routes_sign_backup)
+    clear_remote_routes_state(client)
     restore_permissions_file(permissions_backup)
     restore_permissions_sign_file(permissions_sign_backup)
     clear_permissions_state(client)

@@ -126,6 +126,8 @@ prepare_site() {
     "${site_dir}/init.json" \
     "${site_dir}/routes.json" \
     "${site_dir}/routes_sign.json" \
+    "${site_dir}/remote_routes.json" \
+    "${site_dir}/remote_routes_sign.json" \
     "${site_dir}/permissions.json" \
     "${site_dir}/permissions_sign.json" \
     "${site_dir}/.unseal_key"

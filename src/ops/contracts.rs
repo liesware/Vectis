@@ -91,7 +91,6 @@ pub(crate) struct PublicRawKey {
 
 #[derive(Deserialize)]
 pub struct SendMessageInput {
-    pub recipient_host: String,
     pub recipient_kid: String,
     pub message: String,
 }

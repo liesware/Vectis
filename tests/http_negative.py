@@ -25,6 +25,8 @@ VALID_KEY_REQUEST = {
 VALID_MESSAGE = b"Vectis negative workflow test"
 PERMISSIONS_PATH = Path("permissions.json")
 PERMISSIONS_SIGN_PATH = Path("permissions_sign.json")
+REMOTE_ROUTES_PATH = Path("remote_routes.json")
+REMOTE_ROUTES_SIGN_PATH = Path("remote_routes_sign.json")
 
 
 class NegativeTestError(Exception):
@@ -176,6 +178,19 @@ def sign_permissions():
         )
 
 
+def sign_remote_routes():
+    result = subprocess.run(
+        ["cargo", "run", "--", "remote-routes", "sign", "--output", "json"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise NegativeTestError(
+            f"vectis remote-routes sign failed: stdout={result.stdout} stderr={result.stderr}"
+        )
+
+
 def write_permissions(clients, sign=True):
     PERMISSIONS_PATH.write_text(
         json.dumps({"version": "v1", "clients": clients}, indent=2),
@@ -183,6 +198,15 @@ def write_permissions(clients, sign=True):
     )
     if sign:
         sign_permissions()
+
+
+def write_remote_routes(routes, sign=True):
+    REMOTE_ROUTES_PATH.write_text(
+        json.dumps({"routes": routes}, indent=2),
+        encoding="utf-8",
+    )
+    if sign:
+        sign_remote_routes()
 
 
 def reload_permissions(client):
@@ -230,9 +254,8 @@ def create_valid_internal_message(client, key_id):
     return response
 
 
-def valid_message_request(recipient_host, key_id):
+def valid_message_request(key_id):
     return {
-        "recipient_host": recipient_host,
         "recipient_kid": key_id,
         "message": "negative message",
     }
@@ -262,8 +285,12 @@ def main():
     recipient_host = host_from_base_url(args.base_url)
     permissions_backup = backup_file(PERMISSIONS_PATH)
     permissions_sign_backup = backup_file(PERMISSIONS_SIGN_PATH)
+    remote_routes_backup = backup_file(REMOTE_ROUTES_PATH)
+    remote_routes_sign_backup = backup_file(REMOTE_ROUTES_SIGN_PATH)
     atexit.register(restore_file, PERMISSIONS_PATH, permissions_backup)
     atexit.register(restore_file, PERMISSIONS_SIGN_PATH, permissions_sign_backup)
+    atexit.register(restore_file, REMOTE_ROUTES_PATH, remote_routes_backup)
+    atexit.register(restore_file, REMOTE_ROUTES_SIGN_PATH, remote_routes_sign_backup)
     rows = []
 
     def keys_without_auth():
@@ -364,6 +391,26 @@ def main():
             headers={"X-API-Key": "00" * 32},
         )
         require_status("POST /routes/reload invalid auth", status, 401)
+
+    def remote_routes_list_without_auth():
+        status, _ = client.get("/remote-routes")
+        require_status("GET /remote-routes without auth", status, 401)
+
+    def remote_routes_list_invalid_auth():
+        status, _ = client.get("/remote-routes", headers={"X-API-Key": "00" * 32})
+        require_status("GET /remote-routes invalid auth", status, 401)
+
+    def remote_routes_reload_without_auth():
+        status, _ = client.post("/remote-routes/reload", {})
+        require_status("POST /remote-routes/reload without auth", status, 401)
+
+    def remote_routes_reload_invalid_auth():
+        status, _ = client.post(
+            "/remote-routes/reload",
+            {},
+            headers={"X-API-Key": "00" * 32},
+        )
+        require_status("POST /remote-routes/reload invalid auth", status, 401)
 
     def keys_tag_not_string():
         request = dict(VALID_KEY_REQUEST)
@@ -500,6 +547,10 @@ def main():
         ("GET /routes invalid auth", routes_list_invalid_auth),
         ("POST /routes/reload without auth", routes_reload_without_auth),
         ("POST /routes/reload invalid auth", routes_reload_invalid_auth),
+        ("GET /remote-routes without auth", remote_routes_list_without_auth),
+        ("GET /remote-routes invalid auth", remote_routes_list_invalid_auth),
+        ("POST /remote-routes/reload without auth", remote_routes_reload_without_auth),
+        ("POST /remote-routes/reload invalid auth", remote_routes_reload_invalid_auth),
         ("POST /keys tag not string", keys_tag_not_string),
         ("POST /keys invalid algorithm", keys_invalid_algorithm),
         ("POST /keys invalid profile", keys_invalid_profile),
@@ -565,6 +616,46 @@ def main():
         status, _ = client.post("/permissions/reload", {}, auth=True)
         require_status("permissions invalid action routes", status, 400)
 
+    def remote_routes_invalid_kid():
+        write_remote_routes(
+            [
+                {
+                    "kid": "not-hex",
+                    "name": "bad kid",
+                    "remote_addr": recipient_host,
+                }
+            ]
+        )
+        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        require_status("remote routes invalid kid", status, 400)
+
+    def remote_routes_invalid_addr():
+        write_remote_routes(
+            [
+                {
+                    "kid": key_id,
+                    "name": "bad addr",
+                    "remote_addr": "not-a-socket-address",
+                }
+            ]
+        )
+        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        require_status("remote routes invalid addr", status, 400)
+
+    def remote_routes_invalid_signature():
+        write_remote_routes(
+            [
+                {
+                    "kid": key_id,
+                    "name": "invalid signature",
+                    "remote_addr": recipient_host,
+                }
+            ]
+        )
+        REMOTE_ROUTES_SIGN_PATH.write_text('{"invalid":true}\n', encoding="utf-8")
+        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        require_status("remote routes invalid signature", status, 400)
+
     def permissions_missing_kid():
         write_permissions(
             [
@@ -625,6 +716,9 @@ def main():
     for name, func in (
         ("permissions invalid action pub", permissions_invalid_action_pub),
         ("permissions invalid action routes", permissions_invalid_action_routes),
+        ("remote routes invalid kid", remote_routes_invalid_kid),
+        ("remote routes invalid addr", remote_routes_invalid_addr),
+        ("remote routes invalid signature", remote_routes_invalid_signature),
         ("permissions missing kid", permissions_missing_kid),
         ("permissions invalid apikey_hash", permissions_invalid_apikey_hash),
         ("permissions invalid status", permissions_invalid_status),
@@ -797,30 +891,28 @@ def main():
     def message_without_auth():
         status, _ = client.post(
             f"/message/{key_id}",
-            valid_message_request(recipient_host, key_id),
+            valid_message_request(key_id),
         )
         require_status("POST /message/{id} without auth", status, 401)
 
     def message_sender_id_not_hex():
         status, _ = client.post(
             "/message/not-hex",
-            valid_message_request(recipient_host, key_id),
+            valid_message_request(key_id),
             auth=True,
         )
         require_status("POST /message/{id} sender not hex", status, 400)
 
-    def message_invalid_recipient_host():
-        request = valid_message_request(recipient_host, key_id)
-        request["recipient_host"] = "not-a-socket-address"
+    def message_recipient_route_not_found():
         status, _ = client.post(
             f"/message/{key_id}",
-            request,
+            valid_message_request(key_id),
             auth=True,
         )
-        require_status("POST /message/{id} invalid recipient host", status, 400)
+        require_status("POST /message/{id} recipient route not found", status, 404)
 
     def message_invalid_recipient_kid():
-        request = valid_message_request(recipient_host, key_id)
+        request = valid_message_request(key_id)
         request["recipient_kid"] = "not-hex"
         status, _ = client.post(
             f"/message/{key_id}",
@@ -830,7 +922,7 @@ def main():
         require_status("POST /message/{id} invalid recipient kid", status, 400)
 
     def message_empty_message():
-        request = valid_message_request(recipient_host, key_id)
+        request = valid_message_request(key_id)
         request["message"] = ""
         status, _ = client.post(
             f"/message/{key_id}",
@@ -842,7 +934,7 @@ def main():
     for name, func in (
         ("POST /message/{id} without auth", message_without_auth),
         ("POST /message/{id} sender not hex", message_sender_id_not_hex),
-        ("POST /message/{id} invalid recipient host", message_invalid_recipient_host),
+        ("POST /message/{id} recipient route not found", message_recipient_route_not_found),
         ("POST /message/{id} invalid recipient kid", message_invalid_recipient_kid),
         ("POST /message/{id} empty message", message_empty_message),
     ):
@@ -1057,6 +1149,10 @@ def main():
     restore_file(PERMISSIONS_SIGN_PATH, permissions_sign_backup)
     status, _ = client.post("/permissions/reload", {}, auth=True)
     require_status("restore permissions reload", status, 200)
+    restore_file(REMOTE_ROUTES_PATH, remote_routes_backup)
+    restore_file(REMOTE_ROUTES_SIGN_PATH, remote_routes_sign_backup)
+    status, _ = client.post("/remote-routes/reload", {}, auth=True)
+    require_status("restore remote routes reload", status, 200)
 
     print_section("HTTP negative", rows)
     print(f"SUMMARY negative passed={len(rows)} failed=0")

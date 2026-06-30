@@ -31,11 +31,15 @@ pub async fn send_endpoint(
         })
         .await
         .map_err(|err| error_response(err.as_ref()))?;
+    let remote_route = state
+        .remote_route_for(prepared.recipient_kid())
+        .await
+        .map_err(|err| error_response(err.as_ref()))?;
     let cached_recipient = state
-        .remote_public_keys(prepared.recipient_host(), prepared.recipient_kid())
+        .remote_public_keys(remote_route.remote_addr(), prepared.recipient_kid())
         .await;
 
-    match ops::message::send_message(prepared, cached_recipient).await {
+    match ops::message::send_message(prepared, remote_route, cached_recipient).await {
         Ok(result) => {
             state
                 .upsert_remote_public_keys(result.remote_public_keys)

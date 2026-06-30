@@ -27,6 +27,7 @@ pub async fn run(command: &str, args: Vec<String>) -> Result<(), DynError> {
         "keys" => run_keys(args, output).await,
         "lifecycle" => run_lifecycle(args, output).await,
         "routes" => run_routes(args, output).await,
+        "remote-routes" => run_remote_routes(args, output).await,
         "permissions" => run_permissions(args, output).await,
         "pub" => run_pub(args, output).await,
         "sign" => run_sign(args, output).await,
@@ -42,6 +43,7 @@ pub fn print_help(command: &str) {
         "keys" => print_keys_help(),
         "lifecycle" => print_lifecycle_help(),
         "routes" => print_routes_help(),
+        "remote-routes" => print_remote_routes_help(),
         "permissions" => print_permissions_help(),
         "pub" => print_pub_help(),
         "sign" => print_sign_help(),
@@ -163,6 +165,32 @@ async fn run_routes(args: Vec<String>, output: OutputFormat) -> Result<(), DynEr
     }
 }
 
+async fn run_remote_routes(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+    let (subcommand, rest) = split_subcommand(args, "remote-routes command")?;
+    if subcommand == "sign" {
+        expect_no_args(&rest, "remote-routes sign")?;
+        return run_remote_routes_sign(output);
+    }
+
+    expect_no_args(&rest, &format!("remote-routes {subcommand}"))?;
+    let client = CliHttpClient::from_env()?;
+    match subcommand.as_str() {
+        "list" => {
+            client
+                .send(Method::GET, "/remote-routes", true, None, output)
+                .await
+        }
+        "reload" => {
+            client
+                .send(Method::POST, "/remote-routes/reload", true, None, output)
+                .await
+        }
+        _ => Err(invalid_input(format!(
+            "unknown remote-routes command: {subcommand}"
+        ))),
+    }
+}
+
 fn run_routes_sign(output: OutputFormat) -> Result<(), DynError> {
     let config = config::app_config()?;
     let init_state = init::load_init_state()?;
@@ -183,6 +211,37 @@ fn run_routes_sign(output: OutputFormat) -> Result<(), DynError> {
             "status": "updated",
             "routes_path": config.routes_path.display().to_string(),
             "routes_sign_path": routes_sign_path.display().to_string(),
+        }))?,
+        output,
+    )
+}
+
+fn run_remote_routes_sign(output: OutputFormat) -> Result<(), DynError> {
+    let config = config::app_config()?;
+    let init_state = init::load_init_state()?;
+    let remote_routes_content = fs::read_to_string(&config.remote_routes_path).map_err(|err| {
+        invalid_input(format!(
+            "VECTIS_REMOTE_ROUTES_PATH could not be read from {}: {err}",
+            config.remote_routes_path.display()
+        ))
+    })?;
+    let token = ops::sign::sign_remote_routes_file(
+        &init_state,
+        &config.remote_routes_path,
+        &remote_routes_content,
+    )?;
+    let remote_routes_sign_path = crate::core::remote_routes::remote_routes_signature_path(
+        &config.remote_routes_path,
+        &config.remote_routes_sign_path,
+    );
+    let token_json = serde_json::to_string_pretty(&token)?;
+    fs::write(&remote_routes_sign_path, token_json)?;
+
+    print_response(
+        &serde_json::to_string(&json!({
+            "status": "updated",
+            "remote_routes_path": config.remote_routes_path.display().to_string(),
+            "remote_routes_sign_path": remote_routes_sign_path.display().to_string(),
         }))?,
         output,
     )
@@ -692,6 +751,9 @@ fn print_http_help() {
     println!("  {PROGRAM_NAME} routes list");
     println!("  {PROGRAM_NAME} routes reload");
     println!("  {PROGRAM_NAME} routes sign");
+    println!("  {PROGRAM_NAME} remote-routes list");
+    println!("  {PROGRAM_NAME} remote-routes reload");
+    println!("  {PROGRAM_NAME} remote-routes sign");
     println!("  {PROGRAM_NAME} permissions reload");
     println!("  {PROGRAM_NAME} permissions sign");
     println!("  {PROGRAM_NAME} pub <kid>");
@@ -831,6 +893,32 @@ fn print_routes_help() {
     print_output_help();
 }
 
+fn print_remote_routes_help() {
+    println!("Usage:");
+    println!("  {PROGRAM_NAME} remote-routes list");
+    println!("  {PROGRAM_NAME} remote-routes reload");
+    println!("  {PROGRAM_NAME} remote-routes sign");
+    println!();
+    println!("Lists or reloads authorized remote Vectis routes through the HTTP API.");
+    println!();
+    println!("Commands:");
+    println!("  list                  GET /remote-routes, requires VECTIS_APIKEY");
+    println!("  reload                POST /remote-routes/reload, requires VECTIS_APIKEY");
+    println!("  sign                  Signs VECTIS_REMOTE_ROUTES_PATH with init keys");
+    println!();
+    println!("Behavior:");
+    println!("  list                  Returns remote routes currently loaded in memory");
+    println!(
+        "  reload                Re-reads VECTIS_REMOTE_ROUTES_PATH and replaces in-memory remote routes"
+    );
+    println!();
+    println!("Notes:");
+    println!("  Missing remote routes file reloads to an empty remote route list.");
+    println!("  Each route needs kid, name, and remote_addr.");
+    println!("  Invalid remote routes file keeps the previous in-memory remote routes.");
+    print_output_help();
+}
+
 fn print_permissions_help() {
     println!("Usage:");
     println!("  {PROGRAM_NAME} permissions reload");
@@ -907,9 +995,7 @@ fn print_message_help() {
     );
     println!();
     println!("Common JSON examples:");
-    println!(
-        r#"  send:              {{"recipient_host":"127.0.0.1:3000","recipient_kid":"<kid>","message":"hello vectis"}}"#
-    );
+    println!(r#"  send:              {{"recipient_kid":"<kid>","message":"hello vectis"}}"#);
     println!(r#"  internal encrypt:  {{"plaintext":"hello vectis"}}"#);
     println!();
     println!("Endpoints:");

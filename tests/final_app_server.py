@@ -2,10 +2,10 @@
 import argparse
 import http.server
 import json
-import os
 import sys
 import urllib.error
 import urllib.request
+from test_config import require_apikey
 
 
 class FinalAppHandler(http.server.BaseHTTPRequestHandler):
@@ -110,9 +110,7 @@ def main():
     host, port = parse_addr(args.addr)
     FinalAppHandler.expected_path = args.path
     FinalAppHandler.vectis_url = args.vectis_url.rstrip("/")
-    FinalAppHandler.apikey = args.apikey or os.environ.get("VECTIS_APIKEY", "").strip()
-    if not FinalAppHandler.apikey:
-        raise RuntimeError("VECTIS_APIKEY must be provided with --apikey or environment")
+    FinalAppHandler.apikey = require_apikey(args.apikey)
 
     server = http.server.ThreadingHTTPServer((host, port), FinalAppHandler)
     print(f"Final app server listening on http://{args.addr}{args.path}")

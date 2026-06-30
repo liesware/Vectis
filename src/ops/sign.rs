@@ -1,4 +1,4 @@
-use crate::core::{config, crypto, permissions, routes, validation};
+use crate::core::{config, crypto, permissions, remote_routes, routes, validation};
 use crate::error::DynError;
 use crate::ops::contracts::{
     MessageHash, SignatureBlock, TimestampPayload, TimestampSignatures, VerificationStatus,
@@ -15,6 +15,7 @@ pub use crate::ops::contracts::{SignInput, TimestampToken, VerificationOutput};
 
 const TIMESTAMP_TOKEN_TYPE: &str = "vectis-sign";
 const ROUTES_TOKEN_TYPE: &str = "vectis-routes";
+const REMOTE_ROUTES_TOKEN_TYPE: &str = "vectis-remote-routes";
 const PERMISSIONS_TOKEN_TYPE: &str = "vectis-permissions";
 const INIT_KEYS_KID: &str = "init-keys";
 const PAYLOAD_SERIAL_RANDOM_BYTES: usize = 32;
@@ -164,6 +165,101 @@ pub fn verify_routes_file_signature(
         return Err(Box::new(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "routes signature verification failed",
+        )));
+    }
+
+    Ok(())
+}
+
+pub fn sign_remote_routes_file(
+    init_state: &ValidatedInitState,
+    remote_routes_path: &Path,
+    remote_routes_content: &str,
+) -> Result<TimestampToken, DynError> {
+    let canonical_routes = remote_routes::canonical_remote_routes_json(remote_routes_content)?;
+    let message_hash = MessageHash {
+        alg: config::INTERNAL_KEYS_HASH.to_string(),
+        hex: hex::encode(crypto::hash_text(
+            config::INTERNAL_KEYS_HASH,
+            &canonical_routes,
+        )?),
+    };
+    let created_at = validation::current_timestamp()?;
+    let info = validation::build_aad(&[
+        ("version", "v1"),
+        ("type", REMOTE_ROUTES_TOKEN_TYPE),
+        ("path", &remote_routes_path.display().to_string()),
+    ]);
+    let payload = TimestampPayload {
+        token_type: String::from(REMOTE_ROUTES_TOKEN_TYPE),
+        serial: create_payload_serial(&created_at)?,
+        created_at,
+        info,
+        kid: String::from(INIT_KEYS_KID),
+        message_hash,
+    };
+    let signatures = sign_hybrid_payload(
+        &payload,
+        init_state.init_keys.keys().eddsa(),
+        init_state.init_keys.keys().ml_dsa(),
+    )?;
+
+    Ok(TimestampToken {
+        version: String::from("v1"),
+        payload,
+        signatures,
+    })
+}
+
+pub fn verify_remote_routes_file_signature(
+    init_state: &ValidatedInitState,
+    remote_routes_path: &Path,
+    remote_routes_content: &str,
+    signature_content: &str,
+) -> Result<(), DynError> {
+    let token = parse_timestamp_token(serde_json::from_str(signature_content).map_err(|err| {
+        Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("remote routes signature must be valid JSON: {err}"),
+        )) as DynError
+    })?)?;
+    validate_signed_payload_token(&token, REMOTE_ROUTES_TOKEN_TYPE, INIT_KEYS_KID)?;
+    let expected_info = validation::build_aad(&[
+        ("version", "v1"),
+        ("type", REMOTE_ROUTES_TOKEN_TYPE),
+        ("path", &remote_routes_path.display().to_string()),
+    ]);
+    if token.payload.info != expected_info {
+        return Err(Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "remote routes signature payload.info does not match remote routes path",
+        )));
+    }
+
+    let canonical_routes = remote_routes::canonical_remote_routes_json(remote_routes_content)?;
+    let expected_hash = hex::encode(crypto::hash_text(
+        config::INTERNAL_KEYS_HASH,
+        &canonical_routes,
+    )?);
+    if token.payload.message_hash.alg != config::INTERNAL_KEYS_HASH
+        || token.payload.message_hash.hex != expected_hash
+    {
+        return Err(Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "remote routes signature message_hash does not match remote routes content",
+        )));
+    }
+
+    let status = verify_hybrid_payload(
+        &token.payload,
+        &token.signatures,
+        init_state.init_keys.keys().eddsa(),
+        init_state.init_keys.keys().ml_dsa(),
+    )?;
+    if status.eddsa != "ok" || status.ml_dsa != "ok" {
+        return Err(Box::new(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "remote routes signature verification failed",
         )));
     }
 

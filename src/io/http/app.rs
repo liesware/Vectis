@@ -3,7 +3,7 @@ use artbox::{
 };
 
 use crate::core::validation;
-use crate::core::{config, permissions, routes, storage::StorageState};
+use crate::core::{config, permissions, remote_routes, routes, storage::StorageState};
 use crate::error::DynError;
 use crate::ops::init::ValidatedInitState;
 use crate::ops::keys;
@@ -52,6 +52,22 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         },
         |kid| keys_db_state.contains_id(kid),
     );
+    let remote_routes_state = remote_routes::load_remote_routes_state(
+        &config.remote_routes_path,
+        |remote_routes_path, remote_routes_content| {
+            let remote_routes_sign_path = remote_routes::remote_routes_signature_path(
+                remote_routes_path,
+                &config.remote_routes_sign_path,
+            );
+            let signature_content = std::fs::read_to_string(&remote_routes_sign_path)?;
+            crate::ops::sign::verify_remote_routes_file_signature(
+                &init_state,
+                remote_routes_path,
+                remote_routes_content,
+                &signature_content,
+            )
+        },
+    );
     let started_at = validation::current_timestamp()?;
     info!(
         http_bind_addr = %config.http_bind_addr,
@@ -64,6 +80,8 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         final_app_path = %config.final_app_path,
         routes_path = %config.routes_path.display(),
         routes_sign_path = %config.routes_sign_path.display(),
+        remote_routes_path = %config.remote_routes_path.display(),
+        remote_routes_sign_path = %config.remote_routes_sign_path.display(),
         permissions_path = %config.permissions_path.display(),
         permissions_sign_path = %config.permissions_sign_path.display(),
         storage_type = %config.storage_type,
@@ -84,6 +102,10 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         "final app routes loaded into http state"
     );
     info!(
+        loaded_remote_routes = remote_routes_state.len(),
+        "remote routes loaded into http state"
+    );
+    info!(
         loaded_permission_clients = permissions_state.len(),
         "permissions loaded into http state"
     );
@@ -94,10 +116,13 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         keys_db_state,
         permissions_state,
         routes_state,
+        remote_routes_state,
         permissions_path: config.permissions_path.clone(),
         permissions_sign_path: config.permissions_sign_path.clone(),
         routes_path: config.routes_path.clone(),
         routes_sign_path: config.routes_sign_path.clone(),
+        remote_routes_path: config.remote_routes_path.clone(),
+        remote_routes_sign_path: config.remote_routes_sign_path.clone(),
         started_at,
     }));
     let renderer = Renderer::new(fonts::family("slant").unwrap())

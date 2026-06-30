@@ -68,14 +68,13 @@ site. It receives a local encrypted delivery and must call its local Vectis
 
    ```json
    {
-     "recipient_host": "127.0.0.1:3002",
      "recipient_kid": "<clinic-b-kid>",
      "message": "{...patient record JSON as a string...}"
    }
    ```
 
-4. Vectis A obtains Clinic B's public keys from Vectis B if they are not already
-   cached.
+4. Vectis A resolves Clinic B's KID through signed `remote_routes.json`, then
+   obtains Clinic B's public keys from Vectis B if they are not already cached.
 
 5. Vectis A creates a protected message:
 

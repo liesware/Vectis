@@ -17,6 +17,7 @@ tags:
   - name: Health
   - name: Keys
   - name: Routes
+  - name: Remote Routes
   - name: Public Keys
   - name: Signatures
   - name: Messages
@@ -259,6 +260,40 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RoutesOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /remote-routes:
+    get:
+      tags: [Remote Routes]
+      summary: List authorized remote Vectis routes loaded in memory
+      description: Administrative endpoint requiring root or an admin client. Lists the current in-memory remote routes and does not read VECTIS_REMOTE_ROUTES_PATH.
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: Loaded remote Vectis routes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemoteRoutesOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /remote-routes/reload:
+    post:
+      tags: [Remote Routes]
+      summary: Reload authorized remote Vectis routes from VECTIS_REMOTE_ROUTES_PATH
+      description: Administrative endpoint requiring root or an admin client. Replaces in-memory remote routes only after VECTIS_REMOTE_ROUTES_PATH and VECTIS_REMOTE_ROUTES_SIGN_PATH are successfully read, verified, and validated. A missing remote routes file reloads to an empty route list; an invalid signature or invalid file returns an error and keeps the previous in-memory remote routes.
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: Reloaded remote Vectis routes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemoteRoutesOutput"
         default:
           $ref: "#/components/responses/Error"
 
@@ -684,6 +719,15 @@ components:
           items:
             $ref: "#/components/schemas/FinalAppRoute"
 
+    RemoteRoutesOutput:
+      type: object
+      required: [routes]
+      properties:
+        routes:
+          type: array
+          items:
+            $ref: "#/components/schemas/RemoteRoute"
+
     ReloadPermissionsResponse:
       type: object
       required: [status, clients_loaded]
@@ -706,6 +750,19 @@ components:
         final_app_path:
           type: string
           example: /message
+
+    RemoteRoute:
+      type: object
+      required: [kid, name, remote_addr]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        name:
+          type: string
+          example: site-b
+        remote_addr:
+          type: string
+          example: vectis-b.example.com:443
 
     PublicKeysOutput:
       type: object
@@ -857,11 +914,8 @@ components:
 
     SendMessageInput:
       type: object
-      required: [recipient_host, recipient_kid, message]
+      required: [recipient_kid, message]
       properties:
-        recipient_host:
-          type: string
-          example: 127.0.0.1:3000
         recipient_kid:
           $ref: "#/components/schemas/Kid"
         message:

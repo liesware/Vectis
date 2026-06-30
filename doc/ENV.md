@@ -55,6 +55,8 @@ These variables are used by CLI commands that call the HTTP API. `serve` and `in
 | `VECTIS_FINAL_APP_PATH` | `/message` | HTTP path beginning with `/`, no spaces | Default final app path. |
 | `VECTIS_ROUTES_PATH` | `routes.json` | Non-empty file path | Optional manual routing file. Startup falls back to default final app delivery if the file is missing or invalid. Runtime reload keeps the previous routes if the file exists but is invalid. |
 | `VECTIS_ROUTES_SIGN_PATH` | `routes_sign.json` | Non-empty file path | Signature token for `VECTIS_ROUTES_PATH`, created by `vectis routes sign`. |
+| `VECTIS_REMOTE_ROUTES_PATH` | `remote_routes.json` | Non-empty file path | Optional signed remote Vectis routing file. `POST /message/{sender_kid}` resolves recipient destinations from this file. |
+| `VECTIS_REMOTE_ROUTES_SIGN_PATH` | `remote_routes_sign.json` | Non-empty file path | Signature token for `VECTIS_REMOTE_ROUTES_PATH`, created by `vectis remote-routes sign`. |
 | `VECTIS_PERMISSIONS_PATH` | `permissions.json` | Non-empty file path | Optional signed API key permissions file. If missing, only the root API key is authorized. |
 | `VECTIS_PERMISSIONS_SIGN_PATH` | `permissions_sign.json` | Non-empty file path | Signature token for `VECTIS_PERMISSIONS_PATH`, created by `vectis permissions sign`. |
 
@@ -80,9 +82,28 @@ Runtime route operations:
 - `GET /routes` lists routes currently loaded in memory and requires `VECTIS_APIKEY`.
 - `POST /routes/reload` reloads `VECTIS_ROUTES_PATH` and requires `VECTIS_APIKEY`.
 - `vectis routes sign` signs `VECTIS_ROUTES_PATH` locally with init keys and updates `VECTIS_ROUTES_SIGN_PATH`.
+- `GET /remote-routes` lists authorized remote Vectis routes currently loaded in memory and requires `VECTIS_APIKEY`.
+- `POST /remote-routes/reload` reloads `VECTIS_REMOTE_ROUTES_PATH` and requires `VECTIS_APIKEY`.
+- `vectis remote-routes sign` signs `VECTIS_REMOTE_ROUTES_PATH` locally with init keys and updates `VECTIS_REMOTE_ROUTES_SIGN_PATH`.
 - Every route `kid` must exist in the keys currently loaded in memory.
 - A missing file reloads to an empty manual route list.
 - An invalid existing file, or a route with an unloaded `kid`, returns an error and keeps the previous in-memory routes.
+
+Remote routes file shape:
+
+```json
+{
+  "routes": [
+    {
+      "kid": "b01cbe33187916f0f1367d07bc986d71bb0d91d7047ccd790c13fc9d85fe7259",
+      "name": "site-b",
+      "remote_addr": "vectis-b.example.com:443"
+    }
+  ]
+}
+```
+
+`remote_routes.json` is the only source of authorized outbound Vectis destinations for `POST /message/{sender_kid}`. The request body supplies `recipient_kid`; Vectis uses the signed route to find `remote_addr`.
 
 ## Authentication and Unsealing
 
@@ -135,7 +156,7 @@ Allowed actions:
 
 Permission mapping summary:
 
-- `admin`: administrative protected endpoints, including `POST /keys`, `POST /keys/reload`, `GET /keys/properties`, `GET /routes`, `POST /routes/reload`, `POST /permissions/reload`, and `GET /self-test/init`.
+- `admin`: administrative protected endpoints, including `POST /keys`, `POST /keys/reload`, `GET /keys/properties`, `GET /routes`, `POST /routes/reload`, `GET /remote-routes`, `POST /remote-routes/reload`, `POST /permissions/reload`, and `GET /self-test/init`.
 - `keys`: `GET /keys/properties/{kid}`.
 - `lifecycle`: `POST /lifecycle/{kid}`.
 - `self-test`: `GET /self-test/keys/{kid}`.
@@ -275,6 +296,8 @@ VECTIS_FINAL_APP_ADDR=localhost:3999
 VECTIS_FINAL_APP_PATH=/message
 VECTIS_ROUTES_PATH=routes.json
 VECTIS_ROUTES_SIGN_PATH=routes_sign.json
+VECTIS_REMOTE_ROUTES_PATH=remote_routes.json
+VECTIS_REMOTE_ROUTES_SIGN_PATH=remote_routes_sign.json
 VECTIS_PERMISSIONS_PATH=permissions.json
 VECTIS_PERMISSIONS_SIGN_PATH=permissions_sign.json
 VECTIS_LOG_LEVEL=info

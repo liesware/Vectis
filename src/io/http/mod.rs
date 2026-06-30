@@ -14,11 +14,13 @@ mod keys;
 mod message;
 mod permissions;
 mod pubkey;
+mod remote_routes;
 mod routes;
 mod sign;
 mod test;
 
 use crate::core::permissions::{AuthenticatedClient, PermissionsState};
+use crate::core::remote_routes::{RemoteRoute, RemoteRoutesState};
 use crate::core::routes::{FinalAppRoute, RoutesState};
 use crate::core::storage::StorageState;
 use crate::error::DynError;
@@ -40,10 +42,13 @@ pub struct HttpState {
     remote_public_keys_state: Arc<RwLock<Zeroizing<RemotePublicKeysState>>>,
     permissions_state: Arc<RwLock<Zeroizing<PermissionsState>>>,
     routes_state: Arc<RwLock<RoutesState>>,
+    remote_routes_state: Arc<RwLock<RemoteRoutesState>>,
     permissions_path: Arc<PathBuf>,
     permissions_sign_path: Arc<PathBuf>,
     routes_path: Arc<PathBuf>,
     routes_sign_path: Arc<PathBuf>,
+    remote_routes_path: Arc<PathBuf>,
+    remote_routes_sign_path: Arc<PathBuf>,
 }
 
 struct HttpStateInput {
@@ -53,10 +58,13 @@ struct HttpStateInput {
     keys_db_state: Zeroizing<KeysDbState>,
     permissions_state: Zeroizing<PermissionsState>,
     routes_state: RoutesState,
+    remote_routes_state: RemoteRoutesState,
     permissions_path: PathBuf,
     permissions_sign_path: PathBuf,
     routes_path: PathBuf,
     routes_sign_path: PathBuf,
+    remote_routes_path: PathBuf,
+    remote_routes_sign_path: PathBuf,
     started_at: String,
 }
 
@@ -73,10 +81,13 @@ impl HttpState {
             ))),
             permissions_state: Arc::new(RwLock::new(input.permissions_state)),
             routes_state: Arc::new(RwLock::new(input.routes_state)),
+            remote_routes_state: Arc::new(RwLock::new(input.remote_routes_state)),
             permissions_path: Arc::new(input.permissions_path),
             permissions_sign_path: Arc::new(input.permissions_sign_path),
             routes_path: Arc::new(input.routes_path),
             routes_sign_path: Arc::new(input.routes_sign_path),
+            remote_routes_path: Arc::new(input.remote_routes_path),
+            remote_routes_sign_path: Arc::new(input.remote_routes_sign_path),
         }
     }
 
@@ -150,6 +161,39 @@ impl HttpState {
         let routes_state = self.routes_state.read().await;
 
         routes_state.list()
+    }
+
+    async fn remote_routes_output(&self) -> crate::core::remote_routes::ListRemoteRoutesOutput {
+        let remote_routes_state = self.remote_routes_state.read().await;
+
+        remote_routes_state.list()
+    }
+
+    async fn reload_remote_routes_state(&self) -> Result<(), DynError> {
+        let reloaded = {
+            let remote_routes_state = self.remote_routes_state.read().await;
+            remote_routes_state.reload_from_file(
+                &self.remote_routes_path,
+                |remote_routes_path, remote_routes_content| {
+                    let remote_routes_sign_path =
+                        crate::core::remote_routes::remote_routes_signature_path(
+                            remote_routes_path,
+                            &self.remote_routes_sign_path,
+                        );
+                    let signature_content = std::fs::read_to_string(&remote_routes_sign_path)?;
+                    crate::ops::sign::verify_remote_routes_file_signature(
+                        self.init_state(),
+                        remote_routes_path,
+                        remote_routes_content,
+                        &signature_content,
+                    )
+                },
+            )?
+        };
+        let mut remote_routes_state = self.remote_routes_state.write().await;
+        *remote_routes_state = reloaded;
+
+        Ok(())
     }
 
     async fn reload_routes_state(&self) -> Result<(), DynError> {
@@ -267,6 +311,12 @@ impl HttpState {
 
         routes_state.route_for(kid)
     }
+
+    async fn remote_route_for(&self, kid: &str) -> Result<RemoteRoute, DynError> {
+        let remote_routes_state = self.remote_routes_state.read().await;
+
+        remote_routes_state.route_for(kid)
+    }
 }
 
 pub fn router(state: HttpState) -> Router {
@@ -284,6 +334,11 @@ pub fn router(state: HttpState) -> Router {
         .route("/lifecycle/{kid}", post(keys::update_lifecycle_endpoint))
         .route("/routes", get(routes::list_endpoint))
         .route("/routes/reload", post(routes::reload_endpoint))
+        .route("/remote-routes", get(remote_routes::list_endpoint))
+        .route(
+            "/remote-routes/reload",
+            post(remote_routes::reload_endpoint),
+        )
         .route("/permissions/reload", post(permissions::reload_endpoint))
         .route(
             "/keys",

@@ -44,9 +44,38 @@ cat > "${SCRIPT_DIR}/site-b/routes.json" <<JSON
 }
 JSON
 
+cat > "${SCRIPT_DIR}/site-a/remote_routes.json" <<JSON
+{
+  "routes": [
+    {
+      "kid": "${B_LOCAL_KID}",
+      "name": "site-b",
+      "remote_addr": "${A_REMOTE_VECTIS_HOST}"
+    }
+  ]
+}
+JSON
+
+cat > "${SCRIPT_DIR}/site-b/remote_routes.json" <<JSON
+{
+  "routes": [
+    {
+      "kid": "${A_LOCAL_KID}",
+      "name": "site-a",
+      "remote_addr": "${B_REMOTE_VECTIS_HOST}"
+    }
+  ]
+}
+JSON
+
 (cd "${SCRIPT_DIR}/site-a" && ../bin/vectis routes sign --output json >/dev/null)
 (cd "${SCRIPT_DIR}/site-b" && ../bin/vectis routes sign --output json >/dev/null)
+(cd "${SCRIPT_DIR}/site-a" && ../bin/vectis remote-routes sign --output json >/dev/null)
+(cd "${SCRIPT_DIR}/site-b" && ../bin/vectis remote-routes sign --output json >/dev/null)
 
 echo "Routes created and signed:"
 echo "  site-a -> ${A_APP_BIND_ADDR}/message (${A_LOCAL_KID})"
 echo "  site-b -> ${B_APP_BIND_ADDR}/message (${B_LOCAL_KID})"
+echo "Remote routes created and signed:"
+echo "  site-a -> ${A_REMOTE_VECTIS_HOST} (${B_LOCAL_KID})"
+echo "  site-b -> ${B_REMOTE_VECTIS_HOST} (${A_LOCAL_KID})"

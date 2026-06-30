@@ -37,6 +37,8 @@ pub struct AppConfig {
     pub tls_skip_verify: bool,
     pub routes_path: PathBuf,
     pub routes_sign_path: PathBuf,
+    pub remote_routes_path: PathBuf,
+    pub remote_routes_sign_path: PathBuf,
     pub permissions_path: PathBuf,
     pub permissions_sign_path: PathBuf,
     pub api_key_hash: String,
@@ -94,6 +96,16 @@ pub fn app_config() -> Result<AppConfig, DynError> {
         &env_file,
         "VECTIS_ROUTES_SIGN_PATH",
         "routes_sign.json",
+    ))?;
+    let remote_routes_path = validate_remote_routes_path(&config_value(
+        &env_file,
+        "VECTIS_REMOTE_ROUTES_PATH",
+        "remote_routes.json",
+    ))?;
+    let remote_routes_sign_path = validate_remote_routes_path(&config_value(
+        &env_file,
+        "VECTIS_REMOTE_ROUTES_SIGN_PATH",
+        "remote_routes_sign.json",
     ))?;
     let permissions_path = validate_config_path(
         "VECTIS_PERMISSIONS_PATH",
@@ -187,6 +199,8 @@ pub fn app_config() -> Result<AppConfig, DynError> {
         tls_skip_verify,
         routes_path,
         routes_sign_path,
+        remote_routes_path,
+        remote_routes_sign_path,
         permissions_path,
         permissions_sign_path,
         api_key_hash,
@@ -326,6 +340,10 @@ pub fn validate_bool_field(field: &str, value: &str) -> Result<bool, DynError> {
 
 fn validate_routes_path(value: &str) -> Result<PathBuf, DynError> {
     validate_config_path("VECTIS_ROUTES_PATH", value)
+}
+
+fn validate_remote_routes_path(value: &str) -> Result<PathBuf, DynError> {
+    validate_config_path("VECTIS_REMOTE_ROUTES_PATH", value)
 }
 
 fn validate_config_path(field: &str, value: &str) -> Result<PathBuf, DynError> {

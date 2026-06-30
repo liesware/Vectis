@@ -141,7 +141,6 @@ class ClinicalContext:
             f"{self.vectis_url}/message/{self.local_kid}",
             self.apikey,
             {
-                "recipient_host": self.remote_vectis_host,
                 "recipient_kid": self.remote_kid,
                 "message": json.dumps(clinical_record, sort_keys=True),
             },

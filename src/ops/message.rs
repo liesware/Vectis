@@ -1,4 +1,6 @@
-use crate::core::{config, crypto, http_client, routes::FinalAppRoute, validation};
+use crate::core::{
+    config, crypto, http_client, remote_routes::RemoteRoute, routes::FinalAppRoute, validation,
+};
 use crate::error::DynError;
 use crate::ops::contracts::{
     MessageCipher, MessageKem, MessageRecipient, MessageSender, ProtectedMessagePayload,
@@ -205,17 +207,12 @@ pub struct PreparedSendMessage {
 }
 
 impl PreparedSendMessage {
-    pub fn recipient_host(&self) -> &str {
-        &self.input.recipient_host
-    }
-
     pub fn recipient_kid(&self) -> &str {
         &self.input.recipient_kid
     }
 }
 
 pub struct ValidatedSendMessageInput {
-    recipient_host: String,
     recipient_kid: String,
     message: Zeroizing<String>,
 }
@@ -377,12 +374,14 @@ pub fn prepare_receive_message(
 
 pub async fn send_message(
     prepared: PreparedSendMessage,
+    remote_route: RemoteRoute,
     cached_recipient: Option<RemotePublicKeys>,
 ) -> Result<OutboundMessageResult, DynError> {
     info!(
         sender_kid = %prepared.sender_key.id(),
-        recipient_host = %prepared.input.recipient_host,
+        recipient_host = %remote_route.remote_addr(),
         recipient_kid = %prepared.input.recipient_kid,
+        recipient_name = %remote_route.name(),
         "message send started"
     );
     let recipient_key_source = if cached_recipient.is_some() {
@@ -393,11 +392,8 @@ pub async fn send_message(
     let recipient_public_keys = match cached_recipient {
         Some(remote_key) => remote_key,
         None => {
-            fetch_remote_public_keys(
-                &prepared.input.recipient_host,
-                &prepared.input.recipient_kid,
-            )
-            .await?
+            fetch_remote_public_keys(remote_route.remote_addr(), &prepared.input.recipient_kid)
+                .await?
         }
     };
     validate_remote_public_keys(&recipient_public_keys)?;
@@ -414,12 +410,12 @@ pub async fn send_message(
         &prepared.input,
     )?;
     let response = http_client::post_remote_json::<_, ReceiveMessageOutput>(
-        &prepared.input.recipient_host,
+        remote_route.remote_addr(),
         "/message",
         &envelope,
     )
     .await
-    .map_err(|err| recipient_delivery_error(&prepared.input.recipient_host, err))?;
+    .map_err(|err| recipient_delivery_error(remote_route.remote_addr(), err))?;
     let output = build_send_message_output(&prepared.sender_key, &prepared.input, &response);
     info!(
         sender_kid = %prepared.sender_key.id(),
@@ -716,12 +712,10 @@ pub fn decrypt_internal_message(
 fn validate_send_message_input(
     input: SendMessageInput,
 ) -> Result<ValidatedSendMessageInput, DynError> {
-    validation::validate_host_port("recipient_host", &input.recipient_host)?;
     keys::KeyId::parse(&input.recipient_kid)?;
     validation::validate_text_field("message", &input.message)?;
 
     Ok(ValidatedSendMessageInput {
-        recipient_host: input.recipient_host,
         recipient_kid: input.recipient_kid,
         message: Zeroizing::new(input.message),
     })
