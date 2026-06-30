@@ -59,7 +59,6 @@ pub fn create_init_output() -> Result<InitOutput, DynError> {
 
 pub fn create_encrypted_init_output_json() -> Result<EncryptedInitJsonOutput, DynError> {
     let config = config::app_config()?;
-    let timestamp = validation::current_timestamp()?;
     let aad = validation::build_aad(&[
         ("version", &config.protocol_version),
         ("hostname", &config.sender_hostname),
@@ -71,10 +70,8 @@ pub fn create_encrypted_init_output_json() -> Result<EncryptedInitJsonOutput, Dy
         config::INTERNAL_KEYS_HASH,
         crypto::HASH_ALGORITHMS,
     )?;
-    let api_key_material = format!("{aad}{timestamp}");
-    let api_key = Zeroizing::new(hex::encode(crypto::hash_text(
-        config::INTERNAL_KEYS_HASH,
-        &api_key_material,
+    let api_key = Zeroizing::new(hex::encode(crypto::random_bytes(
+        config::INTERNAL_KEYS_KEY_SIZE_BYTES,
     )?));
     validation::validate_hash_hex_field("VECTIS_APIKEY", &api_key, config::INTERNAL_KEYS_HASH)?;
     let output = Zeroizing::new(create_init_output()?);

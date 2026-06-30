@@ -160,7 +160,7 @@ cargo run -- init
 The command prints:
 
 - `VECTIS_UNSEAL_KEY`: used to decrypt `init.json`;
-- `VECTIS_APIKEY`: client secret sent as `X-API-Key`;
+- `VECTIS_APIKEY`: client secret generated with a cryptographic random number generator and sent as `X-API-Key`;
 - `VECTIS_APIKEY_HASH`: server-side verifier for protected HTTP endpoints.
 
 For local development, save the unseal key in `.unseal_key`:
