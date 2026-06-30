@@ -216,6 +216,7 @@ vectis pub <kid>
 vectis message send <sender_kid> --file send-message.json
 vectis message decrypt --file encrypted-message.json
 vectis routes sign
+vectis permissions sign
 ```
 
 See the full API documentation in [Doc/API.md](Doc/API.md).
@@ -245,6 +246,8 @@ Important variables include:
 - `VECTIS_SQLITE_PATH`;
 - `VECTIS_ROUTES_PATH`;
 - `VECTIS_ROUTES_SIGN_PATH`;
+- `VECTIS_PERMISSIONS_PATH`;
+- `VECTIS_PERMISSIONS_SIGN_PATH`;
 - `VECTIS_DEFAULT_CRYPTO_PROFILE`;
 - `VECTIS_CRYPTO_POLICY`.
 

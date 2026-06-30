@@ -3,7 +3,7 @@ use artbox::{
 };
 
 use crate::core::validation;
-use crate::core::{config, routes, storage::StorageState};
+use crate::core::{config, permissions, routes, storage::StorageState};
 use crate::error::DynError;
 use crate::ops::init::ValidatedInitState;
 use crate::ops::keys;
@@ -20,6 +20,23 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         crate::ops::internal_keys::InternalDerivedKeysState::from_init_state(&init_state)?,
     );
     let keys_db_state = keys::load_keys_db_state(&storage, &internal_keys).await?;
+    let permissions_state = Zeroizing::new(permissions::load_permissions_state(
+        &config.permissions_path,
+        |permissions_path, permissions_content| {
+            let permissions_sign_path = permissions::permissions_signature_path(
+                permissions_path,
+                &config.permissions_sign_path,
+            );
+            let signature_content = std::fs::read_to_string(&permissions_sign_path)?;
+            crate::ops::sign::verify_permissions_file_signature(
+                &init_state,
+                permissions_path,
+                permissions_content,
+                &signature_content,
+            )
+        },
+        |kid| keys_db_state.contains_id(kid),
+    )?);
     let routes_state = routes::load_routes_state(
         &config,
         |routes_path, routes_content| {
@@ -46,6 +63,8 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         final_app_path = %config.final_app_path,
         routes_path = %config.routes_path.display(),
         routes_sign_path = %config.routes_sign_path.display(),
+        permissions_path = %config.permissions_path.display(),
+        permissions_sign_path = %config.permissions_sign_path.display(),
         storage_type = %config.storage_type,
         sqlite_path = %config.sqlite_path.display(),
         protocol_version = %config.protocol_version,
@@ -63,12 +82,19 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         loaded_routes = routes_state.len(),
         "final app routes loaded into http state"
     );
+    info!(
+        loaded_permission_clients = permissions_state.len(),
+        "permissions loaded into http state"
+    );
     let app = super::router(super::HttpState::new(super::HttpStateInput {
         init_state,
         internal_keys,
         storage,
         keys_db_state,
+        permissions_state,
         routes_state,
+        permissions_path: config.permissions_path.clone(),
+        permissions_sign_path: config.permissions_sign_path.clone(),
         routes_path: config.routes_path.clone(),
         routes_sign_path: config.routes_sign_path.clone(),
         started_at,

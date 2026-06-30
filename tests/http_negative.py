@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 import argparse
+import atexit
 import copy
 import hashlib
 import json
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from test_config import require_apikey
 
 
@@ -20,6 +23,8 @@ VALID_KEY_REQUEST = {
     "ml_kem_variant": "ML-KEM-512",
 }
 VALID_MESSAGE = b"Vectis negative workflow test"
+PERMISSIONS_PATH = Path("permissions.json")
+PERMISSIONS_SIGN_PATH = Path("permissions_sign.json")
 
 
 class NegativeTestError(Exception):
@@ -120,6 +125,73 @@ def print_section(title, rows):
     print()
 
 
+def backup_file(path):
+    if not path.exists():
+        return None
+
+    return path.read_text(encoding="utf-8")
+
+
+def restore_file(path, backup):
+    if backup is None:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        return
+
+    path.write_text(backup, encoding="utf-8")
+
+
+def create_api_key_pair():
+    result = subprocess.run(
+        ["cargo", "run", "--", "apikey", "create", "--output", "json"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise NegativeTestError(
+            f"vectis apikey create failed: stdout={result.stdout} stderr={result.stderr}"
+        )
+
+    payload = parse_json(result.stdout)
+    api_key = payload.get("VECTIS_APIKEY")
+    api_key_hash = payload.get("VECTIS_APIKEY_HASH")
+    require_hex(api_key, "VECTIS_APIKEY")
+    require_hex(api_key_hash, "VECTIS_APIKEY_HASH")
+    return api_key, api_key_hash
+
+
+def sign_permissions():
+    result = subprocess.run(
+        ["cargo", "run", "--", "permissions", "sign", "--output", "json"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise NegativeTestError(
+            f"vectis permissions sign failed: stdout={result.stdout} stderr={result.stderr}"
+        )
+
+
+def write_permissions(clients, sign=True):
+    PERMISSIONS_PATH.write_text(
+        json.dumps({"version": "v1", "clients": clients}, indent=2),
+        encoding="utf-8",
+    )
+    if sign:
+        sign_permissions()
+
+
+def reload_permissions(client):
+    status, response = client.post("/permissions/reload", {}, auth=True)
+    require_status("POST /permissions/reload", status, 200)
+    require(response.get("status") == "reloaded", "permissions reload status must be reloaded")
+    return response
+
+
 def create_valid_key(client):
     status, response = client.post("/keys", VALID_KEY_REQUEST, auth=True)
     require_status("create valid key", status, 200)
@@ -188,6 +260,10 @@ def main():
     apikey = require_apikey(args.apikey)
     client = Client(args.base_url, apikey)
     recipient_host = host_from_base_url(args.base_url)
+    permissions_backup = backup_file(PERMISSIONS_PATH)
+    permissions_sign_backup = backup_file(PERMISSIONS_SIGN_PATH)
+    atexit.register(restore_file, PERMISSIONS_PATH, permissions_backup)
+    atexit.register(restore_file, PERMISSIONS_SIGN_PATH, permissions_sign_backup)
     rows = []
 
     def keys_without_auth():
@@ -321,6 +397,91 @@ def main():
 
     key_id = create_valid_key(client)
 
+    limited_api_key, limited_api_key_hash = create_api_key_pair()
+    admin_api_key, admin_api_key_hash = create_api_key_pair()
+    write_permissions(
+        [
+            {
+                "client": "negative-limited-message",
+                "apikey_hash": limited_api_key_hash,
+                "status": "active",
+                "permissions": [
+                    {
+                        "kid": key_id,
+                        "actions": ["message"],
+                    }
+                ],
+            },
+            {
+                "client": "negative-admin",
+                "apikey_hash": admin_api_key_hash,
+                "status": "active",
+                "permissions": [
+                    {
+                        "kid": "*",
+                        "actions": ["admin"],
+                    }
+                ],
+            },
+        ]
+    )
+    reload_permissions(client)
+    limited_client = Client(args.base_url, limited_api_key)
+    admin_client = Client(args.base_url, admin_api_key)
+
+    def limited_can_message():
+        status, _ = limited_client.post(
+            f"/message/internal/encrypt/{key_id}",
+            {"plaintext": "limited message permission"},
+            auth=True,
+        )
+        require_status("limited client can message", status, 200)
+
+    def limited_blocks_keys_reload():
+        status, _ = limited_client.post("/keys/reload", {}, auth=True)
+        require_status("limited client blocks keys reload", status, 403)
+
+    def limited_blocks_routes():
+        status, _ = limited_client.get("/routes", auth=True)
+        require_status("limited client blocks routes", status, 403)
+
+    def limited_blocks_self_test():
+        status, _ = limited_client.get("/self-test/init", auth=True)
+        require_status("limited client blocks self-test init", status, 403)
+
+    def limited_blocks_sign():
+        status, _ = limited_client.post(
+            f"/sign/{key_id}",
+            {
+                "message_hash": {
+                    "alg": "SHA-256",
+                    "hex": hashlib.sha256(VALID_MESSAGE).hexdigest(),
+                }
+            },
+            auth=True,
+        )
+        require_status("limited client blocks sign", status, 403)
+
+    def limited_blocks_permissions_reload():
+        status, _ = limited_client.post("/permissions/reload", {}, auth=True)
+        require_status("limited client blocks permissions reload", status, 403)
+
+    def admin_allows_permissions_reload():
+        status, response = admin_client.post("/permissions/reload", {}, auth=True)
+        require_status("admin client allows permissions reload", status, 200)
+        require(response.get("status") == "reloaded", "admin permissions reload status")
+
+    for name, func in (
+        ("limited client can message", limited_can_message),
+        ("limited client blocks keys reload", limited_blocks_keys_reload),
+        ("limited client blocks routes", limited_blocks_routes),
+        ("limited client blocks self-test init", limited_blocks_self_test),
+        ("limited client blocks sign", limited_blocks_sign),
+        ("limited client blocks permissions reload", limited_blocks_permissions_reload),
+        ("admin client allows permissions reload", admin_allows_permissions_reload),
+    ):
+        run_case(rows, name, func)
+
     for name, func in (
         ("POST /keys without auth", keys_without_auth),
         ("POST /keys invalid auth", keys_invalid_auth),
@@ -346,6 +507,132 @@ def main():
         ("POST /keys invalid symmetric algorithm", keys_invalid_symmetric_algorithm),
     ):
         run_case(rows, name, func)
+
+    def restore_valid_permissions():
+        write_permissions(
+            [
+                {
+                    "client": "negative-limited-message",
+                    "apikey_hash": limited_api_key_hash,
+                    "status": "active",
+                    "permissions": [
+                        {
+                            "kid": key_id,
+                            "actions": ["message"],
+                        }
+                    ],
+                },
+                {
+                    "client": "negative-admin",
+                    "apikey_hash": admin_api_key_hash,
+                    "status": "active",
+                    "permissions": [
+                        {
+                            "kid": "*",
+                            "actions": ["admin"],
+                        }
+                    ],
+                },
+            ]
+        )
+        reload_permissions(client)
+
+    def permissions_invalid_action_pub():
+        write_permissions(
+            [
+                {
+                    "client": "bad-action",
+                    "apikey_hash": limited_api_key_hash,
+                    "status": "active",
+                    "permissions": [{"kid": key_id, "actions": ["pub"]}],
+                }
+            ]
+        )
+        status, _ = client.post("/permissions/reload", {}, auth=True)
+        require_status("permissions invalid action pub", status, 400)
+
+    def permissions_invalid_action_routes():
+        write_permissions(
+            [
+                {
+                    "client": "bad-action-routes",
+                    "apikey_hash": limited_api_key_hash,
+                    "status": "active",
+                    "permissions": [{"kid": key_id, "actions": ["routes"]}],
+                }
+            ]
+        )
+        status, _ = client.post("/permissions/reload", {}, auth=True)
+        require_status("permissions invalid action routes", status, 400)
+
+    def permissions_missing_kid():
+        write_permissions(
+            [
+                {
+                    "client": "missing-kid",
+                    "apikey_hash": limited_api_key_hash,
+                    "status": "active",
+                    "permissions": [{"kid": "00" * 32, "actions": ["message"]}],
+                }
+            ]
+        )
+        status, _ = client.post("/permissions/reload", {}, auth=True)
+        require_status("permissions missing kid", status, 400)
+
+    def permissions_invalid_apikey_hash():
+        write_permissions(
+            [
+                {
+                    "client": "bad-hash",
+                    "apikey_hash": "not-hex",
+                    "status": "active",
+                    "permissions": [{"kid": key_id, "actions": ["message"]}],
+                }
+            ]
+        )
+        status, _ = client.post("/permissions/reload", {}, auth=True)
+        require_status("permissions invalid apikey_hash", status, 400)
+
+    def permissions_invalid_status():
+        write_permissions(
+            [
+                {
+                    "client": "bad-status",
+                    "apikey_hash": limited_api_key_hash,
+                    "status": "paused",
+                    "permissions": [{"kid": key_id, "actions": ["message"]}],
+                }
+            ]
+        )
+        status, _ = client.post("/permissions/reload", {}, auth=True)
+        require_status("permissions invalid status", status, 400)
+
+    def permissions_invalid_signature():
+        write_permissions(
+            [
+                {
+                    "client": "invalid-signature",
+                    "apikey_hash": limited_api_key_hash,
+                    "status": "active",
+                    "permissions": [{"kid": key_id, "actions": ["message"]}],
+                }
+            ]
+        )
+        PERMISSIONS_SIGN_PATH.write_text('{"invalid":true}\n', encoding="utf-8")
+        status, _ = client.post("/permissions/reload", {}, auth=True)
+        require_status("permissions invalid signature", status, 400)
+
+    for name, func in (
+        ("permissions invalid action pub", permissions_invalid_action_pub),
+        ("permissions invalid action routes", permissions_invalid_action_routes),
+        ("permissions missing kid", permissions_missing_kid),
+        ("permissions invalid apikey_hash", permissions_invalid_apikey_hash),
+        ("permissions invalid status", permissions_invalid_status),
+        ("permissions invalid signature", permissions_invalid_signature),
+    ):
+        run_case(rows, name, func)
+
+    restore_valid_permissions()
 
     token = create_valid_token(client, key_id)
     internal_message = create_valid_internal_message(client, key_id)
@@ -765,6 +1052,11 @@ def main():
         ("POST /sign/verification tampered ml-dsa signature", verify_tampered_ml_dsa_signature),
     ):
         run_case(rows, name, func)
+
+    restore_file(PERMISSIONS_PATH, permissions_backup)
+    restore_file(PERMISSIONS_SIGN_PATH, permissions_sign_backup)
+    status, _ = client.post("/permissions/reload", {}, auth=True)
+    require_status("restore permissions reload", status, 200)
 
     print_section("HTTP negative", rows)
     print(f"SUMMARY negative passed={len(rows)} failed=0")

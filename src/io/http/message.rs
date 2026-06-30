@@ -1,5 +1,4 @@
 use super::HttpState;
-use super::auth::authorize_api_key;
 use super::error::{ErrorResponse, error_response};
 use crate::ops;
 use axum::Json;
@@ -14,7 +13,10 @@ pub async fn send_endpoint(
     headers: HeaderMap,
     Json(request): Json<Value>,
 ) -> Result<Json<ops::message::SendMessageOutput>, (StatusCode, Json<ErrorResponse>)> {
-    authorize_api_key(&headers, state.internal_keys())?;
+    let client = state.authorize_api_key(&headers).await?;
+    state
+        .require_permission(&client, Some(&sender_kid), "message")
+        .await?;
 
     ops::keys::validate_key_id(&sender_kid).map_err(|err| error_response(err.as_ref()))?;
     state
@@ -92,12 +94,15 @@ pub async fn decrypt_endpoint(
     headers: HeaderMap,
     Json(request): Json<Value>,
 ) -> Result<Json<ops::message::DecryptMessageOutput>, (StatusCode, Json<ErrorResponse>)> {
-    authorize_api_key(&headers, state.internal_keys())?;
+    let client = state.authorize_api_key(&headers).await?;
 
     let request = ops::message::parse_decrypt_message_input(request)
         .map_err(|err| error_response(err.as_ref()))?;
     let recipient_kid = ops::message::decrypt_message_recipient_kid(&request)
         .map_err(|err| error_response(err.as_ref()))?;
+    state
+        .require_permission(&client, Some(&recipient_kid), "message")
+        .await?;
     state
         .ensure_keys_db_entry(&recipient_kid)
         .await
@@ -124,7 +129,10 @@ pub async fn internal_encrypt_endpoint(
     headers: HeaderMap,
     Json(request): Json<Value>,
 ) -> Result<Json<ops::message::InternalMessageOutput>, (StatusCode, Json<ErrorResponse>)> {
-    authorize_api_key(&headers, state.internal_keys())?;
+    let client = state.authorize_api_key(&headers).await?;
+    state
+        .require_permission(&client, Some(&kid), "message")
+        .await?;
 
     ops::keys::validate_key_id(&kid).map_err(|err| error_response(err.as_ref()))?;
     state
@@ -154,10 +162,13 @@ pub async fn internal_decrypt_endpoint(
     headers: HeaderMap,
     Json(request): Json<Value>,
 ) -> Result<Json<ops::message::DecryptMessageOutput>, (StatusCode, Json<ErrorResponse>)> {
-    authorize_api_key(&headers, state.internal_keys())?;
+    let client = state.authorize_api_key(&headers).await?;
 
     let request = ops::message::parse_internal_decrypt_message_input(request)
         .map_err(|err| error_response(err.as_ref()))?;
+    state
+        .require_permission(&client, Some(&request.kid), "message")
+        .await?;
     ops::keys::validate_key_id(&request.kid).map_err(|err| error_response(err.as_ref()))?;
     state
         .ensure_keys_db_entry(&request.kid)

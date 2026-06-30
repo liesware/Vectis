@@ -1,4 +1,6 @@
+use axum::Json;
 use axum::Router;
+use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -10,11 +12,13 @@ mod error;
 mod health;
 mod keys;
 mod message;
+mod permissions;
 mod pubkey;
 mod routes;
 mod sign;
 mod test;
 
+use crate::core::permissions::{AuthenticatedClient, PermissionsState};
 use crate::core::routes::{FinalAppRoute, RoutesState};
 use crate::core::storage::StorageState;
 use crate::error::DynError;
@@ -34,7 +38,10 @@ pub struct HttpState {
     started_at: Arc<String>,
     keys_db_state: Arc<RwLock<Zeroizing<KeysDbState>>>,
     remote_public_keys_state: Arc<RwLock<Zeroizing<RemotePublicKeysState>>>,
+    permissions_state: Arc<RwLock<Zeroizing<PermissionsState>>>,
     routes_state: Arc<RwLock<RoutesState>>,
+    permissions_path: Arc<PathBuf>,
+    permissions_sign_path: Arc<PathBuf>,
     routes_path: Arc<PathBuf>,
     routes_sign_path: Arc<PathBuf>,
 }
@@ -44,7 +51,10 @@ struct HttpStateInput {
     internal_keys: Zeroizing<InternalDerivedKeysState>,
     storage: StorageState,
     keys_db_state: Zeroizing<KeysDbState>,
+    permissions_state: Zeroizing<PermissionsState>,
     routes_state: RoutesState,
+    permissions_path: PathBuf,
+    permissions_sign_path: PathBuf,
     routes_path: PathBuf,
     routes_sign_path: PathBuf,
     started_at: String,
@@ -61,7 +71,10 @@ impl HttpState {
             remote_public_keys_state: Arc::new(RwLock::new(Zeroizing::new(
                 RemotePublicKeysState::default(),
             ))),
+            permissions_state: Arc::new(RwLock::new(input.permissions_state)),
             routes_state: Arc::new(RwLock::new(input.routes_state)),
+            permissions_path: Arc::new(input.permissions_path),
+            permissions_sign_path: Arc::new(input.permissions_sign_path),
             routes_path: Arc::new(input.routes_path),
             routes_sign_path: Arc::new(input.routes_sign_path),
         }
@@ -85,6 +98,28 @@ impl HttpState {
         &self.internal_keys
     }
 
+    async fn authorize_api_key(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<Zeroizing<AuthenticatedClient>, (StatusCode, Json<error::ErrorResponse>)> {
+        let permissions_state = self.permissions_state.read().await;
+
+        auth::authorize_api_key(headers, self.internal_keys(), &permissions_state)
+    }
+
+    async fn require_permission(
+        &self,
+        client: &AuthenticatedClient,
+        kid: Option<&str>,
+        action: &str,
+    ) -> Result<(), (StatusCode, Json<error::ErrorResponse>)> {
+        let permissions_state = self.permissions_state.read().await;
+
+        permissions_state
+            .require_permission(client, kid, action)
+            .map_err(|err| error::error_response(err.as_ref()))
+    }
+
     fn storage(&self) -> &StorageState {
         &self.storage
     }
@@ -103,6 +138,12 @@ impl HttpState {
         let routes_state = self.routes_state.read().await;
 
         routes_state.len()
+    }
+
+    async fn permissions_loaded(&self) -> usize {
+        let permissions_state = self.permissions_state.read().await;
+
+        permissions_state.len()
     }
 
     async fn routes_output(&self) -> crate::core::routes::ListRoutesOutput {
@@ -138,6 +179,38 @@ impl HttpState {
         };
         let mut routes_state = self.routes_state.write().await;
         *routes_state = reloaded;
+
+        Ok(())
+    }
+
+    async fn reload_permissions_state(&self) -> Result<(), DynError> {
+        let loaded_key_ids = {
+            let keys_db_state = self.keys_db_state.read().await;
+            keys_db_state.ids()
+        };
+        let reloaded = {
+            let permissions_state = self.permissions_state.read().await;
+            permissions_state.reload_from_file(
+                &self.permissions_path,
+                |permissions_path, permissions_content| {
+                    let permissions_sign_path =
+                        crate::core::permissions::permissions_signature_path(
+                            permissions_path,
+                            &self.permissions_sign_path,
+                        );
+                    let signature_content = std::fs::read_to_string(&permissions_sign_path)?;
+                    crate::ops::sign::verify_permissions_file_signature(
+                        self.init_state(),
+                        permissions_path,
+                        permissions_content,
+                        &signature_content,
+                    )
+                },
+                |kid| loaded_key_ids.iter().any(|id| id == kid),
+            )?
+        };
+        let mut permissions_state = self.permissions_state.write().await;
+        *permissions_state = Zeroizing::new(reloaded);
 
         Ok(())
     }
@@ -211,6 +284,7 @@ pub fn router(state: HttpState) -> Router {
         .route("/lifecycle/{kid}", post(keys::update_lifecycle_endpoint))
         .route("/routes", get(routes::list_endpoint))
         .route("/routes/reload", post(routes::reload_endpoint))
+        .route("/permissions/reload", post(permissions::reload_endpoint))
         .route(
             "/keys",
             get(keys::list_endpoint).post(keys::create_endpoint),

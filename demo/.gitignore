@@ -5,6 +5,8 @@ site-*/app.env
 site-*/init.json
 site-*/routes.json
 site-*/routes_sign.json
+site-*/permissions.json
+site-*/permissions_sign.json
 site-*/db/*.db
 site-*/logs/
 __pycache__

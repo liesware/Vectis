@@ -20,6 +20,8 @@ INTERNAL_KEYS_KID_HEX_LEN = 64
 MESSAGE = "The things you own end up owning you."
 ROUTES_PATH = Path("routes.json")
 ROUTES_SIGN_PATH = Path("routes_sign.json")
+PERMISSIONS_PATH = Path("permissions.json")
+PERMISSIONS_SIGN_PATH = Path("permissions_sign.json")
 
 KEY_CASES = [
     {
@@ -414,12 +416,28 @@ def backup_routes_sign_file():
     return backup_file(ROUTES_SIGN_PATH)
 
 
+def backup_permissions_file():
+    return backup_file(PERMISSIONS_PATH)
+
+
+def backup_permissions_sign_file():
+    return backup_file(PERMISSIONS_SIGN_PATH)
+
+
 def restore_routes_file(backup):
     restore_file(ROUTES_PATH, backup)
 
 
 def restore_routes_sign_file(backup):
     restore_file(ROUTES_SIGN_PATH, backup)
+
+
+def restore_permissions_file(backup):
+    restore_file(PERMISSIONS_PATH, backup)
+
+
+def restore_permissions_sign_file(backup):
+    restore_file(PERMISSIONS_SIGN_PATH, backup)
 
 
 def write_test_routes(key_ids, final_app_addr):
@@ -448,6 +466,79 @@ def sign_routes():
         raise WorkflowError(
             f"vectis routes sign failed: stdout={result.stdout} stderr={result.stderr}"
         )
+
+
+def create_api_key_pair():
+    result = subprocess.run(
+        ["cargo", "run", "--", "apikey", "create", "--output", "json"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise WorkflowError(
+            f"vectis apikey create failed: stdout={result.stdout} stderr={result.stderr}"
+        )
+
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as err:
+        raise WorkflowError(f"vectis apikey create returned invalid JSON: {result.stdout}") from err
+
+    api_key = payload.get("VECTIS_APIKEY")
+    api_key_hash = payload.get("VECTIS_APIKEY_HASH")
+    require_hex(api_key, "VECTIS_APIKEY")
+    require_hex(api_key_hash, "VECTIS_APIKEY_HASH")
+    return api_key, api_key_hash
+
+
+def sign_permissions():
+    result = subprocess.run(
+        ["cargo", "run", "--", "permissions", "sign", "--output", "json"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise WorkflowError(
+            f"vectis permissions sign failed: stdout={result.stdout} stderr={result.stderr}"
+        )
+
+
+def write_permissions(clients):
+    PERMISSIONS_PATH.write_text(
+        json.dumps(
+            {
+                "version": "v1",
+                "clients": clients,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    sign_permissions()
+
+
+def reload_permissions(client):
+    response = client.post("/permissions/reload", {}, auth=True)
+    require(response.get("status") == "reloaded", "permissions reload status must be reloaded")
+    require(
+        isinstance(response.get("clients_loaded"), int),
+        "permissions reload clients_loaded must be an integer",
+    )
+    return response
+
+
+def clear_permissions_state(client):
+    backup = backup_permissions_file()
+    sign_backup = backup_permissions_sign_file()
+    PERMISSIONS_PATH.write_text('{"version":"v1","clients":[]}\n', encoding="utf-8")
+    sign_permissions()
+    try:
+        reload_permissions(client)
+    finally:
+        restore_permissions_file(backup)
+        restore_permissions_sign_file(sign_backup)
 
 
 def clear_routes_state(client):
@@ -609,6 +700,52 @@ def encrypt_internal_message(client, message_number, key_id, case):
     }
 
 
+def validate_permissions_flow(base_url, root_client, key_id, case):
+    limited_key, limited_hash = create_api_key_pair()
+    admin_key, admin_hash = create_api_key_pair()
+    write_permissions(
+        [
+            {
+                "client": "positive-limited-message",
+                "apikey_hash": limited_hash,
+                "status": "active",
+                "permissions": [
+                    {
+                        "kid": key_id,
+                        "actions": ["message"],
+                    }
+                ],
+            },
+            {
+                "client": "positive-admin",
+                "apikey_hash": admin_hash,
+                "status": "active",
+                "permissions": [
+                    {
+                        "kid": "*",
+                        "actions": ["admin"],
+                    }
+                ],
+            },
+        ]
+    )
+    reload_permissions(root_client)
+
+    limited_client = Client(base_url, limited_key)
+    admin_client = Client(base_url, admin_key)
+
+    limited_result = encrypt_internal_message(limited_client, 1, key_id, case)
+    validate_init(admin_client.get("/self-test/init", auth=True))
+    validate_routes_list(admin_client.get("/routes", auth=True))
+    reload_permissions(admin_client)
+
+    return [
+        ("limited message key", "OK"),
+        ("admin key", "OK"),
+        (f"limited ctx_hex_len {limited_result['ctx_hex_len']}", "OK"),
+    ]
+
+
 def send_message(client, message_number, sender_key_id, recipient_host, recipient_key_id, case):
     before = len(FinalAppHandler.deliveries)
     plaintext_message = MESSAGE + str(message_number)
@@ -650,8 +787,12 @@ def main():
     client = Client(args.base_url, apikey)
     routes_backup = backup_routes_file()
     routes_sign_backup = backup_routes_sign_file()
+    permissions_backup = backup_permissions_file()
+    permissions_sign_backup = backup_permissions_sign_file()
     atexit.register(restore_routes_file, routes_backup)
     atexit.register(restore_routes_sign_file, routes_sign_backup)
+    atexit.register(restore_permissions_file, permissions_backup)
+    atexit.register(restore_permissions_sign_file, permissions_sign_backup)
     recipient_host = host_from_base_url(args.base_url)
     message = MESSAGE.encode("utf-8")
 
@@ -734,6 +875,10 @@ def main():
     print("List routes: OK\n")
     passed_count += 1
 
+    permission_rows = validate_permissions_flow(args.base_url, client, created[0][0], created[0][1])
+    print_section("permissions", permission_rows)
+    passed_count += len(permission_rows)
+
     test_rows = []
     pub_rows = []
     message_rows = []
@@ -806,6 +951,9 @@ def main():
     restore_routes_file(routes_backup)
     restore_routes_sign_file(routes_sign_backup)
     clear_routes_state(client)
+    restore_permissions_file(permissions_backup)
+    restore_permissions_sign_file(permissions_sign_backup)
+    clear_permissions_state(client)
     final_app.shutdown()
 
 

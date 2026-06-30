@@ -59,6 +59,41 @@ json_field() {
   python3 -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]])' "${field}"
 }
 
+create_client_api_key_pair() {
+  local site="$1"
+  local site_dir="${SCRIPT_DIR}/${site}"
+  (cd "${site_dir}" && ../bin/vectis apikey create --output json)
+}
+
+write_permissions() {
+  local site="$1"
+  local client="$2"
+  local apikey_hash="$3"
+  local kid="$4"
+  local site_dir="${SCRIPT_DIR}/${site}"
+
+  cat > "${site_dir}/permissions.json" <<JSON
+{
+  "version": "v1",
+  "clients": [
+    {
+      "client": "${client}",
+      "apikey_hash": "${apikey_hash}",
+      "status": "active",
+      "permissions": [
+        {
+          "kid": "${kid}",
+          "actions": ["message"]
+        }
+      ]
+    }
+  ]
+}
+JSON
+
+  (cd "${site_dir}" && ../bin/vectis permissions sign --output json >/dev/null)
+}
+
 wait_ready() {
   local url="$1"
   python3 - "${url}" <<'PY'
@@ -87,7 +122,13 @@ prepare_site() {
   local site_dir="${SCRIPT_DIR}/${site}"
 
   init_db "${site_dir}"
-  rm -f "${site_dir}/init.json" "${site_dir}/routes.json" "${site_dir}/routes_sign.json" "${site_dir}/.unseal_key"
+  rm -f \
+    "${site_dir}/init.json" \
+    "${site_dir}/routes.json" \
+    "${site_dir}/routes_sign.json" \
+    "${site_dir}/permissions.json" \
+    "${site_dir}/permissions_sign.json" \
+    "${site_dir}/.unseal_key"
 
   local init_output
   init_output="$(cd "${site_dir}" && ../bin/vectis init)"
@@ -153,8 +194,15 @@ prepare_site "site-b"
 
 kid_a="$(create_site_key "site-a" "clinic-a-records" "http://127.0.0.1:3001/healthz/ready")"
 kid_b="$(create_site_key "site-b" "clinic-b-records" "http://127.0.0.1:3002/healthz/ready")"
-apikey_a="$(grep '^VECTIS_APIKEY=' "${SCRIPT_DIR}/site-a/.env" | cut -d= -f2-)"
-apikey_b="$(grep '^VECTIS_APIKEY=' "${SCRIPT_DIR}/site-b/.env" | cut -d= -f2-)"
+app_api_output_a="$(create_client_api_key_pair "site-a")"
+app_api_output_b="$(create_client_api_key_pair "site-b")"
+app_apikey_a="$(printf '%s\n' "${app_api_output_a}" | json_field "VECTIS_APIKEY")"
+app_apikey_hash_a="$(printf '%s\n' "${app_api_output_a}" | json_field "VECTIS_APIKEY_HASH")"
+app_apikey_b="$(printf '%s\n' "${app_api_output_b}" | json_field "VECTIS_APIKEY")"
+app_apikey_hash_b="$(printf '%s\n' "${app_api_output_b}" | json_field "VECTIS_APIKEY_HASH")"
+
+write_permissions "site-a" "clinic-a-app" "${app_apikey_hash_a}" "${kid_a}"
+write_permissions "site-b" "clinic-b-app" "${app_apikey_hash_b}" "${kid_b}"
 
 cat > "${SCRIPT_DIR}/site-a/app.env" <<ENV
 APP_NAME=clinic-a
@@ -164,7 +212,7 @@ LOCAL_KID=${kid_a}
 REMOTE_APP_NAME=clinic-b
 REMOTE_VECTIS_HOST=127.0.0.1:3002
 REMOTE_KID=${kid_b}
-VECTIS_APIKEY=${apikey_a}
+VECTIS_APIKEY=${app_apikey_a}
 ENV
 
 cat > "${SCRIPT_DIR}/site-b/app.env" <<ENV
@@ -175,10 +223,13 @@ LOCAL_KID=${kid_b}
 REMOTE_APP_NAME=clinic-a
 REMOTE_VECTIS_HOST=127.0.0.1:3001
 REMOTE_KID=${kid_a}
-VECTIS_APIKEY=${apikey_b}
+VECTIS_APIKEY=${app_apikey_b}
 ENV
 
 echo "Created demo keys:"
 echo "  site-a kid: ${kid_a}"
 echo "  site-b kid: ${kid_b}"
+echo "Created and signed permissions:"
+echo "  site-a client: clinic-a-app -> message on ${kid_a}"
+echo "  site-b client: clinic-b-app -> message on ${kid_b}"
 echo "Next: bash demo/configure-routes.sh"

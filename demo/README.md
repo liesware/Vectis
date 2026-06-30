@@ -63,7 +63,7 @@ site. It receives a local encrypted delivery and must call its local Vectis
 
    ```http
    POST /message/{clinic_a_kid}
-   X-API-Key: <clinic-a apikey>
+   X-API-Key: <clinic-a client apikey>
    ```
 
    ```json
@@ -118,7 +118,7 @@ site. It receives a local encrypted delivery and must call its local Vectis
 
     ```http
     POST /message/decrypt
-    X-API-Key: <clinic-b apikey>
+    X-API-Key: <clinic-b client apikey>
     ```
 
 11. Clinic B prints the recovered clinical record.
@@ -131,7 +131,8 @@ site. It receives a local encrypted delivery and must call its local Vectis
 - `site-b/`: Clinic B runtime state.
 - `setup.sh`: builds the Vectis binary and creates demo directories.
 - `create-keys.sh`: initializes both sites and creates one operational key per
-  clinic.
+  clinic, then creates a non-root app API key and signed permissions for each
+  clinic app.
 - `configure-routes.sh`: creates and signs final app routes.
 - `start-vectis-a.sh`, `start-vectis-b.sh`: start each Vectis instance.
 - `start-app-a.sh`, `start-app-b.sh`: start each clinic final app.
@@ -157,7 +158,8 @@ bash demo/configure-routes.sh
 
 The scripts create local demo state under `demo/site-a` and `demo/site-b`,
 including encrypted `init.json`, `.unseal_key`, SQLite storage, routes, and
-route signatures.
+route signatures. The scripts also create signed `permissions.json` files so
+each clinic app can only use `message` operations for its own local KID.
 
 ## Run The Demo
 
@@ -228,5 +230,8 @@ final app decryption.
 - This demo uses local loopback addresses for clarity.
 - The generated `.unseal_key`, `.env`, databases, and route signatures are demo
   state and are ignored by `demo/.gitignore`.
+- The root API key stays in each site's `.env` for administrative scripts.
+  Clinic apps use separate client API keys from `app.env`; those keys are
+  authorized by signed `permissions.json` files.
 - The sample clinical record is fictional and should be replaced with synthetic
   test data for real demonstrations.

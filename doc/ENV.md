@@ -57,6 +57,8 @@ These variables are used by CLI commands that call the HTTP API. `serve` and `in
 | `VECTIS_FINAL_APP_PATH` | `/message` | HTTP path beginning with `/`, no spaces | Default final app path. |
 | `VECTIS_ROUTES_PATH` | `routes.json` | Non-empty file path | Optional manual routing file. Startup falls back to default final app delivery if the file is missing or invalid. Runtime reload keeps the previous routes if the file exists but is invalid. |
 | `VECTIS_ROUTES_SIGN_PATH` | `routes_sign.json` | Non-empty file path | Signature token for `VECTIS_ROUTES_PATH`, created by `vectis routes sign`. |
+| `VECTIS_PERMISSIONS_PATH` | `permissions.json` | Non-empty file path | Optional signed API key permissions file. If missing, only the root API key is authorized. |
+| `VECTIS_PERMISSIONS_SIGN_PATH` | `permissions_sign.json` | Non-empty file path | Signature token for `VECTIS_PERMISSIONS_PATH`, created by `vectis permissions sign`. |
 
 Manual routes file shape:
 
@@ -106,6 +108,66 @@ Security notes:
 - `VECTIS_APIKEY` is a client secret. Do not place it in server-only environments unless the same process also acts as a client.
 - `VECTIS_APIKEY_HASH` lets the server verify `X-API-Key` without storing the API key in plaintext. It is `HMAC-SHA256(api_auth_key, VECTIS_APIKEY)`, where `api_auth_key` is derived from the init symmetric key with HKDF-SHA256.
 - `vectis apikey create` can generate additional client API keys from the existing `init.json`. It only prints `VECTIS_APIKEY` and `VECTIS_APIKEY_HASH`; it does not write `.env`, `init.json`, or storage.
+
+## API Key Permissions
+
+`VECTIS_APIKEY` and `VECTIS_APIKEY_HASH` are the root API key pair. Root can use every protected endpoint. Clients with `admin` can also call protected administrative endpoints, including `POST /permissions/reload`.
+
+Additional clients are loaded from `VECTIS_PERMISSIONS_PATH` when the file exists and its `VECTIS_PERMISSIONS_SIGN_PATH` signature verifies.
+
+Recommended admin permission:
+
+```json
+{
+  "kid": "*",
+  "actions": ["admin"]
+}
+```
+
+If any permission entry contains `admin`, Vectis treats the whole client as admin and ignores `kid` plus any other actions for that client. Non-admin clients must reference KIDs already loaded in memory.
+
+Allowed actions:
+
+- `admin`
+- `keys`
+- `lifecycle`
+- `self-test`
+- `sign`
+- `message`
+
+Permission mapping summary:
+
+- `admin`: administrative protected endpoints, including `POST /keys`, `POST /keys/reload`, `GET /keys/properties`, `GET /routes`, `POST /routes/reload`, `POST /permissions/reload`, and `GET /self-test/init`.
+- `keys`: `GET /keys/properties/{kid}`.
+- `lifecycle`: `POST /lifecycle/{kid}`.
+- `self-test`: `GET /self-test/keys/{kid}`.
+- `sign`: `POST /sign/{kid}`.
+- `message`: protected message endpoints.
+
+Routes operations require root or `admin`; there is no granular `routes` action.
+
+Permissions file shape:
+
+```json
+{
+  "version": "v1",
+  "clients": [
+    {
+      "client": "client-a",
+      "apikey_hash": "<VECTIS_APIKEY_HASH>",
+      "status": "active",
+      "permissions": [
+        {
+          "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+          "actions": ["sign", "message"]
+        }
+      ]
+    }
+  ]
+}
+```
+
+Clients with `status` other than `active` are ignored. Invalid JSON, invalid actions, invalid hashes, signature failure, or a non-admin permission referencing an unloaded KID rejects the whole file.
 
 ## Storage
 
@@ -217,6 +279,8 @@ VECTIS_FINAL_APP_ADDR=localhost:3999
 VECTIS_FINAL_APP_PATH=/message
 VECTIS_ROUTES_PATH=routes.json
 VECTIS_ROUTES_SIGN_PATH=routes_sign.json
+VECTIS_PERMISSIONS_PATH=permissions.json
+VECTIS_PERMISSIONS_SIGN_PATH=permissions_sign.json
 VECTIS_LOG_LEVEL=info
 VECTIS_LOG_DIR=logs
 VECTIS_LOG_FILE=vectis.log

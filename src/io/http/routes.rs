@@ -1,5 +1,4 @@
 use super::HttpState;
-use super::auth::authorize_api_key;
 use super::error::{ErrorResponse, error_response};
 use crate::core::routes::ListRoutesOutput;
 use axum::Json;
@@ -11,7 +10,8 @@ pub async fn list_endpoint(
     State(state): State<HttpState>,
     headers: HeaderMap,
 ) -> Result<Json<ListRoutesOutput>, (StatusCode, Json<ErrorResponse>)> {
-    authorize_api_key(&headers, state.internal_keys())?;
+    let client = state.authorize_api_key(&headers).await?;
+    state.require_permission(&client, None, "admin").await?;
 
     info!(endpoint = "GET /routes", "routes list request accepted");
     let response = state.routes_output().await;
@@ -28,7 +28,8 @@ pub async fn reload_endpoint(
     State(state): State<HttpState>,
     headers: HeaderMap,
 ) -> Result<Json<ListRoutesOutput>, (StatusCode, Json<ErrorResponse>)> {
-    authorize_api_key(&headers, state.internal_keys())?;
+    let client = state.authorize_api_key(&headers).await?;
+    state.require_permission(&client, None, "admin").await?;
 
     info!(
         endpoint = "POST /routes/reload",

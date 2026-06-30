@@ -232,7 +232,7 @@ paths:
     get:
       tags: [Routes]
       summary: List final app routes loaded in memory
-      description: Administrative endpoint. Lists the current in-memory routes and does not read VECTIS_ROUTES_PATH.
+      description: Administrative endpoint requiring root or an admin client. Lists the current in-memory routes and does not read VECTIS_ROUTES_PATH.
       security:
         - ApiKeyAuth: []
       responses:
@@ -249,7 +249,7 @@ paths:
     post:
       tags: [Routes]
       summary: Reload final app routes from VECTIS_ROUTES_PATH
-      description: Administrative endpoint. Replaces in-memory routes only after VECTIS_ROUTES_PATH and VECTIS_ROUTES_SIGN_PATH are successfully read, verified, and validated. Every route kid must exist in the keys currently loaded in memory. A missing routes file reloads to an empty route list; an invalid signature, invalid file, or unloaded route kid returns an error and keeps the previous in-memory routes.
+      description: Administrative endpoint requiring root or an admin client. Replaces in-memory routes only after VECTIS_ROUTES_PATH and VECTIS_ROUTES_SIGN_PATH are successfully read, verified, and validated. Every route kid must exist in the keys currently loaded in memory. A missing routes file reloads to an empty route list; an invalid signature, invalid file, or unloaded route kid returns an error and keeps the previous in-memory routes.
       security:
         - ApiKeyAuth: []
       responses:
@@ -259,6 +259,23 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RoutesOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /permissions/reload:
+    post:
+      tags: [Permissions]
+      summary: Reload signed API key permissions
+      description: Administrative endpoint. Replaces in-memory API key permissions only after VECTIS_PERMISSIONS_PATH and VECTIS_PERMISSIONS_SIGN_PATH are successfully read, verified, and validated. A missing permissions file reloads to an empty client list; invalid signature, invalid file, or unloaded non-admin kid returns an error and keeps the previous permissions.
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: Reloaded API key permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReloadPermissionsResponse"
         default:
           $ref: "#/components/responses/Error"
 
@@ -666,6 +683,16 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/FinalAppRoute"
+
+    ReloadPermissionsResponse:
+      type: object
+      required: [status, clients_loaded]
+      properties:
+        status:
+          const: reloaded
+        clients_loaded:
+          type: integer
+          minimum: 0
 
     FinalAppRoute:
       type: object

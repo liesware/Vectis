@@ -1,5 +1,4 @@
 use super::HttpState;
-use super::auth::authorize_api_key;
 use super::error::{ErrorResponse, error_response};
 use crate::ops;
 use axum::Json;
@@ -14,7 +13,8 @@ pub async fn sign_endpoint(
     headers: HeaderMap,
     Json(request): Json<Value>,
 ) -> Result<Json<ops::sign::TimestampToken>, (StatusCode, Json<ErrorResponse>)> {
-    authorize_api_key(&headers, state.internal_keys())?;
+    let client = state.authorize_api_key(&headers).await?;
+    state.require_permission(&client, Some(&id), "sign").await?;
 
     ops::keys::validate_key_id(&id).map_err(|err| error_response(err.as_ref()))?;
     state

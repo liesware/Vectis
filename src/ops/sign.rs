@@ -1,4 +1,4 @@
-use crate::core::{config, crypto, routes, validation};
+use crate::core::{config, crypto, permissions, routes, validation};
 use crate::error::DynError;
 use crate::ops::contracts::{
     MessageHash, SignatureBlock, TimestampPayload, TimestampSignatures, VerificationStatus,
@@ -15,6 +15,7 @@ pub use crate::ops::contracts::{SignInput, TimestampToken, VerificationOutput};
 
 const TIMESTAMP_TOKEN_TYPE: &str = "vectis-sign";
 const ROUTES_TOKEN_TYPE: &str = "vectis-routes";
+const PERMISSIONS_TOKEN_TYPE: &str = "vectis-permissions";
 const INIT_KEYS_KID: &str = "init-keys";
 const PAYLOAD_SERIAL_RANDOM_BYTES: usize = 32;
 
@@ -163,6 +164,101 @@ pub fn verify_routes_file_signature(
         return Err(Box::new(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "routes signature verification failed",
+        )));
+    }
+
+    Ok(())
+}
+
+pub fn sign_permissions_file(
+    init_state: &ValidatedInitState,
+    permissions_path: &Path,
+    permissions_content: &str,
+) -> Result<TimestampToken, DynError> {
+    let canonical_permissions = permissions::canonical_permissions_json(permissions_content)?;
+    let message_hash = MessageHash {
+        alg: config::INTERNAL_KEYS_HASH.to_string(),
+        hex: hex::encode(crypto::hash_text(
+            config::INTERNAL_KEYS_HASH,
+            &canonical_permissions,
+        )?),
+    };
+    let created_at = validation::current_timestamp()?;
+    let info = validation::build_aad(&[
+        ("version", "v1"),
+        ("type", PERMISSIONS_TOKEN_TYPE),
+        ("path", &permissions_path.display().to_string()),
+    ]);
+    let payload = TimestampPayload {
+        token_type: String::from(PERMISSIONS_TOKEN_TYPE),
+        serial: create_payload_serial(&created_at)?,
+        created_at,
+        info,
+        kid: String::from(INIT_KEYS_KID),
+        message_hash,
+    };
+    let signatures = sign_hybrid_payload(
+        &payload,
+        init_state.init_keys.keys().eddsa(),
+        init_state.init_keys.keys().ml_dsa(),
+    )?;
+
+    Ok(TimestampToken {
+        version: String::from("v1"),
+        payload,
+        signatures,
+    })
+}
+
+pub fn verify_permissions_file_signature(
+    init_state: &ValidatedInitState,
+    permissions_path: &Path,
+    permissions_content: &str,
+    signature_content: &str,
+) -> Result<(), DynError> {
+    let token = parse_timestamp_token(serde_json::from_str(signature_content).map_err(|err| {
+        Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("permissions signature must be valid JSON: {err}"),
+        )) as DynError
+    })?)?;
+    validate_signed_payload_token(&token, PERMISSIONS_TOKEN_TYPE, INIT_KEYS_KID)?;
+    let expected_info = validation::build_aad(&[
+        ("version", "v1"),
+        ("type", PERMISSIONS_TOKEN_TYPE),
+        ("path", &permissions_path.display().to_string()),
+    ]);
+    if token.payload.info != expected_info {
+        return Err(Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "permissions signature payload.info does not match permissions path",
+        )));
+    }
+
+    let canonical_permissions = permissions::canonical_permissions_json(permissions_content)?;
+    let expected_hash = hex::encode(crypto::hash_text(
+        config::INTERNAL_KEYS_HASH,
+        &canonical_permissions,
+    )?);
+    if token.payload.message_hash.alg != config::INTERNAL_KEYS_HASH
+        || token.payload.message_hash.hex != expected_hash
+    {
+        return Err(Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "permissions signature message_hash does not match permissions content",
+        )));
+    }
+
+    let status = verify_hybrid_payload(
+        &token.payload,
+        &token.signatures,
+        init_state.init_keys.keys().eddsa(),
+        init_state.init_keys.keys().ml_dsa(),
+    )?;
+    if status.eddsa != "ok" || status.ml_dsa != "ok" {
+        return Err(Box::new(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "permissions signature verification failed",
         )));
     }
 

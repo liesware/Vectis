@@ -48,8 +48,8 @@ async fn main() -> Result<(), DynError> {
             io::cli::apikey::run(args.collect())?;
         }
         Some(
-            command @ ("health" | "test" | "keys" | "lifecycle" | "routes" | "pub" | "sign"
-            | "message"),
+            command @ ("health" | "test" | "keys" | "lifecycle" | "routes" | "permissions" | "pub"
+            | "sign" | "message"),
         ) => {
             io::cli::http::run(command, args.collect()).await?;
         }
@@ -81,6 +81,7 @@ fn print_help() {
     println!("  keys                  Create, list, or reload operational keys through HTTP");
     println!("  lifecycle             Update operational key lifecycle metadata");
     println!("  routes                List, reload, or sign final app routes");
+    println!("  permissions           Reload or sign API key permissions");
     println!("  pub                   Fetch public keys through HTTP");
     println!("  sign                  Create or verify timestamp signatures through HTTP");
     println!("  message               Send, receive, encrypt, or decrypt messages through HTTP");
@@ -93,6 +94,7 @@ fn print_help() {
     println!("  {PROGRAM_NAME} keys create --tag payments --profile hybrid-high-assurance-v1");
     println!("  {PROGRAM_NAME} lifecycle <kid> --status disabled --reason maintenance");
     println!("  {PROGRAM_NAME} routes list");
+    println!("  {PROGRAM_NAME} permissions sign");
     println!("  {PROGRAM_NAME} sign <kid> --file sign-request.json");
     println!();
     println!("Help:");
@@ -103,6 +105,7 @@ fn print_help() {
     println!("  {PROGRAM_NAME} help keys");
     println!("  {PROGRAM_NAME} help lifecycle");
     println!("  {PROGRAM_NAME} help routes");
+    println!("  {PROGRAM_NAME} help permissions");
     println!("  {PROGRAM_NAME} help pub");
     println!("  {PROGRAM_NAME} help sign");
     println!("  {PROGRAM_NAME} help message");
@@ -119,9 +122,8 @@ fn print_command_help(command: &str) {
         "serve" => print_serve_help(),
         "init" => print_init_help(),
         "apikey" => io::cli::apikey::print_help(),
-        "health" | "test" | "keys" | "lifecycle" | "routes" | "pub" | "sign" | "message" => {
-            io::cli::http::print_help(command)
-        }
+        "health" | "test" | "keys" | "lifecycle" | "routes" | "permissions" | "pub" | "sign"
+        | "message" => io::cli::http::print_help(command),
         "-h" | "--help" | "help" => print_help(),
         command => {
             eprintln!("unknown help command: {command}\n");

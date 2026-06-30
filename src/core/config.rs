@@ -35,6 +35,8 @@ pub struct AppConfig {
     pub tls_skip_verify: bool,
     pub routes_path: PathBuf,
     pub routes_sign_path: PathBuf,
+    pub permissions_path: PathBuf,
+    pub permissions_sign_path: PathBuf,
     pub api_key_hash: String,
     pub protocol_version: String,
     pub storage_type: String,
@@ -93,6 +95,18 @@ pub fn app_config() -> Result<AppConfig, DynError> {
         "VECTIS_ROUTES_SIGN_PATH",
         "routes_sign.json",
     ))?;
+    let permissions_path = validate_config_path(
+        "VECTIS_PERMISSIONS_PATH",
+        &config_value(&env_file, "VECTIS_PERMISSIONS_PATH", "permissions.json"),
+    )?;
+    let permissions_sign_path = validate_config_path(
+        "VECTIS_PERMISSIONS_SIGN_PATH",
+        &config_value(
+            &env_file,
+            "VECTIS_PERMISSIONS_SIGN_PATH",
+            "permissions_sign.json",
+        ),
+    )?;
     let api_key_hash = config_value(&env_file, "VECTIS_APIKEY_HASH", "");
     let protocol_version = config_value(&env_file, "VECTIS_PROTOCOL_VERSION", "v1");
     let storage_type = config_value(&env_file, "VECTIS_STORAGE", "sqlite");
@@ -177,6 +191,8 @@ pub fn app_config() -> Result<AppConfig, DynError> {
         tls_skip_verify,
         routes_path,
         routes_sign_path,
+        permissions_path,
+        permissions_sign_path,
         api_key_hash,
         protocol_version,
         storage_type,
@@ -284,7 +300,11 @@ pub fn validate_bool_field(field: &str, value: &str) -> Result<bool, DynError> {
 }
 
 fn validate_routes_path(value: &str) -> Result<PathBuf, DynError> {
-    validation::validate_text_field("VECTIS_ROUTES_PATH", value)?;
+    validate_config_path("VECTIS_ROUTES_PATH", value)
+}
+
+fn validate_config_path(field: &str, value: &str) -> Result<PathBuf, DynError> {
+    validation::validate_text_field(field, value)?;
 
     Ok(PathBuf::from(value))
 }

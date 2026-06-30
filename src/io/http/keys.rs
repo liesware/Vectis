@@ -1,5 +1,4 @@
 use super::HttpState;
-use super::auth::authorize_api_key;
 use super::error::{ErrorResponse, error_response, public_error_message};
 use crate::ops;
 use axum::Json;
@@ -19,7 +18,8 @@ pub async fn create_endpoint(
     headers: HeaderMap,
     Json(request): Json<Value>,
 ) -> Result<Json<CreateKeysResponse>, (StatusCode, Json<ErrorResponse>)> {
-    authorize_api_key(&headers, state.internal_keys())?;
+    let client = state.authorize_api_key(&headers).await?;
+    state.require_permission(&client, None, "admin").await?;
 
     let request = match ops::keys::parse_create_keys_input(request) {
         Ok(request) => request,
@@ -112,7 +112,8 @@ pub async fn list_properties_endpoint(
     State(state): State<HttpState>,
     headers: HeaderMap,
 ) -> Result<Json<ops::keys::ListKeysPropertiesOutput>, (StatusCode, Json<ErrorResponse>)> {
-    authorize_api_key(&headers, state.internal_keys())?;
+    let client = state.authorize_api_key(&headers).await?;
+    state.require_permission(&client, None, "admin").await?;
 
     info!(
         endpoint = "GET /keys/properties",
@@ -137,7 +138,8 @@ pub async fn get_properties_endpoint(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<ops::keys::KeyPropertiesOutput>, (StatusCode, Json<ErrorResponse>)> {
-    authorize_api_key(&headers, state.internal_keys())?;
+    let client = state.authorize_api_key(&headers).await?;
+    state.require_permission(&client, Some(&id), "keys").await?;
     info!(
         endpoint = "GET /keys/properties/{kid}",
         kid = %id,
@@ -170,7 +172,10 @@ pub async fn update_lifecycle_endpoint(
     Path(id): Path<String>,
     Json(request): Json<Value>,
 ) -> Result<Json<ops::keys::UpdateLifecycleOutput>, (StatusCode, Json<ErrorResponse>)> {
-    authorize_api_key(&headers, state.internal_keys())?;
+    let client = state.authorize_api_key(&headers).await?;
+    state
+        .require_permission(&client, Some(&id), "lifecycle")
+        .await?;
     let request = ops::keys::parse_update_lifecycle_input(request)
         .map_err(|err| error_response(err.as_ref()))?;
 
@@ -203,7 +208,8 @@ pub async fn refresh_endpoint(
     State(state): State<HttpState>,
     headers: HeaderMap,
 ) -> Result<Json<ops::keys::ListKeysPropertiesOutput>, (StatusCode, Json<ErrorResponse>)> {
-    authorize_api_key(&headers, state.internal_keys())?;
+    let client = state.authorize_api_key(&headers).await?;
+    state.require_permission(&client, None, "admin").await?;
 
     info!(
         endpoint = "POST /keys/reload",

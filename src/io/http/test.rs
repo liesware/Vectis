@@ -1,5 +1,4 @@
 use super::HttpState;
-use super::auth::authorize_api_key;
 use super::error::{ErrorResponse, error_response};
 use crate::ops;
 use crate::ops::init::InitValidationOutput;
@@ -12,7 +11,8 @@ pub async fn init_endpoint(
     State(state): State<HttpState>,
     headers: HeaderMap,
 ) -> Result<Json<InitValidationOutput>, (StatusCode, Json<ErrorResponse>)> {
-    authorize_api_key(&headers, state.internal_keys())?;
+    let client = state.authorize_api_key(&headers).await?;
+    state.require_permission(&client, None, "admin").await?;
 
     info!(
         endpoint = "GET /self-test/init",
@@ -39,7 +39,10 @@ pub async fn test_endpoint(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<ops::test::TestOutput>, (StatusCode, Json<ErrorResponse>)> {
-    authorize_api_key(&headers, state.internal_keys())?;
+    let client = state.authorize_api_key(&headers).await?;
+    state
+        .require_permission(&client, Some(&id), "self-test")
+        .await?;
 
     ops::keys::validate_key_id(&id).map_err(|err| error_response(err.as_ref()))?;
     state
