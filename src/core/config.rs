@@ -21,9 +21,11 @@ pub const CRYPTO_PROFILES: &[&str] = &[
 ];
 pub const CRYPTO_POLICIES: &[&str] = &["profile-only", "allow-overrides"];
 pub const HTTP_SCHEMES: &[&str] = &["http", "https"];
+pub const VECTIS_MODES: &[&str] = &["dev", "prod"];
 
 pub struct AppConfig {
     pub http_bind_addr: SocketAddr,
+    pub mode: String,
     pub server_scheme: String,
     pub remote_scheme: String,
     pub final_app_scheme: String,
@@ -54,12 +56,10 @@ pub fn app_config() -> Result<AppConfig, DynError> {
         "VECTIS_HTTP_BIND_ADDR",
         &config_value(&env_file, "VECTIS_HTTP_BIND_ADDR", "127.0.0.1:3000"),
     )?;
-    let server_scheme =
-        validate_http_scheme(&config_value(&env_file, "VECTIS_SERVER_SCHEME", "http"))?;
-    let remote_scheme =
-        validate_http_scheme(&config_value(&env_file, "VECTIS_REMOTE_SCHEME", "http"))?;
-    let final_app_scheme =
-        validate_http_scheme(&config_value(&env_file, "VECTIS_FINAL_APP_SCHEME", "http"))?;
+    let mode = validate_vectis_mode(&config_value(&env_file, "VECTIS_MODE", "dev"))?;
+    let server_scheme = transport_scheme_for_mode(&mode).to_string();
+    let remote_scheme = transport_scheme_for_mode(&mode).to_string();
+    let final_app_scheme = transport_scheme_for_mode(&mode).to_string();
     let public_addr = validation::validate_host_port(
         "VECTIS_PUBLIC_ADDR",
         &config_value(&env_file, "VECTIS_PUBLIC_ADDR", "127.0.0.1:3000"),
@@ -136,12 +136,7 @@ pub fn app_config() -> Result<AppConfig, DynError> {
     );
 
     validation::validate_allowed_value("VECTIS_PROTOCOL_VERSION", &protocol_version, &["v1"])?;
-    if server_scheme == "https" && (tls_cert_path.is_none() || tls_key_path.is_none()) {
-        return Err(Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "VECTIS_TLS_CERT_PATH and VECTIS_TLS_KEY_PATH are required when VECTIS_SERVER_SCHEME=https",
-        )));
-    }
+    validate_tls_paths_for_mode(&mode, tls_cert_path.as_ref(), tls_key_path.as_ref())?;
     validation::validate_allowed_value(
         "VECTIS_STORAGE",
         &storage_type,
@@ -180,6 +175,7 @@ pub fn app_config() -> Result<AppConfig, DynError> {
 
     Ok(AppConfig {
         http_bind_addr,
+        mode,
         server_scheme,
         remote_scheme,
         final_app_scheme,
@@ -206,6 +202,7 @@ pub fn app_config() -> Result<AppConfig, DynError> {
 }
 
 pub struct HttpClientConfig {
+    pub mode: String,
     pub remote_scheme: String,
     pub final_app_scheme: String,
     pub tls_skip_verify: bool,
@@ -213,20 +210,48 @@ pub struct HttpClientConfig {
 
 pub fn http_client_config() -> Result<HttpClientConfig, DynError> {
     let env_file = load_env_file(".env")?;
-    let remote_scheme =
-        validate_http_scheme(&config_value(&env_file, "VECTIS_REMOTE_SCHEME", "http"))?;
-    let final_app_scheme =
-        validate_http_scheme(&config_value(&env_file, "VECTIS_FINAL_APP_SCHEME", "http"))?;
+    let mode = validate_vectis_mode(&config_value(&env_file, "VECTIS_MODE", "dev"))?;
+    let remote_scheme = transport_scheme_for_mode(&mode).to_string();
+    let final_app_scheme = transport_scheme_for_mode(&mode).to_string();
     let tls_skip_verify = validate_bool_field(
         "VECTIS_TLS_SKIP_VERIFY",
         &config_value(&env_file, "VECTIS_TLS_SKIP_VERIFY", "false"),
     )?;
 
     Ok(HttpClientConfig {
+        mode,
         remote_scheme,
         final_app_scheme,
         tls_skip_verify,
     })
+}
+
+pub fn validate_vectis_mode(value: &str) -> Result<String, DynError> {
+    validation::validate_allowed_value("VECTIS_MODE", value, VECTIS_MODES)?;
+
+    Ok(value.to_string())
+}
+
+pub fn transport_scheme_for_mode(mode: &str) -> &'static str {
+    match mode {
+        "prod" => "https",
+        _ => "http",
+    }
+}
+
+fn validate_tls_paths_for_mode(
+    mode: &str,
+    tls_cert_path: Option<&PathBuf>,
+    tls_key_path: Option<&PathBuf>,
+) -> Result<(), DynError> {
+    if mode == "prod" && (tls_cert_path.is_none() || tls_key_path.is_none()) {
+        return Err(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "VECTIS_TLS_CERT_PATH and VECTIS_TLS_KEY_PATH are required when VECTIS_MODE=prod",
+        )));
+    }
+
+    Ok(())
 }
 
 pub fn validate_http_scheme(value: &str) -> Result<String, DynError> {
@@ -410,5 +435,53 @@ pub fn clean_env_value(value: &str) -> String {
         value[1..value.len() - 1].to_string()
     } else {
         value.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dev_mode_uses_http() {
+        let mode = validate_vectis_mode("dev").expect("dev mode must be valid");
+
+        assert_eq!(transport_scheme_for_mode(&mode), "http");
+    }
+
+    #[test]
+    fn prod_mode_uses_https() {
+        let mode = validate_vectis_mode("prod").expect("prod mode must be valid");
+
+        assert_eq!(transport_scheme_for_mode(&mode), "https");
+    }
+
+    #[test]
+    fn invalid_mode_is_rejected() {
+        assert!(validate_vectis_mode("staging").is_err());
+    }
+
+    #[test]
+    fn prod_mode_requires_tls_cert_and_key_paths() {
+        assert!(validate_tls_paths_for_mode("prod", None, None).is_err());
+        assert!(
+            validate_tls_paths_for_mode("prod", Some(&PathBuf::from("cert.pem")), None).is_err()
+        );
+        assert!(
+            validate_tls_paths_for_mode("prod", None, Some(&PathBuf::from("key.pem"))).is_err()
+        );
+        assert!(
+            validate_tls_paths_for_mode(
+                "prod",
+                Some(&PathBuf::from("cert.pem")),
+                Some(&PathBuf::from("key.pem")),
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn dev_mode_does_not_require_tls_cert_or_key_paths() {
+        assert!(validate_tls_paths_for_mode("dev", None, None).is_ok());
     }
 }

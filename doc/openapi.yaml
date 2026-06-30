@@ -11,7 +11,7 @@ servers:
   - url: http://127.0.0.1:3000
     description: Local default server over HTTP
   - url: https://127.0.0.1:3000
-    description: Local HTTPS server when VECTIS_SERVER_SCHEME=https
+    description: Local HTTPS server when VECTIS_MODE=prod
 tags:
   - name: Self Test
   - name: Health

@@ -231,9 +231,7 @@ All Vectis-specific variables use the `VECTIS_` prefix.
 Important variables include:
 
 - `VECTIS_HTTP_BIND_ADDR`;
-- `VECTIS_SERVER_SCHEME`;
-- `VECTIS_REMOTE_SCHEME`;
-- `VECTIS_FINAL_APP_SCHEME`;
+- `VECTIS_MODE`;
 - `VECTIS_TLS_CERT_PATH`;
 - `VECTIS_TLS_KEY_PATH`;
 - `VECTIS_TLS_SKIP_VERIFY`;

@@ -114,7 +114,7 @@ fn print_help() {
     println!("  VECTIS_API_URL        API base URL, default http://127.0.0.1:3000");
     println!("  VECTIS_APIKEY         Client secret for protected API commands");
     println!("  VECTIS_TIMEOUT_SECONDS Request timeout, default 30");
-    println!("  VECTIS_TLS_SKIP_VERIFY Disable outbound TLS verification, default false");
+    println!("  VECTIS_TLS_SKIP_VERIFY Disable outbound TLS verification for HTTPS clients");
 }
 
 fn print_command_help(command: &str) {
@@ -149,9 +149,9 @@ fn print_serve_help() {
     println!("  VECTIS_UNSEAL_KEY     64 hex characters, not read from .env");
     println!("  VECTIS_UNSEAL_KEY_FILE Path to unseal key file, default .unseal_key");
     println!("  VECTIS_HTTP_BIND_ADDR Listen address, default 127.0.0.1:3000");
-    println!("  VECTIS_SERVER_SCHEME  Server transport, http or https, default http");
-    println!("  VECTIS_TLS_CERT_PATH  PEM certificate path when using https");
-    println!("  VECTIS_TLS_KEY_PATH   PEM private key path when using https");
+    println!("  VECTIS_MODE           dev uses http, prod uses https, default dev");
+    println!("  VECTIS_TLS_CERT_PATH  PEM certificate path when VECTIS_MODE=prod");
+    println!("  VECTIS_TLS_KEY_PATH   PEM private key path when VECTIS_MODE=prod");
     println!("  VECTIS_APIKEY_HASH    Required by protected endpoints");
 }
 

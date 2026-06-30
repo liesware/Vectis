@@ -955,11 +955,9 @@ The routes file is operational configuration. Vectis does not create it automati
 Main variables:
 
 - `VECTIS_PUBLIC_ADDR`: public address used as `sender.host` in protected messages.
-- `VECTIS_SERVER_SCHEME`: local server transport, `http` or `https`.
-- `VECTIS_REMOTE_SCHEME`: transport used for Vectis-to-Vectis requests.
-- `VECTIS_FINAL_APP_SCHEME`: transport used for Vectis-to-final-app delivery.
-- `VECTIS_TLS_CERT_PATH`, `VECTIS_TLS_KEY_PATH`: PEM certificate and private key for HTTPS server mode.
-- `VECTIS_TLS_SKIP_VERIFY`: disables outbound TLS certificate verification for local development only.
+- `VECTIS_MODE`: central transport mode. `dev` uses HTTP everywhere; `prod` uses HTTPS for the local server, Vectis-to-Vectis requests, and final app delivery.
+- `VECTIS_TLS_CERT_PATH`, `VECTIS_TLS_KEY_PATH`: PEM certificate and private key required when `VECTIS_MODE=prod`.
+- `VECTIS_TLS_SKIP_VERIFY`: disables outbound HTTPS certificate verification.
 - `VECTIS_FINAL_APP_ADDR`: final app host:port.
 - `VECTIS_FINAL_APP_PATH`: final app delivery path.
 - `VECTIS_ROUTES_PATH`: optional manual final app routing file path, relative to the working directory unless absolute.

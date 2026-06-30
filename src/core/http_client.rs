@@ -68,8 +68,8 @@ fn client_state() -> Result<&'static HttpClientState, DynError> {
     }
 
     let config = config::http_client_config()?;
-    if config.tls_skip_verify {
-        warn!("VECTIS_TLS_SKIP_VERIFY=true; TLS certificate verification is disabled");
+    if config.mode == "prod" && config.tls_skip_verify {
+        warn!("VECTIS_TLS_SKIP_VERIFY=true; outbound TLS certificate verification is disabled");
     }
 
     let client = reqwest::Client::builder()

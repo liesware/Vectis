@@ -55,6 +55,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
     let started_at = validation::current_timestamp()?;
     info!(
         http_bind_addr = %config.http_bind_addr,
+        mode = %config.mode,
         server_scheme = %config.server_scheme,
         remote_scheme = %config.remote_scheme,
         final_app_scheme = %config.final_app_scheme,
@@ -124,13 +125,13 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         let cert_path = config.tls_cert_path.as_ref().ok_or_else(|| {
             Box::new(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "VECTIS_TLS_CERT_PATH is required when VECTIS_SERVER_SCHEME=https",
+                "VECTIS_TLS_CERT_PATH is required when VECTIS_MODE=prod",
             )) as DynError
         })?;
         let key_path = config.tls_key_path.as_ref().ok_or_else(|| {
             Box::new(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "VECTIS_TLS_KEY_PATH is required when VECTIS_SERVER_SCHEME=https",
+                "VECTIS_TLS_KEY_PATH is required when VECTIS_MODE=prod",
             )) as DynError
         })?;
         let tls_config =
@@ -148,7 +149,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
             .serve(app.into_make_service())
             .await?;
     } else {
-        warn!("server running without TLS because VECTIS_SERVER_SCHEME=http");
+        warn!("server running without TLS because VECTIS_MODE=dev");
         let listener = tokio::net::TcpListener::bind(config.http_bind_addr).await?;
 
         info!(addr = %config.http_bind_addr, scheme = %config.server_scheme, "server listening");
