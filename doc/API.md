@@ -19,6 +19,28 @@ The `vectis` CLI is an HTTP client for the runtime API, except for `vectis init`
 }
 ```
 
+## Protocol Versioning
+
+Only `v1` is supported. Any other version is rejected explicitly; there is no silent downgrade.
+
+Signed config files (`routes.json`, `remote_routes.json`, `permissions.json`) carry a single
+top-level `version` that is part of the signed content.
+
+Signed tokens and protected messages intentionally carry `version` at **two** levels:
+
+- **Envelope** (`version`): used for dispatch — it lets a receiver decide how to interpret the
+  `payload` before parsing or trusting it, which keeps room for future versions whose payload
+  shape may differ.
+- **Payload** (`payload.version`): used for integrity — it is inside the signed bytes, so signed
+  content cannot be reinterpreted under a different version.
+
+Verification requires `version == payload.version`; a mismatch is rejected. This binds the two
+copies and defends against version-confusion / downgrade attempts. This is not accidental
+duplication: the envelope copy negotiates, the payload copy authenticates.
+
+Signatures cover the canonical JSON (sorted keys, compact, UTF-8) of the `payload`, so
+`payload.version` is protected by the signature.
+
 ## Authentication
 
 Protected endpoints require:
@@ -43,6 +65,7 @@ Endpoints requiring auth:
 - `GET /remote-routes`
 - `POST /remote-routes/reload`
 - `POST /permissions/reload`
+- `GET /metrics`
 - `GET /self-test/init`
 - `GET /self-test/keys/{kid}`
 - `POST /sign/{kid}`
@@ -56,7 +79,6 @@ Endpoints without auth:
 - `GET /healthz/startup`
 - `GET /healthz/live`
 - `GET /healthz/ready`
-- `GET /metrics`
 - `GET /keys`
 - `GET /pub/{kid}`
 - `POST /sign/verification`
@@ -145,7 +167,7 @@ Response:
 
 ### GET /metrics
 
-Prometheus metrics in the text exposition format (`text/plain; version=0.0.4`). No auth. Enabled by `VECTIS_METRICS_ENABLED` (default `true`); returns `404` when disabled. Labels are low cardinality and carry no sensitive data (only `method`, `endpoint` route template, `status`, `outcome`).
+Prometheus metrics in the text exposition format (`text/plain; version=0.0.4`). Requires auth with root, `admin`, or the `metrics` permission. Enabled by `VECTIS_METRICS_ENABLED` (default `true`); returns `404` when disabled after auth succeeds. Labels are low cardinality and carry no sensitive data (only `method`, `endpoint` route template, `status`, `outcome`).
 
 Exposed metrics:
 
@@ -568,17 +590,19 @@ Allowed actions:
 - `self-test`
 - `sign`
 - `message`
+- `metrics`
 
 Permission mapping:
 
 | Permission | Endpoints |
 | --- | --- |
-| `admin` | `POST /keys`, `POST /keys/reload`, `GET /keys/properties`, `GET /routes`, `POST /routes/reload`, `GET /remote-routes`, `POST /remote-routes/reload`, `POST /permissions/reload`, `GET /self-test/init` |
+| `admin` | `POST /keys`, `POST /keys/reload`, `GET /keys/properties`, `GET /routes`, `POST /routes/reload`, `GET /remote-routes`, `POST /remote-routes/reload`, `POST /permissions/reload`, `GET /self-test/init`, `GET /metrics` |
 | `keys` | `GET /keys/properties/{kid}` |
 | `lifecycle` | `POST /lifecycle/{kid}` |
 | `self-test` | `GET /self-test/keys/{kid}` |
 | `sign` | `POST /sign/{kid}` |
 | `message` | `POST /message/{sender_kid}`, `POST /message/decrypt`, `POST /message/internal/encrypt/{kid}`, `POST /message/internal/decrypt` |
+| `metrics` | `GET /metrics` with `kid: "*"` |
 
 Root always passes permission checks. Routes operations require root or `admin`; there is no granular `routes` action.
 
@@ -611,7 +635,7 @@ Administrative refresh operation. Reloads signed API key permissions from `VECTI
 
 Requires auth with root or an admin client.
 
-If `permissions.json` is missing, Vectis reloads to an empty client list and only root remains authorized. If the file exists but is invalid, unsigned, has an invalid signature, or references an unloaded KID for a non-admin client, the request fails and the previous in-memory permissions remain active.
+If `permissions.json` is missing, Vectis reloads to an empty client list and only root remains authorized. If the file exists but is invalid, unsigned, has an invalid signature, references an unloaded KID for a KID-scoped non-admin permission, or uses `kid: "*"` with a non-global action, the request fails and the previous in-memory permissions remain active.
 
 Response:
 
@@ -686,6 +710,7 @@ Response:
 {
   "version": "v1",
   "payload": {
+    "version": "v1",
     "type": "vectis-sign",
     "created_at": "1782058090",
     "info": "version=v1;hostname=localhost;type=ops-keys;cipher=AES-256/GCM;tag=ACME Corp.;timestamp=1782058090",
@@ -821,6 +846,7 @@ Request:
 {
   "version": "v1",
   "payload": {
+    "version": "v1",
     "type": "protected-message",
     "created_at": "1782058090",
     "sender": {
@@ -984,6 +1010,7 @@ Expected file shape:
 
 ```json
 {
+  "version": "v1",
   "routes": [
     {
       "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
@@ -1014,6 +1041,7 @@ VECTIS_REMOTE_ROUTES_SIGN_PATH=remote_routes_sign.json
 
 ```json
 {
+  "version": "v1",
   "routes": [
     {
       "remote_kid": "b01cbe33187916f0f1367d07bc986d71bb0d91d7047ccd790c13fc9d85fe7259",
@@ -1122,6 +1150,7 @@ vectis routes sign
 {
   "version": "v1",
   "payload": {
+    "version": "v1",
     "type": "vectis-routes",
     "created_at": "1782058090",
     "info": "version=v1;type=vectis-routes;path=routes.json",

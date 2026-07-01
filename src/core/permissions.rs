@@ -1,4 +1,4 @@
-use crate::core::{crypto, validation};
+use crate::core::{canonical, crypto, protocol, validation};
 use crate::error::DynError;
 use crate::ops::keys;
 use serde::{Deserialize, Serialize};
@@ -9,8 +9,16 @@ use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 use zeroize::Zeroize;
 
-pub const PERMISSION_ACTIONS: &[&str] =
-    &["admin", "keys", "lifecycle", "self-test", "sign", "message"];
+pub const PERMISSION_ACTIONS: &[&str] = &[
+    "admin",
+    "keys",
+    "lifecycle",
+    "self-test",
+    "sign",
+    "message",
+    "metrics",
+];
+const GLOBAL_PERMISSION_ACTIONS: &[&str] = &["metrics"];
 
 #[derive(Clone)]
 pub struct AuthenticatedClient {
@@ -149,11 +157,6 @@ impl PermissionsState {
             return Ok(());
         }
 
-        let Some(kid) = kid else {
-            return permission_denied("admin permission is required for this endpoint");
-        };
-        keys::validate_key_id(kid)?;
-
         let Some(permission_client) = self
             .by_hash
             .get(client.apikey_hash())
@@ -161,6 +164,21 @@ impl PermissionsState {
         else {
             return permission_denied("api key is not authorized");
         };
+
+        if is_global_permission_action(action) {
+            if permission_client.permissions.iter().any(|permission| {
+                permission.kid == "*" && permission.actions.iter().any(|item| item == action)
+            }) {
+                return Ok(());
+            }
+
+            return permission_denied("api key does not have permission for this endpoint");
+        }
+
+        let Some(kid) = kid else {
+            return permission_denied("admin permission is required for this endpoint");
+        };
+        keys::validate_key_id(kid)?;
 
         if permission_client.permissions.iter().any(|permission| {
             permission.kid == kid && permission.actions.iter().any(|item| item == action)
@@ -280,15 +298,16 @@ pub fn canonical_permissions_json(content: &str) -> Result<String, DynError> {
             format!("permissions file must be valid JSON: {err}"),
         )) as DynError
     })?;
+    protocol::validate_protocol_version("permissions.version", &permissions_file.version)?;
 
-    Ok(serde_json::to_string(&permissions_file)?)
+    Ok(String::from_utf8(canonical::canonical_json_v1(&permissions_file)?)?)
 }
 
 fn validate_permissions_file(
     permissions_file: PermissionsFile,
     is_loaded_kid: impl Fn(&str) -> bool,
 ) -> Result<PermissionsState, DynError> {
-    validation::validate_allowed_value("permissions.version", &permissions_file.version, &["v1"])?;
+    protocol::validate_protocol_version("permissions.version", &permissions_file.version)?;
 
     let mut seen_clients = HashSet::new();
     let mut seen_hashes = HashSet::new();
@@ -340,18 +359,6 @@ fn validate_permissions_file(
         let mut seen_kids = HashSet::new();
         let mut permissions = Vec::new();
         for permission in client.permissions {
-            keys::validate_key_id(&permission.kid).map_err(|err| {
-                Box::new(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("permissions.kid is invalid: {err}"),
-                )) as DynError
-            })?;
-            if !is_loaded_kid(&permission.kid) {
-                return invalid_permissions(format!(
-                    "permissions file references kid not loaded in memory: {}",
-                    permission.kid
-                ));
-            }
             if !seen_kids.insert(permission.kid.clone()) {
                 return invalid_permissions(format!(
                     "permissions file has duplicated kid for client {}: {}",
@@ -360,6 +367,22 @@ fn validate_permissions_file(
             }
 
             let actions = validate_action_list(permission.actions)?;
+            if permission.kid == "*" {
+                validate_global_actions(&actions)?;
+            } else {
+                keys::validate_key_id(&permission.kid).map_err(|err| {
+                    Box::new(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("permissions.kid is invalid: {err}"),
+                    )) as DynError
+                })?;
+                if !is_loaded_kid(&permission.kid) {
+                    return invalid_permissions(format!(
+                        "permissions file references kid not loaded in memory: {}",
+                        permission.kid
+                    ));
+                }
+            }
             permissions.push(KidPermission {
                 kid: permission.kid,
                 actions,
@@ -401,6 +424,22 @@ fn validate_action_list(actions: Vec<String>) -> Result<Vec<String>, DynError> {
     }
 
     Ok(validated)
+}
+
+fn validate_global_actions(actions: &[String]) -> Result<(), DynError> {
+    for action in actions {
+        if !is_global_permission_action(action) {
+            return invalid_permissions(format!(
+                "permission action {action} cannot use wildcard kid"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn is_global_permission_action(action: &str) -> bool {
+    GLOBAL_PERMISSION_ACTIONS.contains(&action)
 }
 
 fn permission_denied(message: &str) -> Result<(), DynError> {

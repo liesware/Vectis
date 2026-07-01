@@ -1,5 +1,6 @@
 use crate::core::{
-    config, crypto, http_client, remote_routes::RemoteRoute, routes::FinalAppRoute, validation,
+    canonical, config, crypto, http_client, protocol, remote_routes::RemoteRoute,
+    routes::FinalAppRoute, validation,
 };
 use crate::error::DynError;
 use crate::ops::contracts::{
@@ -610,7 +611,7 @@ pub fn encrypt_internal_message(
     let key = Zeroizing::new(hex::decode(prepared.key.keys().symmetric().key_hex())?);
     let nonce = Zeroizing::new(crypto::random_bytes(cipher.nonce_size_bytes)?);
     let aad = validation::build_aad(&[
-        ("version", "v1"),
+        ("version", protocol::PROTOCOL_VERSION_V1),
         ("type", "internal-message"),
         ("kid", prepared.key.id()),
         ("timestamp", &timestamp),
@@ -958,6 +959,7 @@ fn create_message_envelope(
     )?;
 
     let payload = ProtectedMessagePayload {
+        version: protocol::PROTOCOL_VERSION_V1.to_string(),
         token_type: String::from(PROTECTED_MESSAGE_TYPE),
         created_at,
         sender: MessageSender {
@@ -984,7 +986,7 @@ fn create_message_envelope(
     let signatures = sign_message_payload(sender_key, &payload)?;
 
     Ok(ProtectedMessageToken {
-        version: String::from("v1"),
+        version: protocol::PROTOCOL_VERSION_V1.to_string(),
         payload,
         signatures,
     })
@@ -1118,7 +1120,7 @@ fn sign_message_payload(
     sender_key: &LoadedOpsKey,
     payload: &ProtectedMessagePayload,
 ) -> Result<TimestampSignatures, DynError> {
-    let payload_bytes = serde_json::to_vec(payload)?;
+    let payload_bytes = canonical::canonical_json_v1(payload)?;
     let payload_text = std::str::from_utf8(&payload_bytes)?;
     let eddsa = sender_key.keys().eddsa();
     let ml_dsa = sender_key.keys().ml_dsa();
@@ -1156,7 +1158,7 @@ fn verify_message_signatures(
         )));
     }
 
-    let payload_bytes = serde_json::to_vec(&envelope.payload)?;
+    let payload_bytes = canonical::canonical_json_v1(&envelope.payload)?;
     let payload_text = std::str::from_utf8(&payload_bytes)?;
     let eddsa_public_key =
         crypto::load_public_key_der_hex(&sender_public_keys.keys.keys.eddsa.public_key_der_hex)?;
@@ -1179,7 +1181,14 @@ fn verify_message_signatures(
 }
 
 fn validate_message_envelope(envelope: &ProtectedMessageToken) -> Result<(), DynError> {
-    validation::validate_allowed_value("version", &envelope.version, &["v1"])?;
+    protocol::validate_protocol_version("version", &envelope.version)?;
+    protocol::validate_protocol_version("payload.version", &envelope.payload.version)?;
+    if envelope.version != envelope.payload.version {
+        return Err(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "envelope version does not match signed payload version",
+        )));
+    }
     validation::validate_allowed_value(
         "payload.type",
         &envelope.payload.token_type,

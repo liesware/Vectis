@@ -202,7 +202,7 @@ def write_permissions(clients, sign=True):
 
 def write_remote_routes(routes, sign=True):
     REMOTE_ROUTES_PATH.write_text(
-        json.dumps({"routes": routes}, indent=2),
+        json.dumps({"version": "v1", "routes": routes}, indent=2),
         encoding="utf-8",
     )
     if sign:
@@ -325,6 +325,14 @@ def main():
         status, _ = client.get("/keys/properties", headers={"X-API-Key": "00" * 32})
         require_status("GET /keys/properties invalid auth", status, 401)
 
+    def metrics_without_auth():
+        status, _ = client.get("/metrics")
+        require_status("GET /metrics without auth", status, 401)
+
+    def metrics_invalid_auth():
+        status, _ = client.get("/metrics", headers={"X-API-Key": "00" * 32})
+        require_status("GET /metrics invalid auth", status, 401)
+
     def key_properties_without_auth():
         status, _ = client.get(f"/keys/properties/{key_id}")
         require_status("GET /keys/properties/{id} without auth", status, 401)
@@ -445,6 +453,7 @@ def main():
     key_id = create_valid_key(client)
 
     limited_api_key, limited_api_key_hash = create_api_key_pair()
+    metrics_api_key, metrics_api_key_hash = create_api_key_pair()
     admin_api_key, admin_api_key_hash = create_api_key_pair()
     write_permissions(
         [
@@ -456,6 +465,17 @@ def main():
                     {
                         "kid": key_id,
                         "actions": ["message"],
+                    }
+                ],
+            },
+            {
+                "client": "negative-metrics",
+                "apikey_hash": metrics_api_key_hash,
+                "status": "active",
+                "permissions": [
+                    {
+                        "kid": "*",
+                        "actions": ["metrics"],
                     }
                 ],
             },
@@ -474,6 +494,7 @@ def main():
     )
     reload_permissions(client)
     limited_client = Client(args.base_url, limited_api_key)
+    metrics_client = Client(args.base_url, metrics_api_key)
     admin_client = Client(args.base_url, admin_api_key)
 
     def limited_can_message():
@@ -513,6 +534,18 @@ def main():
         status, _ = limited_client.post("/permissions/reload", {}, auth=True)
         require_status("limited client blocks permissions reload", status, 403)
 
+    def limited_blocks_metrics():
+        status, _ = limited_client.get("/metrics", auth=True)
+        require_status("limited client blocks metrics", status, 403)
+
+    def metrics_client_allows_metrics():
+        status, _ = metrics_client.get("/metrics", auth=True)
+        require_status("metrics client allows metrics", status, 200)
+
+    def metrics_client_blocks_admin():
+        status, _ = metrics_client.get("/routes", auth=True)
+        require_status("metrics client blocks admin", status, 403)
+
     def admin_allows_permissions_reload():
         status, response = admin_client.post("/permissions/reload", {}, auth=True)
         require_status("admin client allows permissions reload", status, 200)
@@ -525,6 +558,9 @@ def main():
         ("limited client blocks self-test init", limited_blocks_self_test),
         ("limited client blocks sign", limited_blocks_sign),
         ("limited client blocks permissions reload", limited_blocks_permissions_reload),
+        ("limited client blocks metrics", limited_blocks_metrics),
+        ("metrics client allows metrics", metrics_client_allows_metrics),
+        ("metrics client blocks admin", metrics_client_blocks_admin),
         ("admin client allows permissions reload", admin_allows_permissions_reload),
     ):
         run_case(rows, name, func)
@@ -536,6 +572,8 @@ def main():
         ("POST /keys/reload invalid auth", keys_reload_invalid_auth),
         ("GET /keys/properties without auth", keys_properties_without_auth),
         ("GET /keys/properties invalid auth", keys_properties_invalid_auth),
+        ("GET /metrics without auth", metrics_without_auth),
+        ("GET /metrics invalid auth", metrics_invalid_auth),
         ("GET /keys/properties/{id} without auth", key_properties_without_auth),
         ("GET /keys/properties/{id} invalid kid", key_properties_invalid_kid),
         ("POST /lifecycle/{id} without auth", lifecycle_without_auth),
@@ -584,6 +622,17 @@ def main():
                         }
                     ],
                 },
+                {
+                    "client": "negative-metrics",
+                    "apikey_hash": metrics_api_key_hash,
+                    "status": "active",
+                    "permissions": [
+                        {
+                            "kid": "*",
+                            "actions": ["metrics"],
+                        }
+                    ],
+                },
             ]
         )
         reload_permissions(client)
@@ -615,6 +664,20 @@ def main():
         )
         status, _ = client.post("/permissions/reload", {}, auth=True)
         require_status("permissions invalid action routes", status, 400)
+
+    def permissions_wildcard_non_global_action():
+        write_permissions(
+            [
+                {
+                    "client": "bad-wildcard-message",
+                    "apikey_hash": limited_api_key_hash,
+                    "status": "active",
+                    "permissions": [{"kid": "*", "actions": ["message"]}],
+                }
+            ]
+        )
+        status, _ = client.post("/permissions/reload", {}, auth=True)
+        require_status("permissions wildcard non-global action", status, 400)
 
     def remote_routes_invalid_kid():
         write_remote_routes(
@@ -797,6 +860,7 @@ def main():
     for name, func in (
         ("permissions invalid action pub", permissions_invalid_action_pub),
         ("permissions invalid action routes", permissions_invalid_action_routes),
+        ("permissions wildcard non-global action", permissions_wildcard_non_global_action),
         ("remote routes invalid kid", remote_routes_invalid_kid),
         ("remote routes invalid addr", remote_routes_invalid_addr),
         ("remote routes invalid signature", remote_routes_invalid_signature),

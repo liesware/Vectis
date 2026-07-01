@@ -153,7 +153,7 @@ pub fn app_config() -> Result<AppConfig, DynError> {
         "You are not special. You are not a beautiful and unique snowflake. You're the same decaying organic matter as everything else.",
     );
 
-    validation::validate_allowed_value("VECTIS_PROTOCOL_VERSION", &protocol_version, &["v1"])?;
+    crate::core::protocol::validate_protocol_version("VECTIS_PROTOCOL_VERSION", &protocol_version)?;
     validate_tls_paths_for_mode(&mode, tls_cert_path.as_ref(), tls_key_path.as_ref())?;
     validation::validate_allowed_value(
         "VECTIS_STORAGE",

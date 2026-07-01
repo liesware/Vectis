@@ -221,7 +221,7 @@ def validate_health(client):
 
 
 def validate_metrics(client):
-    status = client.get_status("/metrics")
+    status = client.get_status("/metrics", auth=True)
     require(status == 200, f"/metrics must return 200, got {status}")
 
 
@@ -510,6 +510,7 @@ def restore_permissions_sign_file(backup):
 
 def write_test_routes(key_ids, final_app_addr):
     routes = {
+        "version": "v1",
         "routes": [
             {
                 "kid": key_id,
@@ -525,6 +526,7 @@ def write_test_routes(key_ids, final_app_addr):
 
 def write_test_remote_routes(key_ids, recipient_host, wildcard=False):
     routes = {
+        "version": "v1",
         "routes": [
             {
                 "remote_kid": key_id,
@@ -642,7 +644,7 @@ def clear_permissions_state(client):
 def clear_routes_state(client):
     backup = backup_routes_file()
     sign_backup = backup_routes_sign_file()
-    ROUTES_PATH.write_text('{"routes":[]}\n', encoding="utf-8")
+    ROUTES_PATH.write_text('{"version":"v1","routes":[]}\n', encoding="utf-8")
     sign_routes()
     try:
         validate_routes_list(client.post("/routes/reload", {}, auth=True))
@@ -654,7 +656,7 @@ def clear_routes_state(client):
 def clear_remote_routes_state(client):
     backup = backup_remote_routes_file()
     sign_backup = backup_remote_routes_sign_file()
-    REMOTE_ROUTES_PATH.write_text('{"routes":[]}\n', encoding="utf-8")
+    REMOTE_ROUTES_PATH.write_text('{"version":"v1","routes":[]}\n', encoding="utf-8")
     sign_remote_routes()
     try:
         validate_remote_routes_list(client.post("/remote-routes/reload", {}, auth=True))
@@ -813,6 +815,7 @@ def encrypt_internal_message(client, message_number, key_id, case):
 def validate_permissions_flow(base_url, root_client, key_id, case):
     limited_key, limited_hash = create_api_key_pair()
     admin_key, admin_hash = create_api_key_pair()
+    metrics_key, metrics_hash = create_api_key_pair()
     write_permissions(
         [
             {
@@ -823,6 +826,17 @@ def validate_permissions_flow(base_url, root_client, key_id, case):
                     {
                         "kid": key_id,
                         "actions": ["message"],
+                    }
+                ],
+            },
+            {
+                "client": "positive-metrics",
+                "apikey_hash": metrics_hash,
+                "status": "active",
+                "permissions": [
+                    {
+                        "kid": "*",
+                        "actions": ["metrics"],
                     }
                 ],
             },
@@ -843,14 +857,17 @@ def validate_permissions_flow(base_url, root_client, key_id, case):
 
     limited_client = Client(base_url, limited_key)
     admin_client = Client(base_url, admin_key)
+    metrics_client = Client(base_url, metrics_key)
 
     limited_result = encrypt_internal_message(limited_client, 1, key_id, case)
+    validate_metrics(metrics_client)
     validate_init(admin_client.get("/self-test/init", auth=True))
     validate_routes_list(admin_client.get("/routes", auth=True))
     reload_permissions(admin_client)
 
     return [
         ("limited message key", "OK"),
+        ("metrics key", "OK"),
         ("admin key", "OK"),
         (f"limited ctx_hex_len {limited_result['ctx_hex_len']}", "OK"),
     ]

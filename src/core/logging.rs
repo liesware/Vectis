@@ -42,8 +42,7 @@ pub fn init_logging() -> LoggingGuards {
         .json()
         .with_writer(operational_writer)
         .with_filter(filter_fn(move |metadata| {
-            metadata.is_span()
-                || (metadata.target() != AUDIT_TARGET && *metadata.level() <= level)
+            metadata.is_span() || (metadata.target() != AUDIT_TARGET && *metadata.level() <= level)
         }));
 
     let audit_layer = fmt::layer()

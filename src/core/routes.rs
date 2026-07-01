@@ -1,4 +1,4 @@
-use crate::core::{config, validation};
+use crate::core::{canonical, config, protocol, validation};
 use crate::error::DynError;
 use crate::ops::keys;
 use serde::{Deserialize, Serialize};
@@ -34,6 +34,7 @@ pub struct RoutesState {
 
 #[derive(Deserialize, Serialize)]
 struct RoutesFile {
+    version: String,
     routes: Vec<RouteInput>,
 }
 
@@ -181,8 +182,9 @@ pub fn canonical_routes_json(content: &str) -> Result<String, DynError> {
             format!("routes file must be valid JSON: {err}"),
         )) as DynError
     })?;
+    protocol::validate_protocol_version("routes.version", &routes_file.version)?;
 
-    Ok(serde_json::to_string(&routes_file)?)
+    Ok(String::from_utf8(canonical::canonical_json_v1(&routes_file)?)?)
 }
 
 fn is_not_found_error(err: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {

@@ -55,6 +55,7 @@ Current capabilities include:
 - protected messages between Vectis instances;
 - hybrid key establishment with XECDH + ML-KEM;
 - EdDSA and ML-DSA signatures;
+- canonical JSON signing with explicit protocol versioning bound to signatures;
 - authenticated encryption for protected payloads;
 - local re-encryption before final app delivery;
 - internal encrypt/decrypt endpoints for local protected data;
@@ -62,6 +63,8 @@ Current capabilities include:
 - SQLite-backed operational key storage;
 - storage abstraction designed for future backends;
 - startup, liveness, and readiness health probes;
+- a dedicated security audit log stream with per-request correlation ids;
+- a Prometheus `/metrics` endpoint for operational observability;
 - CLI commands that act as an HTTP API client;
 - OpenAPI and environment variable documentation.
 

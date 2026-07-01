@@ -26,6 +26,7 @@ impl TimestampToken {
 
 #[derive(Deserialize, Serialize)]
 pub(crate) struct TimestampPayload {
+    pub(crate) version: String,
     #[serde(rename = "type")]
     pub(crate) token_type: String,
     pub(crate) created_at: String,
@@ -118,6 +119,7 @@ impl ProtectedMessageToken {
 
 #[derive(Deserialize, Serialize)]
 pub(crate) struct ProtectedMessagePayload {
+    pub(crate) version: String,
     #[serde(rename = "type")]
     pub(crate) token_type: String,
     pub(crate) created_at: String,

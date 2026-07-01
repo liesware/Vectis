@@ -1,4 +1,6 @@
-use crate::core::{config, crypto, permissions, remote_routes, routes, validation};
+use crate::core::{
+    canonical, config, crypto, permissions, protocol, remote_routes, routes, validation,
+};
 use crate::error::DynError;
 use crate::ops::contracts::{
     MessageHash, SignatureBlock, TimestampPayload, TimestampSignatures, VerificationStatus,
@@ -37,6 +39,7 @@ pub fn sign_timestamp(
     );
     let created_at = validation::current_timestamp()?;
     let payload = TimestampPayload {
+        version: protocol::PROTOCOL_VERSION_V1.to_string(),
         token_type: String::from(TIMESTAMP_TOKEN_TYPE),
         serial: create_payload_serial(&created_at)?,
         created_at,
@@ -70,7 +73,7 @@ pub fn sign_timestamp(
     );
 
     Ok(TimestampToken {
-        version: String::from("v1"),
+        version: protocol::PROTOCOL_VERSION_V1.to_string(),
         payload,
         signatures,
     })
@@ -91,11 +94,12 @@ pub fn sign_routes_file(
     };
     let created_at = validation::current_timestamp()?;
     let info = validation::build_aad(&[
-        ("version", "v1"),
+        ("version", protocol::PROTOCOL_VERSION_V1),
         ("type", ROUTES_TOKEN_TYPE),
         ("path", &routes_path.display().to_string()),
     ]);
     let payload = TimestampPayload {
+        version: protocol::PROTOCOL_VERSION_V1.to_string(),
         token_type: String::from(ROUTES_TOKEN_TYPE),
         serial: create_payload_serial(&created_at)?,
         created_at,
@@ -110,7 +114,7 @@ pub fn sign_routes_file(
     )?;
 
     Ok(TimestampToken {
-        version: String::from("v1"),
+        version: protocol::PROTOCOL_VERSION_V1.to_string(),
         payload,
         signatures,
     })
@@ -130,7 +134,7 @@ pub fn verify_routes_file_signature(
     })?)?;
     validate_signed_payload_token(&token, ROUTES_TOKEN_TYPE, INIT_KEYS_KID)?;
     let expected_info = validation::build_aad(&[
-        ("version", "v1"),
+        ("version", protocol::PROTOCOL_VERSION_V1),
         ("type", ROUTES_TOKEN_TYPE),
         ("path", &routes_path.display().to_string()),
     ]);
@@ -186,11 +190,12 @@ pub fn sign_remote_routes_file(
     };
     let created_at = validation::current_timestamp()?;
     let info = validation::build_aad(&[
-        ("version", "v1"),
+        ("version", protocol::PROTOCOL_VERSION_V1),
         ("type", REMOTE_ROUTES_TOKEN_TYPE),
         ("path", &remote_routes_path.display().to_string()),
     ]);
     let payload = TimestampPayload {
+        version: protocol::PROTOCOL_VERSION_V1.to_string(),
         token_type: String::from(REMOTE_ROUTES_TOKEN_TYPE),
         serial: create_payload_serial(&created_at)?,
         created_at,
@@ -205,7 +210,7 @@ pub fn sign_remote_routes_file(
     )?;
 
     Ok(TimestampToken {
-        version: String::from("v1"),
+        version: protocol::PROTOCOL_VERSION_V1.to_string(),
         payload,
         signatures,
     })
@@ -225,7 +230,7 @@ pub fn verify_remote_routes_file_signature(
     })?)?;
     validate_signed_payload_token(&token, REMOTE_ROUTES_TOKEN_TYPE, INIT_KEYS_KID)?;
     let expected_info = validation::build_aad(&[
-        ("version", "v1"),
+        ("version", protocol::PROTOCOL_VERSION_V1),
         ("type", REMOTE_ROUTES_TOKEN_TYPE),
         ("path", &remote_routes_path.display().to_string()),
     ]);
@@ -281,11 +286,12 @@ pub fn sign_permissions_file(
     };
     let created_at = validation::current_timestamp()?;
     let info = validation::build_aad(&[
-        ("version", "v1"),
+        ("version", protocol::PROTOCOL_VERSION_V1),
         ("type", PERMISSIONS_TOKEN_TYPE),
         ("path", &permissions_path.display().to_string()),
     ]);
     let payload = TimestampPayload {
+        version: protocol::PROTOCOL_VERSION_V1.to_string(),
         token_type: String::from(PERMISSIONS_TOKEN_TYPE),
         serial: create_payload_serial(&created_at)?,
         created_at,
@@ -300,7 +306,7 @@ pub fn sign_permissions_file(
     )?;
 
     Ok(TimestampToken {
-        version: String::from("v1"),
+        version: protocol::PROTOCOL_VERSION_V1.to_string(),
         payload,
         signatures,
     })
@@ -320,7 +326,7 @@ pub fn verify_permissions_file_signature(
     })?)?;
     validate_signed_payload_token(&token, PERMISSIONS_TOKEN_TYPE, INIT_KEYS_KID)?;
     let expected_info = validation::build_aad(&[
-        ("version", "v1"),
+        ("version", protocol::PROTOCOL_VERSION_V1),
         ("type", PERMISSIONS_TOKEN_TYPE),
         ("path", &permissions_path.display().to_string()),
     ]);
@@ -376,7 +382,7 @@ fn sign_hybrid_payload(
     eddsa: &VariantDerKeyPair,
     ml_dsa: &VariantDerKeyPair,
 ) -> Result<TimestampSignatures, DynError> {
-    let payload_bytes = serde_json::to_vec(payload)?;
+    let payload_bytes = canonical::canonical_json_v1(payload)?;
     let payload_text = std::str::from_utf8(&payload_bytes)?;
     let eddsa_private_key = crypto::load_private_key_der_hex(eddsa.private_key_der_hex())?;
     let ml_dsa_private_key = crypto::load_private_key_der_hex(ml_dsa.private_key_der_hex())?;
@@ -401,7 +407,7 @@ fn verify_hybrid_payload(
     eddsa: &VariantDerKeyPair,
     ml_dsa: &VariantDerKeyPair,
 ) -> Result<VerificationStatus, DynError> {
-    let payload_bytes = serde_json::to_vec(payload)?;
+    let payload_bytes = canonical::canonical_json_v1(payload)?;
     let payload_text = std::str::from_utf8(&payload_bytes)?;
     let eddsa_public_key = crypto::load_public_key_der_hex(eddsa.public_key_der_hex())?;
     let ml_dsa_public_key = crypto::load_public_key_der_hex(ml_dsa.public_key_der_hex())?;
@@ -559,7 +565,14 @@ fn validate_signed_payload_token(
     expected_type: &str,
     expected_kid: &str,
 ) -> Result<(), DynError> {
-    validation::validate_allowed_value("version", &token.version, &["v1"])?;
+    protocol::validate_protocol_version("version", &token.version)?;
+    protocol::validate_protocol_version("payload.version", &token.payload.version)?;
+    if token.version != token.payload.version {
+        return Err(Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "token version does not match signed payload version",
+        )));
+    }
     validation::validate_allowed_value(
         "payload.type",
         &token.payload.token_type,

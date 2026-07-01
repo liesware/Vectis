@@ -147,7 +147,7 @@ Recommended admin permission:
 }
 ```
 
-If any permission entry contains `admin`, Vectis treats the whole client as admin and ignores `kid` plus any other actions for that client. Non-admin clients must reference KIDs already loaded in memory.
+If any permission entry contains `admin`, Vectis treats the whole client as admin and ignores `kid` plus any other actions for that client. Non-admin KID-scoped permissions must reference KIDs already loaded in memory. Global permissions such as `metrics` use `kid: "*"`.
 
 Allowed actions:
 
@@ -157,15 +157,17 @@ Allowed actions:
 - `self-test`
 - `sign`
 - `message`
+- `metrics`
 
 Permission mapping summary:
 
-- `admin`: administrative protected endpoints, including `POST /keys`, `POST /keys/reload`, `GET /keys/properties`, `GET /routes`, `POST /routes/reload`, `GET /remote-routes`, `POST /remote-routes/reload`, `POST /permissions/reload`, and `GET /self-test/init`.
+- `admin`: administrative protected endpoints, including `POST /keys`, `POST /keys/reload`, `GET /keys/properties`, `GET /routes`, `POST /routes/reload`, `GET /remote-routes`, `POST /remote-routes/reload`, `POST /permissions/reload`, `GET /self-test/init`, and `GET /metrics`.
 - `keys`: `GET /keys/properties/{kid}`.
 - `lifecycle`: `POST /lifecycle/{kid}`.
 - `self-test`: `GET /self-test/keys/{kid}`.
 - `sign`: `POST /sign/{kid}`.
 - `message`: protected message endpoints.
+- `metrics`: `GET /metrics` with `kid: "*"`; this is a global permission and does not reference a loaded operational KID.
 
 Routes operations require root or `admin`; there is no granular `routes` action.
 
@@ -190,7 +192,7 @@ Permissions file shape:
 }
 ```
 
-Clients with `status` other than `active` are ignored. Invalid JSON, invalid actions, invalid hashes, signature failure, or a non-admin permission referencing an unloaded KID rejects the whole file.
+Clients with `status` other than `active` are ignored. Invalid JSON, invalid actions, invalid hashes, signature failure, a KID-scoped non-admin permission referencing an unloaded KID, or `kid: "*"` with a non-global action rejects the whole file.
 
 ## Storage
 
@@ -232,7 +234,7 @@ Logging is JSON by default. Audit events go to a dedicated stream (`VECTIS_AUDIT
 
 | Variable | Default | Expected value | Purpose |
 | --- | --- | --- | --- |
-| `VECTIS_METRICS_ENABLED` | `true` | `true` or `false` | Enable the unauthenticated Prometheus `/metrics` endpoint. When `false`, `/metrics` returns `404`. |
+| `VECTIS_METRICS_ENABLED` | `true` | `true` or `false` | Enable the Prometheus `/metrics` endpoint. The endpoint requires `X-API-Key` with root, `admin`, or `metrics` permission. When `false`, authorized requests return `404`. |
 
 ## Hostnames
 

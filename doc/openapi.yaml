@@ -72,9 +72,12 @@ paths:
     get:
       tags: [Observability]
       summary: Prometheus metrics
+      security:
+        - ApiKeyAuth: []
       description: >
-        Prometheus metrics in the text exposition format. No auth. Enabled by
-        VECTIS_METRICS_ENABLED (default true); returns 404 when disabled. Labels
+        Prometheus metrics in the text exposition format. Requires X-API-Key
+        with root, admin, or metrics permission. Enabled by VECTIS_METRICS_ENABLED
+        (default true); returns 404 when disabled after auth succeeds. Labels
         carry no sensitive data.
       responses:
         "200":
@@ -85,6 +88,8 @@ paths:
                 type: string
         "404":
           description: Metrics disabled via VECTIS_METRICS_ENABLED=false
+        default:
+          $ref: "#/components/responses/Error"
 
   /self-test/init:
     get:
@@ -889,10 +894,14 @@ components:
       properties:
         version:
           const: v1
+          description: Envelope version for dispatch; must equal payload.version.
         payload:
           type: object
-          required: [type, created_at, info, kid, serial, message_hash]
+          required: [version, type, created_at, info, kid, serial, message_hash]
           properties:
+            version:
+              const: v1
+              description: Signed payload version; integrity-protected by the signatures.
             type:
               const: vectis-sign
             created_at:
@@ -978,10 +987,14 @@ components:
       properties:
         version:
           const: v1
+          description: Envelope version for dispatch; must equal payload.version.
         payload:
           type: object
-          required: [type, created_at, sender, recipient, kem, cipher]
+          required: [version, type, created_at, sender, recipient, kem, cipher]
           properties:
+            version:
+              const: v1
+              description: Signed payload version; integrity-protected by the signatures.
             type:
               const: protected-message
             created_at:

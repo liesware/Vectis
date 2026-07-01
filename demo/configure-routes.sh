@@ -22,6 +22,7 @@ load_app_env "${SCRIPT_DIR}/site-b/app.env" "B"
 
 cat > "${SCRIPT_DIR}/site-a/routes.json" <<JSON
 {
+  "version": "v1",
   "routes": [
     {
       "kid": "${A_LOCAL_KID}",
@@ -34,6 +35,7 @@ JSON
 
 cat > "${SCRIPT_DIR}/site-b/routes.json" <<JSON
 {
+  "version": "v1",
   "routes": [
     {
       "kid": "${B_LOCAL_KID}",
@@ -46,6 +48,7 @@ JSON
 
 cat > "${SCRIPT_DIR}/site-a/remote_routes.json" <<JSON
 {
+  "version": "v1",
   "routes": [
     {
       "remote_kid": "${B_LOCAL_KID}",
@@ -60,6 +63,7 @@ JSON
 
 cat > "${SCRIPT_DIR}/site-b/remote_routes.json" <<JSON
 {
+  "version": "v1",
   "routes": [
     {
       "remote_kid": "${A_LOCAL_KID}",
