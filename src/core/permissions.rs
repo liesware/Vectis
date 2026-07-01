@@ -1,4 +1,4 @@
-use crate::core::validation;
+use crate::core::{crypto, validation};
 use crate::error::DynError;
 use crate::ops::keys;
 use serde::{Deserialize, Serialize};
@@ -117,9 +117,15 @@ impl PermissionsState {
     }
 
     pub fn authenticate_hash(&self, apikey_hash: &str) -> Option<AuthenticatedClient> {
-        self.by_hash
-            .get(apikey_hash)
-            .and_then(|index| self.clients.get(*index))
+        let candidate = apikey_hash.as_bytes();
+        let mut matched: Option<usize> = None;
+        for (index, client) in self.clients.iter().enumerate() {
+            if crypto::constant_time_eq(client.apikey_hash.as_bytes(), candidate) {
+                matched = Some(index);
+            }
+        }
+        matched
+            .and_then(|index| self.clients.get(index))
             .map(AuthenticatedClient::from_permission_client)
     }
 
