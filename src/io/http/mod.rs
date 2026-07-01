@@ -19,6 +19,7 @@ mod routes;
 mod sign;
 mod test;
 
+use crate::core::config::AppConfig;
 use crate::core::permissions::{AuthenticatedClient, PermissionsState};
 use crate::core::remote_routes::{RemoteRoute, RemoteRoutesState};
 use crate::core::routes::{FinalAppRoute, RoutesState};
@@ -34,6 +35,8 @@ pub use app::run;
 
 #[derive(Clone)]
 pub struct HttpState {
+    config: Arc<AppConfig>,
+    auth_state: Arc<auth::HttpAuthState>,
     init_state: Arc<ValidatedInitState>,
     internal_keys: Arc<Zeroizing<InternalDerivedKeysState>>,
     storage: Arc<StorageState>,
@@ -52,6 +55,8 @@ pub struct HttpState {
 }
 
 struct HttpStateInput {
+    config: Arc<AppConfig>,
+    auth_state: auth::HttpAuthState,
     init_state: ValidatedInitState,
     internal_keys: Zeroizing<InternalDerivedKeysState>,
     storage: StorageState,
@@ -71,6 +76,8 @@ struct HttpStateInput {
 impl HttpState {
     fn new(input: HttpStateInput) -> Self {
         Self {
+            config: input.config,
+            auth_state: Arc::new(input.auth_state),
             init_state: Arc::new(input.init_state),
             internal_keys: Arc::new(input.internal_keys),
             storage: Arc::new(input.storage),
@@ -109,13 +116,23 @@ impl HttpState {
         &self.internal_keys
     }
 
+    fn config(&self) -> &AppConfig {
+        &self.config
+    }
+
     async fn authorize_api_key(
         &self,
         headers: &HeaderMap,
     ) -> Result<Zeroizing<AuthenticatedClient>, (StatusCode, Json<error::ErrorResponse>)> {
         let permissions_state = self.permissions_state.read().await;
 
-        auth::authorize_api_key(headers, self.internal_keys(), &permissions_state)
+        auth::authorize_api_key(
+            headers,
+            self.config(),
+            &self.auth_state,
+            self.internal_keys(),
+            &permissions_state,
+        )
     }
 
     async fn require_permission(

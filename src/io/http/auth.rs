@@ -1,27 +1,59 @@
 use super::error::{ErrorResponse, public_error_message};
 use crate::core::permissions::{AuthenticatedClient, PermissionsState};
 use crate::core::{config, crypto, validation};
+use crate::error::DynError;
 use crate::ops::internal_keys::InternalDerivedKeysState;
 use axum::Json;
 use axum::http::{HeaderMap, HeaderName, StatusCode};
+use std::io;
 use zeroize::Zeroizing;
 
 const API_KEY_HEADER: HeaderName = HeaderName::from_static("x-api-key");
 
+#[derive(Clone)]
+pub struct HttpAuthState {
+    root_api_key_hash_hex: Option<String>,
+    root_api_key_hash_bytes: Option<Zeroizing<Vec<u8>>>,
+}
+
+impl HttpAuthState {
+    pub fn from_config(config: &config::AppConfig) -> Result<Self, DynError> {
+        if config.api_key_hash.is_empty() {
+            return Ok(Self {
+                root_api_key_hash_hex: None,
+                root_api_key_hash_bytes: None,
+            });
+        }
+
+        let root_api_key_hash_bytes = hex::decode(&config.api_key_hash).map_err(|err| {
+            Box::new(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("VECTIS_APIKEY_HASH could not be decoded: {err}"),
+            )) as DynError
+        })?;
+
+        Ok(Self {
+            root_api_key_hash_hex: Some(config.api_key_hash.clone()),
+            root_api_key_hash_bytes: Some(Zeroizing::new(root_api_key_hash_bytes)),
+        })
+    }
+
+    fn root_api_key_hash_hex(&self) -> Option<&str> {
+        self.root_api_key_hash_hex.as_deref()
+    }
+
+    fn root_api_key_hash_bytes(&self) -> Option<&[u8]> {
+        self.root_api_key_hash_bytes.as_deref().map(Vec::as_slice)
+    }
+}
+
 pub fn authorize_api_key(
     headers: &HeaderMap,
+    config: &config::AppConfig,
+    auth_state: &HttpAuthState,
     internal_keys: &InternalDerivedKeysState,
     permissions_state: &PermissionsState,
 ) -> Result<Zeroizing<AuthenticatedClient>, (StatusCode, Json<ErrorResponse>)> {
-    let config = config::app_config().map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse::new(public_error_message(
-                StatusCode::INTERNAL_SERVER_ERROR,
-            ))),
-        )
-    })?;
-
     let Some(value) = headers.get(API_KEY_HEADER) else {
         return Err((
             StatusCode::UNAUTHORIZED,
@@ -67,19 +99,14 @@ pub fn authorize_api_key(
         )
     })?;
 
-    if !config.api_key_hash.is_empty() {
-        let expected_hash = hex::decode(&config.api_key_hash).map_err(|_| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse::new(public_error_message(
-                    StatusCode::UNAUTHORIZED,
-                ))),
-            )
-        })?;
-
-        if crypto::constant_time_eq(&candidate_hash, &expected_hash) {
+    if let (Some(expected_hash), Some(root_hash_hex)) = (
+        auth_state.root_api_key_hash_bytes(),
+        auth_state.root_api_key_hash_hex(),
+    ) {
+        debug_assert_eq!(config.api_key_hash.as_str(), root_hash_hex);
+        if crypto::constant_time_eq(&candidate_hash, expected_hash) {
             return Ok(Zeroizing::new(AuthenticatedClient::root(
-                config.api_key_hash,
+                root_hash_hex.to_string(),
             )));
         }
     }

@@ -2,7 +2,7 @@ use crate::core::validation;
 use crate::error::DynError;
 use crate::ops::keys;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -31,6 +31,7 @@ impl ListRemoteRoutesOutput {
 #[derive(Default)]
 pub struct RemoteRoutesState {
     routes: Vec<RemoteRoute>,
+    by_remote_kid: HashMap<String, usize>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -48,15 +49,28 @@ struct RemoteRouteInput {
 }
 
 impl RemoteRoutesState {
+    fn from_routes(routes: Vec<RemoteRoute>) -> Self {
+        let by_remote_kid = routes
+            .iter()
+            .enumerate()
+            .map(|(index, route)| (route.remote_kid.clone(), index))
+            .collect();
+
+        Self {
+            routes,
+            by_remote_kid,
+        }
+    }
+
     pub fn route_for(
         &self,
         sender_kid: &str,
         recipient_kid: &str,
     ) -> Result<RemoteRoute, DynError> {
         let route = self
-            .routes
-            .iter()
-            .find(|route| route.remote_kid == recipient_kid)
+            .by_remote_kid
+            .get(recipient_kid)
+            .and_then(|index| self.routes.get(*index))
             .cloned()
             .ok_or_else(|| {
                 Box::new(io::Error::new(
@@ -104,7 +118,7 @@ impl RemoteRoutesState {
             Err(err) => return Err(err),
         };
 
-        Ok(RemoteRoutesState { routes })
+        Ok(RemoteRoutesState::from_routes(routes))
     }
 }
 
@@ -136,7 +150,7 @@ pub fn load_remote_routes_state(
                 remote_routes_loaded = routes.len(),
                 "remote routes loaded"
             );
-            RemoteRoutesState { routes }
+            RemoteRoutesState::from_routes(routes)
         }
         Err(err) => {
             warn!(

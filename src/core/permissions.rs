@@ -2,7 +2,7 @@ use crate::core::validation;
 use crate::error::DynError;
 use crate::ops::keys;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -23,6 +23,7 @@ pub struct AuthenticatedClient {
 #[derive(Clone, Default)]
 pub struct PermissionsState {
     clients: Vec<PermissionClient>,
+    by_hash: HashMap<String, usize>,
 }
 
 #[derive(Clone)]
@@ -101,14 +102,24 @@ impl Zeroize for AuthenticatedClient {
 }
 
 impl PermissionsState {
+    fn from_clients(clients: Vec<PermissionClient>) -> Self {
+        let by_hash = clients
+            .iter()
+            .enumerate()
+            .map(|(index, client)| (client.apikey_hash.clone(), index))
+            .collect();
+
+        Self { clients, by_hash }
+    }
+
     pub fn len(&self) -> usize {
         self.clients.len()
     }
 
     pub fn authenticate_hash(&self, apikey_hash: &str) -> Option<AuthenticatedClient> {
-        self.clients
-            .iter()
-            .find(|client| client.apikey_hash == apikey_hash)
+        self.by_hash
+            .get(apikey_hash)
+            .and_then(|index| self.clients.get(*index))
             .map(AuthenticatedClient::from_permission_client)
     }
 
@@ -130,9 +141,9 @@ impl PermissionsState {
         keys::validate_key_id(kid)?;
 
         let Some(permission_client) = self
-            .clients
-            .iter()
-            .find(|permission_client| permission_client.apikey_hash == client.apikey_hash())
+            .by_hash
+            .get(client.apikey_hash())
+            .and_then(|index| self.clients.get(*index))
         else {
             return permission_denied("api key is not authorized");
         };
@@ -163,6 +174,9 @@ impl PermissionsState {
 impl Zeroize for PermissionsState {
     fn zeroize(&mut self) {
         self.clients.zeroize();
+        for (mut apikey_hash, _) in self.by_hash.drain() {
+            apikey_hash.zeroize();
+        }
     }
 }
 
@@ -346,7 +360,7 @@ fn validate_permissions_file(
         });
     }
 
-    Ok(PermissionsState { clients })
+    Ok(PermissionsState::from_clients(clients))
 }
 
 fn validate_actions(permissions: &[KidPermissionInput]) -> Result<(), DynError> {

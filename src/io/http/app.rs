@@ -8,12 +8,14 @@ use crate::error::DynError;
 use crate::ops::init::ValidatedInitState;
 use crate::ops::keys;
 use std::io;
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, warn};
 use zeroize::Zeroizing;
 
 pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
-    let config = config::app_config()?;
+    let config = Arc::new(config::app_config()?);
+    let auth_state = super::auth::HttpAuthState::from_config(&config)?;
     let logging = crate::core::logging::logging_config();
     let storage = StorageState::new(&config).await?;
     let internal_keys = Zeroizing::new(
@@ -111,6 +113,8 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         "permissions loaded into http state"
     );
     let app = super::router(super::HttpState::new(super::HttpStateInput {
+        config: config.clone(),
+        auth_state,
         init_state,
         internal_keys,
         storage,
