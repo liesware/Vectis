@@ -1,6 +1,6 @@
 use super::error::{ErrorResponse, public_error_message};
 use crate::core::permissions::{AuthenticatedClient, PermissionsState};
-use crate::core::{config, crypto, validation};
+use crate::core::{audit, config, crypto, validation};
 use crate::error::DynError;
 use crate::ops::internal_keys::InternalDerivedKeysState;
 use axum::Json;
@@ -54,50 +54,33 @@ pub fn authorize_api_key(
     internal_keys: &InternalDerivedKeysState,
     permissions_state: &PermissionsState,
 ) -> Result<Zeroizing<AuthenticatedClient>, (StatusCode, Json<ErrorResponse>)> {
-    let Some(value) = headers.get(API_KEY_HEADER) else {
-        return Err((
+    let deny = |reason: &str| -> (StatusCode, Json<ErrorResponse>) {
+        audit::auth_denied(reason);
+        (
             StatusCode::UNAUTHORIZED,
             Json(ErrorResponse::new(public_error_message(
                 StatusCode::UNAUTHORIZED,
             ))),
-        ));
+        )
+    };
+
+    let Some(value) = headers.get(API_KEY_HEADER) else {
+        return Err(deny("missing api key"));
     };
 
     let Ok(value) = value.to_str() else {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(ErrorResponse::new(public_error_message(
-                StatusCode::UNAUTHORIZED,
-            ))),
-        ));
+        return Err(deny("malformed api key"));
     };
 
     if validation::validate_hash_hex_field("X-API-Key", value, config::INTERNAL_KEYS_HASH).is_err()
     {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(ErrorResponse::new(public_error_message(
-                StatusCode::UNAUTHORIZED,
-            ))),
-        ));
+        return Err(deny("malformed api key"));
     }
 
-    let candidate_hash = internal_keys.api_key_hash(value).map_err(|_| {
-        (
-            StatusCode::UNAUTHORIZED,
-            Json(ErrorResponse::new(public_error_message(
-                StatusCode::UNAUTHORIZED,
-            ))),
-        )
-    })?;
-    let candidate_hash = hex::decode(candidate_hash).map_err(|_| {
-        (
-            StatusCode::UNAUTHORIZED,
-            Json(ErrorResponse::new(public_error_message(
-                StatusCode::UNAUTHORIZED,
-            ))),
-        )
-    })?;
+    let candidate_hash = internal_keys
+        .api_key_hash(value)
+        .map_err(|_| deny("authentication error"))?;
+    let candidate_hash = hex::decode(candidate_hash).map_err(|_| deny("authentication error"))?;
 
     if let (Some(expected_hash), Some(root_hash_hex)) = (
         auth_state.root_api_key_hash_bytes(),
@@ -105,21 +88,27 @@ pub fn authorize_api_key(
     ) {
         debug_assert_eq!(config.api_key_hash.as_str(), root_hash_hex);
         if crypto::constant_time_eq(&candidate_hash, expected_hash) {
-            return Ok(Zeroizing::new(AuthenticatedClient::root(
-                root_hash_hex.to_string(),
-            )));
+            let client = AuthenticatedClient::root(root_hash_hex.to_string());
+            audit::auth_success(&audit::Actor {
+                name: client.client_name(),
+                fingerprint: client.fingerprint(),
+                root: client.is_root(),
+                admin: client.is_admin(),
+            });
+            return Ok(Zeroizing::new(client));
         }
     }
 
     let candidate_hash_hex = hex::encode(candidate_hash);
     if let Some(client) = permissions_state.authenticate_hash(&candidate_hash_hex) {
+        audit::auth_success(&audit::Actor {
+            name: client.client_name(),
+            fingerprint: client.fingerprint(),
+            root: client.is_root(),
+            admin: client.is_admin(),
+        });
         return Ok(Zeroizing::new(client));
     }
 
-    Err((
-        StatusCode::UNAUTHORIZED,
-        Json(ErrorResponse::new(public_error_message(
-            StatusCode::UNAUTHORIZED,
-        ))),
-    ))
+    Err(deny("unknown api key"))
 }

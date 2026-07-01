@@ -12,6 +12,7 @@ mod error;
 mod health;
 mod keys;
 mod message;
+mod middleware;
 mod permissions;
 mod pubkey;
 mod remote_routes;
@@ -384,5 +385,6 @@ pub fn router(state: HttpState) -> Router {
         .route("/message/decrypt", post(message::decrypt_endpoint))
         .route("/message", post(message::receive_endpoint))
         .route("/message/{sender_kid}", post(message::send_endpoint))
+        .layer(axum::middleware::from_fn(middleware::request_context))
         .with_state(state)
 }

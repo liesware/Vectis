@@ -90,6 +90,14 @@ impl AuthenticatedClient {
     pub fn apikey_hash(&self) -> &str {
         &self.apikey_hash
     }
+
+    pub fn client_name(&self) -> &str {
+        &self.client
+    }
+
+    pub fn fingerprint(&self) -> &str {
+        &self.apikey_hash[..self.apikey_hash.len().min(8)]
+    }
 }
 
 impl Zeroize for AuthenticatedClient {

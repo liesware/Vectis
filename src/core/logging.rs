@@ -3,39 +3,73 @@ use std::env;
 use std::fs;
 use tracing::{Level, info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::FmtSubscriber;
+use tracing_subscriber::filter::filter_fn;
+use tracing_subscriber::fmt;
+use tracing_subscriber::prelude::*;
 
 const DEFAULT_LOG_LEVEL: &str = "info";
 const DEFAULT_LOG_DIR: &str = "logs";
 const DEFAULT_LOG_FILE: &str = "vectis.log";
+const DEFAULT_AUDIT_LOG_FILE: &str = "audit.log";
+
+pub const AUDIT_TARGET: &str = "vectis::audit";
 
 pub struct LoggingConfig {
     pub level: Level,
     pub dir: String,
     pub file: String,
+    pub audit_file: String,
 }
 
-pub fn init_logging() -> WorkerGuard {
+pub struct LoggingGuards {
+    _operational: WorkerGuard,
+    _audit: WorkerGuard,
+}
+
+pub fn init_logging() -> LoggingGuards {
     let config = logging_config();
     fs::create_dir_all(&config.dir).expect("failed to create log directory");
-    let file_appender = tracing_appender::rolling::daily(&config.dir, &config.file);
-    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(config.level)
-        .with_writer(non_blocking)
+    let operational_appender = tracing_appender::rolling::daily(&config.dir, &config.file);
+    let (operational_writer, operational_guard) =
+        tracing_appender::non_blocking(operational_appender);
+
+    let audit_appender = tracing_appender::rolling::daily(&config.dir, &config.audit_file);
+    let (audit_writer, audit_guard) = tracing_appender::non_blocking(audit_appender);
+
+    let level = config.level;
+    let operational_layer = fmt::layer()
         .json()
-        .finish();
+        .with_writer(operational_writer)
+        .with_filter(filter_fn(move |metadata| {
+            metadata.is_span()
+                || (metadata.target() != AUDIT_TARGET && *metadata.level() <= level)
+        }));
+
+    let audit_layer = fmt::layer()
+        .json()
+        .with_writer(audit_writer)
+        .with_filter(filter_fn(|metadata| {
+            metadata.is_span() || metadata.target() == AUDIT_TARGET
+        }));
+
+    let subscriber = tracing_subscriber::registry()
+        .with(operational_layer)
+        .with(audit_layer);
 
     tracing::subscriber::set_global_default(subscriber).expect("failed to set tracing subscriber");
     info!(
         log_level = %config.level,
         log_dir = %config.dir,
         log_file = %config.file,
+        audit_file = %config.audit_file,
         "logging initialized"
     );
 
-    guard
+    LoggingGuards {
+        _operational: operational_guard,
+        _audit: audit_guard,
+    }
 }
 
 pub fn logging_config() -> LoggingConfig {
@@ -44,8 +78,14 @@ pub fn logging_config() -> LoggingConfig {
     let level = parse_log_level(&level_text);
     let dir = config_value(&env_file, "VECTIS_LOG_DIR", DEFAULT_LOG_DIR);
     let file = config_value(&env_file, "VECTIS_LOG_FILE", DEFAULT_LOG_FILE);
+    let audit_file = config_value(&env_file, "VECTIS_AUDIT_LOG_FILE", DEFAULT_AUDIT_LOG_FILE);
 
-    LoggingConfig { level, dir, file }
+    LoggingConfig {
+        level,
+        dir,
+        file,
+        audit_file,
+    }
 }
 
 fn parse_log_level(value: &str) -> Level {
