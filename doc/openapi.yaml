@@ -753,9 +753,9 @@ components:
 
     RemoteRoute:
       type: object
-      required: [kid, name, remote_addr]
+      required: [remote_kid, name, remote_addr, allowed_local_kids, status]
       properties:
-        kid:
+        remote_kid:
           $ref: "#/components/schemas/Kid"
         name:
           type: string
@@ -763,6 +763,17 @@ components:
         remote_addr:
           type: string
           example: vectis-b.example.com:443
+        allowed_local_kids:
+          type: array
+          minItems: 1
+          items:
+            type: string
+          example:
+            - "*"
+        status:
+          type: string
+          enum: [active, disabled]
+          example: active
 
     PublicKeysOutput:
       type: object

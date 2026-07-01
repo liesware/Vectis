@@ -398,7 +398,7 @@ def validate_remote_routes_list(response):
     require(isinstance(routes, list), "remote routes list response.routes must be an array")
     for item in routes:
         require(isinstance(item, dict), "remote routes list item must be an object")
-        require_kid(item.get("kid"), "remote routes list item kid")
+        require_kid(item.get("remote_kid"), "remote routes list item remote_kid")
         require(
             isinstance(item.get("name"), str) and item["name"],
             "remote routes list item name must be a non-empty string",
@@ -406,6 +406,18 @@ def validate_remote_routes_list(response):
         require(
             isinstance(item.get("remote_addr"), str) and item["remote_addr"],
             "remote routes list item remote_addr must be a non-empty string",
+        )
+        allowed_local_kids = item.get("allowed_local_kids")
+        require(
+            isinstance(allowed_local_kids, list) and allowed_local_kids,
+            "remote routes list item allowed_local_kids must be a non-empty array",
+        )
+        for allowed_kid in allowed_local_kids:
+            if allowed_kid != "*":
+                require_kid(allowed_kid, "remote routes list item allowed_local_kids kid")
+        require(
+            item.get("status") in ("active", "disabled"),
+            "remote routes list item status must be active or disabled",
         )
 
 
@@ -490,13 +502,15 @@ def write_test_routes(key_ids, final_app_addr):
     sign_routes()
 
 
-def write_test_remote_routes(key_ids, recipient_host):
+def write_test_remote_routes(key_ids, recipient_host, wildcard=False):
     routes = {
         "routes": [
             {
-                "kid": key_id,
+                "remote_kid": key_id,
                 "name": f"positive-{index}",
                 "remote_addr": recipient_host,
+                "allowed_local_kids": ["*"] if wildcard else [key_id],
+                "status": "active",
             }
             for index, key_id in enumerate(key_ids, start=1)
         ]
@@ -821,7 +835,16 @@ def validate_permissions_flow(base_url, root_client, key_id, case):
     ]
 
 
-def send_message(client, message_number, sender_key_id, recipient_key_id, case):
+def send_message(
+    client,
+    message_number,
+    sender_key_id,
+    recipient_key_id,
+    sender_case,
+    recipient_case=None,
+):
+    if recipient_case is None:
+        recipient_case = sender_case
     before = len(FinalAppHandler.deliveries)
     plaintext_message = MESSAGE + str(message_number)
     response = client.post(
@@ -832,13 +855,13 @@ def send_message(client, message_number, sender_key_id, recipient_key_id, case):
         },
         auth=True,
     )
-    validate_message_response(response, case)
+    validate_message_response(response, sender_case)
     require(
         len(FinalAppHandler.deliveries) == before + 1,
         "final app must receive exactly one delivery",
     )
     delivery = FinalAppHandler.deliveries[-1]
-    validate_final_app_delivery(delivery, sender_key_id, case)
+    validate_final_app_delivery(delivery, sender_key_id, recipient_case)
     plaintext = decrypt_message(client, delivery, plaintext_message)
 
     return {
@@ -1017,6 +1040,26 @@ def main():
 
             verify_signature(client, token)
             verify_rows.append((f"{key_id} {hash_alg}", "OK"))
+
+    write_test_remote_routes([key_id for key_id, _ in created], recipient_host, wildcard=True)
+    validate_remote_routes_list(client.post("/remote-routes/reload", {}, auth=True))
+    wildcard_result = send_message(
+        client,
+        len(message_rows) + 1,
+        created[-1][0],
+        created[0][0],
+        created[-1][1],
+        created[0][1],
+    )
+    message_rows.append(
+        (
+            f"{created[-1][0]} -> {created[0][0]} wildcard",
+            wildcard_result["timestamp"],
+            wildcard_result["variant"],
+            wildcard_result["ctx_hex_len"],
+            wildcard_result["plaintext"],
+        )
+    )
 
     print_section("test key", test_rows)
     print_section("pub", pub_rows)

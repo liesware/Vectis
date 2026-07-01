@@ -159,7 +159,8 @@ cargo run -- init
 
 The command prints:
 
-- `VECTIS_UNSEAL_KEY`: used to decrypt `init.json`;
+- `VECTIS_UNSEAL_KEY`: used to decrypt the configured init keys file;
+- `VECTIS_INIT_KEYS_FILE`: encrypted init key material path, default `init.json`;
 - `VECTIS_APIKEY`: client secret generated with a cryptographic random number generator and sent as `X-API-Key`;
 - `VECTIS_APIKEY_HASH`: server-side verifier for protected HTTP endpoints.
 
@@ -239,6 +240,7 @@ Important variables include:
 - `VECTIS_API_URL`;
 - `VECTIS_APIKEY`;
 - `VECTIS_APIKEY_HASH`;
+- `VECTIS_INIT_KEYS_FILE`;
 - `VECTIS_UNSEAL_KEY`;
 - `VECTIS_UNSEAL_KEY_FILE`;
 - `VECTIS_SQLITE_PATH`;

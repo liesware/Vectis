@@ -74,7 +74,7 @@ fn print_help() {
     println!();
     println!("Commands:");
     println!("  serve                 Start the HTTP service");
-    println!("  init                  Generate local key material in init.json");
+    println!("  init                  Generate local key material in VECTIS_INIT_KEYS_FILE");
     println!("  apikey                Create additional local API keys");
     println!("  health                Call the health probe endpoints");
     println!("  test                  Call protected test endpoints through HTTP");
@@ -140,11 +140,11 @@ fn print_serve_help() {
     println!();
     println!("Starts the Vectis HTTP service.");
     println!();
-    println!("Before the server starts, Vectis decrypts and validates init.json.");
+    println!("Before the server starts, Vectis decrypts and validates VECTIS_INIT_KEYS_FILE.");
     println!("Provide VECTIS_UNSEAL_KEY, VECTIS_UNSEAL_KEY_FILE, or type it at the hidden prompt.");
     println!();
     println!("Required files:");
-    println!("  init.json             Encrypted local init key material");
+    println!("  VECTIS_INIT_KEYS_FILE Encrypted local init key material, default init.json");
     println!("  src/db/data.db        Default SQLite database in debug builds");
     println!();
     println!("Common environment:");
@@ -161,14 +161,18 @@ fn print_init_help() {
     println!("Usage:");
     println!("  {PROGRAM_NAME} init");
     println!();
-    println!("Generates local bootstrap key material and writes encrypted init.json.");
+    println!("Generates local bootstrap key material and writes encrypted VECTIS_INIT_KEYS_FILE.");
+    println!("If the file already exists, init refuses to overwrite it.");
     println!();
     println!("Output:");
-    println!("  init.json             Encrypted key file");
-    println!("  VECTIS_UNSEAL_KEY=... Key used later by serve to decrypt init.json");
+    println!("  VECTIS_INIT_KEYS_FILE Encrypted key file, default init.json");
+    println!(
+        "  VECTIS_UNSEAL_KEY=... Key used later by serve to decrypt the configured init keys file"
+    );
     println!("  VECTIS_APIKEY=...     Client API key for protected HTTP endpoints");
     println!("  VECTIS_APIKEY_HASH=... Server-side API key hash for protected HTTP endpoints");
     println!();
     println!("Security:");
+    println!("  Delete the configured init keys file manually before reinitializing.");
     println!("  Do not store VECTIS_UNSEAL_KEY in .env for production.");
 }

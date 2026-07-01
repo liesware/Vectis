@@ -170,6 +170,10 @@ impl HttpState {
     }
 
     async fn reload_remote_routes_state(&self) -> Result<(), DynError> {
+        let loaded_key_ids = {
+            let keys_db_state = self.keys_db_state.read().await;
+            keys_db_state.ids()
+        };
         let reloaded = {
             let remote_routes_state = self.remote_routes_state.read().await;
             remote_routes_state.reload_from_file(
@@ -188,6 +192,7 @@ impl HttpState {
                         &signature_content,
                     )
                 },
+                |kid| loaded_key_ids.iter().any(|id| id == kid),
             )?
         };
         let mut remote_routes_state = self.remote_routes_state.write().await;
@@ -312,10 +317,14 @@ impl HttpState {
         routes_state.route_for(kid)
     }
 
-    async fn remote_route_for(&self, kid: &str) -> Result<RemoteRoute, DynError> {
+    async fn remote_route_for(
+        &self,
+        sender_kid: &str,
+        recipient_kid: &str,
+    ) -> Result<RemoteRoute, DynError> {
         let remote_routes_state = self.remote_routes_state.read().await;
 
-        remote_routes_state.route_for(kid)
+        remote_routes_state.route_for(sender_kid, recipient_kid)
     }
 }
 

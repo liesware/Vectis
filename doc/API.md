@@ -497,9 +497,11 @@ Response:
 {
   "routes": [
     {
-      "kid": "b01cbe33187916f0f1367d07bc986d71bb0d91d7047ccd790c13fc9d85fe7259",
+      "remote_kid": "b01cbe33187916f0f1367d07bc986d71bb0d91d7047ccd790c13fc9d85fe7259",
       "name": "site-b",
-      "remote_addr": "vectis-b.example.com:443"
+      "remote_addr": "vectis-b.example.com:443",
+      "allowed_local_kids": ["*"],
+      "status": "active"
     }
   ]
 }
@@ -999,15 +1001,17 @@ VECTIS_REMOTE_ROUTES_SIGN_PATH=remote_routes_sign.json
 {
   "routes": [
     {
-      "kid": "b01cbe33187916f0f1367d07bc986d71bb0d91d7047ccd790c13fc9d85fe7259",
+      "remote_kid": "b01cbe33187916f0f1367d07bc986d71bb0d91d7047ccd790c13fc9d85fe7259",
       "name": "site-b",
-      "remote_addr": "vectis-b.example.com:443"
+      "remote_addr": "vectis-b.example.com:443",
+      "allowed_local_kids": ["*"],
+      "status": "active"
     }
   ]
 }
 ```
 
-`POST /message/{sender_kid}` never accepts a destination host from the request body; it resolves `recipient_kid` through this signed file.
+`POST /message/{sender_kid}` never accepts a destination host from the request body; it resolves `recipient_kid` through this signed file. A route can allow specific local sender KIDs, or `allowed_local_kids: ["*"]` for any loaded local KID. The wildcard cannot be mixed with explicit KIDs. Disabled routes are loaded and listed, but cannot be used to send messages.
 
 ## Related Configuration
 
@@ -1073,9 +1077,9 @@ CLI output defaults to YAML for readability. Add `--output json` to HTTP client 
 
 Local commands:
 
-- `vectis init`: creates encrypted `init.json`, prints `VECTIS_UNSEAL_KEY`, `VECTIS_APIKEY`, and `VECTIS_APIKEY_HASH`.
-- `vectis apikey create`: decrypts `init.json`, derives the internal API auth key, prints a new `VECTIS_APIKEY` and matching `VECTIS_APIKEY_HASH`, and does not write files.
-- `vectis serve`: validates `init.json`, loads storage/routes into memory, and starts the HTTP service. Unseal key resolution order is `VECTIS_UNSEAL_KEY`, `VECTIS_UNSEAL_KEY_FILE` with default `.unseal_key`, then hidden prompt.
+- `vectis init`: creates encrypted `VECTIS_INIT_KEYS_FILE`, default `init.json`, prints `VECTIS_UNSEAL_KEY`, `VECTIS_APIKEY`, and `VECTIS_APIKEY_HASH`. It refuses to overwrite an existing init keys file; delete it manually before reinitializing.
+- `vectis apikey create`: decrypts `VECTIS_INIT_KEYS_FILE`, derives the internal API auth key, prints a new `VECTIS_APIKEY` and matching `VECTIS_APIKEY_HASH`, and does not write files.
+- `vectis serve`: validates `VECTIS_INIT_KEYS_FILE`, loads storage/routes into memory, and starts the HTTP service. Unseal key resolution order is `VECTIS_UNSEAL_KEY`, `VECTIS_UNSEAL_KEY_FILE` with default `.unseal_key`, then hidden prompt.
 - `vectis routes sign`: reads `VECTIS_ROUTES_PATH`, signs its canonical JSON with init EdDSA and init ML-DSA, and writes `VECTIS_ROUTES_SIGN_PATH`.
 - `vectis remote-routes sign`: reads `VECTIS_REMOTE_ROUTES_PATH`, signs its canonical JSON with init EdDSA and init ML-DSA, and writes `VECTIS_REMOTE_ROUTES_SIGN_PATH`.
 - `vectis permissions sign`: reads `VECTIS_PERMISSIONS_PATH`, signs its canonical JSON with init EdDSA and init ML-DSA, and writes `VECTIS_PERMISSIONS_SIGN_PATH`.

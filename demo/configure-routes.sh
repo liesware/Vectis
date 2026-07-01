@@ -48,9 +48,11 @@ cat > "${SCRIPT_DIR}/site-a/remote_routes.json" <<JSON
 {
   "routes": [
     {
-      "kid": "${B_LOCAL_KID}",
+      "remote_kid": "${B_LOCAL_KID}",
       "name": "site-b",
-      "remote_addr": "${A_REMOTE_VECTIS_HOST}"
+      "remote_addr": "${A_REMOTE_VECTIS_HOST}",
+      "allowed_local_kids": ["${A_LOCAL_KID}"],
+      "status": "active"
     }
   ]
 }
@@ -60,9 +62,11 @@ cat > "${SCRIPT_DIR}/site-b/remote_routes.json" <<JSON
 {
   "routes": [
     {
-      "kid": "${A_LOCAL_KID}",
+      "remote_kid": "${A_LOCAL_KID}",
       "name": "site-a",
-      "remote_addr": "${B_REMOTE_VECTIS_HOST}"
+      "remote_addr": "${B_REMOTE_VECTIS_HOST}",
+      "allowed_local_kids": ["${B_LOCAL_KID}"],
+      "status": "active"
     }
   ]
 }

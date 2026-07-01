@@ -67,6 +67,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
                 &signature_content,
             )
         },
+        |kid| keys_db_state.contains_id(kid),
     );
     let started_at = validation::current_timestamp()?;
     info!(

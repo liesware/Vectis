@@ -32,7 +32,7 @@ pub async fn send_endpoint(
         .await
         .map_err(|err| error_response(err.as_ref()))?;
     let remote_route = state
-        .remote_route_for(prepared.recipient_kid())
+        .remote_route_for(&sender_kid, prepared.recipient_kid())
         .await
         .map_err(|err| error_response(err.as_ref()))?;
     let cached_recipient = state

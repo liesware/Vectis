@@ -22,6 +22,7 @@ pub const CRYPTO_PROFILES: &[&str] = &[
 pub const CRYPTO_POLICIES: &[&str] = &["profile-only", "allow-overrides"];
 pub const HTTP_SCHEMES: &[&str] = &["http", "https"];
 pub const VECTIS_MODES: &[&str] = &["dev", "prod"];
+pub const DEFAULT_INIT_KEYS_FILE: &str = "init.json";
 
 pub struct AppConfig {
     pub http_bind_addr: SocketAddr,
@@ -238,6 +239,15 @@ pub fn http_client_config() -> Result<HttpClientConfig, DynError> {
         final_app_scheme,
         tls_skip_verify,
     })
+}
+
+pub fn init_keys_file_path() -> Result<PathBuf, DynError> {
+    let env_file = load_env_file(".env")?;
+
+    validate_config_path(
+        "VECTIS_INIT_KEYS_FILE",
+        &config_value(&env_file, "VECTIS_INIT_KEYS_FILE", DEFAULT_INIT_KEYS_FILE),
+    )
 }
 
 pub fn validate_vectis_mode(value: &str) -> Result<String, DynError> {

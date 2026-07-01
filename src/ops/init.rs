@@ -166,7 +166,7 @@ fn decrypt_encrypted_init_output(
         Box::new(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!(
-                "init.json could not be decrypted: wrong init AES-256 key, stale VECTIS_UNSEAL_KEY, or init.json was regenerated ({err})"
+                "init keys file could not be decrypted: wrong init AES-256 key, stale VECTIS_UNSEAL_KEY, or init key material was regenerated ({err})"
             ),
         )) as DynError
     })?;

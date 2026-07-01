@@ -31,7 +31,9 @@ pub fn print_help() {
     println!();
     println!("Creates a new client API key and its server-side verifier.");
     println!();
-    println!("This is a local command. It decrypts init.json, derives the internal API auth key,");
+    println!(
+        "This is a local command. It decrypts VECTIS_INIT_KEYS_FILE, derives the internal API auth key,"
+    );
     println!("prints the new values, and does not write files or call the HTTP API.");
     println!();
     println!("Output:");
@@ -43,7 +45,7 @@ pub fn print_help() {
     println!("  --output json         Pretty JSON output");
     println!();
     println!("Required local material:");
-    println!("  init.json             Encrypted local init key material");
+    println!("  VECTIS_INIT_KEYS_FILE Encrypted local init key material, default init.json");
     println!("  VECTIS_UNSEAL_KEY     64 hex characters, or");
     println!("  VECTIS_UNSEAL_KEY_FILE Path to unseal key file, default .unseal_key");
 }

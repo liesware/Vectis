@@ -620,9 +620,11 @@ def main():
         write_remote_routes(
             [
                 {
-                    "kid": "not-hex",
+                    "remote_kid": "not-hex",
                     "name": "bad kid",
                     "remote_addr": recipient_host,
+                    "allowed_local_kids": [key_id],
+                    "status": "active",
                 }
             ]
         )
@@ -633,9 +635,11 @@ def main():
         write_remote_routes(
             [
                 {
-                    "kid": key_id,
+                    "remote_kid": key_id,
                     "name": "bad addr",
                     "remote_addr": "not-a-socket-address",
+                    "allowed_local_kids": [key_id],
+                    "status": "active",
                 }
             ]
         )
@@ -646,15 +650,92 @@ def main():
         write_remote_routes(
             [
                 {
-                    "kid": key_id,
+                    "remote_kid": key_id,
                     "name": "invalid signature",
                     "remote_addr": recipient_host,
+                    "allowed_local_kids": [key_id],
+                    "status": "active",
                 }
             ]
         )
         REMOTE_ROUTES_SIGN_PATH.write_text('{"invalid":true}\n', encoding="utf-8")
         status, _ = client.post("/remote-routes/reload", {}, auth=True)
         require_status("remote routes invalid signature", status, 400)
+
+    def remote_routes_empty_allowed_local_kids():
+        write_remote_routes(
+            [
+                {
+                    "remote_kid": key_id,
+                    "name": "empty allowed",
+                    "remote_addr": recipient_host,
+                    "allowed_local_kids": [],
+                    "status": "active",
+                }
+            ]
+        )
+        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        require_status("remote routes empty allowed local kids", status, 400)
+
+    def remote_routes_wildcard_mixed_with_kid():
+        write_remote_routes(
+            [
+                {
+                    "remote_kid": key_id,
+                    "name": "mixed wildcard",
+                    "remote_addr": recipient_host,
+                    "allowed_local_kids": ["*", key_id],
+                    "status": "active",
+                }
+            ]
+        )
+        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        require_status("remote routes wildcard mixed with kid", status, 400)
+
+    def remote_routes_invalid_allowed_local_kid():
+        write_remote_routes(
+            [
+                {
+                    "remote_kid": key_id,
+                    "name": "invalid allowed kid",
+                    "remote_addr": recipient_host,
+                    "allowed_local_kids": ["not-hex"],
+                    "status": "active",
+                }
+            ]
+        )
+        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        require_status("remote routes invalid allowed local kid", status, 400)
+
+    def remote_routes_unloaded_allowed_local_kid():
+        write_remote_routes(
+            [
+                {
+                    "remote_kid": key_id,
+                    "name": "unloaded allowed kid",
+                    "remote_addr": recipient_host,
+                    "allowed_local_kids": ["00" * 32],
+                    "status": "active",
+                }
+            ]
+        )
+        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        require_status("remote routes unloaded allowed local kid", status, 400)
+
+    def remote_routes_invalid_status():
+        write_remote_routes(
+            [
+                {
+                    "remote_kid": key_id,
+                    "name": "invalid status",
+                    "remote_addr": recipient_host,
+                    "allowed_local_kids": [key_id],
+                    "status": "paused",
+                }
+            ]
+        )
+        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        require_status("remote routes invalid status", status, 400)
 
     def permissions_missing_kid():
         write_permissions(
@@ -719,6 +800,11 @@ def main():
         ("remote routes invalid kid", remote_routes_invalid_kid),
         ("remote routes invalid addr", remote_routes_invalid_addr),
         ("remote routes invalid signature", remote_routes_invalid_signature),
+        ("remote routes empty allowed local kids", remote_routes_empty_allowed_local_kids),
+        ("remote routes wildcard mixed with kid", remote_routes_wildcard_mixed_with_kid),
+        ("remote routes invalid allowed local kid", remote_routes_invalid_allowed_local_kid),
+        ("remote routes unloaded allowed local kid", remote_routes_unloaded_allowed_local_kid),
+        ("remote routes invalid status", remote_routes_invalid_status),
         ("permissions missing kid", permissions_missing_kid),
         ("permissions invalid apikey_hash", permissions_invalid_apikey_hash),
         ("permissions invalid status", permissions_invalid_status),
@@ -904,12 +990,57 @@ def main():
         require_status("POST /message/{id} sender not hex", status, 400)
 
     def message_recipient_route_not_found():
+        write_remote_routes([])
+        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        require_status("POST /remote-routes/reload empty", status, 200)
         status, _ = client.post(
             f"/message/{key_id}",
             valid_message_request(key_id),
             auth=True,
         )
         require_status("POST /message/{id} recipient route not found", status, 404)
+
+    def message_recipient_route_disabled():
+        write_remote_routes(
+            [
+                {
+                    "remote_kid": key_id,
+                    "name": "disabled route",
+                    "remote_addr": recipient_host,
+                    "allowed_local_kids": [key_id],
+                    "status": "disabled",
+                }
+            ]
+        )
+        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        require_status("POST /remote-routes/reload disabled", status, 200)
+        status, _ = client.post(
+            f"/message/{key_id}",
+            valid_message_request(key_id),
+            auth=True,
+        )
+        require_status("POST /message/{id} recipient route disabled", status, 403)
+
+    def message_sender_not_allowed_for_route():
+        write_remote_routes(
+            [
+                {
+                    "remote_kid": key_id,
+                    "name": "sender not allowed",
+                    "remote_addr": recipient_host,
+                    "allowed_local_kids": [disabled_key_id],
+                    "status": "active",
+                }
+            ]
+        )
+        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        require_status("POST /remote-routes/reload sender not allowed", status, 200)
+        status, _ = client.post(
+            f"/message/{key_id}",
+            valid_message_request(key_id),
+            auth=True,
+        )
+        require_status("POST /message/{id} sender not allowed for route", status, 403)
 
     def message_invalid_recipient_kid():
         request = valid_message_request(key_id)
@@ -935,6 +1066,8 @@ def main():
         ("POST /message/{id} without auth", message_without_auth),
         ("POST /message/{id} sender not hex", message_sender_id_not_hex),
         ("POST /message/{id} recipient route not found", message_recipient_route_not_found),
+        ("POST /message/{id} recipient route disabled", message_recipient_route_disabled),
+        ("POST /message/{id} sender not allowed for route", message_sender_not_allowed_for_route),
         ("POST /message/{id} invalid recipient kid", message_invalid_recipient_kid),
         ("POST /message/{id} empty message", message_empty_message),
     ):
@@ -1152,7 +1285,12 @@ def main():
     restore_file(REMOTE_ROUTES_PATH, remote_routes_backup)
     restore_file(REMOTE_ROUTES_SIGN_PATH, remote_routes_sign_backup)
     status, _ = client.post("/remote-routes/reload", {}, auth=True)
-    require_status("restore remote routes reload", status, 200)
+    if status != 200:
+        write_remote_routes([])
+        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        require_status("clear remote routes reload", status, 200)
+        restore_file(REMOTE_ROUTES_PATH, remote_routes_backup)
+        restore_file(REMOTE_ROUTES_SIGN_PATH, remote_routes_sign_backup)
 
     print_section("HTTP negative", rows)
     print(f"SUMMARY negative passed={len(rows)} failed=0")

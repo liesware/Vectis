@@ -82,6 +82,10 @@ fn public_error_message_for_error(
         return String::from("recipent kid not found");
     }
 
+    if detail.contains("recipient route not found") {
+        return String::from("recipient route not found");
+    }
+
     if detail.contains("recipient can't be reached") {
         return String::from("internal server error final app can't be reached");
     }
