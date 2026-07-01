@@ -224,8 +224,15 @@ The init symmetric key is a root key. Vectis derives separate internal keys from
 | `VECTIS_LOG_LEVEL` | `info` | `trace`, `debug`, `info`, `warn`, `warning`, or `error` | Maximum tracing level. Invalid values fall back to `info`. |
 | `VECTIS_LOG_DIR` | `logs` | Directory path | Directory for daily rolling JSON logs. Created automatically if missing. |
 | `VECTIS_LOG_FILE` | `vectis.log` | File name | Base log file name used by daily rotation. |
+| `VECTIS_AUDIT_LOG_FILE` | `audit.log` | File name | Base file name for the dedicated audit log stream. Security audit events are written here, separate from the operational log. |
 
-Logging is JSON by default.
+Logging is JSON by default. Audit events go to a dedicated stream (`VECTIS_AUDIT_LOG_FILE`) under `VECTIS_LOG_DIR`, separate from the operational log.
+
+## Observability
+
+| Variable | Default | Expected value | Purpose |
+| --- | --- | --- | --- |
+| `VECTIS_METRICS_ENABLED` | `true` | `true` or `false` | Enable the unauthenticated Prometheus `/metrics` endpoint. When `false`, `/metrics` returns `404`. |
 
 ## Hostnames
 
@@ -307,6 +314,8 @@ VECTIS_PERMISSIONS_SIGN_PATH=permissions_sign.json
 VECTIS_LOG_LEVEL=info
 VECTIS_LOG_DIR=logs
 VECTIS_LOG_FILE=vectis.log
+VECTIS_AUDIT_LOG_FILE=audit.log
+VECTIS_METRICS_ENABLED=true
 VECTIS_APIKEY=20e446d000498e82b056f54e68216d4c8c9bda089a6812d0aa9d82d59f918018
 VECTIS_APIKEY_HASH=
 # VECTIS_INIT_KEYS_FILE=init.json

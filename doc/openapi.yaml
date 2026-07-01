@@ -21,6 +21,7 @@ tags:
   - name: Public Keys
   - name: Signatures
   - name: Messages
+  - name: Observability
 security: []
 
 paths:
@@ -66,6 +67,24 @@ paths:
                 $ref: "#/components/schemas/ReadyHealthOutput"
         default:
           $ref: "#/components/responses/Error"
+
+  /metrics:
+    get:
+      tags: [Observability]
+      summary: Prometheus metrics
+      description: >
+        Prometheus metrics in the text exposition format. No auth. Enabled by
+        VECTIS_METRICS_ENABLED (default true); returns 404 when disabled. Labels
+        carry no sensitive data.
+      responses:
+        "200":
+          description: Metrics in Prometheus text exposition format
+          content:
+            text/plain:
+              schema:
+                type: string
+        "404":
+          description: Metrics disabled via VECTIS_METRICS_ENABLED=false
 
   /self-test/init:
     get:

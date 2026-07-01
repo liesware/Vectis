@@ -56,6 +56,7 @@ Endpoints without auth:
 - `GET /healthz/startup`
 - `GET /healthz/live`
 - `GET /healthz/ready`
+- `GET /metrics`
 - `GET /keys`
 - `GET /pub/{kid}`
 - `POST /sign/verification`
@@ -141,6 +142,20 @@ Response:
   "routes_loaded": 1
 }
 ```
+
+### GET /metrics
+
+Prometheus metrics in the text exposition format (`text/plain; version=0.0.4`). No auth. Enabled by `VECTIS_METRICS_ENABLED` (default `true`); returns `404` when disabled. Labels are low cardinality and carry no sensitive data (only `method`, `endpoint` route template, `status`, `outcome`).
+
+Exposed metrics:
+
+- `http_requests_total{method,endpoint,status}`
+- `http_request_duration_seconds{method,endpoint}` (histogram)
+- `auth_total{outcome}` (`allow` or `deny`)
+- `vectis_keys_loaded`
+- `vectis_routes_loaded`
+- `vectis_remote_routes_loaded`
+- `vectis_permission_clients`
 
 ### GET /self-test/init
 
