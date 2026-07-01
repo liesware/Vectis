@@ -81,6 +81,22 @@ class Client:
 
         return self._request("GET", path, headers=headers)
 
+    def get_status(self, path, auth=False):
+        headers = {}
+        if auth:
+            headers["X-API-Key"] = self.apikey
+
+        request = urllib.request.Request(
+            f"{self.base_url}{path}", headers=headers, method="GET"
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return response.status
+        except urllib.error.HTTPError as err:
+            return err.code
+        except urllib.error.URLError as err:
+            raise WorkflowError(f"GET {path} failed: {err}") from err
+
     def post(self, path, body, auth=False):
         headers = {"Content-Type": "application/json"}
         if auth:
@@ -202,6 +218,11 @@ def validate_health(client):
     require(ready.get("storage") == "ok", "health ready storage must be ok")
     require(isinstance(ready.get("keys_loaded"), int), "health ready keys_loaded must be an integer")
     require(isinstance(ready.get("routes_loaded"), int), "health ready routes_loaded must be an integer")
+
+
+def validate_metrics(client):
+    status = client.get_status("/metrics")
+    require(status == 200, f"/metrics must return 200, got {status}")
 
 
 def create_key(client, case):
@@ -900,6 +921,10 @@ def main():
     validate_health(client)
     print("Health: OK\n")
     passed_count = 1
+
+    validate_metrics(client)
+    print("Metrics: OK\n")
+    passed_count += 1
 
     validate_init(client.get("/self-test/init", auth=True))
     print("Test init: OK\n")

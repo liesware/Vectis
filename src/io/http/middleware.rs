@@ -1,9 +1,9 @@
-use axum::extract::Request;
+use axum::extract::{MatchedPath, Request};
 use axum::middleware::Next;
 use axum::response::Response;
 use tracing::{Instrument, info_span};
 
-use crate::core::crypto;
+use crate::core::{crypto, metrics};
 
 pub async fn request_context(request: Request, next: Next) -> Response {
     let request_id = crypto::random_bytes(16)
@@ -11,6 +11,11 @@ pub async fn request_context(request: Request, next: Next) -> Response {
         .unwrap_or_default();
     let method = request.method().clone();
     let path = request.uri().path().to_string();
+    let endpoint = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|matched| matched.as_str().to_string())
+        .unwrap_or_else(|| String::from("unknown"));
 
     let span = info_span!(
         "request",
@@ -19,5 +24,15 @@ pub async fn request_context(request: Request, next: Next) -> Response {
         path = %path,
     );
 
-    next.run(request).instrument(span).await
+    let start = std::time::Instant::now();
+    let response = next.run(request).instrument(span).await;
+
+    metrics::record_http_request(
+        method.as_str(),
+        &endpoint,
+        response.status().as_u16(),
+        start.elapsed().as_secs_f64(),
+    );
+
+    response
 }

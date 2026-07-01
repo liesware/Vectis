@@ -51,6 +51,7 @@ pub struct AppConfig {
     pub default_crypto_profile: String,
     pub crypto_policy: String,
     pub plaintext_message: String,
+    pub metrics_enabled: bool,
 }
 
 pub fn app_config() -> Result<AppConfig, DynError> {
@@ -142,6 +143,10 @@ pub fn app_config() -> Result<AppConfig, DynError> {
         "hybrid-performance-v1",
     );
     let crypto_policy = config_value(&env_file, "VECTIS_CRYPTO_POLICY", "profile-only");
+    let metrics_enabled = validate_bool_field(
+        "VECTIS_METRICS_ENABLED",
+        &config_value(&env_file, "VECTIS_METRICS_ENABLED", "true"),
+    )?;
     let plaintext_message = config_value(
         &env_file,
         "VECTIS_PLAINTEXT_MESSAGE",
@@ -213,6 +218,7 @@ pub fn app_config() -> Result<AppConfig, DynError> {
         default_crypto_profile,
         crypto_policy,
         plaintext_message,
+        metrics_enabled,
     })
 }
 

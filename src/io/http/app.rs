@@ -15,6 +15,11 @@ use zeroize::Zeroizing;
 
 pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
     let config = Arc::new(config::app_config()?);
+    let metrics_handle = if config.metrics_enabled {
+        Some(Arc::new(crate::core::metrics::init()?))
+    } else {
+        None
+    };
     let auth_state = super::auth::HttpAuthState::from_config(&config)?;
     let logging = crate::core::logging::logging_config();
     let storage = StorageState::new(&config).await?;
@@ -112,6 +117,14 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         loaded_permission_clients = permissions_state.len(),
         "permissions loaded into http state"
     );
+    if metrics_handle.is_some() {
+        crate::core::metrics::set_loaded_gauges(
+            keys_db_state.len(),
+            routes_state.len(),
+            remote_routes_state.len(),
+            permissions_state.len(),
+        );
+    }
     let app = super::router(super::HttpState::new(super::HttpStateInput {
         config: config.clone(),
         auth_state,
@@ -129,6 +142,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         remote_routes_path: config.remote_routes_path.clone(),
         remote_routes_sign_path: config.remote_routes_sign_path.clone(),
         started_at,
+        metrics_handle,
     }));
     let renderer = Renderer::new(fonts::family("slant").unwrap())
         .with_alignment(Alignment::Center)

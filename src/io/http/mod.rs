@@ -12,6 +12,7 @@ mod error;
 mod health;
 mod keys;
 mod message;
+mod metrics;
 mod middleware;
 mod permissions;
 mod pubkey;
@@ -30,6 +31,7 @@ use crate::ops::init::{InitValidationOutput, ValidatedInitState};
 use crate::ops::internal_keys::InternalDerivedKeysState;
 use crate::ops::keys::{KeysDbState, LoadedOpsKey};
 use crate::ops::message::{RemotePublicKeys, RemotePublicKeysState};
+use metrics_exporter_prometheus::PrometheusHandle;
 use std::path::PathBuf;
 
 pub use app::run;
@@ -53,6 +55,7 @@ pub struct HttpState {
     routes_sign_path: Arc<PathBuf>,
     remote_routes_path: Arc<PathBuf>,
     remote_routes_sign_path: Arc<PathBuf>,
+    metrics_handle: Option<Arc<PrometheusHandle>>,
 }
 
 struct HttpStateInput {
@@ -72,6 +75,7 @@ struct HttpStateInput {
     remote_routes_path: PathBuf,
     remote_routes_sign_path: PathBuf,
     started_at: String,
+    metrics_handle: Option<Arc<PrometheusHandle>>,
 }
 
 impl HttpState {
@@ -96,7 +100,12 @@ impl HttpState {
             routes_sign_path: Arc::new(input.routes_sign_path),
             remote_routes_path: Arc::new(input.remote_routes_path),
             remote_routes_sign_path: Arc::new(input.remote_routes_sign_path),
+            metrics_handle: input.metrics_handle,
         }
+    }
+
+    fn metrics_handle(&self) -> Option<&PrometheusHandle> {
+        self.metrics_handle.as_deref()
     }
 
     fn key_material_loaded(&self) -> bool {
@@ -353,6 +362,7 @@ pub fn router(state: HttpState) -> Router {
         .route("/healthz/startup", get(health::startup_endpoint))
         .route("/healthz/live", get(health::live_endpoint))
         .route("/healthz/ready", get(health::ready_endpoint))
+        .route("/metrics", get(metrics::metrics_endpoint))
         .route("/self-test/keys/{kid}", get(test::test_endpoint))
         .route("/self-test/init", get(test::init_endpoint))
         .route("/keys/reload", post(keys::refresh_endpoint))

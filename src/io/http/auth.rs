@@ -1,6 +1,6 @@
 use super::error::{ErrorResponse, public_error_message};
 use crate::core::permissions::{AuthenticatedClient, PermissionsState};
-use crate::core::{audit, config, crypto, validation};
+use crate::core::{audit, config, crypto, metrics, validation};
 use crate::error::DynError;
 use crate::ops::internal_keys::InternalDerivedKeysState;
 use axum::Json;
@@ -56,6 +56,7 @@ pub fn authorize_api_key(
 ) -> Result<Zeroizing<AuthenticatedClient>, (StatusCode, Json<ErrorResponse>)> {
     let deny = |reason: &str| -> (StatusCode, Json<ErrorResponse>) {
         audit::auth_denied(reason);
+        metrics::record_auth("deny");
         (
             StatusCode::UNAUTHORIZED,
             Json(ErrorResponse::new(public_error_message(
@@ -95,6 +96,7 @@ pub fn authorize_api_key(
                 root: client.is_root(),
                 admin: client.is_admin(),
             });
+            metrics::record_auth("allow");
             return Ok(Zeroizing::new(client));
         }
     }
@@ -107,6 +109,7 @@ pub fn authorize_api_key(
             root: client.is_root(),
             admin: client.is_admin(),
         });
+        metrics::record_auth("allow");
         return Ok(Zeroizing::new(client));
     }
 
