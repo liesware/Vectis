@@ -140,9 +140,29 @@ is kept untouched.
 **In Vectis**: `load_config_state` (lenient) vs `reload_config_state` (strict)
 in `core/config_file.rs`, both covered by unit tests.
 
+### Rule 9 — Bound config and file parsing before expensive work
+
+**Why**: unbounded reads let a malformed or oversized file consume memory, CPU,
+or cryptographic verification time before the application knows whether it is
+safe to process.
+
+**How**: before reading, parsing, canonicalizing, signing, or verifying an
+operator-controlled file, validate that the path exists when required, points to
+a regular file, and stays under a documented size limit. Startup can fall back
+to a safe empty state; runtime reload must reject the new file and keep the
+previous state.
+
+**Rust note**: use `fs::metadata` before `read_to_string`, keep `NotFound`
+distinguishable when missing files are allowed, and centralize the helper so all
+load/sign/list paths share the same limits.
+
+**In Vectis**: `config.json` and `config_sign.json` have explicit maximum
+sizes enforced through `core/config_file.rs` and constants in `core/config.rs`
+before config load, reload, list, sign, and verification paths.
+
 ## 4. Centralized, Typed Errors
 
-### Rule 9 — One semantic error type per application
+### Rule 10 — One semantic error type per application
 
 **Why**: ad-hoc errors (strings, borrowed OS error kinds) carry no contract;
 every consumer invents its own interpretation.
@@ -159,7 +179,7 @@ allow migrating call sites without touching signatures.
 **In Vectis**: `VectisError` in `src/error.rs`; 148 sites migrated from
 fabricated `io::Error` kinds with zero signature changes.
 
-### Rule 10 — Map errors to public responses with an exhaustive match
+### Rule 11 — Map errors to public responses with an exhaustive match
 
 **Why**: deciding responses by substring-matching error text means rewording a
 message silently changes the API. It fossilizes typos into public contracts.
@@ -172,7 +192,7 @@ at compile time. Never `contains()` on error prose.
 string-matching block preserved a typo ("recipent") in the public API until the
 migration removed it.
 
-### Rule 11 — Never leak internals in public errors
+### Rule 12 — Never leak internals in public errors
 
 **Why**: 5xx detail (hosts, paths, library errors) maps your internals for
 attackers and couples clients to incidental strings.
@@ -187,7 +207,7 @@ fixed public message; `doc/API.md` error examples mirror `src` strings.
 
 ## 5. Security Defaults
 
-### Rule 12 — Canonicalize everything you sign
+### Rule 13 — Canonicalize everything you sign
 
 **Why**: signing non-canonical encodings makes signatures depend on key order
 and whitespace; two semantically equal documents verify differently.
@@ -204,7 +224,7 @@ without extra dependencies.
 **In Vectis**: `core/canonical.rs` (`canonical_json_v1`), `core/protocol.rs`;
 envelope/payload version match enforced in `ops/sign.rs`.
 
-### Rule 13 — Verify before decrypt, bind the context
+### Rule 14 — Verify before decrypt, bind the context
 
 **Why**: decrypting unauthenticated data processes attacker input with your
 keys; unbound ciphertexts can be replayed across contexts (wrong recipient,
@@ -220,7 +240,7 @@ structurally impossible.
 `open_message_cipher`; the AAD binds 8 context fields; ephemeral XECDH +
 fresh ML-KEM encapsulation per message.
 
-### Rule 14 — Treat secrets as radioactive
+### Rule 15 — Treat secrets as radioactive
 
 **Why**: secrets leak through memory dumps, timing side channels, logs, and
 telemetry labels — every channel you did not explicitly close.
@@ -228,20 +248,39 @@ telemetry labels — every channel you did not explicitly close.
 **How**:
 
 - zeroize secret material in memory when dropped;
-- compare credentials in constant time, scanning the full set without early
-  exit;
+- avoid credential timing leaks; use constant-time comparison for secret
+  material, and keep authorization indexes separate from authentication
+  matching;
 - never log secrets; keep telemetry labels low-cardinality and content-free;
 - encrypt stored key material and bind it to its identity so a swapped record
   fails closed.
 
-**Rust note**: `zeroize`/`Zeroizing`; a constant-time `eq` helper; structured
-logging with an explicit field allowlist mindset.
+**Rust note**: `zeroize`/`Zeroizing`; a constant-time `eq` helper for secret
+comparison; structured logging with an explicit field allowlist mindset.
 
-**In Vectis**: 180+ `Zeroizing` uses; `constant_time_eq` over all clients in
-`authenticate_hash`; kid-binding via `validate_key_id_matches_enc_keys`;
+**In Vectis**: 180+ `Zeroizing` uses; `PermissionsState` keeps an index for
+permission lookup while `authenticate_hash` still compares credential hashes
+with `constant_time_eq`; kid-binding via `validate_key_id_matches_enc_keys`;
 dedicated audit stream with request ids and no payload contents.
 
-### Rule 15 — Write the threat model, including what you refuse to defend
+### Rule 16 — Model resource lifecycle explicitly
+
+**Why**: resources rarely stay simply "valid" or "invalid". Without an explicit
+lifecycle, disabled, retired, compromised, and destroyed states become ad-hoc
+flags that every operation interprets differently.
+
+**How**: define closed lifecycle states, allowed transitions, and centralized
+guards for each operation class. New use, read-only use, verification, public
+discovery, and administrative changes may each require different permissions
+from the lifecycle model, but the decision must live in one place.
+
+**In Vectis**: operational keys use `active`, `disabled`, `retired`,
+`compromised`, and `destroyed`; helpers such as
+`require_lifecycle_for_new_use`, `require_lifecycle_for_decrypt_or_verify`, and
+`require_lifecycle_for_public_keys` enforce the model, including blocking
+`/pub` for retired keys.
+
+### Rule 17 — Write the threat model, including what you refuse to defend
 
 **Why**: undocumented gaps are indistinguishable from oversights. An explicit
 assumption is a defensible design decision; an implicit one is a finding in
@@ -257,7 +296,7 @@ are documented assumptions with operational mitigations, not silent gaps.
 
 ## 6. Testing and Tooling Discipline
 
-### Rule 16 — Unit-test every validation function; e2e-test the contract both ways
+### Rule 18 — Unit-test every validation function; e2e-test the contract both ways
 
 **Why**: validation functions are the security boundary — untested rules decay.
 A positive-only e2e suite proves the happy path while the rejection contract
@@ -275,7 +314,7 @@ A positive-only e2e suite proves the happy path while the rejection contract
 **In Vectis**: `#[cfg(test)]` modules across `core`/`ops` (56 tests);
 `tests/http_positive.py` and `tests/http_negative.py` asserting status codes.
 
-### Rule 17 — Zero warnings, always
+### Rule 19 — Zero warnings, always
 
 **Why**: a build with tolerated warnings hides the new warning that matters.
 Lint debt compounds silently.
@@ -289,7 +328,7 @@ mechanical cleanups.
 
 **In Vectis**: every change in the repository lands with clippy and fmt clean.
 
-### Rule 18 — Keep an executable demo, and verify against the fresh build
+### Rule 20 — Keep an executable demo, and verify against the fresh build
 
 **Why**: documentation lies over time; a runnable end-to-end scenario cannot.
 And test results against a stale binary validate nothing (a classic false
@@ -303,9 +342,28 @@ the running binary is the one you just built.
 lesson: suites once passed against a server started before the rebuild — the
 results were discarded and re-run.
 
-## 7. Documentation Contract
+## 7. Observability Contract
 
-### Rule 19 — Fixed documentation set, swept on every behavior change
+### Rule 21 — Separate operational logs, audit logs, and metrics
+
+**Why**: debugging output, security evidence, and operational counters have
+different audiences and retention needs. Mixing them makes logs noisy, audits
+incomplete, and metrics unsafe.
+
+**How**: keep three channels. Operational logs explain what the service is doing
+and why it failed. Audit logs record stable security events with actor,
+resource, action, outcome, and reason, but no secrets or payloads. Metrics expose
+runtime health and behavior using counters/gauges/histograms with
+low-cardinality labels only.
+
+**In Vectis**: JSON operational logs, a dedicated audit stream through
+`core/audit.rs`, and Prometheus metrics through `core/metrics.rs` and
+`/metrics`; labels avoid KIDs, actors, remote addresses, payloads, and free-form
+errors.
+
+## 8. Documentation Contract
+
+### Rule 22 — Fixed documentation set, swept on every behavior change
 
 **Why**: docs rot section by section; a stale paragraph about removed behavior
 (e.g. an old fallback) misleads users into building on it.
@@ -317,20 +375,23 @@ threat model, architecture reference. After every behavior change, grep the
 relative links and that documented examples match code literally.
 
 **In Vectis**: `README.md`, `doc/API.md`, `doc/ENV.md`, `doc/ThreatModel.md`,
-`doc/Reference.md`; the TOFU removal required sweeping four documents that
-described the old fallback.
+`doc/Reference.md`; removing runtime peer-key fetch required sweeping four
+documents that described the old fallback.
 
-### Rule 20 — Code explains itself; documents explain the system
+### Rule 23 — Code explains itself; documents explain the system
 
 **Why**: explanatory comments duplicate the code and drift from it; the
 information either belongs in a name/type or in a document with an owner.
 
-**How**: no explanatory comments in code — express intent through names, types,
-and small functions. Design rationale, flows, and invariants live in the
-documentation set (Rule 19), which is reviewed and kept consistent.
+**How**: avoid redundant comments that restate the code. Express normal intent
+through names, types, and small functions. Use short comments only for
+non-obvious security, protocol, fallback, or invariant behavior. Design
+rationale and system flows live in the documentation set (Rule 22), which is
+reviewed and kept consistent.
 
-**In Vectis**: the codebase carries no explanatory comments; rationale lives in
-`doc/Reference.md` and this document.
+**In Vectis**: comments are reserved for small pieces of non-obvious protocol or
+fallback behavior; broader rationale lives in `doc/Reference.md` and this
+document.
 
 ## How to Apply This to a New Project
 
@@ -339,20 +400,25 @@ Bootstrap order — each step makes the next one cheaper:
 1. **Layout**: create the three layers (`core`, `ops`, `io`) empty, with the
    dependency rule written down (Rule 1).
 2. **Errors first**: define the semantic error enum and constructor helpers
-   before writing the first fallible function (Rules 9-11).
+   before writing the first fallible function (Rules 10-12).
 3. **Validation module**: `core/validation` with the generic field validators;
    every new input type gets its `*Input` → domain conversion (Rules 6-7).
 4. **Config loader**: one settings precedence (env → file → defaults) and, if
-   the project has operational config, one unified file with one loader and
-   lenient-startup/strict-reload semantics (Rules 3, 5, 8).
+   the project has operational config, one unified file with one bounded loader
+   and lenient-startup/strict-reload semantics (Rules 3, 5, 8-9).
 5. **CI from day one**: format + lint (zero warnings) + unit tests + negative
    e2e as the pipeline; the negative suite grows with every endpoint
-   (Rules 16-17).
-6. **Threat model from day one**: even three lines of explicit assumptions
-   beat a perfect document written after the audit (Rule 15).
-7. **Docs as contract**: README + API + ENV skeletons created with the first
-   endpoint; sweep them on every behavior change (Rules 19-20).
-8. When a second source of truth appears — a cache, a fallback, a convenience
+   (Rules 18-19).
+6. **Lifecycle model**: if the project manages sensitive resources, define
+   states, transitions, and centralized operation guards before exposing the
+   first mutation endpoint (Rule 16).
+7. **Observability from day one**: create operational logs, audit events, and
+   metrics as separate channels with a no-secrets rule (Rule 21).
+8. **Threat model from day one**: even three lines of explicit assumptions
+   beat a perfect document written after the audit (Rule 17).
+9. **Docs as contract**: README + API + ENV skeletons created with the first
+   endpoint; sweep them on every behavior change (Rules 22-23).
+10. When a second source of truth appears — a cache, a fallback, a convenience
    fetch — delete it (Rule 4).
 
 ## Revision
