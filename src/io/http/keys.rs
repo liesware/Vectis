@@ -1,6 +1,6 @@
 use super::HttpState;
 use super::error::{ErrorResponse, error_response, public_error_message};
-use crate::core::audit;
+use crate::core::{audit, metrics};
 use crate::ops;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -85,6 +85,7 @@ pub async fn create_endpoint(
             };
 
             state.upsert_keys_db_entry(loaded_key).await;
+            state.refresh_loaded_gauges().await;
             let loaded_key = state
                 .with_keys_db_state(|keys_db_state| keys_db_state.get(&output.id).cloned())
                 .await;
@@ -305,6 +306,7 @@ pub async fn refresh_endpoint(
         "keys reload request accepted"
     );
     state.reload_keys_db_state().await.map_err(|err| {
+        metrics::record_keys_reload("failed");
         audit::operation_failed(
             "key.reload.failed",
             Some(&actor),
@@ -315,6 +317,8 @@ pub async fn refresh_endpoint(
         );
         error_response(err.as_ref())
     })?;
+    state.refresh_loaded_gauges().await;
+    metrics::record_keys_reload("success");
     let response = state
         .with_keys_db_state(ops::keys::list_keys_properties_from_state)
         .await;

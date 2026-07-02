@@ -244,6 +244,8 @@ Audit events use stable event names such as `auth.success`, `permission.denied`,
 | --- | --- | --- | --- |
 | `VECTIS_METRICS_ENABLED` | `true` | `true` or `false` | Enable the Prometheus `/metrics` endpoint. The endpoint requires `X-API-Key` with root, `admin`, or `metrics` permission. When `false`, authorized requests return `404`. |
 
+Metrics include runtime gauges for unsealed state and loaded keys/routes/permissions, counters for auth and permission decisions, config/key reload results, message send/receive/decrypt results, and cryptographic sign/verify/encrypt/decrypt results. Labels are intentionally low cardinality and must not include KIDs, API keys, actors, remote addresses, plaintext, ciphertext, or free-form errors.
+
 ## Hostnames
 
 | Variable | Default | Expected value | Purpose |

@@ -76,6 +76,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         "signed config loaded into http state"
     );
     if metrics_handle.is_some() {
+        crate::core::metrics::set_unsealed_state(true);
         crate::core::metrics::set_loaded_gauges(
             keys_db_state.len(),
             config_state.routes.len(),

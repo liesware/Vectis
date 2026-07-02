@@ -1,6 +1,6 @@
 use super::HttpState;
 use super::error::{ErrorResponse, error_response};
-use crate::core::audit;
+use crate::core::{audit, metrics};
 use crate::ops;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -34,6 +34,7 @@ pub async fn send_endpoint(
             Some("message"),
             &err.to_string(),
         );
+        record_message_failed("send");
         error_response(err.as_ref())
     })?;
     state
@@ -48,6 +49,7 @@ pub async fn send_endpoint(
                 Some("message"),
                 &err.to_string(),
             );
+            record_message_failed("send");
             error_response(err.as_ref())
         })?;
     let request = ops::message::parse_send_message_input(request).map_err(|err| {
@@ -59,6 +61,7 @@ pub async fn send_endpoint(
             Some("message"),
             &err.to_string(),
         );
+        record_message_failed("send");
         error_response(err.as_ref())
     })?;
     let prepared = state
@@ -75,6 +78,7 @@ pub async fn send_endpoint(
                 Some("message"),
                 &err.to_string(),
             );
+            record_message_failed("send");
             error_response(err.as_ref())
         })?;
     let recipient_kid = prepared.recipient_kid().to_string();
@@ -90,6 +94,7 @@ pub async fn send_endpoint(
                 Some("message"),
                 &err.to_string(),
             );
+            record_message_failed("send");
             error_response(err.as_ref())
         })?;
 
@@ -102,6 +107,7 @@ pub async fn send_endpoint(
                 Some(&recipient_kid),
                 Some("message"),
             );
+            record_message_success("send");
             Ok(Json(output))
         }
         Err(err) => {
@@ -113,6 +119,7 @@ pub async fn send_endpoint(
                 Some("message"),
                 &err.to_string(),
             );
+            record_message_failed("send");
             error!(error = %err, sender_kid = %sender_kid, "message send endpoint failed");
             Err(error_response(err.as_ref()))
         }
@@ -132,6 +139,7 @@ pub async fn receive_endpoint(
             None,
             &err.to_string(),
         );
+        record_message_failed("receive");
         error_response(err.as_ref())
     })?;
     let recipient_kid = envelope.recipient_kid().to_string();
@@ -145,6 +153,7 @@ pub async fn receive_endpoint(
             None,
             &err.to_string(),
         );
+        record_message_failed("receive");
         error_response(err.as_ref())
     })?;
     state
@@ -159,6 +168,7 @@ pub async fn receive_endpoint(
                 None,
                 &err.to_string(),
             );
+            record_message_failed("receive");
             error_response(err.as_ref())
         })?;
     let prepared = state
@@ -175,6 +185,7 @@ pub async fn receive_endpoint(
                 None,
                 &err.to_string(),
             );
+            record_message_failed("receive");
             error_response(err.as_ref())
         })?;
     let sender_host = prepared.sender_host().to_string();
@@ -192,6 +203,7 @@ pub async fn receive_endpoint(
             None,
             "sender kid is not a registered peer with public keys in the signed config",
         );
+        record_message_denied("receive");
         return Err(error_response(
             crate::error::forbidden(
                 "sender kid is not a registered peer with public keys in the signed config",
@@ -210,6 +222,7 @@ pub async fn receive_endpoint(
                     None,
                     &err.to_string(),
                 );
+                record_message_failed("receive");
                 error_response(err.as_ref())
             },
         )?;
@@ -224,6 +237,7 @@ pub async fn receive_endpoint(
                 Some(&sender_kid),
                 None,
             );
+            record_message_success("receive");
             Ok(Json(output))
         }
         Err(err) => {
@@ -235,6 +249,7 @@ pub async fn receive_endpoint(
                 None,
                 &err.to_string(),
             );
+            record_message_failed("receive");
             error!(error = %err, recipient_kid = %recipient_kid, "message receive endpoint failed");
             Err(error_response(err.as_ref()))
         }
@@ -258,6 +273,8 @@ pub async fn decrypt_endpoint(
             Some("message"),
             &err.to_string(),
         );
+        record_message_failed("decrypt");
+        record_crypto_failed("decrypt");
         error_response(err.as_ref())
     })?;
     let recipient_kid = ops::message::decrypt_message_recipient_kid(&request).map_err(|err| {
@@ -269,6 +286,8 @@ pub async fn decrypt_endpoint(
             Some("message"),
             &err.to_string(),
         );
+        record_message_failed("decrypt");
+        record_crypto_failed("decrypt");
         error_response(err.as_ref())
     })?;
     state
@@ -291,6 +310,8 @@ pub async fn decrypt_endpoint(
                 Some("message"),
                 &err.to_string(),
             );
+            record_message_failed("decrypt");
+            record_crypto_failed("decrypt");
             error_response(err.as_ref())
         })?;
     let prepared = state
@@ -307,6 +328,8 @@ pub async fn decrypt_endpoint(
                 Some("message"),
                 &err.to_string(),
             );
+            record_message_failed("decrypt");
+            record_crypto_failed("decrypt");
             error_response(err.as_ref())
         })?;
 
@@ -319,6 +342,8 @@ pub async fn decrypt_endpoint(
                 None,
                 Some("message"),
             );
+            record_message_success("decrypt");
+            record_crypto_success("decrypt");
             Ok(Json(output))
         }
         Err(err) => {
@@ -330,6 +355,8 @@ pub async fn decrypt_endpoint(
                 Some("message"),
                 &err.to_string(),
             );
+            record_message_failed("decrypt");
+            record_crypto_failed("decrypt");
             error!(error = %err, "message decrypt endpoint failed");
             Err(error_response(err.as_ref()))
         }
@@ -357,6 +384,8 @@ pub async fn internal_encrypt_endpoint(
             Some("message"),
             &err.to_string(),
         );
+        record_message_failed("send");
+        record_crypto_failed("encrypt");
         error_response(err.as_ref())
     })?;
     state.ensure_keys_db_entry(&kid).await.map_err(|err| {
@@ -368,6 +397,8 @@ pub async fn internal_encrypt_endpoint(
             Some("message"),
             &err.to_string(),
         );
+        record_message_failed("send");
+        record_crypto_failed("encrypt");
         error_response(err.as_ref())
     })?;
     let request = ops::message::parse_internal_encrypt_message_input(request).map_err(|err| {
@@ -379,6 +410,8 @@ pub async fn internal_encrypt_endpoint(
             Some("message"),
             &err.to_string(),
         );
+        record_message_failed("send");
+        record_crypto_failed("encrypt");
         error_response(err.as_ref())
     })?;
     let prepared = state
@@ -395,6 +428,8 @@ pub async fn internal_encrypt_endpoint(
                 Some("message"),
                 &err.to_string(),
             );
+            record_message_failed("send");
+            record_crypto_failed("encrypt");
             error_response(err.as_ref())
         })?;
 
@@ -407,6 +442,8 @@ pub async fn internal_encrypt_endpoint(
                 None,
                 Some("message"),
             );
+            record_message_success("send");
+            record_crypto_success("encrypt");
             Ok(Json(output))
         }
         Err(err) => {
@@ -418,6 +455,8 @@ pub async fn internal_encrypt_endpoint(
                 Some("message"),
                 &err.to_string(),
             );
+            record_message_failed("send");
+            record_crypto_failed("encrypt");
             error!(error = %err, kid = %kid, "internal message encrypt endpoint failed");
             Err(error_response(err.as_ref()))
         }
@@ -441,6 +480,8 @@ pub async fn internal_decrypt_endpoint(
             Some("message"),
             &err.to_string(),
         );
+        record_message_failed("decrypt");
+        record_crypto_failed("decrypt");
         error_response(err.as_ref())
     })?;
     state
@@ -461,6 +502,8 @@ pub async fn internal_decrypt_endpoint(
             Some("message"),
             &err.to_string(),
         );
+        record_message_failed("decrypt");
+        record_crypto_failed("decrypt");
         error_response(err.as_ref())
     })?;
     state.ensure_keys_db_entry(&kid).await.map_err(|err| {
@@ -472,6 +515,8 @@ pub async fn internal_decrypt_endpoint(
             Some("message"),
             &err.to_string(),
         );
+        record_message_failed("decrypt");
+        record_crypto_failed("decrypt");
         error_response(err.as_ref())
     })?;
     let prepared = state
@@ -488,6 +533,8 @@ pub async fn internal_decrypt_endpoint(
                 Some("message"),
                 &err.to_string(),
             );
+            record_message_failed("decrypt");
+            record_crypto_failed("decrypt");
             error_response(err.as_ref())
         })?;
 
@@ -500,6 +547,8 @@ pub async fn internal_decrypt_endpoint(
                 None,
                 Some("message"),
             );
+            record_message_success("decrypt");
+            record_crypto_success("decrypt");
             Ok(Json(output))
         }
         Err(err) => {
@@ -511,8 +560,30 @@ pub async fn internal_decrypt_endpoint(
                 Some("message"),
                 &err.to_string(),
             );
+            record_message_failed("decrypt");
+            record_crypto_failed("decrypt");
             error!(error = %err, "internal message decrypt endpoint failed");
             Err(error_response(err.as_ref()))
         }
     }
+}
+
+fn record_message_success(operation: &str) {
+    metrics::record_message(operation, "success");
+}
+
+fn record_message_denied(operation: &str) {
+    metrics::record_message(operation, "denied");
+}
+
+fn record_message_failed(operation: &str) {
+    metrics::record_message(operation, "failed");
+}
+
+fn record_crypto_success(operation: &str) {
+    metrics::record_crypto_operation(operation, "success");
+}
+
+fn record_crypto_failed(operation: &str) {
+    metrics::record_crypto_operation(operation, "failed");
 }

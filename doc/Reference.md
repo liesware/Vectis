@@ -727,7 +727,10 @@ contain plaintext, ciphertext, API keys, unseal keys, private keys, or full
 sensitive payloads.
 
 Metrics are exposed in Prometheus text format and should avoid sensitive labels.
-Labels should remain low cardinality.
+Labels should remain low cardinality. Runtime metrics cover unsealed state,
+loaded keys/routes/permissions, auth and permission decisions, config/key
+reload results, message send/receive/decrypt results, and cryptographic
+sign/verify/encrypt/decrypt results.
 
 ## Security Boundaries And Invariants
 

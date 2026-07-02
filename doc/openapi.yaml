@@ -80,7 +80,10 @@ paths:
         Prometheus metrics in the text exposition format. Requires X-API-Key
         with root, admin, or metrics permission. Enabled by VECTIS_METRICS_ENABLED
         (default true); returns 404 when disabled after auth succeeds. Labels
-        carry no sensitive data.
+        carry no sensitive data. Metrics include HTTP request counts/durations,
+        auth and permission decisions, unsealed state, loaded keys/routes/
+        permissions, config and key reload results, message operation results,
+        and cryptographic operation results.
       responses:
         "200":
           description: Metrics in Prometheus text exposition format

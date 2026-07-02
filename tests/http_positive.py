@@ -95,6 +95,23 @@ class Client:
         except urllib.error.URLError as err:
             raise WorkflowError(f"GET {path} failed: {err}") from err
 
+    def get_text(self, path, auth=False):
+        headers = {}
+        if auth:
+            headers["X-API-Key"] = self.apikey
+
+        request = urllib.request.Request(
+            f"{self.base_url}{path}", headers=headers, method="GET"
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return response.read().decode("utf-8")
+        except urllib.error.HTTPError as err:
+            payload = err.read().decode("utf-8", errors="replace")
+            raise WorkflowError(f"GET {path} failed with {err.code}: {payload}") from err
+        except urllib.error.URLError as err:
+            raise WorkflowError(f"GET {path} failed: {err}") from err
+
     def post(self, path, body, auth=False):
         headers = {"Content-Type": "application/json"}
         if auth:
@@ -219,8 +236,79 @@ def validate_health(client):
 
 
 def validate_metrics(client):
-    status = client.get_status("/metrics", auth=True)
-    require(status == 200, f"/metrics must return 200, got {status}")
+    metrics = client.get_text("/metrics", auth=True)
+    require("http_requests_total" in metrics, "metrics must include http_requests_total")
+    require(
+        "http_request_duration_seconds" in metrics,
+        "metrics must include http_request_duration_seconds",
+    )
+    require("auth_total" in metrics, "metrics must include auth_total")
+    require("vectis_unsealed" in metrics, "metrics must include vectis_unsealed")
+    require("vectis_keys_loaded" in metrics, "metrics must include vectis_keys_loaded")
+    require("vectis_routes_loaded" in metrics, "metrics must include vectis_routes_loaded")
+    require(
+        "vectis_remote_routes_loaded" in metrics,
+        "metrics must include vectis_remote_routes_loaded",
+    )
+    require(
+        "vectis_permission_clients" in metrics,
+        "metrics must include vectis_permission_clients",
+    )
+
+
+def validate_runtime_metrics(client):
+    metrics = client.get_text("/metrics", auth=True)
+    expected = [
+        "vectis_config_reload_total",
+        "vectis_config_last_reload_timestamp_seconds",
+        "vectis_keys_reload_total",
+        "vectis_permission_total",
+        "vectis_message_total",
+        "vectis_crypto_operation_total",
+    ]
+    for metric in expected:
+        require(metric in metrics, f"metrics must include {metric}")
+
+    require(
+        'vectis_config_reload_total{result="success"}' in metrics,
+        "metrics must include successful config reload count",
+    )
+    require(
+        'vectis_keys_reload_total{result="success"}' in metrics,
+        "metrics must include successful keys reload count",
+    )
+    require(
+        'vectis_permission_total{result="allow"}' in metrics,
+        "metrics must include allowed permission count",
+    )
+    require(
+        'vectis_message_total{operation="send",result="success"}' in metrics,
+        "metrics must include successful message send count",
+    )
+    require(
+        'vectis_message_total{operation="receive",result="success"}' in metrics,
+        "metrics must include successful message receive count",
+    )
+    require(
+        'vectis_message_total{operation="decrypt",result="success"}' in metrics,
+        "metrics must include successful message decrypt count",
+    )
+    require(
+        'vectis_crypto_operation_total{operation="sign",result="success"}' in metrics,
+        "metrics must include successful sign count",
+    )
+    require(
+        'vectis_crypto_operation_total{operation="verify",result="success"}' in metrics,
+        "metrics must include successful verify count",
+    )
+    require(
+        'vectis_crypto_operation_total{operation="encrypt",result="success"}' in metrics,
+        "metrics must include successful encrypt count",
+    )
+    require(
+        'vectis_crypto_operation_total{operation="decrypt",result="success"}' in metrics,
+        "metrics must include successful decrypt count",
+    )
 
 
 def create_key(client, case):
@@ -1136,6 +1224,8 @@ def main():
     print_internal_message(internal_message_rows)
     print_section("sign", sign_rows)
     print_section("sign verification", verify_rows)
+    validate_runtime_metrics(client)
+    print("Runtime metrics: OK\n")
     passed_count += len(create_rows)
     passed_count += len(test_rows)
     passed_count += len(pub_rows)
@@ -1143,6 +1233,7 @@ def main():
     passed_count += len(internal_message_rows)
     passed_count += len(sign_rows)
     passed_count += len(verify_rows)
+    passed_count += 1
     print(f"SUMMARY positive passed={passed_count} failed=0")
     _CONFIG["routes"] = []
     _CONFIG["remote_routes"] = []

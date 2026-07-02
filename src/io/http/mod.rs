@@ -22,13 +22,13 @@ mod routes;
 mod sign;
 mod test;
 
-use crate::core::audit;
 use crate::core::config::AppConfig;
 use crate::core::config_file::ConfigState;
 use crate::core::permissions::AuthenticatedClient;
 use crate::core::remote_routes::{PeerPublicKeys, RemoteRoute};
 use crate::core::routes::FinalAppRoute;
 use crate::core::storage::StorageState;
+use crate::core::{audit, metrics as core_metrics};
 use crate::error::DynError;
 use crate::ops::init::{InitValidationOutput, ValidatedInitState};
 use crate::ops::internal_keys::InternalDerivedKeysState;
@@ -143,13 +143,16 @@ impl HttpState {
         {
             Ok(()) => {
                 audit::permission_allowed(&actor, kid, action);
+                core_metrics::record_permission("allow");
                 Ok(())
             }
             Err(err) => {
                 let reason = err.to_string();
                 audit::permission_denied(&actor, kid, action, &reason);
+                core_metrics::record_permission("deny");
                 if let Some(event_name) = denied_event {
                     audit::operation_denied(event_name, &actor, kid, None, Some(action), &reason);
+                    record_operation_denied_metric(event_name);
                 }
 
                 Err(error::error_response(err.as_ref()))
@@ -236,6 +239,15 @@ impl HttpState {
         Ok(())
     }
 
+    async fn refresh_loaded_gauges(&self) {
+        core_metrics::set_loaded_gauges(
+            self.keys_loaded().await,
+            self.routes_loaded().await,
+            self.remote_routes_loaded().await,
+            self.permissions_loaded().await,
+        );
+    }
+
     async fn with_keys_db_state<T>(&self, f: impl FnOnce(&KeysDbState) -> T) -> T {
         let keys_db_state = self.keys_db_state.read().await;
 
@@ -294,6 +306,19 @@ impl HttpState {
         let config_state = self.config_state.read().await;
 
         config_state.remote_routes.public_keys_for(kid).cloned()
+    }
+}
+
+fn record_operation_denied_metric(event_name: &str) {
+    match event_name {
+        "config.reload.denied" => core_metrics::record_config_reload("failed"),
+        "key.reload.denied" => core_metrics::record_keys_reload("failed"),
+        "message.send.denied" => core_metrics::record_message("send", "denied"),
+        "message.receive.denied" => core_metrics::record_message("receive", "denied"),
+        "message.decrypt.denied" => core_metrics::record_message("decrypt", "denied"),
+        "sign.denied" => core_metrics::record_crypto_operation("sign", "failed"),
+        "self_test.denied" => {}
+        _ => {}
     }
 }
 

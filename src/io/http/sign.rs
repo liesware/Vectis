@@ -1,6 +1,6 @@
 use super::HttpState;
 use super::error::{ErrorResponse, error_response};
-use crate::core::audit;
+use crate::core::{audit, metrics};
 use crate::ops;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -29,6 +29,7 @@ pub async fn sign_endpoint(
             Some("sign"),
             &err.to_string(),
         );
+        metrics::record_crypto_operation("sign", "failed");
         error_response(err.as_ref())
     })?;
     state.ensure_keys_db_entry(&id).await.map_err(|err| {
@@ -40,6 +41,7 @@ pub async fn sign_endpoint(
             Some("sign"),
             &err.to_string(),
         );
+        metrics::record_crypto_operation("sign", "failed");
         error_response(err.as_ref())
     })?;
     let request = ops::sign::parse_sign_input(request).map_err(|err| {
@@ -51,6 +53,7 @@ pub async fn sign_endpoint(
             Some("sign"),
             &err.to_string(),
         );
+        metrics::record_crypto_operation("sign", "failed");
         error_response(err.as_ref())
     })?;
     info!(
@@ -88,6 +91,7 @@ pub async fn sign_endpoint(
                 None,
                 Some("sign"),
             );
+            metrics::record_crypto_operation("sign", "success");
 
             Ok(Json(response))
         }
@@ -100,6 +104,7 @@ pub async fn sign_endpoint(
                 Some("sign"),
                 &err.to_string(),
             );
+            metrics::record_crypto_operation("sign", "failed");
             error!(error = %err, id = %id, "sign endpoint failed");
             Err(error_response(err.as_ref()))
         }
@@ -112,6 +117,7 @@ pub async fn sign_verification_endpoint(
 ) -> Result<Json<ops::sign::VerificationOutput>, (StatusCode, Json<ErrorResponse>)> {
     let request = ops::sign::parse_timestamp_token(request).map_err(|err| {
         audit::operation_failed("verify.failed", None, None, None, None, &err.to_string());
+        metrics::record_crypto_operation("verify", "failed");
         error_response(err.as_ref())
     })?;
     ops::sign::validate_timestamp_token(&request).map_err(|err| {
@@ -123,6 +129,7 @@ pub async fn sign_verification_endpoint(
             None,
             &err.to_string(),
         );
+        metrics::record_crypto_operation("verify", "failed");
         error_response(err.as_ref())
     })?;
 
@@ -165,6 +172,7 @@ pub async fn sign_verification_endpoint(
                 "sign verification response ready"
             );
             audit::operation_success("verify.success", None, Some(&kid), None, None);
+            metrics::record_crypto_operation("verify", "success");
 
             Ok(Json(response))
         }
@@ -177,6 +185,7 @@ pub async fn sign_verification_endpoint(
                 None,
                 &err.to_string(),
             );
+            metrics::record_crypto_operation("verify", "failed");
             error!(error = %err, kid = %kid, "sign verification endpoint failed");
             Err(error_response(err.as_ref()))
         }

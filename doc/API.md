@@ -166,17 +166,24 @@ Response:
 
 ### GET /metrics
 
-Prometheus metrics in the text exposition format (`text/plain; version=0.0.4`). Requires auth with root, `admin`, or the `metrics` permission. Enabled by `VECTIS_METRICS_ENABLED` (default `true`); returns `404` when disabled after auth succeeds. Labels are low cardinality and carry no sensitive data (only `method`, `endpoint` route template, `status`, `outcome`).
+Prometheus metrics in the text exposition format (`text/plain; version=0.0.4`). Requires auth with root, `admin`, or the `metrics` permission. Enabled by `VECTIS_METRICS_ENABLED` (default `true`); returns `404` when disabled after auth succeeds. Labels are low cardinality and carry no sensitive data. Current labels are limited to stable dimensions such as `method`, `endpoint` route template, `status`, `outcome`, `operation`, and `result`.
 
 Exposed metrics:
 
 - `http_requests_total{method,endpoint,status}`
 - `http_request_duration_seconds{method,endpoint}` (histogram)
 - `auth_total{outcome}` (`allow` or `deny`)
+- `vectis_unsealed`
 - `vectis_keys_loaded`
 - `vectis_routes_loaded`
 - `vectis_remote_routes_loaded`
 - `vectis_permission_clients`
+- `vectis_permission_total{result}` (`allow` or `deny`)
+- `vectis_config_reload_total{result}` (`success` or `failed`)
+- `vectis_config_last_reload_timestamp_seconds{result}` (`success` or `failed`)
+- `vectis_keys_reload_total{result}` (`success` or `failed`)
+- `vectis_message_total{operation,result}` (`send`, `receive`, or `decrypt`; `success`, `denied`, or `failed`)
+- `vectis_crypto_operation_total{operation,result}` (`sign`, `verify`, `encrypt`, or `decrypt`; `success` or `failed`)
 
 ### GET /self-test/init
 

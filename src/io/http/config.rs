@@ -1,6 +1,6 @@
 use super::HttpState;
 use super::error::{ErrorResponse, error_response};
-use crate::core::audit;
+use crate::core::{audit, metrics, validation};
 use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -30,6 +30,8 @@ pub async fn reload_endpoint(
         "config reload request accepted"
     );
     if let Err(err) = state.reload_config_state().await {
+        metrics::record_config_reload("failed");
+        record_config_reload_timestamp("failed");
         audit::operation_failed(
             "config.reload.failed",
             Some(&actor),
@@ -45,6 +47,9 @@ pub async fn reload_endpoint(
     let routes_loaded = state.routes_loaded().await;
     let remote_routes_loaded = state.remote_routes_loaded().await;
     let clients_loaded = state.permissions_loaded().await;
+    state.refresh_loaded_gauges().await;
+    metrics::record_config_reload("success");
+    record_config_reload_timestamp("success");
     info!(
         endpoint = "POST /config/reload",
         routes_loaded, remote_routes_loaded, clients_loaded, "config reload response ready"
@@ -63,4 +68,12 @@ pub async fn reload_endpoint(
         remote_routes_loaded,
         clients_loaded,
     }))
+}
+
+fn record_config_reload_timestamp(result: &str) {
+    if let Ok(timestamp) = validation::current_timestamp()
+        && let Ok(timestamp) = timestamp.parse::<f64>()
+    {
+        metrics::set_config_last_reload_timestamp(result, timestamp);
+    }
 }
