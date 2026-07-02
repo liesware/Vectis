@@ -804,7 +804,10 @@ components:
             Optional. The peer's full public key set (the `keys` object from its
             GET /pub/{kid}). When present, /message uses these trusted keys
             directly and POST /sign/verification can verify tokens signed by
-            this remote kid (cross-instance verification).
+            this remote kid (cross-instance verification). Vectis validates the
+            material before loading it: DER public keys must be loadable by
+            Botan, X25519/X448 raw public keys must be exactly 32/56 bytes, and
+            ML-KEM public keys must be loadable and usable for encapsulation.
           required: [eddsa, xecdh, ml-dsa, ml-kem]
           properties:
             eddsa:

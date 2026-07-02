@@ -1075,7 +1075,7 @@ Top level:
 | `status` | yes | `active` \| `disabled` | Disabled routes load but cannot send. |
 | `public_keys` | no | object (see below) | Peer's trusted public keys for direct use and cross-instance verification. |
 
-`public_keys` object (optional; the `keys` object from the peer's `GET /pub/{kid}`): `eddsa`/`ml-dsa`/`ml-kem` each `{ "alg", "public_key_der_hex" }`, and `xecdh` `{ "alg", "public_key_hex" }`.
+`public_keys` object (optional; the `keys` object from the peer's `GET /pub/{kid}`): `eddsa`/`ml-dsa`/`ml-kem` each `{ "alg", "public_key_der_hex" }`, and `xecdh` `{ "alg", "public_key_hex" }`. When present, Vectis validates the material before loading it: DER public keys must be loadable by Botan, X25519/X448 raw public keys must be exactly 32/56 bytes, and ML-KEM public keys must be loadable and usable for encapsulation.
 
 `permissions[]` entries:
 
@@ -1084,7 +1084,7 @@ Top level:
 | `client` | yes | text, unique | Client label. |
 | `apikey_hash` | yes | 64 hex (32 bytes) | Server-side verifier for this client's `X-API-Key`. |
 | `status` | yes | `active` \| `disabled` \| `revoked` | Only `active` clients are authorized. |
-| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `metrics`. `kid: "*"` is only allowed with global actions (`metrics`); an `admin` action grants all endpoints and ignores kid-scoped grants. |
+| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `metrics`. `kid: "*"` is allowed with global actions such as `admin` and `metrics`; an `admin` action grants all endpoints and ignores kid-scoped grants. |
 
 Routing behavior:
 
@@ -1103,6 +1103,7 @@ Each `remote_routes` entry may carry an optional `public_keys` object — the fu
 
 - `/message` uses those keys directly for the peer (no `/pub` fetch); when absent, Vectis fetches `/pub` on demand (trust on first use).
 - `POST /sign/verification` can verify timestamp tokens whose signer `kid` is not local, resolving the signer's public keys from the matching active `remote_routes` entry.
+- Invalid or non-operational public key material rejects config load/reload. Startup falls back to empty config sections; runtime reload keeps the previous in-memory config.
 
 ## Related Configuration
 
@@ -1115,10 +1116,13 @@ Main variables:
 - `VECTIS_FINAL_APP_ADDR`: final app host:port.
 - `VECTIS_FINAL_APP_PATH`: final app delivery path.
 - `VECTIS_CONFIG_PATH`: unified signed config file path (routes, remote routes, permissions), relative to the working directory unless absolute.
+- `VECTIS_CONFIG_SIGN_PATH`: signature token for `VECTIS_CONFIG_PATH`, created by `vectis config sign`.
 - `VECTIS_APIKEY`: client-side HTTP auth key sent as `X-API-Key`.
 - `VECTIS_APIKEY_HASH`: server-side HMAC value used to verify `X-API-Key` without storing the API key in plaintext.
 - `VECTIS_SQLITE_PATH`: sqlite storage path.
-- `VECTIS_HASH`, `VECTIS_SYMMETRIC`, `VECTIS_EDDSA`, `VECTIS_XECDH`, `VECTIS_ML_DSA_VARIANT`, `VECTIS_ML_KEM_VARIANT`: defaults for `POST /keys`.
+- `VECTIS_DEFAULT_CRYPTO_PROFILE`: default crypto profile for `POST /keys`.
+- `VECTIS_CRYPTO_POLICY`: controls whether `POST /keys` accepts request-level algorithm overrides.
+- `VECTIS_HASH`, `VECTIS_SYMMETRIC`, `VECTIS_EDDSA`, `VECTIS_XECDH`, `VECTIS_ML_DSA_VARIANT`, `VECTIS_ML_KEM_VARIANT`: validated legacy/dev algorithm settings; profiles are the source of key-generation defaults.
 - `VECTIS_LOG_LEVEL`, `VECTIS_LOG_DIR`, `VECTIS_LOG_FILE`: logging configuration.
 
 Internal defaults for `init` key material:

@@ -223,7 +223,7 @@ vectis config sign
 vectis config reload
 ```
 
-See the full API documentation in [Doc/API.md](Doc/API.md).
+See the full API documentation in [doc/API.md](doc/API.md).
 
 ## Configuration
 
@@ -232,7 +232,7 @@ config file** (`config.json`, default path `VECTIS_CONFIG_PATH`) with `version`,
 `routes`, `remote_routes`, and `permissions` sections. Edit it, then sign it with
 `vectis config sign`. The full schema (every field, allowed values, and the
 optional peer `public_keys`) is documented under **Configuration File
-(`config.json`)** in [Doc/API.md](Doc/API.md).
+(`config.json`)** in [doc/API.md](doc/API.md).
 
 Vectis reads process/environment settings from process environment variables
 first, then from `.env`, then from built-in defaults.
@@ -259,7 +259,7 @@ Important variables include:
 - `VECTIS_DEFAULT_CRYPTO_PROFILE`;
 - `VECTIS_CRYPTO_POLICY`.
 
-See [Doc/ENV.md](Doc/ENV.md).
+See [doc/ENV.md](doc/ENV.md).
 
 ## Crypto Profiles
 
@@ -284,9 +284,9 @@ VECTIS_CRYPTO_POLICY=allow-overrides
 
 ## Documentation
 
-- [Doc/API.md](Doc/API.md): HTTP API and CLI mapping.
-- [Doc/ENV.md](Doc/ENV.md): environment variables and expected values.
-- [Doc/openapi.yaml](Doc/openapi.yaml): OpenAPI specification.
+- [doc/API.md](doc/API.md): HTTP API and CLI mapping.
+- [doc/ENV.md](doc/ENV.md): environment variables and expected values.
+- [doc/openapi.yaml](doc/openapi.yaml): OpenAPI specification.
 - [demo/README.md](demo/README.md): clinical data exchange demo.
 
 ## What Vectis Is Not

@@ -4,6 +4,7 @@ use botan::{
     HashFunction, KeyDecapsulation, KeyEncapsulation, Privkey, Pubkey, RandomNumberGenerator,
     Signer, Verifier,
 };
+use std::io;
 use zeroize::Zeroizing;
 
 pub fn random_bytes(size: usize) -> Result<Vec<u8>, botan::Error> {
@@ -189,6 +190,18 @@ pub fn load_public_key_der_hex(public_key_der_hex: &str) -> Result<Pubkey, DynEr
     Ok(load_public_key_der(&public_key_der)?)
 }
 
+pub fn validate_der_public_key_hex(
+    field_name: &str,
+    public_key_der_hex: &str,
+) -> Result<Pubkey, DynError> {
+    load_public_key_der_hex(public_key_der_hex).map_err(|err| {
+        Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{field_name} is not a valid public key: {err}"),
+        )) as DynError
+    })
+}
+
 pub fn sign_message(private_key: &Privkey, message: &str) -> Result<Vec<u8>, botan::Error> {
     let mut rng = RandomNumberGenerator::new()?;
     let mut signer = Signer::new(private_key, EDDSA_PADDING)?;
@@ -222,6 +235,36 @@ pub fn key_agreement_public_key(private_key: &Privkey) -> Result<Vec<u8>, botan:
 
 pub fn agree_key(private_key: &Privkey, peer_public_key: &[u8]) -> Result<Vec<u8>, botan::Error> {
     private_key.agree(peer_public_key, 0, &[], X_KEY_AGREEMENT_KDF)
+}
+
+pub fn validate_x_key_agreement_public_key_hex(
+    field_name: &str,
+    algorithm: &str,
+    public_key_hex: &str,
+) -> Result<Vec<u8>, DynError> {
+    let public_key = hex::decode(public_key_hex)?;
+    let expected_size = match algorithm {
+        "X25519" => 32,
+        "X448" => 56,
+        _ => {
+            return Err(Box::new(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{field_name} algorithm is not supported"),
+            )));
+        }
+    };
+
+    if public_key.len() != expected_size {
+        return Err(Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "{field_name} must be {expected_size} bytes for {algorithm}, got {}",
+                public_key.len()
+            ),
+        )));
+    }
+
+    Ok(public_key)
 }
 
 const ML_DSA_SIGNING_MODE: &str = "Randomized";
@@ -350,6 +393,23 @@ pub fn encapsulate_ml_kem_shared_key(
         shared_key,
         encapsulated_key,
     })
+}
+
+pub fn validate_ml_kem_public_key_hex(
+    field_name: &str,
+    public_key_der_hex: &str,
+    shared_key_len: usize,
+) -> Result<(), DynError> {
+    let public_key = validate_der_public_key_hex(field_name, public_key_der_hex)?;
+    let salt = Zeroizing::new(random_bytes(32)?);
+    encapsulate_ml_kem_shared_key(&public_key, &salt, shared_key_len).map_err(|err| {
+        Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{field_name} cannot encapsulate: {err}"),
+        )) as DynError
+    })?;
+
+    Ok(())
 }
 
 pub fn decapsulate_ml_kem_shared_key(

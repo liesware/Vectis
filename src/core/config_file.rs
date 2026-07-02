@@ -51,7 +51,9 @@ pub fn canonical_config_json(content: &str) -> Result<String, DynError> {
     })?;
     protocol::validate_protocol_version("config.version", &config_file.version)?;
 
-    Ok(String::from_utf8(canonical::canonical_json_v1(&config_file)?)?)
+    Ok(String::from_utf8(canonical::canonical_json_v1(
+        &config_file,
+    )?)?)
 }
 
 pub fn load_config_state(
@@ -243,10 +245,10 @@ mod tests {
         let result = reload_config_state(
             &config,
             |_, _| {
-                Err(Box::new(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "bad signature",
-                )) as DynError)
+                Err(
+                    Box::new(io::Error::new(io::ErrorKind::InvalidData, "bad signature"))
+                        as DynError,
+                )
             },
             |_| true,
         );

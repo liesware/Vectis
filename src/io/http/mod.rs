@@ -273,7 +273,9 @@ impl HttpState {
     ) -> Result<RemoteRoute, DynError> {
         let config_state = self.config_state.read().await;
 
-        config_state.remote_routes.route_for(sender_kid, recipient_kid)
+        config_state
+            .remote_routes
+            .route_for(sender_kid, recipient_kid)
     }
 
     async fn remote_peer_public_keys(&self, kid: &str) -> Option<PeerPublicKeys> {

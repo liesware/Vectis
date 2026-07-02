@@ -1,7 +1,8 @@
 use crate::core::{
     canonical, config, crypto, http_client, protocol,
     remote_routes::{PeerPublicKeys, RemoteRoute},
-    routes::FinalAppRoute, validation,
+    routes::FinalAppRoute,
+    validation,
 };
 use crate::error::DynError;
 use crate::ops::contracts::{
@@ -387,29 +388,27 @@ pub async fn send_message(
         recipient_name = %remote_route.name(),
         "message send started"
     );
-    let (recipient_key_source, recipient_public_keys) =
-        if let Some(peer) = remote_route.public_keys() {
-            (
-                "config",
-                remote_public_keys_from_peer(
-                    remote_route.remote_addr(),
-                    &prepared.input.recipient_kid,
-                    peer,
-                )?,
-            )
-        } else {
-            match cached_recipient {
-                Some(remote_key) => ("cache", remote_key),
-                None => (
-                    "remote",
-                    fetch_remote_public_keys(
-                        remote_route.remote_addr(),
-                        &prepared.input.recipient_kid,
-                    )
+    let (recipient_key_source, recipient_public_keys) = if let Some(peer) =
+        remote_route.public_keys()
+    {
+        (
+            "config",
+            remote_public_keys_from_peer(
+                remote_route.remote_addr(),
+                &prepared.input.recipient_kid,
+                peer,
+            )?,
+        )
+    } else {
+        match cached_recipient {
+            Some(remote_key) => ("cache", remote_key),
+            None => (
+                "remote",
+                fetch_remote_public_keys(remote_route.remote_addr(), &prepared.input.recipient_kid)
                     .await?,
-                ),
-            }
-        };
+            ),
+        }
+    };
     validate_remote_public_keys(&recipient_public_keys)?;
     info!(
         recipient_host = %recipient_public_keys.host(),
@@ -1348,66 +1347,24 @@ fn validate_remote_public_keys(remote_key: &RemotePublicKeys) -> Result<(), DynE
 }
 
 fn validate_remote_public_key_material(remote_key: &RemotePublicKeys) -> Result<(), DynError> {
-    crypto::load_public_key_der_hex(&remote_key.keys.keys.eddsa.public_key_der_hex).map_err(
-        |err| {
-            Box::new(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("remote.keys.eddsa.public_key_der_hex is not a valid public key: {err}"),
-            )) as DynError
-        },
+    crypto::validate_der_public_key_hex(
+        "remote.keys.eddsa.public_key_der_hex",
+        &remote_key.keys.keys.eddsa.public_key_der_hex,
     )?;
-    let xecdh_public_key = hex::decode(&remote_key.keys.keys.xecdh.public_key_hex)?;
-    validate_xecdh_public_key_size(&remote_key.keys.keys.xecdh.alg, xecdh_public_key.len())?;
-    crypto::load_public_key_der_hex(&remote_key.keys.keys.ml_dsa.public_key_der_hex).map_err(
-        |err| {
-            Box::new(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("remote.keys.ml-dsa.public_key_der_hex is not a valid public key: {err}"),
-            )) as DynError
-        },
+    crypto::validate_x_key_agreement_public_key_hex(
+        "remote.keys.xecdh.public_key_hex",
+        &remote_key.keys.keys.xecdh.alg,
+        &remote_key.keys.keys.xecdh.public_key_hex,
     )?;
-
-    let ml_kem_public_key = crypto::load_public_key_der_hex(
+    crypto::validate_der_public_key_hex(
+        "remote.keys.ml-dsa.public_key_der_hex",
+        &remote_key.keys.keys.ml_dsa.public_key_der_hex,
+    )?;
+    crypto::validate_ml_kem_public_key_hex(
+        "remote.keys.ml-kem.public_key_der_hex",
         &remote_key.keys.keys.ml_kem.public_key_der_hex,
-    )
-    .map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("remote.keys.ml-kem.public_key_der_hex is not a valid public key: {err}"),
-        )) as DynError
-    })?;
-    let salt = Zeroizing::new(crypto::random_bytes(32)?);
-    crypto::encapsulate_ml_kem_shared_key(&ml_kem_public_key, &salt, HYBRID_SECRET_SIZE_BYTES)
-        .map_err(|err| {
-            Box::new(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("remote.keys.ml-kem.public_key_der_hex cannot encapsulate: {err}"),
-            )) as DynError
-        })?;
-
-    Ok(())
-}
-
-fn validate_xecdh_public_key_size(algorithm: &str, size_bytes: usize) -> Result<(), DynError> {
-    let expected_size = match algorithm {
-        "X25519" => 32,
-        "X448" => 56,
-        _ => {
-            return Err(Box::new(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "remote.keys.xecdh.alg is not supported",
-            )));
-        }
-    };
-
-    if size_bytes != expected_size {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "remote.keys.xecdh.public_key_hex must be {expected_size} bytes for {algorithm}, got {size_bytes}"
-            ),
-        )));
-    }
+        HYBRID_SECRET_SIZE_BYTES,
+    )?;
 
     Ok(())
 }

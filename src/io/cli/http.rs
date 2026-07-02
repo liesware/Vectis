@@ -211,7 +211,9 @@ async fn run_config(args: Vec<String>, output: OutputFormat) -> Result<(), DynEr
                 .send(Method::POST, "/routes/reload", true, None, output)
                 .await
         }
-        _ => Err(invalid_input(format!("unknown config command: {subcommand}"))),
+        _ => Err(invalid_input(format!(
+            "unknown config command: {subcommand}"
+        ))),
     }
 }
 
@@ -836,9 +838,7 @@ fn print_routes_help() {
     println!();
     println!("Behavior:");
     println!("  list                  Returns routes currently loaded in memory");
-    println!(
-        "  reload                Re-reads VECTIS_ROUTES_PATH and replaces the in-memory routes"
-    );
+    println!("  reload                Re-reads VECTIS_CONFIG_PATH and refreshes in-memory routes");
     println!();
     println!("Notes:");
     println!(
@@ -864,12 +864,12 @@ fn print_remote_routes_help() {
     println!("Behavior:");
     println!("  list                  Returns remote routes currently loaded in memory");
     println!(
-        "  reload                Re-reads VECTIS_REMOTE_ROUTES_PATH and replaces in-memory remote routes"
+        "  reload                Re-reads VECTIS_CONFIG_PATH and refreshes in-memory remote routes"
     );
     println!();
     println!("Notes:");
     println!("  Missing remote routes file reloads to an empty remote route list.");
-    println!("  Each route needs kid, name, and remote_addr.");
+    println!("  Each route needs remote_kid, name, remote_addr, allowed_local_kids, and status.");
     println!("  Invalid remote routes file keeps the previous in-memory remote routes.");
     print_output_help();
 }

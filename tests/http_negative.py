@@ -788,12 +788,11 @@ def main():
         require_status("remote routes invalid status", status, 400)
 
     def _peer_public_keys():
-        return {
-            "eddsa": {"alg": "Ed25519", "public_key_der_hex": "aa"},
-            "xecdh": {"alg": "X25519", "public_key_hex": "aa"},
-            "ml-dsa": {"alg": "ML-DSA-44", "public_key_der_hex": "aa"},
-            "ml-kem": {"alg": "ML-KEM-512", "public_key_der_hex": "aa"},
-        }
+        status, response = client.get(f"/pub/{key_id}")
+        require_status("GET /pub for remote route public keys", status, 200)
+        keys = response.get("keys")
+        require(isinstance(keys, dict), "pub response keys must be an object")
+        return copy.deepcopy(keys)
 
     def remote_routes_invalid_public_key_alg():
         public_keys = _peer_public_keys()
@@ -830,6 +829,24 @@ def main():
         )
         status, _ = client.post("/remote-routes/reload", {}, auth=True)
         require_status("remote routes invalid public key hex", status, 400)
+
+    def remote_routes_invalid_public_key_der():
+        public_keys = _peer_public_keys()
+        public_keys["eddsa"]["public_key_der_hex"] = "aa"
+        write_remote_routes(
+            [
+                {
+                    "remote_kid": key_id,
+                    "name": "bad public key der",
+                    "remote_addr": recipient_host,
+                    "allowed_local_kids": [key_id],
+                    "status": "active",
+                    "public_keys": public_keys,
+                }
+            ]
+        )
+        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        require_status("remote routes invalid public key der", status, 400)
 
     def permissions_missing_kid():
         write_permissions(
@@ -902,6 +919,7 @@ def main():
         ("remote routes invalid status", remote_routes_invalid_status),
         ("remote routes invalid public key alg", remote_routes_invalid_public_key_alg),
         ("remote routes invalid public key hex", remote_routes_invalid_public_key_hex),
+        ("remote routes invalid public key der", remote_routes_invalid_public_key_der),
         ("permissions missing kid", permissions_missing_kid),
         ("permissions invalid apikey_hash", permissions_invalid_apikey_hash),
         ("permissions invalid status", permissions_invalid_status),

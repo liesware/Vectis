@@ -1,9 +1,11 @@
-use crate::core::validation;
+use crate::core::{crypto, validation};
 use crate::error::DynError;
 use crate::ops::keys;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io;
+
+const REMOTE_ROUTE_ML_KEM_SHARED_KEY_SIZE_BYTES: usize = 32;
 
 #[derive(Clone, Serialize)]
 pub struct RemoteRoute {
@@ -214,6 +216,10 @@ fn validate_peer_public_keys(keys: &PeerPublicKeys) -> Result<(), DynError> {
         "remote_routes.public_keys.eddsa.public_key_der_hex",
         &keys.eddsa.public_key_der_hex,
     )?;
+    crypto::validate_der_public_key_hex(
+        "remote_routes.public_keys.eddsa.public_key_der_hex",
+        &keys.eddsa.public_key_der_hex,
+    )?;
     validation::validate_allowed_value(
         "remote_routes.public_keys.xecdh.alg",
         &keys.xecdh.alg,
@@ -221,6 +227,11 @@ fn validate_peer_public_keys(keys: &PeerPublicKeys) -> Result<(), DynError> {
     )?;
     validation::validate_hex_field(
         "remote_routes.public_keys.xecdh.public_key_hex",
+        &keys.xecdh.public_key_hex,
+    )?;
+    crypto::validate_x_key_agreement_public_key_hex(
+        "remote_routes.public_keys.xecdh.public_key_hex",
+        &keys.xecdh.alg,
         &keys.xecdh.public_key_hex,
     )?;
     validation::validate_allowed_value(
@@ -232,6 +243,10 @@ fn validate_peer_public_keys(keys: &PeerPublicKeys) -> Result<(), DynError> {
         "remote_routes.public_keys.ml-dsa.public_key_der_hex",
         &keys.ml_dsa.public_key_der_hex,
     )?;
+    crypto::validate_der_public_key_hex(
+        "remote_routes.public_keys.ml-dsa.public_key_der_hex",
+        &keys.ml_dsa.public_key_der_hex,
+    )?;
     validation::validate_allowed_value(
         "remote_routes.public_keys.ml-kem.alg",
         &keys.ml_kem.alg,
@@ -240,6 +255,11 @@ fn validate_peer_public_keys(keys: &PeerPublicKeys) -> Result<(), DynError> {
     validation::validate_hex_field(
         "remote_routes.public_keys.ml-kem.public_key_der_hex",
         &keys.ml_kem.public_key_der_hex,
+    )?;
+    crypto::validate_ml_kem_public_key_hex(
+        "remote_routes.public_keys.ml-kem.public_key_der_hex",
+        &keys.ml_kem.public_key_der_hex,
+        REMOTE_ROUTE_ML_KEM_SHARED_KEY_SIZE_BYTES,
     )?;
 
     Ok(())
@@ -297,19 +317,49 @@ fn validate_allowed_local_kids(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ops::key_material::{KeyMaterialSpec, create_key_material};
     use serde_json::json;
+    use std::sync::OnceLock;
 
     fn kid(seed: char) -> String {
         String::from(seed).repeat(64)
     }
 
     fn valid_public_keys() -> serde_json::Value {
-        json!({
-            "eddsa": {"alg": "Ed25519", "public_key_der_hex": "aa"},
-            "xecdh": {"alg": "X25519", "public_key_hex": "aa"},
-            "ml-dsa": {"alg": "ML-DSA-44", "public_key_der_hex": "aa"},
-            "ml-kem": {"alg": "ML-KEM-512", "public_key_der_hex": "aa"}
-        })
+        static PUBLIC_KEYS: OnceLock<serde_json::Value> = OnceLock::new();
+
+        PUBLIC_KEYS
+            .get_or_init(|| {
+                let material = create_key_material(&KeyMaterialSpec {
+                    hash_algorithm: String::from("BLAKE2b(256)"),
+                    symmetric_algorithm: String::from("AES-256/GCM"),
+                    eddsa_algorithm: String::from("Ed25519"),
+                    xecdh_algorithm: String::from("X25519"),
+                    ml_dsa_variant: String::from("ML-DSA-44"),
+                    ml_kem_variant: String::from("ML-KEM-512"),
+                })
+                .unwrap();
+
+                json!({
+                    "eddsa": {
+                        "alg": material.keys().eddsa().variant(),
+                        "public_key_der_hex": material.keys().eddsa().public_key_der_hex()
+                    },
+                    "xecdh": {
+                        "alg": material.keys().xecdh().variant(),
+                        "public_key_hex": material.keys().xecdh().public_key_hex()
+                    },
+                    "ml-dsa": {
+                        "alg": material.keys().ml_dsa().variant(),
+                        "public_key_der_hex": material.keys().ml_dsa().public_key_der_hex()
+                    },
+                    "ml-kem": {
+                        "alg": material.keys().ml_kem().variant(),
+                        "public_key_der_hex": material.keys().ml_kem().public_key_der_hex()
+                    }
+                })
+            })
+            .clone()
     }
 
     fn route_input(
@@ -380,6 +430,47 @@ mod tests {
     fn rejects_invalid_public_key_hex() {
         let mut keys = valid_public_keys();
         keys["xecdh"]["public_key_hex"] = json!("zz");
+        let routes = vec![route_input(&kid('a'), "active", Some(keys))];
+        assert!(validate_remote_routes(routes, |_| true).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_eddsa_public_key_der() {
+        let mut keys = valid_public_keys();
+        keys["eddsa"]["public_key_der_hex"] = json!("aa");
+        let routes = vec![route_input(&kid('a'), "active", Some(keys))];
+        assert!(validate_remote_routes(routes, |_| true).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_ml_dsa_public_key_der() {
+        let mut keys = valid_public_keys();
+        keys["ml-dsa"]["public_key_der_hex"] = json!("aa");
+        let routes = vec![route_input(&kid('a'), "active", Some(keys))];
+        assert!(validate_remote_routes(routes, |_| true).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_ml_kem_public_key_der() {
+        let mut keys = valid_public_keys();
+        keys["ml-kem"]["public_key_der_hex"] = json!("aa");
+        let routes = vec![route_input(&kid('a'), "active", Some(keys))];
+        assert!(validate_remote_routes(routes, |_| true).is_err());
+    }
+
+    #[test]
+    fn rejects_wrong_x25519_public_key_size() {
+        let mut keys = valid_public_keys();
+        keys["xecdh"]["public_key_hex"] = json!("aa");
+        let routes = vec![route_input(&kid('a'), "active", Some(keys))];
+        assert!(validate_remote_routes(routes, |_| true).is_err());
+    }
+
+    #[test]
+    fn rejects_wrong_x448_public_key_size() {
+        let mut keys = valid_public_keys();
+        keys["xecdh"]["alg"] = json!("X448");
+        keys["xecdh"]["public_key_hex"] = json!("aa");
         let routes = vec![route_input(&kid('a'), "active", Some(keys))];
         assert!(validate_remote_routes(routes, |_| true).is_err());
     }
