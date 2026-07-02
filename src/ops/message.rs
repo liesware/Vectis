@@ -199,14 +199,6 @@ impl PreparedReceiveMessage {
     pub fn sender_host(&self) -> &str {
         self.envelope.sender_host()
     }
-
-    pub fn sender_kid(&self) -> &str {
-        self.envelope.sender_kid()
-    }
-
-    pub fn recipient_kid(&self) -> &str {
-        self.envelope.recipient_kid()
-    }
 }
 
 pub fn parse_send_message_input(request: Value) -> Result<SendMessageInput, DynError> {

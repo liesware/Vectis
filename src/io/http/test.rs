@@ -1,5 +1,6 @@
 use super::HttpState;
 use super::error::{ErrorResponse, error_response};
+use crate::core::audit;
 use crate::ops;
 use crate::ops::init::InitValidationOutput;
 use axum::Json;
@@ -12,12 +13,16 @@ pub async fn init_endpoint(
     headers: HeaderMap,
 ) -> Result<Json<InitValidationOutput>, (StatusCode, Json<ErrorResponse>)> {
     let client = state.authorize_api_key(&headers).await?;
-    state.require_permission(&client, None, "admin").await?;
+    state
+        .require_permission_for(&client, None, "admin", Some("self_test.denied"))
+        .await?;
+    let actor = audit::actor_from_client(&client);
 
     info!(
         endpoint = "GET /self-test/init",
         "self-test init request accepted"
     );
+    audit::operation_success("self_test.started", Some(&actor), None, None, Some("admin"));
     state
         .validation()
         .with_current_timestamp()
@@ -26,9 +31,24 @@ pub async fn init_endpoint(
                 endpoint = "GET /self-test/init",
                 "self-test init response ready"
             );
+            audit::operation_success(
+                "self_test.finished",
+                Some(&actor),
+                None,
+                None,
+                Some("admin"),
+            );
             Json(response)
         })
         .map_err(|err| {
+            audit::operation_failed(
+                "self_test.failed",
+                Some(&actor),
+                None,
+                None,
+                Some("admin"),
+                &err.to_string(),
+            );
             error!(error = %err, "self-test init endpoint failed");
             error_response(err.as_ref())
         })
@@ -41,18 +61,43 @@ pub async fn test_endpoint(
 ) -> Result<Json<ops::test::TestOutput>, (StatusCode, Json<ErrorResponse>)> {
     let client = state.authorize_api_key(&headers).await?;
     state
-        .require_permission(&client, Some(&id), "self-test")
+        .require_permission_for(&client, Some(&id), "self-test", Some("self_test.denied"))
         .await?;
+    let actor = audit::actor_from_client(&client);
 
-    ops::keys::validate_key_id(&id).map_err(|err| error_response(err.as_ref()))?;
-    state
-        .ensure_keys_db_entry(&id)
-        .await
-        .map_err(|err| error_response(err.as_ref()))?;
+    ops::keys::validate_key_id(&id).map_err(|err| {
+        audit::operation_failed(
+            "self_test.failed",
+            Some(&actor),
+            Some(&id),
+            None,
+            Some("self-test"),
+            &err.to_string(),
+        );
+        error_response(err.as_ref())
+    })?;
+    state.ensure_keys_db_entry(&id).await.map_err(|err| {
+        audit::operation_failed(
+            "self_test.failed",
+            Some(&actor),
+            Some(&id),
+            None,
+            Some("self-test"),
+            &err.to_string(),
+        );
+        error_response(err.as_ref())
+    })?;
     info!(
         endpoint = "GET /self-test/keys/{id}",
         kid = %id,
         "self-test key request accepted"
+    );
+    audit::operation_success(
+        "self_test.started",
+        Some(&actor),
+        Some(&id),
+        None,
+        Some("self-test"),
     );
     let result = state
         .with_keys_db_state(|keys_db_state| ops::test::handle_test_from_state(keys_db_state, &id))
@@ -65,9 +110,24 @@ pub async fn test_endpoint(
                 kid = %id,
                 "self-test key response ready"
             );
+            audit::operation_success(
+                "self_test.finished",
+                Some(&actor),
+                Some(&id),
+                None,
+                Some("self-test"),
+            );
             Ok(Json(response))
         }
         Err(err) => {
+            audit::operation_failed(
+                "self_test.failed",
+                Some(&actor),
+                Some(&id),
+                None,
+                Some("self-test"),
+                &err.to_string(),
+            );
             error!(error = %err, "self-test endpoint failed");
             Err(error_response(err.as_ref()))
         }

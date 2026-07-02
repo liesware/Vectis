@@ -1139,7 +1139,8 @@ Main variables:
 - `VECTIS_DEFAULT_CRYPTO_PROFILE`: default crypto profile for `POST /keys`.
 - `VECTIS_CRYPTO_POLICY`: controls whether `POST /keys` accepts request-level algorithm overrides.
 - `VECTIS_HASH`, `VECTIS_SYMMETRIC`, `VECTIS_EDDSA`, `VECTIS_XECDH`, `VECTIS_ML_DSA_VARIANT`, `VECTIS_ML_KEM_VARIANT`: validated legacy/dev algorithm settings; profiles are the source of key-generation defaults.
-- `VECTIS_LOG_LEVEL`, `VECTIS_LOG_DIR`, `VECTIS_LOG_FILE`: logging configuration.
+- `VECTIS_LOG_LEVEL`, `VECTIS_LOG_DIR`, `VECTIS_LOG_FILE`: operational logging configuration.
+- `VECTIS_AUDIT_LOG_FILE`: dedicated security audit log stream.
 
 Internal defaults for `init` key material:
 

@@ -22,6 +22,7 @@ mod routes;
 mod sign;
 mod test;
 
+use crate::core::audit;
 use crate::core::config::AppConfig;
 use crate::core::config_file::ConfigState;
 use crate::core::permissions::AuthenticatedClient;
@@ -123,12 +124,37 @@ impl HttpState {
         kid: Option<&str>,
         action: &str,
     ) -> Result<(), (StatusCode, Json<error::ErrorResponse>)> {
-        let config_state = self.config_state.read().await;
+        self.require_permission_for(client, kid, action, None).await
+    }
 
-        config_state
+    async fn require_permission_for(
+        &self,
+        client: &AuthenticatedClient,
+        kid: Option<&str>,
+        action: &str,
+        denied_event: Option<&str>,
+    ) -> Result<(), (StatusCode, Json<error::ErrorResponse>)> {
+        let config_state = self.config_state.read().await;
+        let actor = audit::actor_from_client(client);
+
+        match config_state
             .permissions
             .require_permission(client, kid, action)
-            .map_err(|err| error::error_response(err.as_ref()))
+        {
+            Ok(()) => {
+                audit::permission_allowed(&actor, kid, action);
+                Ok(())
+            }
+            Err(err) => {
+                let reason = err.to_string();
+                audit::permission_denied(&actor, kid, action, &reason);
+                if let Some(event_name) = denied_event {
+                    audit::operation_denied(event_name, &actor, kid, None, Some(action), &reason);
+                }
+
+                Err(error::error_response(err.as_ref()))
+            }
+        }
     }
 
     fn storage(&self) -> &StorageState {

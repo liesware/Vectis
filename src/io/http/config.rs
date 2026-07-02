@@ -1,5 +1,6 @@
 use super::HttpState;
 use super::error::{ErrorResponse, error_response};
+use crate::core::audit;
 use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -19,13 +20,24 @@ pub async fn reload_endpoint(
     headers: HeaderMap,
 ) -> Result<Json<ReloadConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
     let client = state.authorize_api_key(&headers).await?;
-    state.require_permission(&client, None, "admin").await?;
+    state
+        .require_permission_for(&client, None, "admin", Some("config.reload.denied"))
+        .await?;
+    let actor = audit::actor_from_client(&client);
 
     info!(
         endpoint = "POST /config/reload",
         "config reload request accepted"
     );
     if let Err(err) = state.reload_config_state().await {
+        audit::operation_failed(
+            "config.reload.failed",
+            Some(&actor),
+            None,
+            None,
+            Some("admin"),
+            &err.to_string(),
+        );
         error!(error = %err, "config reload endpoint failed");
         return Err(error_response(err.as_ref()));
     }
@@ -36,6 +48,13 @@ pub async fn reload_endpoint(
     info!(
         endpoint = "POST /config/reload",
         routes_loaded, remote_routes_loaded, clients_loaded, "config reload response ready"
+    );
+    audit::operation_success(
+        "config.reload.success",
+        Some(&actor),
+        None,
+        None,
+        Some("admin"),
     );
 
     Ok(Json(ReloadConfigResponse {

@@ -1,5 +1,6 @@
 use super::HttpState;
 use super::error::{ErrorResponse, error_response, public_error_message};
+use crate::core::audit;
 use crate::ops;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -19,11 +20,22 @@ pub async fn create_endpoint(
     Json(request): Json<Value>,
 ) -> Result<Json<CreateKeysResponse>, (StatusCode, Json<ErrorResponse>)> {
     let client = state.authorize_api_key(&headers).await?;
-    state.require_permission(&client, None, "admin").await?;
+    state
+        .require_permission_for(&client, None, "admin", Some("key.create.denied"))
+        .await?;
+    let actor = audit::actor_from_client(&client);
 
     let request = match ops::keys::parse_create_keys_input(request) {
         Ok(request) => request,
         Err(err) => {
+            audit::operation_failed(
+                "key.create.failed",
+                Some(&actor),
+                None,
+                None,
+                Some("admin"),
+                &err.to_string(),
+            );
             return Err(error_response(err.as_ref()));
         }
     };
@@ -54,6 +66,14 @@ pub async fn create_endpoint(
             {
                 Ok(loaded_key) => loaded_key,
                 Err(err) => {
+                    audit::operation_failed(
+                        "key.create.failed",
+                        Some(&actor),
+                        Some(&output.id),
+                        None,
+                        Some("admin"),
+                        &err.to_string(),
+                    );
                     error!(error = %err, id = %output.id, "failed to load created key into http state");
                     return Err((
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -83,9 +103,25 @@ pub async fn create_endpoint(
                 );
             }
 
+            audit::operation_success(
+                "key.create.success",
+                Some(&actor),
+                Some(&output.id),
+                None,
+                Some("admin"),
+            );
+
             Ok(Json(CreateKeysResponse { id: output.id }))
         }
         Err(err) => {
+            audit::operation_failed(
+                "key.create.failed",
+                Some(&actor),
+                None,
+                None,
+                Some("admin"),
+                &err.to_string(),
+            );
             error!(error = %err, "keys endpoint failed");
             Err(error_response(err.as_ref()))
         }
@@ -174,10 +210,28 @@ pub async fn update_lifecycle_endpoint(
 ) -> Result<Json<ops::keys::UpdateLifecycleOutput>, (StatusCode, Json<ErrorResponse>)> {
     let client = state.authorize_api_key(&headers).await?;
     state
-        .require_permission(&client, Some(&id), "lifecycle")
+        .require_permission_for(
+            &client,
+            Some(&id),
+            "lifecycle",
+            Some("key.lifecycle.denied"),
+        )
         .await?;
-    let request = ops::keys::parse_update_lifecycle_input(request)
-        .map_err(|err| error_response(err.as_ref()))?;
+    let actor = audit::actor_from_client(&client);
+    let request = match ops::keys::parse_update_lifecycle_input(request) {
+        Ok(request) => request,
+        Err(err) => {
+            audit::operation_failed(
+                "key.lifecycle.failed",
+                Some(&actor),
+                Some(&id),
+                None,
+                Some("lifecycle"),
+                &err.to_string(),
+            );
+            return Err(error_response(err.as_ref()));
+        }
+    };
 
     info!(
         endpoint = "POST /lifecycle/{kid}",
@@ -187,18 +241,50 @@ pub async fn update_lifecycle_endpoint(
     );
 
     let response =
-        ops::keys::update_key_lifecycle(state.storage(), state.internal_keys(), &id, request)
+        match ops::keys::update_key_lifecycle(state.storage(), state.internal_keys(), &id, request)
             .await
-            .map_err(|err| error_response(err.as_ref()))?;
-    let loaded_key = ops::keys::load_keys_db_entry(state.storage(), state.internal_keys(), &id)
-        .await
-        .map_err(|err| error_response(err.as_ref()))?;
+        {
+            Ok(response) => response,
+            Err(err) => {
+                audit::operation_failed(
+                    "key.lifecycle.failed",
+                    Some(&actor),
+                    Some(&id),
+                    None,
+                    Some("lifecycle"),
+                    &err.to_string(),
+                );
+                return Err(error_response(err.as_ref()));
+            }
+        };
+    let loaded_key =
+        match ops::keys::load_keys_db_entry(state.storage(), state.internal_keys(), &id).await {
+            Ok(loaded_key) => loaded_key,
+            Err(err) => {
+                audit::operation_failed(
+                    "key.lifecycle.failed",
+                    Some(&actor),
+                    Some(&id),
+                    None,
+                    Some("lifecycle"),
+                    &err.to_string(),
+                );
+                return Err(error_response(err.as_ref()));
+            }
+        };
     state.upsert_keys_db_entry(loaded_key).await;
 
     info!(
         endpoint = "POST /lifecycle/{kid}",
         kid = %id,
         "lifecycle update response ready"
+    );
+    audit::operation_success(
+        "key.lifecycle.changed",
+        Some(&actor),
+        Some(&id),
+        None,
+        Some("lifecycle"),
     );
 
     Ok(Json(response))
@@ -209,16 +295,26 @@ pub async fn refresh_endpoint(
     headers: HeaderMap,
 ) -> Result<Json<ops::keys::ListKeysPropertiesOutput>, (StatusCode, Json<ErrorResponse>)> {
     let client = state.authorize_api_key(&headers).await?;
-    state.require_permission(&client, None, "admin").await?;
+    state
+        .require_permission_for(&client, None, "admin", Some("key.reload.denied"))
+        .await?;
+    let actor = audit::actor_from_client(&client);
 
     info!(
         endpoint = "POST /keys/reload",
         "keys reload request accepted"
     );
-    state
-        .reload_keys_db_state()
-        .await
-        .map_err(|err| error_response(err.as_ref()))?;
+    state.reload_keys_db_state().await.map_err(|err| {
+        audit::operation_failed(
+            "key.reload.failed",
+            Some(&actor),
+            None,
+            None,
+            Some("admin"),
+            &err.to_string(),
+        );
+        error_response(err.as_ref())
+    })?;
     let response = state
         .with_keys_db_state(ops::keys::list_keys_properties_from_state)
         .await;
@@ -228,6 +324,13 @@ pub async fn refresh_endpoint(
     info!(
         endpoint = "POST /keys/reload",
         keys_count, "keys reload response ready"
+    );
+    audit::operation_success(
+        "key.reload.success",
+        Some(&actor),
+        None,
+        None,
+        Some("admin"),
     );
 
     Ok(Json(response))

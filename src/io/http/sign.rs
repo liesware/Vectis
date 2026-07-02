@@ -1,5 +1,6 @@
 use super::HttpState;
 use super::error::{ErrorResponse, error_response};
+use crate::core::audit;
 use crate::ops;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -14,15 +15,44 @@ pub async fn sign_endpoint(
     Json(request): Json<Value>,
 ) -> Result<Json<ops::sign::TimestampToken>, (StatusCode, Json<ErrorResponse>)> {
     let client = state.authorize_api_key(&headers).await?;
-    state.require_permission(&client, Some(&id), "sign").await?;
-
-    ops::keys::validate_key_id(&id).map_err(|err| error_response(err.as_ref()))?;
     state
-        .ensure_keys_db_entry(&id)
-        .await
-        .map_err(|err| error_response(err.as_ref()))?;
-    let request =
-        ops::sign::parse_sign_input(request).map_err(|err| error_response(err.as_ref()))?;
+        .require_permission_for(&client, Some(&id), "sign", Some("sign.denied"))
+        .await?;
+    let actor = audit::actor_from_client(&client);
+
+    ops::keys::validate_key_id(&id).map_err(|err| {
+        audit::operation_failed(
+            "sign.failed",
+            Some(&actor),
+            Some(&id),
+            None,
+            Some("sign"),
+            &err.to_string(),
+        );
+        error_response(err.as_ref())
+    })?;
+    state.ensure_keys_db_entry(&id).await.map_err(|err| {
+        audit::operation_failed(
+            "sign.failed",
+            Some(&actor),
+            Some(&id),
+            None,
+            Some("sign"),
+            &err.to_string(),
+        );
+        error_response(err.as_ref())
+    })?;
+    let request = ops::sign::parse_sign_input(request).map_err(|err| {
+        audit::operation_failed(
+            "sign.failed",
+            Some(&actor),
+            Some(&id),
+            None,
+            Some("sign"),
+            &err.to_string(),
+        );
+        error_response(err.as_ref())
+    })?;
     info!(
         endpoint = "/sign/{id}",
         kid = %id,
@@ -51,10 +81,25 @@ pub async fn sign_endpoint(
                 ml_dsa_sig_len = response.signatures.ml_dsa.sig.len(),
                 "sign response ready"
             );
+            audit::operation_success(
+                "sign.success",
+                Some(&actor),
+                Some(response.kid()),
+                None,
+                Some("sign"),
+            );
 
             Ok(Json(response))
         }
         Err(err) => {
+            audit::operation_failed(
+                "sign.failed",
+                Some(&actor),
+                Some(&id),
+                None,
+                Some("sign"),
+                &err.to_string(),
+            );
             error!(error = %err, id = %id, "sign endpoint failed");
             Err(error_response(err.as_ref()))
         }
@@ -65,9 +110,21 @@ pub async fn sign_verification_endpoint(
     State(state): State<HttpState>,
     Json(request): Json<Value>,
 ) -> Result<Json<ops::sign::VerificationOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let request =
-        ops::sign::parse_timestamp_token(request).map_err(|err| error_response(err.as_ref()))?;
-    ops::sign::validate_timestamp_token(&request).map_err(|err| error_response(err.as_ref()))?;
+    let request = ops::sign::parse_timestamp_token(request).map_err(|err| {
+        audit::operation_failed("verify.failed", None, None, None, None, &err.to_string());
+        error_response(err.as_ref())
+    })?;
+    ops::sign::validate_timestamp_token(&request).map_err(|err| {
+        audit::operation_failed(
+            "verify.failed",
+            None,
+            Some(request.kid()),
+            None,
+            None,
+            &err.to_string(),
+        );
+        error_response(err.as_ref())
+    })?;
 
     let kid = request.kid().to_string();
     info!(
@@ -107,10 +164,19 @@ pub async fn sign_verification_endpoint(
                 ml_dsa = %response.status.ml_dsa,
                 "sign verification response ready"
             );
+            audit::operation_success("verify.success", None, Some(&kid), None, None);
 
             Ok(Json(response))
         }
         Err(err) => {
+            audit::operation_failed(
+                "verify.failed",
+                None,
+                Some(&kid),
+                None,
+                None,
+                &err.to_string(),
+            );
             error!(error = %err, kid = %kid, "sign verification endpoint failed");
             Err(error_response(err.as_ref()))
         }

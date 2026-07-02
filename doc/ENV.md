@@ -234,7 +234,9 @@ The init symmetric key is a root key. Vectis derives separate internal keys from
 | `VECTIS_LOG_FILE` | `vectis.log` | File name | Base log file name used by daily rotation. |
 | `VECTIS_AUDIT_LOG_FILE` | `audit.log` | File name | Base file name for the dedicated audit log stream. Security audit events are written here, separate from the operational log. |
 
-Logging is JSON by default. Audit events go to a dedicated stream (`VECTIS_AUDIT_LOG_FILE`) under `VECTIS_LOG_DIR`, separate from the operational log.
+Logging is JSON by default. Operational events go to `VECTIS_LOG_FILE`; security events go to a dedicated audit stream (`VECTIS_AUDIT_LOG_FILE`) under `VECTIS_LOG_DIR`.
+
+Audit events use stable event names such as `auth.success`, `permission.denied`, `config.reload.success`, `key.lifecycle.changed`, `message.send.failed`, and `sign.success`. Audit records include logical identity fields such as `actor`, `actor_fp`, `root`, `admin`, `kid`, `remote_kid`, `action`, `outcome`, and `reason`. They must not include plaintext, ciphertext, API keys, unseal keys, private keys, or full sensitive payloads.
 
 ## Observability
 

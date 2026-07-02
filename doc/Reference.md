@@ -717,7 +717,14 @@ Operational logs should show:
 - remote communication failures.
 
 Audit logs are separate from operational logs and intended for security-relevant
-events. They should not contain secrets.
+events. They record stable security event names such as `auth.success`,
+`permission.denied`, `config.reload.failed`, `key.create.success`,
+`message.receive.denied`, and `verify.failed`.
+
+Audit records use logical identity and resource fields (`actor`, `actor_fp`,
+`root`, `admin`, `kid`, `remote_kid`, `action`, `outcome`, `reason`) and must not
+contain plaintext, ciphertext, API keys, unseal keys, private keys, or full
+sensitive payloads.
 
 Metrics are exposed in Prometheus text format and should avoid sensitive labels.
 Labels should remain low cardinality.
