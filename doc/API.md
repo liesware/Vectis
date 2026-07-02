@@ -2,7 +2,7 @@
 
 Vectis protects data throughout its lifecycle. The HTTP API exposes operations to create key material, validate keys, publish public keys, sign message hashes, exchange protected messages between Vectis instances, and encrypt/decrypt internal messages.
 
-The `vectis` CLI is an HTTP client for the runtime API, except for `vectis init`, `vectis serve`, `vectis apikey create`, and `vectis routes sign`, which are local commands.
+The `vectis` CLI is an HTTP client for the runtime API, except for `vectis init`, `vectis serve`, `vectis apikey create`, `vectis config sign`, and `vectis config list`, which are local commands.
 
 ## Conventions
 
@@ -23,8 +23,8 @@ The `vectis` CLI is an HTTP client for the runtime API, except for `vectis init`
 
 Only `v1` is supported. Any other version is rejected explicitly; there is no silent downgrade.
 
-Signed config files (`routes.json`, `remote_routes.json`, `permissions.json`) carry a single
-top-level `version` that is part of the signed content.
+The signed config file (`config.json`, with `routes`, `remote_routes`, and `permissions`
+sections) carries a single top-level `version` that is part of the signed content.
 
 Signed tokens and protected messages intentionally carry `version` at **two** levels:
 
@@ -51,7 +51,7 @@ X-API-Key: <VECTIS_APIKEY>
 
 `VECTIS_APIKEY` is the client secret sent in the `X-API-Key` header. `vectis init` and `vectis apikey create` generate it from Botan's cryptographic random number generator. The server validates it against `VECTIS_APIKEY_HASH`, which is derived with the init API auth key.
 
-`VECTIS_APIKEY` and `VECTIS_APIKEY_HASH` are the root API key pair. Root can access every protected endpoint. Additional clients can be authorized through a signed `permissions.json`; clients with `admin` can also access protected administrative endpoints, including `POST /permissions/reload`.
+`VECTIS_APIKEY` and `VECTIS_APIKEY_HASH` are the root API key pair. Root can access every protected endpoint. Additional clients can be authorized through the `permissions` section of the signed config; clients with `admin` can also access protected administrative endpoints, including `POST /permissions/reload`.
 
 Endpoints requiring auth:
 
@@ -488,7 +488,7 @@ Response:
 
 ### GET /routes
 
-Lists the final app routes currently loaded in memory. It does not read `routes.json`.
+Lists the final app routes currently loaded in memory. It does not read `config.json`.
 
 Requires auth.
 
@@ -508,7 +508,7 @@ Response:
 
 ### POST /routes/reload
 
-Administrative refresh operation. Reloads final app routes from `VECTIS_ROUTES_PATH` into memory.
+Administrative refresh operation. Reloads the unified signed config into memory.
 
 Requires auth.
 
@@ -546,7 +546,7 @@ Response:
 
 ### POST /remote-routes/reload
 
-Administrative refresh operation. Reloads authorized remote Vectis routes from `VECTIS_REMOTE_ROUTES_PATH` into memory.
+Administrative refresh operation. Reloads the unified signed config into memory.
 
 Requires auth.
 
@@ -562,14 +562,14 @@ Response:
 
 ## API Key Permissions
 
-Permissions are configured with a manually maintained signed file:
+Permissions are the `permissions` section of the unified signed config file:
 
 ```env
-VECTIS_PERMISSIONS_PATH=permissions.json
-VECTIS_PERMISSIONS_SIGN_PATH=permissions_sign.json
+VECTIS_CONFIG_PATH=config.json
+VECTIS_CONFIG_SIGN_PATH=config_sign.json
 ```
 
-`vectis permissions sign` signs `VECTIS_PERMISSIONS_PATH` locally with init keys and writes `VECTIS_PERMISSIONS_SIGN_PATH`.
+`vectis config sign` signs `VECTIS_CONFIG_PATH` locally with init keys and writes `VECTIS_CONFIG_SIGN_PATH`. The config file has `routes`, `remote_routes`, and `permissions` sections under a top-level `version`.
 
 Recommended admin permission:
 
@@ -631,11 +631,11 @@ There is no `GET /permissions` endpoint and no CLI list command.
 
 ### POST /permissions/reload
 
-Administrative refresh operation. Reloads signed API key permissions from `VECTIS_PERMISSIONS_PATH` into memory.
+Administrative refresh operation. Reloads the unified signed config into memory.
 
 Requires auth with root or an admin client.
 
-If `permissions.json` is missing, Vectis reloads to an empty client list and only root remains authorized. If the file exists but is invalid, unsigned, has an invalid signature, references an unloaded KID for a KID-scoped non-admin permission, or uses `kid: "*"` with a non-global action, the request fails and the previous in-memory permissions remain active.
+If `config.json` is missing, Vectis reloads to an empty client list and only root remains authorized. If the config exists but is invalid, unsigned, has an invalid signature, references an unloaded KID for a KID-scoped non-admin permission, or uses `kid: "*"` with a non-global action, the request fails and the previous in-memory config remains active.
 
 Response:
 
@@ -738,6 +738,8 @@ Response:
 
 Verifies a token emitted by `POST /sign/{kid}`. This endpoint does not require auth.
 
+The signer key is resolved locally first; if the token's `kid` is not a local key, Vectis resolves the signer's public keys from a trusted peer in the signed config (an active `remote_routes` entry with `public_keys` for that `kid`), enabling cross-instance verification. If the `kid` is neither local nor a known peer, verification fails.
+
 Request: the complete JSON returned by `POST /sign/{kid}`.
 
 Valid response:
@@ -784,7 +786,7 @@ Request:
 Flow:
 
 1. Validate `sender_kid`, `recipient_kid`, and `message`.
-2. Resolve `recipient_kid` through signed `remote_routes.json`.
+2. Resolve `recipient_kid` through the signed config `remote_routes` section.
 3. If the recipient public key is not cached, call `GET /pub/{recipient_kid}` on the authorized `remote_addr`.
 4. Create a hybrid secret with XECDH + ML-KEM.
 5. Derive `message_key` with HKDF.
@@ -996,14 +998,15 @@ When `POST /message` receives and validates a protected message, it delivers thi
 
 The final app can call `POST /message/decrypt` to recover the plaintext.
 
-### Manual Routing
+## Configuration File (`config.json`)
 
-Vectis can route final app delivery per `kid` with a manually maintained routes file. The file is loaded when `vectis serve` starts and can be reloaded at runtime with `POST /routes/reload`.
+Vectis loads a single signed config file (`config.json`) with three sections — `routes`, `remote_routes`, and `permissions` — plus a top-level `version`. It is loaded when `vectis serve` starts and can be reloaded at runtime with `POST /routes/reload`, `POST /remote-routes/reload`, or `POST /permissions/reload` (each reloads the whole config). Create/update its signature with `vectis config sign`; inspect it with `vectis config list`.
 
-Default path:
+Default paths:
 
 ```env
-VECTIS_ROUTES_PATH=routes.json
+VECTIS_CONFIG_PATH=config.json
+VECTIS_CONFIG_SIGN_PATH=config_sign.json
 ```
 
 Expected file shape:
@@ -1017,9 +1020,71 @@ Expected file shape:
       "final_app_addr": "127.0.0.1:3999",
       "final_app_path": "/message"
     }
+  ],
+  "remote_routes": [
+    {
+      "remote_kid": "b01cbe33187916f0f1367d07bc986d71bb0d91d7047ccd790c13fc9d85fe7259",
+      "name": "site-b",
+      "remote_addr": "vectis-b.example.com:443",
+      "allowed_local_kids": ["*"],
+      "status": "active",
+      "public_keys": {
+        "eddsa":  { "alg": "Ed25519",    "public_key_der_hex": "3043..." },
+        "xecdh":  { "alg": "X25519",     "public_key_hex": "a1b2..." },
+        "ml-dsa": { "alg": "ML-DSA-44",  "public_key_der_hex": "3082..." },
+        "ml-kem": { "alg": "ML-KEM-512", "public_key_der_hex": "3082..." }
+      }
+    }
+  ],
+  "permissions": [
+    {
+      "client": "clinic-app",
+      "apikey_hash": "f80e3d53ecb4c086f6a4f76792df30fe70fcf383c8aaff09bce65340a9360e3e",
+      "status": "active",
+      "permissions": [{ "kid": "f55f086e...", "actions": ["message"] }]
+    }
   ]
 }
 ```
+
+Top level:
+
+| Field | Required | Value | Meaning |
+| --- | --- | --- | --- |
+| `version` | yes | `"v1"` | Config schema version; unknown versions are rejected. |
+| `routes` | yes (may be `[]`) | array | Final app delivery routes per local `kid`. |
+| `remote_routes` | yes (may be `[]`) | array | Authorized remote Vectis peers. |
+| `permissions` | yes (may be `[]`) | array | Non-root API key clients and their allowed actions. |
+
+`routes[]` entries:
+
+| Field | Required | Value | Meaning |
+| --- | --- | --- | --- |
+| `kid` | yes | 64-hex kid, must be a loaded local key | Local operational key this route applies to. |
+| `final_app_addr` | yes | `host:port` | Where to deliver decrypted messages for this `kid`. |
+| `final_app_path` | yes | path starting with `/` | Delivery path (e.g. `/message`). |
+
+`remote_routes[]` entries:
+
+| Field | Required | Value | Meaning |
+| --- | --- | --- | --- |
+| `remote_kid` | yes | 64-hex kid (the remote peer's key) | Identifies the remote peer. |
+| `name` | yes | text | Human label. |
+| `remote_addr` | yes | `host:port` | Address of the remote Vectis instance. |
+| `allowed_local_kids` | yes | non-empty array; `["*"]` or explicit loaded kids (no mixing) | Which local sender KIDs may use this route. |
+| `status` | yes | `active` \| `disabled` | Disabled routes load but cannot send. |
+| `public_keys` | no | object (see below) | Peer's trusted public keys for direct use and cross-instance verification. |
+
+`public_keys` object (optional; the `keys` object from the peer's `GET /pub/{kid}`): `eddsa`/`ml-dsa`/`ml-kem` each `{ "alg", "public_key_der_hex" }`, and `xecdh` `{ "alg", "public_key_hex" }`.
+
+`permissions[]` entries:
+
+| Field | Required | Value | Meaning |
+| --- | --- | --- | --- |
+| `client` | yes | text, unique | Client label. |
+| `apikey_hash` | yes | 64 hex (32 bytes) | Server-side verifier for this client's `X-API-Key`. |
+| `status` | yes | `active` \| `disabled` \| `revoked` | Only `active` clients are authorized. |
+| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `metrics`. `kid: "*"` is only allowed with global actions (`metrics`); an `admin` action grants all endpoints and ignores kid-scoped grants. |
 
 Routing behavior:
 
@@ -1027,34 +1092,17 @@ Routing behavior:
 2. If a route exists, deliver to that route's `final_app_addr` and `final_app_path`.
 3. If no route exists for the `kid`, deliver to the default `VECTIS_FINAL_APP_ADDR` and `VECTIS_FINAL_APP_PATH`.
 4. A manual route is loaded only if its `kid` exists in the keys currently loaded in memory.
-5. During startup, a missing file, invalid file, or route with an unloaded `kid` starts with an empty manual route list and uses the default final app fallback.
-6. During `POST /routes/reload`, a missing routes file reloads to an empty manual route list; an invalid file or route with an unloaded `kid` returns an error and keeps the previous in-memory routes.
+5. During startup, a missing config, invalid config, or route with an unloaded `kid` starts with empty sections and uses the default final app fallback.
+6. During reload, a missing config reloads to empty sections; an invalid config, bad signature, or a section referencing an unloaded `kid` returns an error and keeps the previous in-memory config.
 
-The routes file is operational configuration. Vectis does not create it automatically and `POST /keys` does not modify it.
+The config file is operational configuration. Vectis does not create it automatically and `POST /keys` does not modify it.
 
-Remote Vectis destinations are controlled separately with a signed remote routes file:
+`POST /message/{sender_kid}` never accepts a destination host from the request body; it resolves `recipient_kid` through the signed `remote_routes` section. A route can allow specific local sender KIDs, or `allowed_local_kids: ["*"]` for any loaded local KID. The wildcard cannot be mixed with explicit KIDs. Disabled routes are loaded and listed, but cannot be used to send messages.
 
-```env
-VECTIS_REMOTE_ROUTES_PATH=remote_routes.json
-VECTIS_REMOTE_ROUTES_SIGN_PATH=remote_routes_sign.json
-```
+Each `remote_routes` entry may carry an optional `public_keys` object — the full public key set of that peer, exactly as returned by the remote's `GET /pub/{kid}`. It is trusted because the operator signs the config. When present:
 
-```json
-{
-  "version": "v1",
-  "routes": [
-    {
-      "remote_kid": "b01cbe33187916f0f1367d07bc986d71bb0d91d7047ccd790c13fc9d85fe7259",
-      "name": "site-b",
-      "remote_addr": "vectis-b.example.com:443",
-      "allowed_local_kids": ["*"],
-      "status": "active"
-    }
-  ]
-}
-```
-
-`POST /message/{sender_kid}` never accepts a destination host from the request body; it resolves `recipient_kid` through this signed file. A route can allow specific local sender KIDs, or `allowed_local_kids: ["*"]` for any loaded local KID. The wildcard cannot be mixed with explicit KIDs. Disabled routes are loaded and listed, but cannot be used to send messages.
+- `/message` uses those keys directly for the peer (no `/pub` fetch); when absent, Vectis fetches `/pub` on demand (trust on first use).
+- `POST /sign/verification` can verify timestamp tokens whose signer `kid` is not local, resolving the signer's public keys from the matching active `remote_routes` entry.
 
 ## Related Configuration
 
@@ -1066,7 +1114,7 @@ Main variables:
 - `VECTIS_TLS_SKIP_VERIFY`: disables outbound HTTPS certificate verification.
 - `VECTIS_FINAL_APP_ADDR`: final app host:port.
 - `VECTIS_FINAL_APP_PATH`: final app delivery path.
-- `VECTIS_ROUTES_PATH`: optional manual final app routing file path, relative to the working directory unless absolute.
+- `VECTIS_CONFIG_PATH`: unified signed config file path (routes, remote routes, permissions), relative to the working directory unless absolute.
 - `VECTIS_APIKEY`: client-side HTTP auth key sent as `X-API-Key`.
 - `VECTIS_APIKEY_HASH`: server-side HMAC value used to verify `X-API-Key` without storing the API key in plaintext.
 - `VECTIS_SQLITE_PATH`: sqlite storage path.
@@ -1103,12 +1151,12 @@ CLI output defaults to YAML for readability. Add `--output json` to HTTP client 
 | `vectis lifecycle <kid>` | `POST /lifecycle/{kid}` | Yes |
 | `vectis routes list` | `GET /routes` | Yes |
 | `vectis routes reload` | `POST /routes/reload` | Yes |
-| `vectis routes sign` | Local `routes_sign.json` update | No HTTP |
 | `vectis remote-routes list` | `GET /remote-routes` | Yes |
 | `vectis remote-routes reload` | `POST /remote-routes/reload` | Yes |
-| `vectis remote-routes sign` | Local `remote_routes_sign.json` update | No HTTP |
 | `vectis permissions reload` | `POST /permissions/reload` | Yes |
-| `vectis permissions sign` | Local `permissions_sign.json` update | No HTTP |
+| `vectis config sign` | Local `config_sign.json` update | No HTTP |
+| `vectis config list` | Prints local `config.json` | No HTTP |
+| `vectis config reload` | `POST /routes/reload` | Yes |
 | `vectis pub <kid>` | `GET /pub/{kid}` | No |
 | `vectis sign <kid>` | `POST /sign/{kid}` | Yes |
 | `vectis sign verify` | `POST /sign/verification` | No |
@@ -1122,43 +1170,42 @@ Local commands:
 
 - `vectis init`: creates encrypted `VECTIS_INIT_KEYS_FILE`, default `init.json`, prints `VECTIS_UNSEAL_KEY`, `VECTIS_APIKEY`, and `VECTIS_APIKEY_HASH`. It refuses to overwrite an existing init keys file; delete it manually before reinitializing.
 - `vectis apikey create`: decrypts `VECTIS_INIT_KEYS_FILE`, derives the internal API auth key, prints a new `VECTIS_APIKEY` and matching `VECTIS_APIKEY_HASH`, and does not write files.
-- `vectis serve`: validates `VECTIS_INIT_KEYS_FILE`, loads storage/routes into memory, and starts the HTTP service. Unseal key resolution order is `VECTIS_UNSEAL_KEY`, `VECTIS_UNSEAL_KEY_FILE` with default `.unseal_key`, then hidden prompt.
-- `vectis routes sign`: reads `VECTIS_ROUTES_PATH`, signs its canonical JSON with init EdDSA and init ML-DSA, and writes `VECTIS_ROUTES_SIGN_PATH`.
-- `vectis remote-routes sign`: reads `VECTIS_REMOTE_ROUTES_PATH`, signs its canonical JSON with init EdDSA and init ML-DSA, and writes `VECTIS_REMOTE_ROUTES_SIGN_PATH`.
-- `vectis permissions sign`: reads `VECTIS_PERMISSIONS_PATH`, signs its canonical JSON with init EdDSA and init ML-DSA, and writes `VECTIS_PERMISSIONS_SIGN_PATH`.
+- `vectis serve`: validates `VECTIS_INIT_KEYS_FILE`, loads storage/config into memory, and starts the HTTP service. Unseal key resolution order is `VECTIS_UNSEAL_KEY`, `VECTIS_UNSEAL_KEY_FILE` with default `.unseal_key`, then hidden prompt.
+- `vectis config sign`: reads `VECTIS_CONFIG_PATH`, signs its canonical JSON with init EdDSA and init ML-DSA, and writes `VECTIS_CONFIG_SIGN_PATH`.
+- `vectis config list`: prints `VECTIS_CONFIG_PATH` locally.
 
-## Route Signature
+## Config Signature
 
-When `routes.json` exists, Vectis requires a matching route signature before loading manual routes.
+When `config.json` exists, Vectis requires a matching config signature before loading it.
 
 Default paths:
 
 ```env
-VECTIS_ROUTES_PATH=routes.json
-VECTIS_ROUTES_SIGN_PATH=routes_sign.json
+VECTIS_CONFIG_PATH=config.json
+VECTIS_CONFIG_SIGN_PATH=config_sign.json
 ```
 
 Create or update the signature:
 
 ```bash
-vectis routes sign
+vectis config sign
 ```
 
-`routes_sign.json` uses the same signed payload structure as `POST /sign/{kid}`:
+`config_sign.json` uses the same signed payload structure as `POST /sign/{kid}`:
 
 ```json
 {
   "version": "v1",
   "payload": {
     "version": "v1",
-    "type": "vectis-routes",
+    "type": "vectis-config",
     "created_at": "1782058090",
-    "info": "version=v1;type=vectis-routes;path=routes.json",
+    "info": "version=v1;type=vectis-config;path=config.json",
     "kid": "init-keys",
     "serial": "INTERNAL_KEYS_HASH(created_at + random_bytes)",
     "message_hash": {
       "alg": "BLAKE2b(256)",
-      "hex": "hash of canonical routes.json"
+      "hex": "hash of canonical config.json"
     }
   },
   "signatures": {
@@ -1176,10 +1223,10 @@ vectis routes sign
 
 Validation rules:
 
-- `payload.type` must be `vectis-routes`.
+- `payload.type` must be `vectis-config`.
 - `payload.kid` must be `init-keys`.
-- `payload.message_hash` must match canonical `routes.json` using `INTERNAL_KEYS_HASH`.
+- `payload.message_hash` must match canonical `config.json` using `INTERNAL_KEYS_HASH`.
 - EdDSA and ML-DSA signatures must verify with init public keys.
-- Startup with missing `routes.json` uses default routing.
-- Startup with invalid route signature uses default routing and logs the error.
-- `POST /routes/reload` rejects invalid signatures and keeps the previous in-memory routes.
+- Startup with missing `config.json` uses empty sections (default routing, only root authorized).
+- Startup with invalid config signature uses empty sections and logs the error.
+- A reload endpoint rejects invalid signatures and keeps the previous in-memory config.

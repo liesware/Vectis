@@ -23,10 +23,10 @@ VALID_KEY_REQUEST = {
     "ml_kem_variant": "ML-KEM-512",
 }
 VALID_MESSAGE = b"Vectis negative workflow test"
-PERMISSIONS_PATH = Path("permissions.json")
-PERMISSIONS_SIGN_PATH = Path("permissions_sign.json")
-REMOTE_ROUTES_PATH = Path("remote_routes.json")
-REMOTE_ROUTES_SIGN_PATH = Path("remote_routes_sign.json")
+CONFIG_PATH = Path("config.json")
+CONFIG_SIGN_PATH = Path("config_sign.json")
+
+_CONFIG = {"version": "v1", "routes": [], "remote_routes": [], "permissions": []}
 
 
 class NegativeTestError(Exception):
@@ -165,48 +165,39 @@ def create_api_key_pair():
     return api_key, api_key_hash
 
 
-def sign_permissions():
+def sign_config():
     result = subprocess.run(
-        ["cargo", "run", "--", "permissions", "sign", "--output", "json"],
+        ["cargo", "run", "--", "config", "sign", "--output", "json"],
         check=False,
         capture_output=True,
         text=True,
     )
     if result.returncode != 0:
         raise NegativeTestError(
-            f"vectis permissions sign failed: stdout={result.stdout} stderr={result.stderr}"
+            f"vectis config sign failed: stdout={result.stdout} stderr={result.stderr}"
         )
 
 
-def sign_remote_routes():
-    result = subprocess.run(
-        ["cargo", "run", "--", "remote-routes", "sign", "--output", "json"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise NegativeTestError(
-            f"vectis remote-routes sign failed: stdout={result.stdout} stderr={result.stderr}"
-        )
+def write_config(sign=True):
+    CONFIG_PATH.write_text(json.dumps(_CONFIG, indent=2), encoding="utf-8")
+    if sign:
+        sign_config()
 
 
 def write_permissions(clients, sign=True):
-    PERMISSIONS_PATH.write_text(
-        json.dumps({"version": "v1", "clients": clients}, indent=2),
-        encoding="utf-8",
-    )
-    if sign:
-        sign_permissions()
+    # Isolate the section under test: negative cases put deliberately bad data
+    # in one section, and the unified config reload validates all sections.
+    _CONFIG["routes"] = []
+    _CONFIG["remote_routes"] = []
+    _CONFIG["permissions"] = clients
+    write_config(sign=sign)
 
 
 def write_remote_routes(routes, sign=True):
-    REMOTE_ROUTES_PATH.write_text(
-        json.dumps({"version": "v1", "routes": routes}, indent=2),
-        encoding="utf-8",
-    )
-    if sign:
-        sign_remote_routes()
+    _CONFIG["routes"] = []
+    _CONFIG["permissions"] = []
+    _CONFIG["remote_routes"] = routes
+    write_config(sign=sign)
 
 
 def reload_permissions(client):
@@ -283,14 +274,10 @@ def main():
     apikey = require_apikey(args.apikey)
     client = Client(args.base_url, apikey)
     recipient_host = host_from_base_url(args.base_url)
-    permissions_backup = backup_file(PERMISSIONS_PATH)
-    permissions_sign_backup = backup_file(PERMISSIONS_SIGN_PATH)
-    remote_routes_backup = backup_file(REMOTE_ROUTES_PATH)
-    remote_routes_sign_backup = backup_file(REMOTE_ROUTES_SIGN_PATH)
-    atexit.register(restore_file, PERMISSIONS_PATH, permissions_backup)
-    atexit.register(restore_file, PERMISSIONS_SIGN_PATH, permissions_sign_backup)
-    atexit.register(restore_file, REMOTE_ROUTES_PATH, remote_routes_backup)
-    atexit.register(restore_file, REMOTE_ROUTES_SIGN_PATH, remote_routes_sign_backup)
+    config_backup = backup_file(CONFIG_PATH)
+    config_sign_backup = backup_file(CONFIG_SIGN_PATH)
+    atexit.register(restore_file, CONFIG_PATH, config_backup)
+    atexit.register(restore_file, CONFIG_SIGN_PATH, config_sign_backup)
     rows = []
 
     def keys_without_auth():
@@ -721,7 +708,7 @@ def main():
                 }
             ]
         )
-        REMOTE_ROUTES_SIGN_PATH.write_text('{"invalid":true}\n', encoding="utf-8")
+        CONFIG_SIGN_PATH.write_text('{"invalid":true}\n', encoding="utf-8")
         status, _ = client.post("/remote-routes/reload", {}, auth=True)
         require_status("remote routes invalid signature", status, 400)
 
@@ -853,7 +840,7 @@ def main():
                 }
             ]
         )
-        PERMISSIONS_SIGN_PATH.write_text('{"invalid":true}\n', encoding="utf-8")
+        CONFIG_SIGN_PATH.write_text('{"invalid":true}\n', encoding="utf-8")
         status, _ = client.post("/permissions/reload", {}, auth=True)
         require_status("permissions invalid signature", status, 400)
 
@@ -1342,19 +1329,14 @@ def main():
     ):
         run_case(rows, name, func)
 
-    restore_file(PERMISSIONS_PATH, permissions_backup)
-    restore_file(PERMISSIONS_SIGN_PATH, permissions_sign_backup)
+    _CONFIG["routes"] = []
+    _CONFIG["remote_routes"] = []
+    _CONFIG["permissions"] = []
+    write_config()
     status, _ = client.post("/permissions/reload", {}, auth=True)
-    require_status("restore permissions reload", status, 200)
-    restore_file(REMOTE_ROUTES_PATH, remote_routes_backup)
-    restore_file(REMOTE_ROUTES_SIGN_PATH, remote_routes_sign_backup)
-    status, _ = client.post("/remote-routes/reload", {}, auth=True)
-    if status != 200:
-        write_remote_routes([])
-        status, _ = client.post("/remote-routes/reload", {}, auth=True)
-        require_status("clear remote routes reload", status, 200)
-        restore_file(REMOTE_ROUTES_PATH, remote_routes_backup)
-        restore_file(REMOTE_ROUTES_SIGN_PATH, remote_routes_sign_backup)
+    require_status("restore config reload", status, 200)
+    restore_file(CONFIG_PATH, config_backup)
+    restore_file(CONFIG_SIGN_PATH, config_sign_backup)
 
     print_section("HTTP negative", rows)
     print(f"SUMMARY negative passed={len(rows)} failed=0")

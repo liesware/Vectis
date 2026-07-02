@@ -1,11 +1,13 @@
 use crate::core::{
-    canonical, config, crypto, http_client, protocol, remote_routes::RemoteRoute,
+    canonical, config, crypto, http_client, protocol,
+    remote_routes::{PeerPublicKeys, RemoteRoute},
     routes::FinalAppRoute, validation,
 };
 use crate::error::DynError;
 use crate::ops::contracts::{
     MessageCipher, MessageKem, MessageRecipient, MessageSender, ProtectedMessagePayload,
-    ProtectedMessageToken, PublicKeysOutput, SendMessageInput, SignatureBlock, TimestampSignatures,
+    ProtectedMessageToken, PublicDerKey, PublicKeys, PublicKeysOutput, PublicRawKey,
+    SendMessageInput, SignatureBlock, TimestampSignatures,
 };
 use crate::ops::keys::{self, KeysDbState, LoadedOpsKey};
 use serde::{Deserialize, Serialize};
@@ -385,18 +387,29 @@ pub async fn send_message(
         recipient_name = %remote_route.name(),
         "message send started"
     );
-    let recipient_key_source = if cached_recipient.is_some() {
-        "cache"
-    } else {
-        "remote"
-    };
-    let recipient_public_keys = match cached_recipient {
-        Some(remote_key) => remote_key,
-        None => {
-            fetch_remote_public_keys(remote_route.remote_addr(), &prepared.input.recipient_kid)
-                .await?
-        }
-    };
+    let (recipient_key_source, recipient_public_keys) =
+        if let Some(peer) = remote_route.public_keys() {
+            (
+                "config",
+                remote_public_keys_from_peer(
+                    remote_route.remote_addr(),
+                    &prepared.input.recipient_kid,
+                    peer,
+                )?,
+            )
+        } else {
+            match cached_recipient {
+                Some(remote_key) => ("cache", remote_key),
+                None => (
+                    "remote",
+                    fetch_remote_public_keys(
+                        remote_route.remote_addr(),
+                        &prepared.input.recipient_kid,
+                    )
+                    .await?,
+                ),
+            }
+        };
     validate_remote_public_keys(&recipient_public_keys)?;
     info!(
         recipient_host = %recipient_public_keys.host(),
@@ -1444,6 +1457,49 @@ fn build_message_aad(
 
 fn hybrid_kem_alg(xecdh_alg: &str, ml_kem_alg: &str) -> String {
     format!("{xecdh_alg}+{ml_kem_alg}")
+}
+
+pub fn remote_public_keys_from_peer(
+    host: &str,
+    kid: &str,
+    peer: &PeerPublicKeys,
+) -> Result<RemotePublicKeys, DynError> {
+    let info = validation::build_aad(&[
+        ("version", protocol::PROTOCOL_VERSION_V1),
+        ("type", "peer-public-keys"),
+        ("kid", kid),
+    ]);
+    let keys = PublicKeysOutput {
+        info: info.clone(),
+        keys: PublicKeys {
+            eddsa: PublicDerKey {
+                alg: peer.eddsa.alg.clone(),
+                public_key_der_hex: peer.eddsa.public_key_der_hex.clone(),
+            },
+            xecdh: PublicRawKey {
+                alg: peer.xecdh.alg.clone(),
+                public_key_hex: peer.xecdh.public_key_hex.clone(),
+            },
+            ml_dsa: PublicDerKey {
+                alg: peer.ml_dsa.alg.clone(),
+                public_key_der_hex: peer.ml_dsa.public_key_der_hex.clone(),
+            },
+            ml_kem: PublicDerKey {
+                alg: peer.ml_kem.alg.clone(),
+                public_key_der_hex: peer.ml_kem.public_key_der_hex.clone(),
+            },
+        },
+    };
+    let remote_key = RemotePublicKeys {
+        host: host.to_string(),
+        kid: kid.to_string(),
+        loaded_at: validation::current_timestamp()?,
+        info,
+        keys,
+    };
+    validate_remote_public_keys(&remote_key)?;
+
+    Ok(remote_key)
 }
 
 async fn fetch_remote_public_keys(host: &str, kid: &str) -> Result<RemotePublicKeys, DynError> {

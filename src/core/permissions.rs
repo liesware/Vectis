@@ -1,12 +1,10 @@
-use crate::core::{canonical, crypto, protocol, validation};
+use crate::core::{crypto, validation};
 use crate::error::DynError;
 use crate::ops::keys;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
-use tracing::{info, warn};
+use tracing::warn;
 use zeroize::Zeroize;
 
 pub const PERMISSION_ACTIONS: &[&str] = &[
@@ -49,13 +47,7 @@ struct KidPermission {
 }
 
 #[derive(Deserialize, Serialize)]
-struct PermissionsFile {
-    version: String,
-    clients: Vec<PermissionClientInput>,
-}
-
-#[derive(Deserialize, Serialize)]
-struct PermissionClientInput {
+pub(crate) struct PermissionClientInput {
     client: String,
     apikey_hash: String,
     status: String,
@@ -188,19 +180,6 @@ impl PermissionsState {
 
         permission_denied("api key does not have permission for this kid")
     }
-
-    pub fn reload_from_file(
-        &self,
-        path: &Path,
-        verify_permissions: impl Fn(&Path, &str) -> Result<(), DynError>,
-        is_loaded_kid: impl Fn(&str) -> bool,
-    ) -> Result<PermissionsState, DynError> {
-        match load_permissions_file(path, verify_permissions, is_loaded_kid) {
-            Ok(state) => Ok(state),
-            Err(err) if is_not_found_error(err.as_ref()) => Ok(PermissionsState::default()),
-            Err(err) => Err(err),
-        }
-    }
 }
 
 impl Zeroize for PermissionsState {
@@ -228,92 +207,15 @@ impl Zeroize for KidPermission {
     }
 }
 
-pub fn load_permissions_state(
-    path: &Path,
-    verify_permissions: impl Fn(&Path, &str) -> Result<(), DynError>,
+pub(crate) fn validate_permission_clients(
+    client_inputs: Vec<PermissionClientInput>,
     is_loaded_kid: impl Fn(&str) -> bool,
 ) -> Result<PermissionsState, DynError> {
-    match load_permissions_file(path, verify_permissions, is_loaded_kid) {
-        Ok(state) => {
-            info!(
-                permissions_path = %path.display(),
-                clients_loaded = state.len(),
-                "permissions loaded"
-            );
-            Ok(state)
-        }
-        Err(err) if is_not_found_error(err.as_ref()) => {
-            warn!(
-                permissions_path = %path.display(),
-                "permissions file does not exist, only root api key is authorized"
-            );
-            Ok(PermissionsState::default())
-        }
-        Err(err) => Err(err),
-    }
-}
-
-fn load_permissions_file(
-    path: &Path,
-    verify_permissions: impl Fn(&Path, &str) -> Result<(), DynError>,
-    is_loaded_kid: impl Fn(&str) -> bool,
-) -> Result<PermissionsState, DynError> {
-    let content = fs::read_to_string(path).map_err(|err| {
-        if err.kind() == io::ErrorKind::NotFound {
-            Box::new(io::Error::new(
-                io::ErrorKind::NotFound,
-                "permissions file does not exist",
-            )) as DynError
-        } else {
-            Box::new(err) as DynError
-        }
-    })?;
-    verify_permissions(path, &content)?;
-    let permissions_file: PermissionsFile = serde_json::from_str(&content).map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("permissions file must be valid JSON: {err}"),
-        )) as DynError
-    })?;
-
-    validate_permissions_file(permissions_file, is_loaded_kid)
-}
-
-pub fn permissions_signature_path(path: &Path, configured_path: &Path) -> PathBuf {
-    if configured_path.is_absolute() {
-        configured_path.to_path_buf()
-    } else if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        parent.join(configured_path)
-    } else {
-        configured_path.to_path_buf()
-    }
-}
-
-pub fn canonical_permissions_json(content: &str) -> Result<String, DynError> {
-    let permissions_file: PermissionsFile = serde_json::from_str(content).map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("permissions file must be valid JSON: {err}"),
-        )) as DynError
-    })?;
-    protocol::validate_protocol_version("permissions.version", &permissions_file.version)?;
-
-    Ok(String::from_utf8(canonical::canonical_json_v1(&permissions_file)?)?)
-}
-
-fn validate_permissions_file(
-    permissions_file: PermissionsFile,
-    is_loaded_kid: impl Fn(&str) -> bool,
-) -> Result<PermissionsState, DynError> {
-    protocol::validate_protocol_version("permissions.version", &permissions_file.version)?;
-
     let mut seen_clients = HashSet::new();
     let mut seen_hashes = HashSet::new();
     let mut clients = Vec::new();
 
-    for client in permissions_file.clients {
+    for client in client_inputs {
         validation::validate_text_field("permissions.client", &client.client)?;
         validation::validate_symmetric_key("permissions.apikey_hash", &client.apikey_hash, 32)?;
         validation::validate_allowed_value(
@@ -454,9 +356,4 @@ fn invalid_permissions<T>(message: impl Into<String>) -> Result<T, DynError> {
         io::ErrorKind::InvalidInput,
         message.into(),
     )))
-}
-
-fn is_not_found_error(err: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
-    err.downcast_ref::<io::Error>()
-        .is_some_and(|err| err.kind() == io::ErrorKind::NotFound)
 }

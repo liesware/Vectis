@@ -18,12 +18,10 @@ DEFAULT_BASE_URL = "http://127.0.0.1:3000"
 DEFAULT_FINAL_APP_ADDR = "localhost:3999"
 INTERNAL_KEYS_KID_HEX_LEN = 64
 MESSAGE = "The things you own end up owning you."
-ROUTES_PATH = Path("routes.json")
-ROUTES_SIGN_PATH = Path("routes_sign.json")
-REMOTE_ROUTES_PATH = Path("remote_routes.json")
-REMOTE_ROUTES_SIGN_PATH = Path("remote_routes_sign.json")
-PERMISSIONS_PATH = Path("permissions.json")
-PERMISSIONS_SIGN_PATH = Path("permissions_sign.json")
+CONFIG_PATH = Path("config.json")
+CONFIG_SIGN_PATH = Path("config_sign.json")
+
+_CONFIG = {"version": "v1", "routes": [], "remote_routes": [], "permissions": []}
 
 KEY_CASES = [
     {
@@ -460,112 +458,64 @@ def restore_file(path, backup):
     path.write_text(backup, encoding="utf-8")
 
 
-def backup_routes_file():
-    return backup_file(ROUTES_PATH)
+def backup_config_file():
+    return backup_file(CONFIG_PATH)
 
 
-def backup_routes_sign_file():
-    return backup_file(ROUTES_SIGN_PATH)
+def backup_config_sign_file():
+    return backup_file(CONFIG_SIGN_PATH)
 
 
-def backup_remote_routes_file():
-    return backup_file(REMOTE_ROUTES_PATH)
+def restore_config_file(backup):
+    restore_file(CONFIG_PATH, backup)
 
 
-def backup_remote_routes_sign_file():
-    return backup_file(REMOTE_ROUTES_SIGN_PATH)
+def restore_config_sign_file(backup):
+    restore_file(CONFIG_SIGN_PATH, backup)
 
 
-def backup_permissions_file():
-    return backup_file(PERMISSIONS_PATH)
+def sign_config():
+    result = subprocess.run(
+        ["cargo", "run", "--", "config", "sign", "--output", "json"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise WorkflowError(
+            f"vectis config sign failed: stdout={result.stdout} stderr={result.stderr}"
+        )
 
 
-def backup_permissions_sign_file():
-    return backup_file(PERMISSIONS_SIGN_PATH)
-
-
-def restore_routes_file(backup):
-    restore_file(ROUTES_PATH, backup)
-
-
-def restore_routes_sign_file(backup):
-    restore_file(ROUTES_SIGN_PATH, backup)
-
-
-def restore_remote_routes_file(backup):
-    restore_file(REMOTE_ROUTES_PATH, backup)
-
-
-def restore_remote_routes_sign_file(backup):
-    restore_file(REMOTE_ROUTES_SIGN_PATH, backup)
-
-
-def restore_permissions_file(backup):
-    restore_file(PERMISSIONS_PATH, backup)
-
-
-def restore_permissions_sign_file(backup):
-    restore_file(PERMISSIONS_SIGN_PATH, backup)
+def write_config():
+    CONFIG_PATH.write_text(json.dumps(_CONFIG, indent=2), encoding="utf-8")
+    sign_config()
 
 
 def write_test_routes(key_ids, final_app_addr):
-    routes = {
-        "version": "v1",
-        "routes": [
-            {
-                "kid": key_id,
-                "final_app_addr": final_app_addr,
-                "final_app_path": "/message",
-            }
-            for key_id in key_ids
-        ]
-    }
-    ROUTES_PATH.write_text(json.dumps(routes, indent=2), encoding="utf-8")
-    sign_routes()
+    _CONFIG["routes"] = [
+        {
+            "kid": key_id,
+            "final_app_addr": final_app_addr,
+            "final_app_path": "/message",
+        }
+        for key_id in key_ids
+    ]
+    write_config()
 
 
 def write_test_remote_routes(key_ids, recipient_host, wildcard=False):
-    routes = {
-        "version": "v1",
-        "routes": [
-            {
-                "remote_kid": key_id,
-                "name": f"positive-{index}",
-                "remote_addr": recipient_host,
-                "allowed_local_kids": ["*"] if wildcard else [key_id],
-                "status": "active",
-            }
-            for index, key_id in enumerate(key_ids, start=1)
-        ]
-    }
-    REMOTE_ROUTES_PATH.write_text(json.dumps(routes, indent=2), encoding="utf-8")
-    sign_remote_routes()
-
-
-def sign_routes():
-    result = subprocess.run(
-        ["cargo", "run", "--", "routes", "sign", "--output", "json"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise WorkflowError(
-            f"vectis routes sign failed: stdout={result.stdout} stderr={result.stderr}"
-        )
-
-
-def sign_remote_routes():
-    result = subprocess.run(
-        ["cargo", "run", "--", "remote-routes", "sign", "--output", "json"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise WorkflowError(
-            f"vectis remote-routes sign failed: stdout={result.stdout} stderr={result.stderr}"
-        )
+    _CONFIG["remote_routes"] = [
+        {
+            "remote_kid": key_id,
+            "name": f"positive-{index}",
+            "remote_addr": recipient_host,
+            "allowed_local_kids": ["*"] if wildcard else [key_id],
+            "status": "active",
+        }
+        for index, key_id in enumerate(key_ids, start=1)
+    ]
+    write_config()
 
 
 def create_api_key_pair():
@@ -592,31 +542,9 @@ def create_api_key_pair():
     return api_key, api_key_hash
 
 
-def sign_permissions():
-    result = subprocess.run(
-        ["cargo", "run", "--", "permissions", "sign", "--output", "json"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise WorkflowError(
-            f"vectis permissions sign failed: stdout={result.stdout} stderr={result.stderr}"
-        )
-
-
 def write_permissions(clients):
-    PERMISSIONS_PATH.write_text(
-        json.dumps(
-            {
-                "version": "v1",
-                "clients": clients,
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-    sign_permissions()
+    _CONFIG["permissions"] = clients
+    write_config()
 
 
 def reload_permissions(client):
@@ -630,39 +558,36 @@ def reload_permissions(client):
 
 
 def clear_permissions_state(client):
-    backup = backup_permissions_file()
-    sign_backup = backup_permissions_sign_file()
-    PERMISSIONS_PATH.write_text('{"version":"v1","clients":[]}\n', encoding="utf-8")
-    sign_permissions()
+    saved = _CONFIG["permissions"]
+    _CONFIG["permissions"] = []
+    write_config()
     try:
         reload_permissions(client)
     finally:
-        restore_permissions_file(backup)
-        restore_permissions_sign_file(sign_backup)
+        _CONFIG["permissions"] = saved
+        write_config()
 
 
 def clear_routes_state(client):
-    backup = backup_routes_file()
-    sign_backup = backup_routes_sign_file()
-    ROUTES_PATH.write_text('{"version":"v1","routes":[]}\n', encoding="utf-8")
-    sign_routes()
+    saved = _CONFIG["routes"]
+    _CONFIG["routes"] = []
+    write_config()
     try:
         validate_routes_list(client.post("/routes/reload", {}, auth=True))
     finally:
-        restore_routes_file(backup)
-        restore_routes_sign_file(sign_backup)
+        _CONFIG["routes"] = saved
+        write_config()
 
 
 def clear_remote_routes_state(client):
-    backup = backup_remote_routes_file()
-    sign_backup = backup_remote_routes_sign_file()
-    REMOTE_ROUTES_PATH.write_text('{"version":"v1","routes":[]}\n', encoding="utf-8")
-    sign_remote_routes()
+    saved = _CONFIG["remote_routes"]
+    _CONFIG["remote_routes"] = []
+    write_config()
     try:
         validate_remote_routes_list(client.post("/remote-routes/reload", {}, auth=True))
     finally:
-        restore_remote_routes_file(backup)
-        restore_remote_routes_sign_file(sign_backup)
+        _CONFIG["remote_routes"] = saved
+        write_config()
 
 
 def sign_key(client, key_id, hash_alg, message_hash_hex):
@@ -920,18 +845,10 @@ def main():
     final_app = start_final_app(args.final_app_addr)
     apikey = require_apikey(args.apikey)
     client = Client(args.base_url, apikey)
-    routes_backup = backup_routes_file()
-    routes_sign_backup = backup_routes_sign_file()
-    remote_routes_backup = backup_remote_routes_file()
-    remote_routes_sign_backup = backup_remote_routes_sign_file()
-    permissions_backup = backup_permissions_file()
-    permissions_sign_backup = backup_permissions_sign_file()
-    atexit.register(restore_routes_file, routes_backup)
-    atexit.register(restore_routes_sign_file, routes_sign_backup)
-    atexit.register(restore_remote_routes_file, remote_routes_backup)
-    atexit.register(restore_remote_routes_sign_file, remote_routes_sign_backup)
-    atexit.register(restore_permissions_file, permissions_backup)
-    atexit.register(restore_permissions_sign_file, permissions_sign_backup)
+    config_backup = backup_config_file()
+    config_sign_backup = backup_config_sign_file()
+    atexit.register(restore_config_file, config_backup)
+    atexit.register(restore_config_sign_file, config_sign_backup)
     recipient_host = host_from_base_url(args.base_url)
     message = MESSAGE.encode("utf-8")
 
@@ -1117,15 +1034,13 @@ def main():
     passed_count += len(sign_rows)
     passed_count += len(verify_rows)
     print(f"SUMMARY positive passed={passed_count} failed=0")
-    restore_routes_file(routes_backup)
-    restore_routes_sign_file(routes_sign_backup)
-    clear_routes_state(client)
-    restore_remote_routes_file(remote_routes_backup)
-    restore_remote_routes_sign_file(remote_routes_sign_backup)
-    clear_remote_routes_state(client)
-    restore_permissions_file(permissions_backup)
-    restore_permissions_sign_file(permissions_sign_backup)
-    clear_permissions_state(client)
+    _CONFIG["routes"] = []
+    _CONFIG["remote_routes"] = []
+    _CONFIG["permissions"] = []
+    write_config()
+    client.post("/routes/reload", {}, auth=True)
+    restore_config_file(config_backup)
+    restore_config_sign_file(config_sign_backup)
     final_app.shutdown()
 
 

@@ -29,6 +29,7 @@ pub async fn run(command: &str, args: Vec<String>) -> Result<(), DynError> {
         "routes" => run_routes(args, output).await,
         "remote-routes" => run_remote_routes(args, output).await,
         "permissions" => run_permissions(args, output).await,
+        "config" => run_config(args, output).await,
         "pub" => run_pub(args, output).await,
         "sign" => run_sign(args, output).await,
         "message" => run_message(args, output).await,
@@ -45,6 +46,7 @@ pub fn print_help(command: &str) {
         "routes" => print_routes_help(),
         "remote-routes" => print_remote_routes_help(),
         "permissions" => print_permissions_help(),
+        "config" => print_config_help(),
         "pub" => print_pub_help(),
         "sign" => print_sign_help(),
         "message" => print_message_help(),
@@ -141,11 +143,6 @@ async fn run_lifecycle(args: Vec<String>, output: OutputFormat) -> Result<(), Dy
 
 async fn run_routes(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "routes command")?;
-    if subcommand == "sign" {
-        expect_no_args(&rest, "routes sign")?;
-        return run_routes_sign(output);
-    }
-
     expect_no_args(&rest, &format!("routes {subcommand}"))?;
     let client = CliHttpClient::from_env()?;
     match subcommand.as_str() {
@@ -167,11 +164,6 @@ async fn run_routes(args: Vec<String>, output: OutputFormat) -> Result<(), DynEr
 
 async fn run_remote_routes(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "remote-routes command")?;
-    if subcommand == "sign" {
-        expect_no_args(&rest, "remote-routes sign")?;
-        return run_remote_routes_sign(output);
-    }
-
     expect_no_args(&rest, &format!("remote-routes {subcommand}"))?;
     let client = CliHttpClient::from_env()?;
     match subcommand.as_str() {
@@ -191,69 +183,8 @@ async fn run_remote_routes(args: Vec<String>, output: OutputFormat) -> Result<()
     }
 }
 
-fn run_routes_sign(output: OutputFormat) -> Result<(), DynError> {
-    let config = config::app_config()?;
-    let init_state = init::load_init_state()?;
-    let routes_content = fs::read_to_string(&config.routes_path).map_err(|err| {
-        invalid_input(format!(
-            "VECTIS_ROUTES_PATH could not be read from {}: {err}",
-            config.routes_path.display()
-        ))
-    })?;
-    let token = ops::sign::sign_routes_file(&init_state, &config.routes_path, &routes_content)?;
-    let routes_sign_path =
-        crate::core::routes::routes_signature_path(&config.routes_path, &config.routes_sign_path);
-    let token_json = serde_json::to_string_pretty(&token)?;
-    fs::write(&routes_sign_path, token_json)?;
-
-    print_response(
-        &serde_json::to_string(&json!({
-            "status": "updated",
-            "routes_path": config.routes_path.display().to_string(),
-            "routes_sign_path": routes_sign_path.display().to_string(),
-        }))?,
-        output,
-    )
-}
-
-fn run_remote_routes_sign(output: OutputFormat) -> Result<(), DynError> {
-    let config = config::app_config()?;
-    let init_state = init::load_init_state()?;
-    let remote_routes_content = fs::read_to_string(&config.remote_routes_path).map_err(|err| {
-        invalid_input(format!(
-            "VECTIS_REMOTE_ROUTES_PATH could not be read from {}: {err}",
-            config.remote_routes_path.display()
-        ))
-    })?;
-    let token = ops::sign::sign_remote_routes_file(
-        &init_state,
-        &config.remote_routes_path,
-        &remote_routes_content,
-    )?;
-    let remote_routes_sign_path = crate::core::remote_routes::remote_routes_signature_path(
-        &config.remote_routes_path,
-        &config.remote_routes_sign_path,
-    );
-    let token_json = serde_json::to_string_pretty(&token)?;
-    fs::write(&remote_routes_sign_path, token_json)?;
-
-    print_response(
-        &serde_json::to_string(&json!({
-            "status": "updated",
-            "remote_routes_path": config.remote_routes_path.display().to_string(),
-            "remote_routes_sign_path": remote_routes_sign_path.display().to_string(),
-        }))?,
-        output,
-    )
-}
-
 async fn run_permissions(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "permissions command")?;
-    if subcommand == "sign" {
-        expect_no_args(&rest, "permissions sign")?;
-        return run_permissions_sign(output);
-    }
-
     expect_no_args(&rest, &format!("permissions {subcommand}"))?;
     let client = CliHttpClient::from_env()?;
     match subcommand.as_str() {
@@ -268,35 +199,61 @@ async fn run_permissions(args: Vec<String>, output: OutputFormat) -> Result<(), 
     }
 }
 
-fn run_permissions_sign(output: OutputFormat) -> Result<(), DynError> {
+async fn run_config(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+    let (subcommand, rest) = split_subcommand(args, "config command")?;
+    expect_no_args(&rest, &format!("config {subcommand}"))?;
+    match subcommand.as_str() {
+        "sign" => run_config_sign(output),
+        "list" => run_config_list(output),
+        "reload" => {
+            let client = CliHttpClient::from_env()?;
+            client
+                .send(Method::POST, "/routes/reload", true, None, output)
+                .await
+        }
+        _ => Err(invalid_input(format!("unknown config command: {subcommand}"))),
+    }
+}
+
+fn run_config_sign(output: OutputFormat) -> Result<(), DynError> {
     let config = config::app_config()?;
     let init_state = init::load_init_state()?;
-    let permissions_content = fs::read_to_string(&config.permissions_path).map_err(|err| {
+    let config_content = fs::read_to_string(&config.config_path).map_err(|err| {
         invalid_input(format!(
-            "VECTIS_PERMISSIONS_PATH could not be read from {}: {err}",
-            config.permissions_path.display()
+            "VECTIS_CONFIG_PATH could not be read from {}: {err}",
+            config.config_path.display()
         ))
     })?;
-    let token = ops::sign::sign_permissions_file(
-        &init_state,
-        &config.permissions_path,
-        &permissions_content,
-    )?;
-    let permissions_sign_path = crate::core::permissions::permissions_signature_path(
-        &config.permissions_path,
-        &config.permissions_sign_path,
+    let token = ops::sign::sign_config_file(&init_state, &config.config_path, &config_content)?;
+    let config_sign_path = crate::core::config_file::config_signature_path(
+        &config.config_path,
+        &config.config_sign_path,
     );
     let token_json = serde_json::to_string_pretty(&token)?;
-    fs::write(&permissions_sign_path, token_json)?;
+    fs::write(&config_sign_path, token_json)?;
 
     print_response(
         &serde_json::to_string(&json!({
             "status": "updated",
-            "permissions_path": config.permissions_path.display().to_string(),
-            "permissions_sign_path": permissions_sign_path.display().to_string(),
+            "config_path": config.config_path.display().to_string(),
+            "config_sign_path": config_sign_path.display().to_string(),
         }))?,
         output,
     )
+}
+
+fn run_config_list(output: OutputFormat) -> Result<(), DynError> {
+    let config = config::app_config()?;
+    let config_content = fs::read_to_string(&config.config_path).map_err(|err| {
+        invalid_input(format!(
+            "VECTIS_CONFIG_PATH could not be read from {}: {err}",
+            config.config_path.display()
+        ))
+    })?;
+    let value: Value = serde_json::from_str(&config_content)
+        .map_err(|err| invalid_input(format!("config file must be valid JSON: {err}")))?;
+
+    print_response(&serde_json::to_string(&value)?, output)
 }
 
 async fn run_pub(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
@@ -750,12 +707,12 @@ fn print_http_help() {
     println!("  {PROGRAM_NAME} lifecycle <kid> --status <status> --reason <reason>");
     println!("  {PROGRAM_NAME} routes list");
     println!("  {PROGRAM_NAME} routes reload");
-    println!("  {PROGRAM_NAME} routes sign");
     println!("  {PROGRAM_NAME} remote-routes list");
     println!("  {PROGRAM_NAME} remote-routes reload");
-    println!("  {PROGRAM_NAME} remote-routes sign");
     println!("  {PROGRAM_NAME} permissions reload");
-    println!("  {PROGRAM_NAME} permissions sign");
+    println!("  {PROGRAM_NAME} config sign");
+    println!("  {PROGRAM_NAME} config list");
+    println!("  {PROGRAM_NAME} config reload");
     println!("  {PROGRAM_NAME} pub <kid>");
     println!("  {PROGRAM_NAME} sign <kid> (--json <json>|--file <path>)");
     println!("  {PROGRAM_NAME} sign verify (--json <json>|--file <path>)");
@@ -869,14 +826,13 @@ fn print_routes_help() {
     println!("Usage:");
     println!("  {PROGRAM_NAME} routes list");
     println!("  {PROGRAM_NAME} routes reload");
-    println!("  {PROGRAM_NAME} routes sign");
     println!();
     println!("Lists or reloads final app routes through the HTTP API.");
+    println!("(Sign the unified config with `{PROGRAM_NAME} config sign`.)");
     println!();
     println!("Commands:");
     println!("  list                  GET /routes, requires VECTIS_APIKEY");
     println!("  reload                POST /routes/reload, requires VECTIS_APIKEY");
-    println!("  sign                  Signs VECTIS_ROUTES_PATH with init keys");
     println!();
     println!("Behavior:");
     println!("  list                  Returns routes currently loaded in memory");
@@ -897,14 +853,13 @@ fn print_remote_routes_help() {
     println!("Usage:");
     println!("  {PROGRAM_NAME} remote-routes list");
     println!("  {PROGRAM_NAME} remote-routes reload");
-    println!("  {PROGRAM_NAME} remote-routes sign");
     println!();
     println!("Lists or reloads authorized remote Vectis routes through the HTTP API.");
+    println!("(Sign the unified config with `{PROGRAM_NAME} config sign`.)");
     println!();
     println!("Commands:");
     println!("  list                  GET /remote-routes, requires VECTIS_APIKEY");
     println!("  reload                POST /remote-routes/reload, requires VECTIS_APIKEY");
-    println!("  sign                  Signs VECTIS_REMOTE_ROUTES_PATH with init keys");
     println!();
     println!("Behavior:");
     println!("  list                  Returns remote routes currently loaded in memory");
@@ -922,22 +877,41 @@ fn print_remote_routes_help() {
 fn print_permissions_help() {
     println!("Usage:");
     println!("  {PROGRAM_NAME} permissions reload");
-    println!("  {PROGRAM_NAME} permissions sign");
     println!();
-    println!("Reloads or signs API key permissions.");
+    println!("Reloads API key permissions from the signed config.");
+    println!("(Sign the unified config with `{PROGRAM_NAME} config sign`.)");
     println!();
     println!("Commands:");
     println!("  reload                POST /permissions/reload, requires admin VECTIS_APIKEY");
-    println!("  sign                  Signs VECTIS_PERMISSIONS_PATH with init keys");
     println!();
     println!("Environment:");
-    println!("  VECTIS_PERMISSIONS_PATH      Permissions JSON path, default permissions.json");
-    println!("  VECTIS_PERMISSIONS_SIGN_PATH Signature JSON path, default permissions_sign.json");
     println!("  VECTIS_APIKEY                Root or admin API key for reload");
     println!();
     println!("Examples:");
-    println!("  {PROGRAM_NAME} permissions sign");
     println!("  {PROGRAM_NAME} permissions reload");
+    print_output_help();
+}
+
+fn print_config_help() {
+    println!("Usage:");
+    println!("  {PROGRAM_NAME} config sign");
+    println!("  {PROGRAM_NAME} config list");
+    println!("  {PROGRAM_NAME} config reload");
+    println!();
+    println!("Signs, prints, or reloads the unified signed config file.");
+    println!();
+    println!("Commands:");
+    println!("  sign                  Signs VECTIS_CONFIG_PATH with init keys (local)");
+    println!("  list                  Prints VECTIS_CONFIG_PATH (local)");
+    println!("  reload                Reloads the config in the running service");
+    println!();
+    println!("Environment:");
+    println!("  VECTIS_CONFIG_PATH      Config JSON path, default config.json");
+    println!("  VECTIS_CONFIG_SIGN_PATH Signature JSON path, default config_sign.json");
+    println!();
+    println!("Examples:");
+    println!("  {PROGRAM_NAME} config sign");
+    println!("  {PROGRAM_NAME} config reload");
     print_output_help();
 }
 

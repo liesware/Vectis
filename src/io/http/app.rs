@@ -3,7 +3,7 @@ use artbox::{
 };
 
 use crate::core::validation;
-use crate::core::{config, permissions, remote_routes, routes, storage::StorageState};
+use crate::core::{config, storage::StorageState};
 use crate::error::DynError;
 use crate::ops::init::ValidatedInitState;
 use crate::ops::keys;
@@ -27,50 +27,18 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         crate::ops::internal_keys::InternalDerivedKeysState::from_init_state(&init_state)?,
     );
     let keys_db_state = keys::load_keys_db_state(&storage, &internal_keys).await?;
-    let permissions_state = Zeroizing::new(permissions::load_permissions_state(
-        &config.permissions_path,
-        |permissions_path, permissions_content| {
-            let permissions_sign_path = permissions::permissions_signature_path(
-                permissions_path,
-                &config.permissions_sign_path,
-            );
-            let signature_content = std::fs::read_to_string(&permissions_sign_path)?;
-            crate::ops::sign::verify_permissions_file_signature(
-                &init_state,
-                permissions_path,
-                permissions_content,
-                &signature_content,
-            )
-        },
-        |kid| keys_db_state.contains_id(kid),
-    )?);
-    let routes_state = routes::load_routes_state(
+    let config_state = crate::core::config_file::load_config_state(
         &config,
-        |routes_path, routes_content| {
-            let routes_sign_path =
-                routes::routes_signature_path(routes_path, &config.routes_sign_path);
-            let signature_content = std::fs::read_to_string(&routes_sign_path)?;
-            crate::ops::sign::verify_routes_file_signature(
-                &init_state,
-                routes_path,
-                routes_content,
-                &signature_content,
-            )
-        },
-        |kid| keys_db_state.contains_id(kid),
-    );
-    let remote_routes_state = remote_routes::load_remote_routes_state(
-        &config.remote_routes_path,
-        |remote_routes_path, remote_routes_content| {
-            let remote_routes_sign_path = remote_routes::remote_routes_signature_path(
-                remote_routes_path,
-                &config.remote_routes_sign_path,
+        |config_path, config_content| {
+            let config_sign_path = crate::core::config_file::config_signature_path(
+                config_path,
+                &config.config_sign_path,
             );
-            let signature_content = std::fs::read_to_string(&remote_routes_sign_path)?;
-            crate::ops::sign::verify_remote_routes_file_signature(
+            let signature_content = std::fs::read_to_string(&config_sign_path)?;
+            crate::ops::sign::verify_config_file_signature(
                 &init_state,
-                remote_routes_path,
-                remote_routes_content,
+                config_path,
+                config_content,
                 &signature_content,
             )
         },
@@ -86,12 +54,8 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         public_addr = %config.public_addr,
         final_app_addr = %config.final_app_addr,
         final_app_path = %config.final_app_path,
-        routes_path = %config.routes_path.display(),
-        routes_sign_path = %config.routes_sign_path.display(),
-        remote_routes_path = %config.remote_routes_path.display(),
-        remote_routes_sign_path = %config.remote_routes_sign_path.display(),
-        permissions_path = %config.permissions_path.display(),
-        permissions_sign_path = %config.permissions_sign_path.display(),
+        config_path = %config.config_path.display(),
+        config_sign_path = %config.config_sign_path.display(),
         storage_type = %config.storage_type,
         sqlite_path = %config.sqlite_path.display(),
         protocol_version = %config.protocol_version,
@@ -106,23 +70,17 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         "decrypted ops keys loaded into http state"
     );
     info!(
-        loaded_routes = routes_state.len(),
-        "final app routes loaded into http state"
-    );
-    info!(
-        loaded_remote_routes = remote_routes_state.len(),
-        "remote routes loaded into http state"
-    );
-    info!(
-        loaded_permission_clients = permissions_state.len(),
-        "permissions loaded into http state"
+        loaded_routes = config_state.routes.len(),
+        loaded_remote_routes = config_state.remote_routes.len(),
+        loaded_permission_clients = config_state.permissions.len(),
+        "signed config loaded into http state"
     );
     if metrics_handle.is_some() {
         crate::core::metrics::set_loaded_gauges(
             keys_db_state.len(),
-            routes_state.len(),
-            remote_routes_state.len(),
-            permissions_state.len(),
+            config_state.routes.len(),
+            config_state.remote_routes.len(),
+            config_state.permissions.len(),
         );
     }
     let app = super::router(super::HttpState::new(super::HttpStateInput {
@@ -132,15 +90,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         internal_keys,
         storage,
         keys_db_state,
-        permissions_state,
-        routes_state,
-        remote_routes_state,
-        permissions_path: config.permissions_path.clone(),
-        permissions_sign_path: config.permissions_sign_path.clone(),
-        routes_path: config.routes_path.clone(),
-        routes_sign_path: config.routes_sign_path.clone(),
-        remote_routes_path: config.remote_routes_path.clone(),
-        remote_routes_sign_path: config.remote_routes_sign_path.clone(),
+        config_state,
         started_at,
         metrics_handle,
     }));

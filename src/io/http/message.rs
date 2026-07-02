@@ -75,7 +75,13 @@ pub async fn receive_endpoint(
     let sender_host = prepared.sender_host().to_string();
     let sender_kid = prepared.sender_kid().to_string();
     let recipient_kid = prepared.recipient_kid().to_string();
-    let cached_sender = state.remote_public_keys(&sender_host, &sender_kid).await;
+    let cached_sender = match state.remote_peer_public_keys(&sender_kid).await {
+        Some(peer) => Some(
+            ops::message::remote_public_keys_from_peer(&sender_host, &sender_kid, &peer)
+                .map_err(|err| error_response(err.as_ref()))?,
+        ),
+        None => state.remote_public_keys(&sender_host, &sender_kid).await,
+    };
     let final_app_route = state.final_app_route_for(&recipient_kid).await;
 
     match ops::message::receive_message(prepared, cached_sender, final_app_route).await {

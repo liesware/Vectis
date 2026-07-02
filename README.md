@@ -59,7 +59,7 @@ Current capabilities include:
 - authenticated encryption for protected payloads;
 - local re-encryption before final app delivery;
 - internal encrypt/decrypt endpoints for local protected data;
-- signed route files for per-key final app delivery;
+- one unified signed config file (routes, remote routes, permissions);
 - SQLite-backed operational key storage;
 - storage abstraction designed for future backends;
 - startup, liveness, and readiness health probes;
@@ -219,16 +219,23 @@ vectis keys list
 vectis pub <kid>
 vectis message send <sender_kid> --file send-message.json
 vectis message decrypt --file encrypted-message.json
-vectis routes sign
-vectis permissions sign
+vectis config sign
+vectis config reload
 ```
 
 See the full API documentation in [Doc/API.md](Doc/API.md).
 
 ## Configuration
 
-Vectis reads configuration from process environment variables first, then from
-`.env`, then from built-in defaults.
+Runtime routing, remote peers, and API-key permissions live in a single **signed
+config file** (`config.json`, default path `VECTIS_CONFIG_PATH`) with `version`,
+`routes`, `remote_routes`, and `permissions` sections. Edit it, then sign it with
+`vectis config sign`. The full schema (every field, allowed values, and the
+optional peer `public_keys`) is documented under **Configuration File
+(`config.json`)** in [Doc/API.md](Doc/API.md).
+
+Vectis reads process/environment settings from process environment variables
+first, then from `.env`, then from built-in defaults.
 
 All Vectis-specific variables use the `VECTIS_` prefix.
 
@@ -247,10 +254,8 @@ Important variables include:
 - `VECTIS_UNSEAL_KEY`;
 - `VECTIS_UNSEAL_KEY_FILE`;
 - `VECTIS_SQLITE_PATH`;
-- `VECTIS_ROUTES_PATH`;
-- `VECTIS_ROUTES_SIGN_PATH`;
-- `VECTIS_PERMISSIONS_PATH`;
-- `VECTIS_PERMISSIONS_SIGN_PATH`;
+- `VECTIS_CONFIG_PATH`;
+- `VECTIS_CONFIG_SIGN_PATH`;
 - `VECTIS_DEFAULT_CRYPTO_PROFILE`;
 - `VECTIS_CRYPTO_POLICY`.
 

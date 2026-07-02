@@ -1,12 +1,9 @@
-use crate::core::{canonical, protocol, validation};
+use crate::core::validation;
 use crate::error::DynError;
 use crate::ops::keys;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
-use tracing::{info, warn};
 
 #[derive(Clone, Serialize)]
 pub struct RemoteRoute {
@@ -15,6 +12,30 @@ pub struct RemoteRoute {
     remote_addr: String,
     allowed_local_kids: Vec<String>,
     status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    public_keys: Option<PeerPublicKeys>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct PeerPublicKeys {
+    pub eddsa: PeerDerKey,
+    pub xecdh: PeerRawKey,
+    #[serde(rename = "ml-dsa")]
+    pub ml_dsa: PeerDerKey,
+    #[serde(rename = "ml-kem")]
+    pub ml_kem: PeerDerKey,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct PeerDerKey {
+    pub alg: String,
+    pub public_key_der_hex: String,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct PeerRawKey {
+    pub alg: String,
+    pub public_key_hex: String,
 }
 
 #[derive(Serialize)]
@@ -35,22 +56,18 @@ pub struct RemoteRoutesState {
 }
 
 #[derive(Deserialize, Serialize)]
-struct RemoteRoutesFile {
-    version: String,
-    routes: Vec<RemoteRouteInput>,
-}
-
-#[derive(Deserialize, Serialize)]
-struct RemoteRouteInput {
+pub(crate) struct RemoteRouteInput {
     remote_kid: String,
     name: String,
     remote_addr: String,
     allowed_local_kids: Vec<String>,
     status: String,
+    #[serde(default)]
+    public_keys: Option<PeerPublicKeys>,
 }
 
 impl RemoteRoutesState {
-    fn from_routes(routes: Vec<RemoteRoute>) -> Self {
+    pub(crate) fn from_routes(routes: Vec<RemoteRoute>) -> Self {
         let by_remote_kid = routes
             .iter()
             .enumerate()
@@ -101,25 +118,18 @@ impl RemoteRoutesState {
         self.routes.len()
     }
 
+    pub fn public_keys_for(&self, kid: &str) -> Option<&PeerPublicKeys> {
+        self.by_remote_kid
+            .get(kid)
+            .and_then(|index| self.routes.get(*index))
+            .filter(|route| route.status == "active")
+            .and_then(|route| route.public_keys.as_ref())
+    }
+
     pub fn list(&self) -> ListRemoteRoutesOutput {
         ListRemoteRoutesOutput {
             routes: self.routes.clone(),
         }
-    }
-
-    pub fn reload_from_file(
-        &self,
-        path: &Path,
-        verify_routes: impl Fn(&Path, &str) -> Result<(), DynError>,
-        local_kid_exists: impl Fn(&str) -> bool,
-    ) -> Result<RemoteRoutesState, DynError> {
-        let routes = match load_remote_routes_file(path, verify_routes, local_kid_exists) {
-            Ok(routes) => routes,
-            Err(err) if is_not_found_error(err.as_ref()) => Vec::new(),
-            Err(err) => return Err(err),
-        };
-
-        Ok(RemoteRoutesState::from_routes(routes))
     }
 }
 
@@ -132,6 +142,10 @@ impl RemoteRoute {
         &self.remote_addr
     }
 
+    pub fn public_keys(&self) -> Option<&PeerPublicKeys> {
+        self.public_keys.as_ref()
+    }
+
     fn allows_local_kid(&self, sender_kid: &str) -> bool {
         self.allowed_local_kids
             .iter()
@@ -139,87 +153,7 @@ impl RemoteRoute {
     }
 }
 
-pub fn load_remote_routes_state(
-    path: &Path,
-    verify_routes: impl Fn(&Path, &str) -> Result<(), DynError>,
-    local_kid_exists: impl Fn(&str) -> bool,
-) -> RemoteRoutesState {
-    match load_remote_routes_file(path, verify_routes, local_kid_exists) {
-        Ok(routes) => {
-            info!(
-                remote_routes_path = %path.display(),
-                remote_routes_loaded = routes.len(),
-                "remote routes loaded"
-            );
-            RemoteRoutesState::from_routes(routes)
-        }
-        Err(err) => {
-            warn!(
-                remote_routes_path = %path.display(),
-                error = %err,
-                "remote routes unavailable, using empty remote route list"
-            );
-            RemoteRoutesState::default()
-        }
-    }
-}
-
-fn load_remote_routes_file(
-    path: &Path,
-    verify_routes: impl Fn(&Path, &str) -> Result<(), DynError>,
-    local_kid_exists: impl Fn(&str) -> bool,
-) -> Result<Vec<RemoteRoute>, DynError> {
-    let content = fs::read_to_string(path).map_err(|err| {
-        if err.kind() == io::ErrorKind::NotFound {
-            Box::new(io::Error::new(
-                io::ErrorKind::NotFound,
-                "remote routes file does not exist",
-            )) as DynError
-        } else {
-            Box::new(err) as DynError
-        }
-    })?;
-    verify_routes(path, &content)?;
-    let routes_file: RemoteRoutesFile = serde_json::from_str(&content).map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("remote routes file must be valid JSON: {err}"),
-        )) as DynError
-    })?;
-
-    validate_remote_routes(routes_file.routes, local_kid_exists)
-}
-
-pub fn remote_routes_signature_path(path: &Path, configured_path: &Path) -> PathBuf {
-    if configured_path.is_absolute() {
-        configured_path.to_path_buf()
-    } else if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        parent.join(configured_path)
-    } else {
-        configured_path.to_path_buf()
-    }
-}
-
-pub fn canonical_remote_routes_json(content: &str) -> Result<String, DynError> {
-    let routes_file: RemoteRoutesFile = serde_json::from_str(content).map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("remote routes file must be valid JSON: {err}"),
-        )) as DynError
-    })?;
-    protocol::validate_protocol_version("remote_routes.version", &routes_file.version)?;
-
-    Ok(String::from_utf8(canonical::canonical_json_v1(&routes_file)?)?)
-}
-
-fn is_not_found_error(err: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
-    err.downcast_ref::<io::Error>()
-        .is_some_and(|err| err.kind() == io::ErrorKind::NotFound)
-}
-
-fn validate_remote_routes(
+pub(crate) fn validate_remote_routes(
     routes: Vec<RemoteRouteInput>,
     local_kid_exists: impl Fn(&str) -> bool,
 ) -> Result<Vec<RemoteRoute>, DynError> {
@@ -253,6 +187,9 @@ fn validate_remote_routes(
             &["active", "disabled"],
         )?;
         validate_allowed_local_kids(&route.allowed_local_kids, &local_kid_exists)?;
+        if let Some(public_keys) = &route.public_keys {
+            validate_peer_public_keys(public_keys)?;
+        }
 
         validated.push(RemoteRoute {
             remote_kid: route.remote_kid,
@@ -260,10 +197,52 @@ fn validate_remote_routes(
             remote_addr,
             allowed_local_kids: route.allowed_local_kids,
             status: route.status,
+            public_keys: route.public_keys,
         });
     }
 
     Ok(validated)
+}
+
+fn validate_peer_public_keys(keys: &PeerPublicKeys) -> Result<(), DynError> {
+    validation::validate_allowed_value(
+        "remote_routes.public_keys.eddsa.alg",
+        &keys.eddsa.alg,
+        &["Ed25519", "Ed448"],
+    )?;
+    validation::validate_hex_field(
+        "remote_routes.public_keys.eddsa.public_key_der_hex",
+        &keys.eddsa.public_key_der_hex,
+    )?;
+    validation::validate_allowed_value(
+        "remote_routes.public_keys.xecdh.alg",
+        &keys.xecdh.alg,
+        &["X25519", "X448"],
+    )?;
+    validation::validate_hex_field(
+        "remote_routes.public_keys.xecdh.public_key_hex",
+        &keys.xecdh.public_key_hex,
+    )?;
+    validation::validate_allowed_value(
+        "remote_routes.public_keys.ml-dsa.alg",
+        &keys.ml_dsa.alg,
+        &["ML-DSA-44", "ML-DSA-65", "ML-DSA-87"],
+    )?;
+    validation::validate_hex_field(
+        "remote_routes.public_keys.ml-dsa.public_key_der_hex",
+        &keys.ml_dsa.public_key_der_hex,
+    )?;
+    validation::validate_allowed_value(
+        "remote_routes.public_keys.ml-kem.alg",
+        &keys.ml_kem.alg,
+        &["ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"],
+    )?;
+    validation::validate_hex_field(
+        "remote_routes.public_keys.ml-kem.public_key_der_hex",
+        &keys.ml_kem.public_key_der_hex,
+    )?;
+
+    Ok(())
 }
 
 fn validate_allowed_local_kids(

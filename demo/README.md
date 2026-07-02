@@ -73,8 +73,9 @@ site. It receives a local encrypted delivery and must call its local Vectis
    }
    ```
 
-4. Vectis A resolves Clinic B's KID through signed `remote_routes.json`, then
-   obtains Clinic B's public keys from Vectis B if they are not already cached.
+4. Vectis A resolves Clinic B's KID through the signed `remote_routes` section of
+   `config.json`, using the peer's `public_keys` from the config when present, or
+   fetching them from Vectis B otherwise.
 
 5. Vectis A creates a protected message:
 
@@ -130,9 +131,9 @@ site. It receives a local encrypted delivery and must call its local Vectis
 - `site-b/`: Clinic B runtime state.
 - `setup.sh`: builds the Vectis binary and creates demo directories.
 - `create-keys.sh`: initializes both sites and creates one operational key per
-  clinic, then creates a non-root app API key and signed permissions for each
-  clinic app.
-- `configure-routes.sh`: creates and signs final app routes.
+  clinic, then creates a non-root app API key for each clinic app.
+- `configure-routes.sh`: builds and signs the unified `config.json` (routes,
+  remote routes, and permissions) for each site.
 - `start-vectis-a.sh`, `start-vectis-b.sh`: start each Vectis instance.
 - `start-app-a.sh`, `start-app-b.sh`: start each clinic final app.
 
@@ -156,9 +157,10 @@ bash demo/configure-routes.sh
 ```
 
 The scripts create local demo state under `demo/site-a` and `demo/site-b`,
-including encrypted `init.json`, `.unseal_key`, SQLite storage, routes, and
-route signatures. The scripts also create signed `permissions.json` files so
-each clinic app can only use `message` operations for its own local KID.
+including encrypted `init.json`, `.unseal_key`, SQLite storage, and a unified
+signed `config.json` (with `routes`, `remote_routes`, and `permissions`
+sections) so each clinic app can only use `message` operations for its own
+local KID.
 
 ## Run The Demo
 
@@ -231,6 +233,6 @@ final app decryption.
   state and are ignored by `demo/.gitignore`.
 - The root API key stays in each site's `.env` for administrative scripts.
   Clinic apps use separate client API keys from `app.env`; those keys are
-  authorized by signed `permissions.json` files.
+  authorized by the `permissions` section of each site's signed `config.json`.
 - The sample clinical record is fictional and should be replaced with synthetic
   test data for real demonstrations.

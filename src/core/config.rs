@@ -36,12 +36,8 @@ pub struct AppConfig {
     pub tls_cert_path: Option<PathBuf>,
     pub tls_key_path: Option<PathBuf>,
     pub tls_skip_verify: bool,
-    pub routes_path: PathBuf,
-    pub routes_sign_path: PathBuf,
-    pub remote_routes_path: PathBuf,
-    pub remote_routes_sign_path: PathBuf,
-    pub permissions_path: PathBuf,
-    pub permissions_sign_path: PathBuf,
+    pub config_path: PathBuf,
+    pub config_sign_path: PathBuf,
     pub api_key_hash: String,
     pub protocol_version: String,
     pub storage_type: String,
@@ -89,37 +85,13 @@ pub fn app_config() -> Result<AppConfig, DynError> {
         "VECTIS_TLS_SKIP_VERIFY",
         &config_value(&env_file, "VECTIS_TLS_SKIP_VERIFY", "false"),
     )?;
-    let routes_path = validate_routes_path(&config_value(
-        &env_file,
-        "VECTIS_ROUTES_PATH",
-        "routes.json",
-    ))?;
-    let routes_sign_path = validate_routes_path(&config_value(
-        &env_file,
-        "VECTIS_ROUTES_SIGN_PATH",
-        "routes_sign.json",
-    ))?;
-    let remote_routes_path = validate_remote_routes_path(&config_value(
-        &env_file,
-        "VECTIS_REMOTE_ROUTES_PATH",
-        "remote_routes.json",
-    ))?;
-    let remote_routes_sign_path = validate_remote_routes_path(&config_value(
-        &env_file,
-        "VECTIS_REMOTE_ROUTES_SIGN_PATH",
-        "remote_routes_sign.json",
-    ))?;
-    let permissions_path = validate_config_path(
-        "VECTIS_PERMISSIONS_PATH",
-        &config_value(&env_file, "VECTIS_PERMISSIONS_PATH", "permissions.json"),
+    let config_path = validate_config_path(
+        "VECTIS_CONFIG_PATH",
+        &config_value(&env_file, "VECTIS_CONFIG_PATH", "config.json"),
     )?;
-    let permissions_sign_path = validate_config_path(
-        "VECTIS_PERMISSIONS_SIGN_PATH",
-        &config_value(
-            &env_file,
-            "VECTIS_PERMISSIONS_SIGN_PATH",
-            "permissions_sign.json",
-        ),
+    let config_sign_path = validate_config_path(
+        "VECTIS_CONFIG_SIGN_PATH",
+        &config_value(&env_file, "VECTIS_CONFIG_SIGN_PATH", "config_sign.json"),
     )?;
     let api_key_hash = config_value(&env_file, "VECTIS_APIKEY_HASH", "");
     let protocol_version = config_value(&env_file, "VECTIS_PROTOCOL_VERSION", "v1");
@@ -203,12 +175,8 @@ pub fn app_config() -> Result<AppConfig, DynError> {
         tls_cert_path,
         tls_key_path,
         tls_skip_verify,
-        routes_path,
-        routes_sign_path,
-        remote_routes_path,
-        remote_routes_sign_path,
-        permissions_path,
-        permissions_sign_path,
+        config_path,
+        config_sign_path,
         api_key_hash,
         protocol_version,
         storage_type,
@@ -352,14 +320,6 @@ pub fn validate_bool_field(field: &str, value: &str) -> Result<bool, DynError> {
     validation::validate_allowed_value(field, value, &["true", "false"])?;
 
     Ok(value == "true")
-}
-
-fn validate_routes_path(value: &str) -> Result<PathBuf, DynError> {
-    validate_config_path("VECTIS_ROUTES_PATH", value)
-}
-
-fn validate_remote_routes_path(value: &str) -> Result<PathBuf, DynError> {
-    validate_config_path("VECTIS_REMOTE_ROUTES_PATH", value)
 }
 
 fn validate_config_path(field: &str, value: &str) -> Result<PathBuf, DynError> {

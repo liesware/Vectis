@@ -1,6 +1,5 @@
-use crate::core::{
-    canonical, config, crypto, permissions, protocol, remote_routes, routes, validation,
-};
+use crate::core::remote_routes::PeerPublicKeys;
+use crate::core::{canonical, config, config_file, crypto, protocol, validation};
 use crate::error::DynError;
 use crate::ops::contracts::{
     MessageHash, SignatureBlock, TimestampPayload, TimestampSignatures, VerificationStatus,
@@ -16,9 +15,7 @@ use tracing::{debug, info};
 pub use crate::ops::contracts::{SignInput, TimestampToken, VerificationOutput};
 
 const TIMESTAMP_TOKEN_TYPE: &str = "vectis-sign";
-const ROUTES_TOKEN_TYPE: &str = "vectis-routes";
-const REMOTE_ROUTES_TOKEN_TYPE: &str = "vectis-remote-routes";
-const PERMISSIONS_TOKEN_TYPE: &str = "vectis-permissions";
+const CONFIG_TOKEN_TYPE: &str = "vectis-config";
 const INIT_KEYS_KID: &str = "init-keys";
 const PAYLOAD_SERIAL_RANDOM_BYTES: usize = 32;
 
@@ -79,28 +76,28 @@ pub fn sign_timestamp(
     })
 }
 
-pub fn sign_routes_file(
+pub fn sign_config_file(
     init_state: &ValidatedInitState,
-    routes_path: &Path,
-    routes_content: &str,
+    config_path: &Path,
+    config_content: &str,
 ) -> Result<TimestampToken, DynError> {
-    let canonical_routes = routes::canonical_routes_json(routes_content)?;
+    let canonical_config = config_file::canonical_config_json(config_content)?;
     let message_hash = MessageHash {
         alg: config::INTERNAL_KEYS_HASH.to_string(),
         hex: hex::encode(crypto::hash_text(
             config::INTERNAL_KEYS_HASH,
-            &canonical_routes,
+            &canonical_config,
         )?),
     };
     let created_at = validation::current_timestamp()?;
     let info = validation::build_aad(&[
         ("version", protocol::PROTOCOL_VERSION_V1),
-        ("type", ROUTES_TOKEN_TYPE),
-        ("path", &routes_path.display().to_string()),
+        ("type", CONFIG_TOKEN_TYPE),
+        ("path", &config_path.display().to_string()),
     ]);
     let payload = TimestampPayload {
         version: protocol::PROTOCOL_VERSION_V1.to_string(),
-        token_type: String::from(ROUTES_TOKEN_TYPE),
+        token_type: String::from(CONFIG_TOKEN_TYPE),
         serial: create_payload_serial(&created_at)?,
         created_at,
         info,
@@ -120,42 +117,42 @@ pub fn sign_routes_file(
     })
 }
 
-pub fn verify_routes_file_signature(
+pub fn verify_config_file_signature(
     init_state: &ValidatedInitState,
-    routes_path: &Path,
-    routes_content: &str,
+    config_path: &Path,
+    config_content: &str,
     signature_content: &str,
 ) -> Result<(), DynError> {
     let token = parse_timestamp_token(serde_json::from_str(signature_content).map_err(|err| {
         Box::new(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("routes signature must be valid JSON: {err}"),
+            format!("config signature must be valid JSON: {err}"),
         )) as DynError
     })?)?;
-    validate_signed_payload_token(&token, ROUTES_TOKEN_TYPE, INIT_KEYS_KID)?;
+    validate_signed_payload_token(&token, CONFIG_TOKEN_TYPE, INIT_KEYS_KID)?;
     let expected_info = validation::build_aad(&[
         ("version", protocol::PROTOCOL_VERSION_V1),
-        ("type", ROUTES_TOKEN_TYPE),
-        ("path", &routes_path.display().to_string()),
+        ("type", CONFIG_TOKEN_TYPE),
+        ("path", &config_path.display().to_string()),
     ]);
     if token.payload.info != expected_info {
         return Err(Box::new(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "routes signature payload.info does not match routes path",
+            "config signature payload.info does not match config path",
         )));
     }
 
-    let canonical_routes = routes::canonical_routes_json(routes_content)?;
+    let canonical_config = config_file::canonical_config_json(config_content)?;
     let expected_hash = hex::encode(crypto::hash_text(
         config::INTERNAL_KEYS_HASH,
-        &canonical_routes,
+        &canonical_config,
     )?);
     if token.payload.message_hash.alg != config::INTERNAL_KEYS_HASH
         || token.payload.message_hash.hex != expected_hash
     {
         return Err(Box::new(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "routes signature message_hash does not match routes content",
+            "config signature message_hash does not match config content",
         )));
     }
 
@@ -168,199 +165,7 @@ pub fn verify_routes_file_signature(
     if status.eddsa != "ok" || status.ml_dsa != "ok" {
         return Err(Box::new(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "routes signature verification failed",
-        )));
-    }
-
-    Ok(())
-}
-
-pub fn sign_remote_routes_file(
-    init_state: &ValidatedInitState,
-    remote_routes_path: &Path,
-    remote_routes_content: &str,
-) -> Result<TimestampToken, DynError> {
-    let canonical_routes = remote_routes::canonical_remote_routes_json(remote_routes_content)?;
-    let message_hash = MessageHash {
-        alg: config::INTERNAL_KEYS_HASH.to_string(),
-        hex: hex::encode(crypto::hash_text(
-            config::INTERNAL_KEYS_HASH,
-            &canonical_routes,
-        )?),
-    };
-    let created_at = validation::current_timestamp()?;
-    let info = validation::build_aad(&[
-        ("version", protocol::PROTOCOL_VERSION_V1),
-        ("type", REMOTE_ROUTES_TOKEN_TYPE),
-        ("path", &remote_routes_path.display().to_string()),
-    ]);
-    let payload = TimestampPayload {
-        version: protocol::PROTOCOL_VERSION_V1.to_string(),
-        token_type: String::from(REMOTE_ROUTES_TOKEN_TYPE),
-        serial: create_payload_serial(&created_at)?,
-        created_at,
-        info,
-        kid: String::from(INIT_KEYS_KID),
-        message_hash,
-    };
-    let signatures = sign_hybrid_payload(
-        &payload,
-        init_state.init_keys.keys().eddsa(),
-        init_state.init_keys.keys().ml_dsa(),
-    )?;
-
-    Ok(TimestampToken {
-        version: protocol::PROTOCOL_VERSION_V1.to_string(),
-        payload,
-        signatures,
-    })
-}
-
-pub fn verify_remote_routes_file_signature(
-    init_state: &ValidatedInitState,
-    remote_routes_path: &Path,
-    remote_routes_content: &str,
-    signature_content: &str,
-) -> Result<(), DynError> {
-    let token = parse_timestamp_token(serde_json::from_str(signature_content).map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("remote routes signature must be valid JSON: {err}"),
-        )) as DynError
-    })?)?;
-    validate_signed_payload_token(&token, REMOTE_ROUTES_TOKEN_TYPE, INIT_KEYS_KID)?;
-    let expected_info = validation::build_aad(&[
-        ("version", protocol::PROTOCOL_VERSION_V1),
-        ("type", REMOTE_ROUTES_TOKEN_TYPE),
-        ("path", &remote_routes_path.display().to_string()),
-    ]);
-    if token.payload.info != expected_info {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "remote routes signature payload.info does not match remote routes path",
-        )));
-    }
-
-    let canonical_routes = remote_routes::canonical_remote_routes_json(remote_routes_content)?;
-    let expected_hash = hex::encode(crypto::hash_text(
-        config::INTERNAL_KEYS_HASH,
-        &canonical_routes,
-    )?);
-    if token.payload.message_hash.alg != config::INTERNAL_KEYS_HASH
-        || token.payload.message_hash.hex != expected_hash
-    {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "remote routes signature message_hash does not match remote routes content",
-        )));
-    }
-
-    let status = verify_hybrid_payload(
-        &token.payload,
-        &token.signatures,
-        init_state.init_keys.keys().eddsa(),
-        init_state.init_keys.keys().ml_dsa(),
-    )?;
-    if status.eddsa != "ok" || status.ml_dsa != "ok" {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "remote routes signature verification failed",
-        )));
-    }
-
-    Ok(())
-}
-
-pub fn sign_permissions_file(
-    init_state: &ValidatedInitState,
-    permissions_path: &Path,
-    permissions_content: &str,
-) -> Result<TimestampToken, DynError> {
-    let canonical_permissions = permissions::canonical_permissions_json(permissions_content)?;
-    let message_hash = MessageHash {
-        alg: config::INTERNAL_KEYS_HASH.to_string(),
-        hex: hex::encode(crypto::hash_text(
-            config::INTERNAL_KEYS_HASH,
-            &canonical_permissions,
-        )?),
-    };
-    let created_at = validation::current_timestamp()?;
-    let info = validation::build_aad(&[
-        ("version", protocol::PROTOCOL_VERSION_V1),
-        ("type", PERMISSIONS_TOKEN_TYPE),
-        ("path", &permissions_path.display().to_string()),
-    ]);
-    let payload = TimestampPayload {
-        version: protocol::PROTOCOL_VERSION_V1.to_string(),
-        token_type: String::from(PERMISSIONS_TOKEN_TYPE),
-        serial: create_payload_serial(&created_at)?,
-        created_at,
-        info,
-        kid: String::from(INIT_KEYS_KID),
-        message_hash,
-    };
-    let signatures = sign_hybrid_payload(
-        &payload,
-        init_state.init_keys.keys().eddsa(),
-        init_state.init_keys.keys().ml_dsa(),
-    )?;
-
-    Ok(TimestampToken {
-        version: protocol::PROTOCOL_VERSION_V1.to_string(),
-        payload,
-        signatures,
-    })
-}
-
-pub fn verify_permissions_file_signature(
-    init_state: &ValidatedInitState,
-    permissions_path: &Path,
-    permissions_content: &str,
-    signature_content: &str,
-) -> Result<(), DynError> {
-    let token = parse_timestamp_token(serde_json::from_str(signature_content).map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("permissions signature must be valid JSON: {err}"),
-        )) as DynError
-    })?)?;
-    validate_signed_payload_token(&token, PERMISSIONS_TOKEN_TYPE, INIT_KEYS_KID)?;
-    let expected_info = validation::build_aad(&[
-        ("version", protocol::PROTOCOL_VERSION_V1),
-        ("type", PERMISSIONS_TOKEN_TYPE),
-        ("path", &permissions_path.display().to_string()),
-    ]);
-    if token.payload.info != expected_info {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "permissions signature payload.info does not match permissions path",
-        )));
-    }
-
-    let canonical_permissions = permissions::canonical_permissions_json(permissions_content)?;
-    let expected_hash = hex::encode(crypto::hash_text(
-        config::INTERNAL_KEYS_HASH,
-        &canonical_permissions,
-    )?);
-    if token.payload.message_hash.alg != config::INTERNAL_KEYS_HASH
-        || token.payload.message_hash.hex != expected_hash
-    {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "permissions signature message_hash does not match permissions content",
-        )));
-    }
-
-    let status = verify_hybrid_payload(
-        &token.payload,
-        &token.signatures,
-        init_state.init_keys.keys().eddsa(),
-        init_state.init_keys.keys().ml_dsa(),
-    )?;
-    if status.eddsa != "ok" || status.ml_dsa != "ok" {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "permissions signature verification failed",
+            "config signature verification failed",
         )));
     }
 
@@ -407,10 +212,24 @@ fn verify_hybrid_payload(
     eddsa: &VariantDerKeyPair,
     ml_dsa: &VariantDerKeyPair,
 ) -> Result<VerificationStatus, DynError> {
+    verify_payload_with_public_keys(
+        payload,
+        signatures,
+        eddsa.public_key_der_hex(),
+        ml_dsa.public_key_der_hex(),
+    )
+}
+
+fn verify_payload_with_public_keys(
+    payload: &TimestampPayload,
+    signatures: &TimestampSignatures,
+    eddsa_public_key_der_hex: &str,
+    ml_dsa_public_key_der_hex: &str,
+) -> Result<VerificationStatus, DynError> {
     let payload_bytes = canonical::canonical_json_v1(payload)?;
     let payload_text = std::str::from_utf8(&payload_bytes)?;
-    let eddsa_public_key = crypto::load_public_key_der_hex(eddsa.public_key_der_hex())?;
-    let ml_dsa_public_key = crypto::load_public_key_der_hex(ml_dsa.public_key_der_hex())?;
+    let eddsa_public_key = crypto::load_public_key_der_hex(eddsa_public_key_der_hex)?;
+    let ml_dsa_public_key = crypto::load_public_key_der_hex(ml_dsa_public_key_der_hex)?;
     let eddsa_signature = hex::decode(&signatures.eddsa.sig)?;
     let ml_dsa_signature = hex::decode(&signatures.ml_dsa.sig)?;
     let eddsa_valid = crypto::verify_message(&eddsa_public_key, payload_text, &eddsa_signature)?;
@@ -507,6 +326,54 @@ pub fn verify_timestamp(
         ml_dsa = status_text(ml_dsa_valid),
         valid = eddsa_valid && ml_dsa_valid,
         "timestamp token verified"
+    );
+
+    if !eddsa_valid || !ml_dsa_valid {
+        return Ok(VerificationOutput {
+            status,
+            valid: String::from("fail"),
+        });
+    }
+
+    Ok(VerificationOutput {
+        status: VerificationStatus {
+            eddsa: String::from("ok"),
+            ml_dsa: String::from("ok"),
+        },
+        valid: String::from("ok"),
+    })
+}
+
+pub fn verify_timestamp_with_peer_keys(
+    token: &TimestampToken,
+    peer: &PeerPublicKeys,
+) -> Result<VerificationOutput, DynError> {
+    validate_timestamp_token(token)?;
+    if token.signatures.eddsa.alg != peer.eddsa.alg {
+        return Err(Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "signatures.eddsa.alg does not match peer public key",
+        )));
+    }
+    if token.signatures.ml_dsa.alg != peer.ml_dsa.alg {
+        return Err(Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "signatures.ml-dsa.alg does not match peer public key",
+        )));
+    }
+
+    let status = verify_payload_with_public_keys(
+        &token.payload,
+        &token.signatures,
+        &peer.eddsa.public_key_der_hex,
+        &peer.ml_dsa.public_key_der_hex,
+    )?;
+    let eddsa_valid = status.eddsa == "ok";
+    let ml_dsa_valid = status.ml_dsa == "ok";
+    info!(
+        token_kid = %token.kid(),
+        valid = eddsa_valid && ml_dsa_valid,
+        "timestamp token verified against peer public keys"
     );
 
     if !eddsa_valid || !ml_dsa_valid {

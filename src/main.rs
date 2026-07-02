@@ -49,7 +49,7 @@ async fn main() -> Result<(), DynError> {
         }
         Some(
             command @ ("health" | "test" | "keys" | "lifecycle" | "routes" | "remote-routes"
-            | "permissions" | "pub" | "sign" | "message"),
+            | "permissions" | "config" | "pub" | "sign" | "message"),
         ) => {
             io::cli::http::run(command, args.collect()).await?;
         }
@@ -80,9 +80,10 @@ fn print_help() {
     println!("  test                  Call protected test endpoints through HTTP");
     println!("  keys                  Create, list, or reload operational keys through HTTP");
     println!("  lifecycle             Update operational key lifecycle metadata");
-    println!("  routes                List, reload, or sign final app routes");
-    println!("  remote-routes         List, reload, or sign remote Vectis routes");
-    println!("  permissions           Reload or sign API key permissions");
+    println!("  routes                List or reload final app routes");
+    println!("  remote-routes         List or reload remote Vectis routes");
+    println!("  permissions           Reload API key permissions");
+    println!("  config                Sign, list, or reload the unified signed config");
     println!("  pub                   Fetch public keys through HTTP");
     println!("  sign                  Create or verify timestamp signatures through HTTP");
     println!("  message               Send, receive, encrypt, or decrypt messages through HTTP");
@@ -95,7 +96,7 @@ fn print_help() {
     println!("  {PROGRAM_NAME} keys create --tag payments --profile hybrid-high-assurance-v1");
     println!("  {PROGRAM_NAME} lifecycle <kid> --status disabled --reason maintenance");
     println!("  {PROGRAM_NAME} routes list");
-    println!("  {PROGRAM_NAME} permissions sign");
+    println!("  {PROGRAM_NAME} config sign");
     println!("  {PROGRAM_NAME} sign <kid> --file sign-request.json");
     println!();
     println!("Help:");
@@ -108,6 +109,7 @@ fn print_help() {
     println!("  {PROGRAM_NAME} help routes");
     println!("  {PROGRAM_NAME} help remote-routes");
     println!("  {PROGRAM_NAME} help permissions");
+    println!("  {PROGRAM_NAME} help config");
     println!("  {PROGRAM_NAME} help pub");
     println!("  {PROGRAM_NAME} help sign");
     println!("  {PROGRAM_NAME} help message");
@@ -125,7 +127,7 @@ fn print_command_help(command: &str) {
         "init" => print_init_help(),
         "apikey" => io::cli::apikey::print_help(),
         "health" | "test" | "keys" | "lifecycle" | "routes" | "remote-routes" | "permissions"
-        | "pub" | "sign" | "message" => io::cli::http::print_help(command),
+        | "config" | "pub" | "sign" | "message" => io::cli::http::print_help(command),
         "-h" | "--help" | "help" => print_help(),
         command => {
             eprintln!("unknown help command: {command}\n");

@@ -1,0 +1,153 @@
+use crate::core::{canonical, config, permissions, protocol, remote_routes, routes};
+use crate::error::DynError;
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+use tracing::{info, warn};
+use zeroize::Zeroize;
+
+#[derive(Deserialize, Serialize)]
+pub struct ConfigFile {
+    version: String,
+    #[serde(default)]
+    routes: Vec<routes::RouteInput>,
+    #[serde(default)]
+    remote_routes: Vec<remote_routes::RemoteRouteInput>,
+    #[serde(default)]
+    permissions: Vec<permissions::PermissionClientInput>,
+}
+
+pub struct ConfigState {
+    pub routes: routes::RoutesState,
+    pub remote_routes: remote_routes::RemoteRoutesState,
+    pub permissions: permissions::PermissionsState,
+}
+
+impl Zeroize for ConfigState {
+    fn zeroize(&mut self) {
+        self.permissions.zeroize();
+    }
+}
+
+pub fn config_signature_path(path: &Path, configured_path: &Path) -> PathBuf {
+    if configured_path.is_absolute() {
+        configured_path.to_path_buf()
+    } else if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        parent.join(configured_path)
+    } else {
+        configured_path.to_path_buf()
+    }
+}
+
+pub fn canonical_config_json(content: &str) -> Result<String, DynError> {
+    let config_file: ConfigFile = serde_json::from_str(content).map_err(|err| {
+        Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("config file must be valid JSON: {err}"),
+        )) as DynError
+    })?;
+    protocol::validate_protocol_version("config.version", &config_file.version)?;
+
+    Ok(String::from_utf8(canonical::canonical_json_v1(&config_file)?)?)
+}
+
+pub fn load_config_state(
+    config: &config::AppConfig,
+    verify_config: impl Fn(&Path, &str) -> Result<(), DynError>,
+    is_loaded_kid: impl Fn(&str) -> bool,
+) -> ConfigState {
+    match load_config_file(&config.config_path, verify_config, config, &is_loaded_kid) {
+        Ok(state) => {
+            info!(
+                config_path = %config.config_path.display(),
+                routes_loaded = state.routes.len(),
+                remote_routes_loaded = state.remote_routes.len(),
+                clients_loaded = state.permissions.len(),
+                "signed config loaded"
+            );
+            state
+        }
+        Err(err) => {
+            warn!(
+                config_path = %config.config_path.display(),
+                error = %err,
+                "signed config unavailable, using empty defaults"
+            );
+            empty_config_state(config)
+        }
+    }
+}
+
+pub fn reload_config_state(
+    config: &config::AppConfig,
+    verify_config: impl Fn(&Path, &str) -> Result<(), DynError>,
+    is_loaded_kid: impl Fn(&str) -> bool,
+) -> Result<ConfigState, DynError> {
+    match load_config_file(&config.config_path, verify_config, config, &is_loaded_kid) {
+        Ok(state) => Ok(state),
+        Err(err) if is_not_found_error(err.as_ref()) => Ok(empty_config_state(config)),
+        Err(err) => Err(err),
+    }
+}
+
+fn load_config_file(
+    path: &Path,
+    verify_config: impl Fn(&Path, &str) -> Result<(), DynError>,
+    config: &config::AppConfig,
+    is_loaded_kid: &impl Fn(&str) -> bool,
+) -> Result<ConfigState, DynError> {
+    let content = fs::read_to_string(path).map_err(|err| {
+        if err.kind() == io::ErrorKind::NotFound {
+            Box::new(io::Error::new(
+                io::ErrorKind::NotFound,
+                "config file does not exist",
+            )) as DynError
+        } else {
+            Box::new(err) as DynError
+        }
+    })?;
+    verify_config(path, &content)?;
+    let config_file: ConfigFile = serde_json::from_str(&content).map_err(|err| {
+        Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("config file must be valid JSON: {err}"),
+        )) as DynError
+    })?;
+    protocol::validate_protocol_version("config.version", &config_file.version)?;
+
+    let validated_routes = routes::validate_routes(config_file.routes, is_loaded_kid)?;
+    let validated_remote_routes =
+        remote_routes::validate_remote_routes(config_file.remote_routes, is_loaded_kid)?;
+    let validated_permissions =
+        permissions::validate_permission_clients(config_file.permissions, is_loaded_kid)?;
+
+    Ok(ConfigState {
+        routes: routes::RoutesState::from_parts(
+            config.final_app_addr.clone(),
+            config.final_app_path.clone(),
+            validated_routes,
+        ),
+        remote_routes: remote_routes::RemoteRoutesState::from_routes(validated_remote_routes),
+        permissions: validated_permissions,
+    })
+}
+
+fn empty_config_state(config: &config::AppConfig) -> ConfigState {
+    ConfigState {
+        routes: routes::RoutesState::from_parts(
+            config.final_app_addr.clone(),
+            config.final_app_path.clone(),
+            Vec::new(),
+        ),
+        remote_routes: remote_routes::RemoteRoutesState::default(),
+        permissions: permissions::PermissionsState::default(),
+    }
+}
+
+fn is_not_found_error(err: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
+    err.downcast_ref::<io::Error>()
+        .is_some_and(|err| err.kind() == io::ErrorKind::NotFound)
+}

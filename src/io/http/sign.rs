@@ -70,10 +70,6 @@ pub async fn sign_verification_endpoint(
     ops::sign::validate_timestamp_token(&request).map_err(|err| error_response(err.as_ref()))?;
 
     let kid = request.kid().to_string();
-    state
-        .ensure_keys_db_entry(&kid)
-        .await
-        .map_err(|err| error_response(err.as_ref()))?;
     info!(
         endpoint = "/sign/verification",
         kid = %kid,
@@ -85,11 +81,21 @@ pub async fn sign_verification_endpoint(
         ml_dsa_sig_len = request.signatures.ml_dsa.sig.len(),
         "sign verification request accepted"
     );
-    let result = state
-        .with_keys_db_state(|keys_db_state| {
-            ops::sign::verify_timestamp_from_state(keys_db_state, &request)
-        })
-        .await;
+    // Resolve the signer key locally first; if the kid is not local, fall back
+    // to a trusted peer's public keys from the signed config (remote_routes).
+    let result = match state.ensure_keys_db_entry(&kid).await {
+        Ok(()) => {
+            state
+                .with_keys_db_state(|keys_db_state| {
+                    ops::sign::verify_timestamp_from_state(keys_db_state, &request)
+                })
+                .await
+        }
+        Err(local_err) => match state.remote_peer_public_keys(&kid).await {
+            Some(peer) => ops::sign::verify_timestamp_with_peer_keys(&request, &peer),
+            None => Err(local_err),
+        },
+    };
 
     match result {
         Ok(response) => {

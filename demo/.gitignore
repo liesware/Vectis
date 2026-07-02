@@ -3,12 +3,9 @@ site-*/.env
 site-*/.unseal_key
 site-*/app.env
 site-*/init.json
-site-*/routes.json
-site-*/routes_sign.json
-site-*/remote_routes.json
-site-*/remote_routes_sign.json
-site-*/permissions.json
-site-*/permissions_sign.json
+site-*/config.json
+site-*/config_sign.json
+site-*/pub.json
 site-*/db/*.db
 site-*/logs/
 __pycache__

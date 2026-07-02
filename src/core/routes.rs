@@ -1,12 +1,9 @@
-use crate::core::{canonical, config, protocol, validation};
+use crate::core::{config, validation};
 use crate::error::DynError;
 use crate::ops::keys;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
-use tracing::{info, warn};
 
 #[derive(Clone, Serialize)]
 pub struct FinalAppRoute {
@@ -33,19 +30,25 @@ pub struct RoutesState {
 }
 
 #[derive(Deserialize, Serialize)]
-struct RoutesFile {
-    version: String,
-    routes: Vec<RouteInput>,
-}
-
-#[derive(Deserialize, Serialize)]
-struct RouteInput {
+pub(crate) struct RouteInput {
     kid: String,
     final_app_addr: String,
     final_app_path: String,
 }
 
 impl RoutesState {
+    pub(crate) fn from_parts(
+        default_addr: String,
+        default_path: String,
+        routes: Vec<FinalAppRoute>,
+    ) -> Self {
+        Self {
+            default_addr,
+            default_path,
+            routes,
+        }
+    }
+
     pub fn route_for(&self, kid: &str) -> FinalAppRoute {
         self.routes
             .iter()
@@ -67,25 +70,6 @@ impl RoutesState {
             routes: self.routes.clone(),
         }
     }
-
-    pub fn reload_from_file(
-        &self,
-        path: &Path,
-        verify_routes: impl Fn(&Path, &str) -> Result<(), DynError>,
-        is_loaded_kid: impl Fn(&str) -> bool,
-    ) -> Result<RoutesState, DynError> {
-        let routes = match load_routes_file(path, verify_routes, is_loaded_kid) {
-            Ok(routes) => routes,
-            Err(err) if is_not_found_error(err.as_ref()) => Vec::new(),
-            Err(err) => return Err(err),
-        };
-
-        Ok(RoutesState {
-            default_addr: self.default_addr.clone(),
-            default_path: self.default_path.clone(),
-            routes,
-        })
-    }
 }
 
 impl FinalAppRoute {
@@ -102,97 +86,7 @@ impl FinalAppRoute {
     }
 }
 
-pub fn load_routes_state(
-    config: &config::AppConfig,
-    verify_routes: impl Fn(&Path, &str) -> Result<(), DynError>,
-    is_loaded_kid: impl Fn(&str) -> bool,
-) -> RoutesState {
-    match load_routes_file(&config.routes_path, verify_routes, is_loaded_kid) {
-        Ok(routes) => {
-            info!(
-                routes_path = %config.routes_path.display(),
-                routes_loaded = routes.len(),
-                "final app routes loaded"
-            );
-            RoutesState {
-                default_addr: config.final_app_addr.clone(),
-                default_path: config.final_app_path.clone(),
-                routes,
-            }
-        }
-        Err(err) => {
-            warn!(
-                routes_path = %config.routes_path.display(),
-                error = %err,
-                final_app_addr = %config.final_app_addr,
-                final_app_path = %config.final_app_path,
-                "final app routes unavailable, using default route"
-            );
-            RoutesState {
-                default_addr: config.final_app_addr.clone(),
-                default_path: config.final_app_path.clone(),
-                routes: Vec::new(),
-            }
-        }
-    }
-}
-
-fn load_routes_file(
-    path: &Path,
-    verify_routes: impl Fn(&Path, &str) -> Result<(), DynError>,
-    is_loaded_kid: impl Fn(&str) -> bool,
-) -> Result<Vec<FinalAppRoute>, DynError> {
-    let content = fs::read_to_string(path).map_err(|err| {
-        if err.kind() == io::ErrorKind::NotFound {
-            Box::new(io::Error::new(
-                io::ErrorKind::NotFound,
-                "routes file does not exist",
-            )) as DynError
-        } else {
-            Box::new(err) as DynError
-        }
-    })?;
-    verify_routes(path, &content)?;
-    let routes_file: RoutesFile = serde_json::from_str(&content).map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("routes file must be valid JSON: {err}"),
-        )) as DynError
-    })?;
-
-    validate_routes(routes_file.routes, is_loaded_kid)
-}
-
-pub fn routes_signature_path(path: &Path, configured_path: &Path) -> PathBuf {
-    if configured_path.is_absolute() {
-        configured_path.to_path_buf()
-    } else if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        parent.join(configured_path)
-    } else {
-        configured_path.to_path_buf()
-    }
-}
-
-pub fn canonical_routes_json(content: &str) -> Result<String, DynError> {
-    let routes_file: RoutesFile = serde_json::from_str(content).map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("routes file must be valid JSON: {err}"),
-        )) as DynError
-    })?;
-    protocol::validate_protocol_version("routes.version", &routes_file.version)?;
-
-    Ok(String::from_utf8(canonical::canonical_json_v1(&routes_file)?)?)
-}
-
-fn is_not_found_error(err: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
-    err.downcast_ref::<io::Error>()
-        .is_some_and(|err| err.kind() == io::ErrorKind::NotFound)
-}
-
-fn validate_routes(
+pub(crate) fn validate_routes(
     routes: Vec<RouteInput>,
     is_loaded_kid: impl Fn(&str) -> bool,
 ) -> Result<Vec<FinalAppRoute>, DynError> {

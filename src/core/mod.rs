@@ -1,6 +1,7 @@
 pub mod audit;
 pub mod canonical;
 pub mod config;
+pub mod config_file;
 pub mod crypto;
 pub mod http_client;
 pub mod logging;

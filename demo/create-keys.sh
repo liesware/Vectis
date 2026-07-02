@@ -65,35 +65,6 @@ create_client_api_key_pair() {
   (cd "${site_dir}" && ../bin/vectis apikey create --output json)
 }
 
-write_permissions() {
-  local site="$1"
-  local client="$2"
-  local apikey_hash="$3"
-  local kid="$4"
-  local site_dir="${SCRIPT_DIR}/${site}"
-
-  cat > "${site_dir}/permissions.json" <<JSON
-{
-  "version": "v1",
-  "clients": [
-    {
-      "client": "${client}",
-      "apikey_hash": "${apikey_hash}",
-      "status": "active",
-      "permissions": [
-        {
-          "kid": "${kid}",
-          "actions": ["message"]
-        }
-      ]
-    }
-  ]
-}
-JSON
-
-  (cd "${site_dir}" && ../bin/vectis permissions sign --output json >/dev/null)
-}
-
 wait_ready() {
   local url="$1"
   python3 - "${url}" <<'PY'
@@ -124,12 +95,9 @@ prepare_site() {
   init_db "${site_dir}"
   rm -f \
     "${site_dir}/init.json" \
-    "${site_dir}/routes.json" \
-    "${site_dir}/routes_sign.json" \
-    "${site_dir}/remote_routes.json" \
-    "${site_dir}/remote_routes_sign.json" \
-    "${site_dir}/permissions.json" \
-    "${site_dir}/permissions_sign.json" \
+    "${site_dir}/config.json" \
+    "${site_dir}/config_sign.json" \
+    "${site_dir}/pub.json" \
     "${site_dir}/.unseal_key"
 
   local init_output
@@ -187,6 +155,11 @@ create_site_key() {
     return 1
   fi
 
+  # Capture this site's public keys (from /pub) while its server is up, so
+  # configure-routes.sh can embed them into the peer's signed config.
+  local base="${ready_url%/healthz/ready}"
+  curl -s "${base}/pub/${kid}" > "${SCRIPT_DIR}/${site}/pub.json"
+
   stop_vectis "${pid}"
   printf '%s\n' "${kid}"
 }
@@ -203,9 +176,6 @@ app_apikey_hash_a="$(printf '%s\n' "${app_api_output_a}" | json_field "VECTIS_AP
 app_apikey_b="$(printf '%s\n' "${app_api_output_b}" | json_field "VECTIS_APIKEY")"
 app_apikey_hash_b="$(printf '%s\n' "${app_api_output_b}" | json_field "VECTIS_APIKEY_HASH")"
 
-write_permissions "site-a" "clinic-a-app" "${app_apikey_hash_a}" "${kid_a}"
-write_permissions "site-b" "clinic-b-app" "${app_apikey_hash_b}" "${kid_b}"
-
 cat > "${SCRIPT_DIR}/site-a/app.env" <<ENV
 APP_NAME=clinic-a
 APP_BIND_ADDR=127.0.0.1:4001
@@ -215,6 +185,8 @@ REMOTE_APP_NAME=clinic-b
 REMOTE_VECTIS_HOST=127.0.0.1:3002
 REMOTE_KID=${kid_b}
 VECTIS_APIKEY=${app_apikey_a}
+APP_CLIENT=clinic-a-app
+APP_APIKEY_HASH=${app_apikey_hash_a}
 ENV
 
 cat > "${SCRIPT_DIR}/site-b/app.env" <<ENV
@@ -226,12 +198,11 @@ REMOTE_APP_NAME=clinic-a
 REMOTE_VECTIS_HOST=127.0.0.1:3001
 REMOTE_KID=${kid_a}
 VECTIS_APIKEY=${app_apikey_b}
+APP_CLIENT=clinic-b-app
+APP_APIKEY_HASH=${app_apikey_hash_b}
 ENV
 
 echo "Created demo keys:"
 echo "  site-a kid: ${kid_a}"
 echo "  site-b kid: ${kid_b}"
-echo "Created and signed permissions:"
-echo "  site-a client: clinic-a-app -> message on ${kid_a}"
-echo "  site-b client: clinic-b-app -> message on ${kid_b}"
 echo "Next: bash demo/configure-routes.sh"

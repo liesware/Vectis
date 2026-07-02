@@ -22,9 +22,10 @@ mod sign;
 mod test;
 
 use crate::core::config::AppConfig;
-use crate::core::permissions::{AuthenticatedClient, PermissionsState};
-use crate::core::remote_routes::{RemoteRoute, RemoteRoutesState};
-use crate::core::routes::{FinalAppRoute, RoutesState};
+use crate::core::config_file::ConfigState;
+use crate::core::permissions::AuthenticatedClient;
+use crate::core::remote_routes::{PeerPublicKeys, RemoteRoute};
+use crate::core::routes::FinalAppRoute;
 use crate::core::storage::StorageState;
 use crate::error::DynError;
 use crate::ops::init::{InitValidationOutput, ValidatedInitState};
@@ -32,7 +33,6 @@ use crate::ops::internal_keys::InternalDerivedKeysState;
 use crate::ops::keys::{KeysDbState, LoadedOpsKey};
 use crate::ops::message::{RemotePublicKeys, RemotePublicKeysState};
 use metrics_exporter_prometheus::PrometheusHandle;
-use std::path::PathBuf;
 
 pub use app::run;
 
@@ -46,15 +46,7 @@ pub struct HttpState {
     started_at: Arc<String>,
     keys_db_state: Arc<RwLock<Zeroizing<KeysDbState>>>,
     remote_public_keys_state: Arc<RwLock<Zeroizing<RemotePublicKeysState>>>,
-    permissions_state: Arc<RwLock<Zeroizing<PermissionsState>>>,
-    routes_state: Arc<RwLock<RoutesState>>,
-    remote_routes_state: Arc<RwLock<RemoteRoutesState>>,
-    permissions_path: Arc<PathBuf>,
-    permissions_sign_path: Arc<PathBuf>,
-    routes_path: Arc<PathBuf>,
-    routes_sign_path: Arc<PathBuf>,
-    remote_routes_path: Arc<PathBuf>,
-    remote_routes_sign_path: Arc<PathBuf>,
+    config_state: Arc<RwLock<Zeroizing<ConfigState>>>,
     metrics_handle: Option<Arc<PrometheusHandle>>,
 }
 
@@ -65,15 +57,7 @@ struct HttpStateInput {
     internal_keys: Zeroizing<InternalDerivedKeysState>,
     storage: StorageState,
     keys_db_state: Zeroizing<KeysDbState>,
-    permissions_state: Zeroizing<PermissionsState>,
-    routes_state: RoutesState,
-    remote_routes_state: RemoteRoutesState,
-    permissions_path: PathBuf,
-    permissions_sign_path: PathBuf,
-    routes_path: PathBuf,
-    routes_sign_path: PathBuf,
-    remote_routes_path: PathBuf,
-    remote_routes_sign_path: PathBuf,
+    config_state: ConfigState,
     started_at: String,
     metrics_handle: Option<Arc<PrometheusHandle>>,
 }
@@ -91,15 +75,7 @@ impl HttpState {
             remote_public_keys_state: Arc::new(RwLock::new(Zeroizing::new(
                 RemotePublicKeysState::default(),
             ))),
-            permissions_state: Arc::new(RwLock::new(input.permissions_state)),
-            routes_state: Arc::new(RwLock::new(input.routes_state)),
-            remote_routes_state: Arc::new(RwLock::new(input.remote_routes_state)),
-            permissions_path: Arc::new(input.permissions_path),
-            permissions_sign_path: Arc::new(input.permissions_sign_path),
-            routes_path: Arc::new(input.routes_path),
-            routes_sign_path: Arc::new(input.routes_sign_path),
-            remote_routes_path: Arc::new(input.remote_routes_path),
-            remote_routes_sign_path: Arc::new(input.remote_routes_sign_path),
+            config_state: Arc::new(RwLock::new(Zeroizing::new(input.config_state))),
             metrics_handle: input.metrics_handle,
         }
     }
@@ -134,14 +110,14 @@ impl HttpState {
         &self,
         headers: &HeaderMap,
     ) -> Result<Zeroizing<AuthenticatedClient>, (StatusCode, Json<error::ErrorResponse>)> {
-        let permissions_state = self.permissions_state.read().await;
+        let config_state = self.config_state.read().await;
 
         auth::authorize_api_key(
             headers,
             self.config(),
             &self.auth_state,
             self.internal_keys(),
-            &permissions_state,
+            &config_state.permissions,
         )
     }
 
@@ -151,9 +127,10 @@ impl HttpState {
         kid: Option<&str>,
         action: &str,
     ) -> Result<(), (StatusCode, Json<error::ErrorResponse>)> {
-        let permissions_state = self.permissions_state.read().await;
+        let config_state = self.config_state.read().await;
 
-        permissions_state
+        config_state
+            .permissions
             .require_permission(client, kid, action)
             .map_err(|err| error::error_response(err.as_ref()))
     }
@@ -173,122 +150,67 @@ impl HttpState {
     }
 
     async fn routes_loaded(&self) -> usize {
-        let routes_state = self.routes_state.read().await;
+        let config_state = self.config_state.read().await;
 
-        routes_state.len()
+        config_state.routes.len()
     }
 
     async fn permissions_loaded(&self) -> usize {
-        let permissions_state = self.permissions_state.read().await;
+        let config_state = self.config_state.read().await;
 
-        permissions_state.len()
+        config_state.permissions.len()
     }
 
     async fn routes_output(&self) -> crate::core::routes::ListRoutesOutput {
-        let routes_state = self.routes_state.read().await;
+        let config_state = self.config_state.read().await;
 
-        routes_state.list()
+        config_state.routes.list()
     }
 
     async fn remote_routes_output(&self) -> crate::core::remote_routes::ListRemoteRoutesOutput {
-        let remote_routes_state = self.remote_routes_state.read().await;
+        let config_state = self.config_state.read().await;
 
-        remote_routes_state.list()
+        config_state.remote_routes.list()
+    }
+
+    async fn reload_config_state(&self) -> Result<(), DynError> {
+        let loaded_key_ids = {
+            let keys_db_state = self.keys_db_state.read().await;
+            keys_db_state.ids()
+        };
+        let reloaded = crate::core::config_file::reload_config_state(
+            self.config(),
+            |config_path, config_content| {
+                let config_sign_path = crate::core::config_file::config_signature_path(
+                    config_path,
+                    &self.config.config_sign_path,
+                );
+                let signature_content = std::fs::read_to_string(&config_sign_path)?;
+                crate::ops::sign::verify_config_file_signature(
+                    self.init_state(),
+                    config_path,
+                    config_content,
+                    &signature_content,
+                )
+            },
+            |kid| loaded_key_ids.iter().any(|id| id == kid),
+        )?;
+        let mut config_state = self.config_state.write().await;
+        *config_state = Zeroizing::new(reloaded);
+
+        Ok(())
     }
 
     async fn reload_remote_routes_state(&self) -> Result<(), DynError> {
-        let loaded_key_ids = {
-            let keys_db_state = self.keys_db_state.read().await;
-            keys_db_state.ids()
-        };
-        let reloaded = {
-            let remote_routes_state = self.remote_routes_state.read().await;
-            remote_routes_state.reload_from_file(
-                &self.remote_routes_path,
-                |remote_routes_path, remote_routes_content| {
-                    let remote_routes_sign_path =
-                        crate::core::remote_routes::remote_routes_signature_path(
-                            remote_routes_path,
-                            &self.remote_routes_sign_path,
-                        );
-                    let signature_content = std::fs::read_to_string(&remote_routes_sign_path)?;
-                    crate::ops::sign::verify_remote_routes_file_signature(
-                        self.init_state(),
-                        remote_routes_path,
-                        remote_routes_content,
-                        &signature_content,
-                    )
-                },
-                |kid| loaded_key_ids.iter().any(|id| id == kid),
-            )?
-        };
-        let mut remote_routes_state = self.remote_routes_state.write().await;
-        *remote_routes_state = reloaded;
-
-        Ok(())
+        self.reload_config_state().await
     }
 
     async fn reload_routes_state(&self) -> Result<(), DynError> {
-        let loaded_key_ids = {
-            let keys_db_state = self.keys_db_state.read().await;
-            keys_db_state.ids()
-        };
-        let reloaded = {
-            let routes_state = self.routes_state.read().await;
-            routes_state.reload_from_file(
-                &self.routes_path,
-                |routes_path, routes_content| {
-                    let routes_sign_path = crate::core::routes::routes_signature_path(
-                        routes_path,
-                        &self.routes_sign_path,
-                    );
-                    let signature_content = std::fs::read_to_string(&routes_sign_path)?;
-                    crate::ops::sign::verify_routes_file_signature(
-                        self.init_state(),
-                        routes_path,
-                        routes_content,
-                        &signature_content,
-                    )
-                },
-                |kid| loaded_key_ids.iter().any(|id| id == kid),
-            )?
-        };
-        let mut routes_state = self.routes_state.write().await;
-        *routes_state = reloaded;
-
-        Ok(())
+        self.reload_config_state().await
     }
 
     async fn reload_permissions_state(&self) -> Result<(), DynError> {
-        let loaded_key_ids = {
-            let keys_db_state = self.keys_db_state.read().await;
-            keys_db_state.ids()
-        };
-        let reloaded = {
-            let permissions_state = self.permissions_state.read().await;
-            permissions_state.reload_from_file(
-                &self.permissions_path,
-                |permissions_path, permissions_content| {
-                    let permissions_sign_path =
-                        crate::core::permissions::permissions_signature_path(
-                            permissions_path,
-                            &self.permissions_sign_path,
-                        );
-                    let signature_content = std::fs::read_to_string(&permissions_sign_path)?;
-                    crate::ops::sign::verify_permissions_file_signature(
-                        self.init_state(),
-                        permissions_path,
-                        permissions_content,
-                        &signature_content,
-                    )
-                },
-                |kid| loaded_key_ids.iter().any(|id| id == kid),
-            )?
-        };
-        let mut permissions_state = self.permissions_state.write().await;
-        *permissions_state = Zeroizing::new(reloaded);
-
-        Ok(())
+        self.reload_config_state().await
     }
 
     async fn with_keys_db_state<T>(&self, f: impl FnOnce(&KeysDbState) -> T) -> T {
@@ -339,9 +261,9 @@ impl HttpState {
     }
 
     async fn final_app_route_for(&self, kid: &str) -> FinalAppRoute {
-        let routes_state = self.routes_state.read().await;
+        let config_state = self.config_state.read().await;
 
-        routes_state.route_for(kid)
+        config_state.routes.route_for(kid)
     }
 
     async fn remote_route_for(
@@ -349,9 +271,15 @@ impl HttpState {
         sender_kid: &str,
         recipient_kid: &str,
     ) -> Result<RemoteRoute, DynError> {
-        let remote_routes_state = self.remote_routes_state.read().await;
+        let config_state = self.config_state.read().await;
 
-        remote_routes_state.route_for(sender_kid, recipient_kid)
+        config_state.remote_routes.route_for(sender_kid, recipient_kid)
+    }
+
+    async fn remote_peer_public_keys(&self, kid: &str) -> Option<PeerPublicKeys> {
+        let config_state = self.config_state.read().await;
+
+        config_state.remote_routes.public_keys_for(kid).cloned()
     }
 }
 
