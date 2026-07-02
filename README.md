@@ -1,5 +1,9 @@
 # Vectis
 
+<p align="left">
+  <img width="300" alt="Vectis logo" src="logo.png">
+</p>
+
 Vectis is a personal open source project for **Sensitive Data Lifecycle
 Protection**.
 
@@ -8,15 +12,12 @@ continues moving through applications, services, queues, storage, logs, workers,
 and final systems after the transport session is over. Vectis explores how to
 protect the data object itself across that lifecycle.
 
+> In Latin, *vectis* can mean a lever, crowbar, fastening bar, or carrying pole:
+> a simple tool used to move something heavy with controlled force.
+
 This project is experimental and should be treated as a work in progress.
 
 **Do not use Vectis to protect real sensitive data yet.**
-<p align="left">
-  <img width="300" alt="OpenBao Mascot" src="logo.png">
-</p>
-
-> In Latin, *vectis* can mean a lever, crowbar, fastening bar, or carrying pole:
-> a simple tool used to move something heavy with controlled force.
 
 ## Why Vectis?
 
@@ -45,23 +46,34 @@ Vectis explores a different question:
 Vectis currently provides a small HTTP service and CLI for experimenting with
 protected data flows between Vectis instances.
 
-Current capabilities include:
+**Cryptography**
+
+- hybrid post-quantum key establishment with XECDH + ML-KEM;
+- dual signatures with EdDSA and ML-DSA, both required to verify;
+- authenticated encryption for protected payloads;
+- canonical JSON signing with explicit protocol versioning bound to signatures;
+- selectable crypto profiles (see [Crypto Profiles](#crypto-profiles)).
+
+**Protocol and trust**
+
+- protected messages between Vectis instances, verified before decryption;
+- one operator-signed config file (routes, remote routes, permissions) as the
+  only source of peer public keys — no trust-on-first-use path;
+- local re-encryption before final app delivery: the receiving application
+  never gets remote plaintext directly;
+- public key publication by `kid`;
+- internal encrypt/decrypt endpoints for local protected data.
+
+**Key management**
 
 - encrypted local init key material;
 - HKDF-derived internal keys for storage encryption and API key verification;
 - operational key creation and validation;
 - encrypted key lifecycle metadata and runtime lifecycle enforcement;
-- public key publication by `kid`;
-- protected messages between Vectis instances;
-- hybrid key establishment with XECDH + ML-KEM;
-- EdDSA and ML-DSA signatures;
-- canonical JSON signing with explicit protocol versioning bound to signatures;
-- authenticated encryption for protected payloads;
-- local re-encryption before final app delivery;
-- internal encrypt/decrypt endpoints for local protected data;
-- one unified signed config file (routes, remote routes, permissions);
-- SQLite-backed operational key storage;
-- storage abstraction designed for future backends;
+- SQLite-backed operational key storage behind a storage abstraction.
+
+**Operations and observability**
+
 - startup, liveness, and readiness health probes;
 - a dedicated security audit log stream with per-request correlation ids;
 - a Prometheus `/metrics` endpoint for operational observability;
@@ -239,27 +251,17 @@ first, then from `.env`, then from built-in defaults.
 
 All Vectis-specific variables use the `VECTIS_` prefix.
 
-Important variables include:
+The essentials to get a local instance running:
 
-- `VECTIS_HTTP_BIND_ADDR`;
-- `VECTIS_MODE`;
-- `VECTIS_TLS_CERT_PATH`;
-- `VECTIS_TLS_KEY_PATH`;
-- `VECTIS_TLS_SKIP_VERIFY`;
-- `VECTIS_PUBLIC_ADDR`;
-- `VECTIS_API_URL`;
-- `VECTIS_APIKEY`;
-- `VECTIS_APIKEY_HASH`;
-- `VECTIS_INIT_KEYS_FILE`;
-- `VECTIS_UNSEAL_KEY`;
-- `VECTIS_UNSEAL_KEY_FILE`;
-- `VECTIS_SQLITE_PATH`;
-- `VECTIS_CONFIG_PATH`;
-- `VECTIS_CONFIG_SIGN_PATH`;
-- `VECTIS_DEFAULT_CRYPTO_PROFILE`;
-- `VECTIS_CRYPTO_POLICY`.
+- `VECTIS_HTTP_BIND_ADDR`: listen address, default `127.0.0.1:3000`;
+- `VECTIS_MODE`: `dev` (HTTP) or `prod` (HTTPS, requires TLS cert and key);
+- `VECTIS_INIT_KEYS_FILE`: encrypted init key material, default `init.json`;
+- `VECTIS_UNSEAL_KEY_FILE`: unseal key file, default `.unseal_key`;
+- `VECTIS_SQLITE_PATH`: operational key storage, default `src/db/data.db` in
+  dev builds;
+- `VECTIS_CONFIG_PATH`: signed config file, default `config.json`.
 
-See [doc/ENV.md](doc/ENV.md).
+See [doc/ENV.md](doc/ENV.md) for the full list and expected values.
 
 ## Crypto Profiles
 
@@ -287,6 +289,9 @@ VECTIS_CRYPTO_POLICY=allow-overrides
 - [doc/API.md](doc/API.md): HTTP API and CLI mapping.
 - [doc/ENV.md](doc/ENV.md): environment variables and expected values.
 - [doc/openapi.yaml](doc/openapi.yaml): OpenAPI specification.
+- [doc/ThreatModel.md](doc/ThreatModel.md): threat model, explicit assumptions, and limitations.
+- [doc/Reference.md](doc/Reference.md): architecture and design reference.
+- [doc/Design.md](doc/Design.md): reusable design principles distilled from this project.
 - [demo/README.md](demo/README.md): clinical data exchange demo.
 
 ## What Vectis Is Not
@@ -316,6 +321,9 @@ Vectis is currently:
 
 Do not use Vectis with real patient data, production secrets, financial records,
 or any other real sensitive data.
+
+The threat model, explicit assumptions, and known limitations are documented in
+[doc/ThreatModel.md](doc/ThreatModel.md).
 
 ## License
 

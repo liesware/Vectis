@@ -1176,6 +1176,27 @@ def main():
         )
         require_status("POST /message/{id} sender not allowed for route", status, 403)
 
+    def message_route_without_public_keys():
+        write_remote_routes(
+            [
+                {
+                    "remote_kid": key_id,
+                    "name": "no public keys",
+                    "remote_addr": recipient_host,
+                    "allowed_local_kids": [key_id],
+                    "status": "active",
+                }
+            ]
+        )
+        status, _ = client.post("/config/reload", {}, auth=True)
+        require_status("POST /config/reload no public keys", status, 200)
+        status, _ = client.post(
+            f"/message/{key_id}",
+            valid_message_request(key_id),
+            auth=True,
+        )
+        require_status("POST /message/{id} route without public keys", status, 403)
+
     def message_invalid_recipient_kid():
         request = valid_message_request(key_id)
         request["recipient_kid"] = "not-hex"
@@ -1202,6 +1223,7 @@ def main():
         ("POST /message/{id} recipient route not found", message_recipient_route_not_found),
         ("POST /message/{id} recipient route disabled", message_recipient_route_disabled),
         ("POST /message/{id} sender not allowed for route", message_sender_not_allowed_for_route),
+        ("POST /message/{id} route without public keys", message_route_without_public_keys),
         ("POST /message/{id} invalid recipient kid", message_invalid_recipient_kid),
         ("POST /message/{id} empty message", message_empty_message),
     ):

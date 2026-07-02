@@ -35,18 +35,9 @@ pub async fn send_endpoint(
         .remote_route_for(&sender_kid, prepared.recipient_kid())
         .await
         .map_err(|err| error_response(err.as_ref()))?;
-    let cached_recipient = state
-        .remote_public_keys(remote_route.remote_addr(), prepared.recipient_kid())
-        .await;
 
-    match ops::message::send_message(prepared, remote_route, cached_recipient).await {
-        Ok(result) => {
-            state
-                .upsert_remote_public_keys(result.remote_public_keys)
-                .await;
-
-            Ok(Json(result.output))
-        }
+    match ops::message::send_message(prepared, remote_route).await {
+        Ok(output) => Ok(Json(output)),
         Err(err) => {
             error!(error = %err, sender_kid = %sender_kid, "message send endpoint failed");
             Err(error_response(err.as_ref()))
@@ -75,23 +66,21 @@ pub async fn receive_endpoint(
     let sender_host = prepared.sender_host().to_string();
     let sender_kid = prepared.sender_kid().to_string();
     let recipient_kid = prepared.recipient_kid().to_string();
-    let cached_sender = match state.remote_peer_public_keys(&sender_kid).await {
-        Some(peer) => Some(
-            ops::message::remote_public_keys_from_peer(&sender_host, &sender_kid, &peer)
-                .map_err(|err| error_response(err.as_ref()))?,
-        ),
-        None => state.remote_public_keys(&sender_host, &sender_kid).await,
+    let Some(peer) = state.remote_peer_public_keys(&sender_kid).await else {
+        return Err(error_response(
+            crate::error::forbidden(
+                "sender kid is not a registered peer with public keys in the signed config",
+            )
+            .as_ref(),
+        ));
     };
+    let sender_public_keys =
+        ops::message::remote_public_keys_from_peer(&sender_host, &sender_kid, &peer)
+            .map_err(|err| error_response(err.as_ref()))?;
     let final_app_route = state.final_app_route_for(&recipient_kid).await;
 
-    match ops::message::receive_message(prepared, cached_sender, final_app_route).await {
-        Ok(result) => {
-            state
-                .upsert_remote_public_keys(result.remote_public_keys)
-                .await;
-
-            Ok(Json(result.output))
-        }
+    match ops::message::receive_message(prepared, sender_public_keys, final_app_route).await {
+        Ok(output) => Ok(Json(output)),
         Err(err) => {
             error!(error = %err, recipient_kid = %recipient_kid, "message receive endpoint failed");
             Err(error_response(err.as_ref()))

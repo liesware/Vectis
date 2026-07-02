@@ -74,8 +74,8 @@ site. It receives a local encrypted delivery and must call its local Vectis
    ```
 
 4. Vectis A resolves Clinic B's KID through the signed `remote_routes` section of
-   `config.json`, using the peer's `public_keys` from the config when present, or
-   fetching them from Vectis B otherwise.
+   `config.json` and uses the peer's `public_keys` registered there. The signed
+   config is the only source of peer public keys; there is no runtime fetch.
 
 5. Vectis A creates a protected message:
 

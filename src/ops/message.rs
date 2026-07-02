@@ -13,17 +13,11 @@ use crate::ops::contracts::{
 use crate::ops::keys::{self, KeysDbState, LoadedOpsKey};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::io;
 use tracing::info;
 use zeroize::{Zeroize, Zeroizing};
 
 const PROTECTED_MESSAGE_TYPE: &str = "protected-message";
 const HYBRID_SECRET_SIZE_BYTES: usize = 32;
-
-#[derive(Default, Serialize)]
-pub struct RemotePublicKeysState {
-    remote_keys: Vec<RemotePublicKeys>,
-}
 
 #[derive(Clone, Serialize)]
 pub struct RemotePublicKeys {
@@ -32,25 +26,6 @@ pub struct RemotePublicKeys {
     loaded_at: String,
     info: String,
     keys: PublicKeysOutput,
-}
-
-impl RemotePublicKeysState {
-    pub(crate) fn get(&self, host: &str, kid: &str) -> Option<&RemotePublicKeys> {
-        self.remote_keys
-            .iter()
-            .find(|remote_key| remote_key.host == host && remote_key.kid == kid)
-    }
-
-    pub(crate) fn upsert(&mut self, remote_key: RemotePublicKeys) {
-        if let Some(index) = self.remote_keys.iter().position(|existing_key| {
-            existing_key.host == remote_key.host && existing_key.kid == remote_key.kid
-        }) {
-            let mut existing_key = self.remote_keys.remove(index);
-            existing_key.zeroize();
-        }
-
-        self.remote_keys.push(remote_key);
-    }
 }
 
 impl RemotePublicKeys {
@@ -64,12 +39,6 @@ impl RemotePublicKeys {
 
     pub(crate) fn keys(&self) -> &PublicKeysOutput {
         &self.keys
-    }
-}
-
-impl Zeroize for RemotePublicKeysState {
-    fn zeroize(&mut self) {
-        self.remote_keys.zeroize();
     }
 }
 
@@ -240,23 +209,9 @@ impl PreparedReceiveMessage {
     }
 }
 
-pub struct OutboundMessageResult {
-    pub output: SendMessageOutput,
-    pub remote_public_keys: RemotePublicKeys,
-}
-
-pub struct InboundMessageResult {
-    pub output: ReceiveMessageOutput,
-    pub remote_public_keys: RemotePublicKeys,
-}
-
 pub fn parse_send_message_input(request: Value) -> Result<SendMessageInput, DynError> {
-    serde_json::from_value(request).map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("invalid message request: {err}"),
-        )) as DynError
-    })
+    serde_json::from_value(request)
+        .map_err(|err| crate::error::invalid_input(format!("invalid message request: {err}")))
 }
 
 pub fn prepare_send_message(
@@ -274,20 +229,13 @@ pub fn prepare_send_message(
 }
 
 pub fn parse_message_envelope(request: Value) -> Result<ProtectedMessageToken, DynError> {
-    serde_json::from_value(request).map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("invalid protected message: {err}"),
-        )) as DynError
-    })
+    serde_json::from_value(request)
+        .map_err(|err| crate::error::invalid_input(format!("invalid protected message: {err}")))
 }
 
 pub fn parse_decrypt_message_input(request: Value) -> Result<DecryptMessageInput, DynError> {
     serde_json::from_value(request).map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("invalid message decrypt request: {err}"),
-        )) as DynError
+        crate::error::invalid_input(format!("invalid message decrypt request: {err}"))
     })
 }
 
@@ -295,10 +243,7 @@ pub fn parse_internal_encrypt_message_input(
     request: Value,
 ) -> Result<InternalEncryptMessageInput, DynError> {
     serde_json::from_value(request).map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("invalid internal message encrypt request: {err}"),
-        )) as DynError
+        crate::error::invalid_input(format!("invalid internal message encrypt request: {err}"))
     })
 }
 
@@ -306,10 +251,7 @@ pub fn parse_internal_decrypt_message_input(
     request: Value,
 ) -> Result<InternalMessageOutput, DynError> {
     serde_json::from_value(request).map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("invalid internal message decrypt request: {err}"),
-        )) as DynError
+        crate::error::invalid_input(format!("invalid internal message decrypt request: {err}"))
     })
 }
 
@@ -379,8 +321,7 @@ pub fn prepare_receive_message(
 pub async fn send_message(
     prepared: PreparedSendMessage,
     remote_route: RemoteRoute,
-    cached_recipient: Option<RemotePublicKeys>,
-) -> Result<OutboundMessageResult, DynError> {
+) -> Result<SendMessageOutput, DynError> {
     info!(
         sender_kid = %prepared.sender_key.id(),
         recipient_host = %remote_route.remote_addr(),
@@ -388,32 +329,21 @@ pub async fn send_message(
         recipient_name = %remote_route.name(),
         "message send started"
     );
-    let (recipient_key_source, recipient_public_keys) = if let Some(peer) =
-        remote_route.public_keys()
-    {
-        (
-            "config",
-            remote_public_keys_from_peer(
-                remote_route.remote_addr(),
-                &prepared.input.recipient_kid,
-                peer,
-            )?,
-        )
-    } else {
-        match cached_recipient {
-            Some(remote_key) => ("cache", remote_key),
-            None => (
-                "remote",
-                fetch_remote_public_keys(remote_route.remote_addr(), &prepared.input.recipient_kid)
-                    .await?,
-            ),
-        }
+    let Some(peer) = remote_route.public_keys() else {
+        return Err(crate::error::forbidden(
+            "recipient route has no registered public keys in the signed config",
+        ));
     };
+    let recipient_public_keys = remote_public_keys_from_peer(
+        remote_route.remote_addr(),
+        &prepared.input.recipient_kid,
+        peer,
+    )?;
     validate_remote_public_keys(&recipient_public_keys)?;
     info!(
         recipient_host = %recipient_public_keys.host(),
         recipient_kid = %recipient_public_keys.kid(),
-        source = recipient_key_source,
+        source = "config",
         "recipient public key ready"
     );
 
@@ -437,23 +367,20 @@ pub async fn send_message(
         "message send completed"
     );
 
-    Ok(OutboundMessageResult {
-        output,
-        remote_public_keys: recipient_public_keys,
-    })
+    Ok(output)
 }
 
 fn recipient_delivery_error(host: &str, err: DynError) -> DynError {
-    Box::new(io::Error::other(format!(
+    crate::error::remote_unreachable(format!(
         "recipient can't be reached: host={host}, error={err}"
-    )))
+    ))
 }
 
 pub async fn receive_message(
     prepared: PreparedReceiveMessage,
-    cached_sender: Option<RemotePublicKeys>,
+    sender_public_keys: RemotePublicKeys,
     final_app_route: FinalAppRoute,
-) -> Result<InboundMessageResult, DynError> {
+) -> Result<ReceiveMessageOutput, DynError> {
     info!(
         sender_host = %prepared.envelope.sender_host(),
         sender_kid = %prepared.envelope.sender_kid(),
@@ -462,26 +389,11 @@ pub async fn receive_message(
     );
     validate_message_envelope_for_recipient(&prepared.recipient_key, &prepared.envelope)?;
 
-    let sender_key_source = if cached_sender.is_some() {
-        "cache"
-    } else {
-        "remote"
-    };
-    let sender_public_keys = match cached_sender {
-        Some(remote_key) => remote_key,
-        None => {
-            fetch_remote_public_keys(
-                prepared.envelope.sender_host(),
-                prepared.envelope.sender_kid(),
-            )
-            .await?
-        }
-    };
     validate_remote_public_keys(&sender_public_keys)?;
     info!(
         sender_host = %sender_public_keys.host(),
         sender_kid = %sender_public_keys.kid(),
-        source = sender_key_source,
+        source = "config",
         "sender public key ready"
     );
     verify_message_signatures(&sender_public_keys, &prepared.envelope)?;
@@ -517,14 +429,11 @@ pub async fn receive_message(
         "message delivered to final app"
     );
 
-    Ok(InboundMessageResult {
-        output: ReceiveMessageOutput {
-            status: String::from("ok"),
-            sender_kid: prepared.envelope.sender_kid().to_string(),
-            recipient_kid: prepared.envelope.recipient_kid().to_string(),
-            local_cipher,
-        },
-        remote_public_keys: sender_public_keys,
+    Ok(ReceiveMessageOutput {
+        status: String::from("ok"),
+        sender_kid: prepared.envelope.sender_kid().to_string(),
+        recipient_kid: prepared.envelope.recipient_kid().to_string(),
+        local_cipher,
     })
 }
 
@@ -544,36 +453,28 @@ pub fn decrypt_message(prepared: PreparedDecryptMessage) -> Result<DecryptMessag
     let cipher_alg = aad_field(&aad, "cipher_alg")?;
 
     if input.sender_kid != sender_kid {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "sender_kid does not match message aad",
-        )));
+        ));
     }
     if prepared.recipient_key.id() != recipient_kid {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "recipient key does not match message aad",
-        )));
+        ));
     }
     if input.message.variant != cipher_alg {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "message.variant does not match message aad cipher_alg",
-        )));
+        ));
     }
     if input.message.variant != prepared.recipient_key.keys().symmetric().variant() {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "message.variant does not match recipient symmetric key",
-        )));
+        ));
     }
 
-    let cipher = crypto::symmetric_cipher(&input.message.variant).ok_or_else(|| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "message.variant is not supported",
-        )) as DynError
-    })?;
+    let cipher = crypto::symmetric_cipher(&input.message.variant)
+        .ok_or_else(|| crate::error::invalid_input("message.variant is not supported"))?;
     validation::validate_symmetric_key(
         "recipient symmetric key",
         prepared.recipient_key.keys().symmetric().key_hex(),
@@ -609,10 +510,7 @@ pub fn encrypt_internal_message(
     let timestamp = validation::current_timestamp()?;
     let cipher =
         crypto::symmetric_cipher(prepared.key.keys().symmetric().variant()).ok_or_else(|| {
-            Box::new(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "internal message symmetric algorithm is not supported",
-            )) as DynError
+            crate::error::invalid_input("internal message symmetric algorithm is not supported")
         })?;
     validation::validate_symmetric_key(
         "internal message symmetric key",
@@ -665,36 +563,28 @@ pub fn decrypt_internal_message(
     let cipher_alg = aad_field(&aad, "cipher_alg")?;
 
     if input.kid != kid {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "kid does not match internal message aad",
-        )));
+        ));
     }
     if input.timestamp != timestamp {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "timestamp does not match internal message aad",
-        )));
+        ));
     }
     if input.message.variant != cipher_alg {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "message.variant does not match internal message aad cipher_alg",
-        )));
+        ));
     }
     if input.message.variant != prepared.key.keys().symmetric().variant() {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "message.variant does not match internal symmetric key",
-        )));
+        ));
     }
 
-    let cipher = crypto::symmetric_cipher(&input.message.variant).ok_or_else(|| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "message.variant is not supported",
-        )) as DynError
-    })?;
+    let cipher = crypto::symmetric_cipher(&input.message.variant)
+        .ok_or_else(|| crate::error::invalid_input("message.variant is not supported"))?;
     validation::validate_symmetric_key(
         "internal message symmetric key",
         prepared.key.keys().symmetric().key_hex(),
@@ -748,17 +638,12 @@ fn validate_decrypt_message_input(
         &input.message.variant,
         crypto::SYMMETRIC_ALGORITHMS,
     )?;
-    let cipher = crypto::symmetric_cipher(&input.message.variant).ok_or_else(|| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "message.variant is not supported",
-        )) as DynError
-    })?;
+    let cipher = crypto::symmetric_cipher(&input.message.variant)
+        .ok_or_else(|| crate::error::invalid_input("message.variant is not supported"))?;
     if input.message.nonce.len() != cipher.nonce_size_bytes * 2 {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "message.nonce length does not match message.variant",
-        )));
+        ));
     }
 
     let aad = parse_aad_fields(&input.message.aad)?;
@@ -805,17 +690,12 @@ fn validate_internal_decrypt_message_input(
         &input.message.variant,
         crypto::SYMMETRIC_ALGORITHMS,
     )?;
-    let cipher = crypto::symmetric_cipher(&input.message.variant).ok_or_else(|| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "message.variant is not supported",
-        )) as DynError
-    })?;
+    let cipher = crypto::symmetric_cipher(&input.message.variant)
+        .ok_or_else(|| crate::error::invalid_input("message.variant is not supported"))?;
     if input.message.nonce.len() != cipher.nonce_size_bytes * 2 {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "message.nonce length does not match message.variant",
-        )));
+        ));
     }
 
     let aad = parse_aad_fields(&input.message.aad)?;
@@ -841,10 +721,9 @@ fn parse_aad_fields(aad: &str) -> Result<Vec<(String, String)>, DynError> {
     let mut fields = Vec::new();
     for part in aad.split(';') {
         let Some((key, value)) = part.split_once('=') else {
-            return Err(Box::new(io::Error::new(
-                io::ErrorKind::InvalidInput,
+            return Err(crate::error::invalid_input(
                 "aad must contain key=value fields",
-            )));
+            ));
         };
         validation::validate_text_field("aad key", key)?;
         validation::validate_text_field("aad value", value)?;
@@ -859,12 +738,7 @@ fn aad_field<'a>(fields: &'a [(String, String)], key: &str) -> Result<&'a str, D
         .iter()
         .find(|(field_key, _)| field_key == key)
         .map(|(_, value)| value.as_str())
-        .ok_or_else(|| {
-            Box::new(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("aad missing {key}"),
-            )) as DynError
-        })
+        .ok_or_else(|| crate::error::invalid_input(format!("aad missing {key}")))
 }
 
 fn build_send_message_output(
@@ -917,10 +791,7 @@ fn create_message_envelope(
     );
     let cipher =
         crypto::symmetric_cipher(sender_key.keys().symmetric().variant()).ok_or_else(|| {
-            Box::new(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "sender symmetric algorithm is not supported",
-            )) as DynError
+            crate::error::invalid_input("sender symmetric algorithm is not supported")
         })?;
     let cipher_alg = cipher.algorithm.to_string();
     let sender_host = config.public_addr;
@@ -1028,12 +899,8 @@ fn open_message_cipher(
         HYBRID_SECRET_SIZE_BYTES,
     )?);
     let hkdf_salt = Zeroizing::new(hex::decode(&payload.kem.hkdf_salt)?);
-    let cipher = crypto::symmetric_cipher(&payload.cipher.alg).ok_or_else(|| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "message cipher algorithm is not supported",
-        )) as DynError
-    })?;
+    let cipher = crypto::symmetric_cipher(&payload.cipher.alg)
+        .ok_or_else(|| crate::error::invalid_input("message cipher algorithm is not supported"))?;
     let message_key = derive_message_key(
         &xecdh_shared_key,
         &ml_kem_shared_key,
@@ -1062,10 +929,7 @@ fn encrypt_local_message(
 ) -> Result<LocalCipherOutput, DynError> {
     let cipher =
         crypto::symmetric_cipher(recipient_key.keys().symmetric().variant()).ok_or_else(|| {
-            Box::new(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "recipient symmetric algorithm is not supported",
-            )) as DynError
+            crate::error::invalid_input("recipient symmetric algorithm is not supported")
         })?;
     validation::validate_symmetric_key(
         "recipient symmetric key",
@@ -1123,9 +987,9 @@ async fn deliver_message_to_final_app(
 }
 
 fn final_app_delivery_error(addr: &str, path: &str, err: DynError) -> DynError {
-    Box::new(io::Error::other(format!(
+    crate::error::remote_unreachable(format!(
         "final app can't be reached: addr={addr}, path={path}, error={err}"
-    )))
+    ))
 }
 
 fn sign_message_payload(
@@ -1158,16 +1022,14 @@ fn verify_message_signatures(
     envelope: &ProtectedMessageToken,
 ) -> Result<(), DynError> {
     if envelope.signatures.eddsa.alg != sender_public_keys.keys.keys.eddsa.alg {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "signatures.eddsa.alg does not match sender public key",
-        )));
+        ));
     }
     if envelope.signatures.ml_dsa.alg != sender_public_keys.keys.keys.ml_dsa.alg {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "signatures.ml-dsa.alg does not match sender public key",
-        )));
+        ));
     }
 
     let payload_bytes = canonical::canonical_json_v1(&envelope.payload)?;
@@ -1183,10 +1045,9 @@ fn verify_message_signatures(
         crypto::verify_ml_dsa_message(&ml_dsa_public_key, payload_text, &ml_dsa_signature)?;
 
     if !eddsa_valid || !ml_dsa_valid {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "message signatures are invalid",
-        )));
+        ));
     }
 
     Ok(())
@@ -1196,10 +1057,9 @@ fn validate_message_envelope(envelope: &ProtectedMessageToken) -> Result<(), Dyn
     protocol::validate_protocol_version("version", &envelope.version)?;
     protocol::validate_protocol_version("payload.version", &envelope.payload.version)?;
     if envelope.version != envelope.payload.version {
-        return Err(Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "envelope version does not match signed payload version",
-        )));
+        ));
     }
     validation::validate_allowed_value(
         "payload.type",
@@ -1252,10 +1112,9 @@ fn validate_message_envelope(envelope: &ProtectedMessageToken) -> Result<(), Dyn
         &envelope.payload.cipher.alg,
     );
     if envelope.payload.cipher.aad != expected_aad {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "payload.cipher.aad does not match protected message metadata",
-        )));
+        ));
     }
 
     Ok(())
@@ -1268,10 +1127,9 @@ fn validate_message_envelope_for_recipient(
     validate_message_envelope(envelope)?;
 
     if envelope.recipient_kid() != recipient_key.id() {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "payload.recipient.kid does not match loaded recipient key",
-        )));
+        ));
     }
 
     let expected_kem_alg = hybrid_kem_alg(
@@ -1279,23 +1137,17 @@ fn validate_message_envelope_for_recipient(
         recipient_key.keys().ml_kem().variant(),
     );
     if envelope.payload.kem.alg != expected_kem_alg {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "payload.kem.alg does not match recipient key algorithms",
-        )));
+        ));
     }
 
-    let cipher = crypto::symmetric_cipher(&envelope.payload.cipher.alg).ok_or_else(|| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "payload.cipher.alg is not supported",
-        )) as DynError
-    })?;
+    let cipher = crypto::symmetric_cipher(&envelope.payload.cipher.alg)
+        .ok_or_else(|| crate::error::invalid_input("payload.cipher.alg is not supported"))?;
     if envelope.payload.cipher.nonce.len() != cipher.nonce_size_bytes * 2 {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "payload.cipher.nonce length does not match cipher algorithm",
-        )));
+        ));
     }
 
     Ok(())
@@ -1457,42 +1309,4 @@ pub fn remote_public_keys_from_peer(
     validate_remote_public_keys(&remote_key)?;
 
     Ok(remote_key)
-}
-
-async fn fetch_remote_public_keys(host: &str, kid: &str) -> Result<RemotePublicKeys, DynError> {
-    validation::validate_host_port("recipient_host", host)?;
-    keys::KeyId::parse(kid)?;
-
-    let path = format!("/pub/{kid}");
-    let keys = http_client::get_remote_json::<PublicKeysOutput>(host, &path)
-        .await
-        .map_err(|err| remote_public_key_error(host, kid, err))?;
-    let remote_key = RemotePublicKeys {
-        host: host.to_string(),
-        kid: kid.to_string(),
-        loaded_at: validation::current_timestamp()?,
-        info: keys.info.clone(),
-        keys,
-    };
-    validate_remote_public_keys(&remote_key)?;
-    info!(host = %host, kid = %kid, "remote public key loaded");
-
-    Ok(remote_key)
-}
-
-fn remote_public_key_error(host: &str, kid: &str, err: DynError) -> DynError {
-    let kind = err
-        .downcast_ref::<io::Error>()
-        .map(io::Error::kind)
-        .unwrap_or(io::ErrorKind::Other);
-
-    let message = if kind == io::ErrorKind::NotFound {
-        format!("recipient_kid not found in remote /pub response: host={host}, recipient_kid={kid}")
-    } else {
-        format!(
-            "recipient_kid could not be loaded from remote /pub response: host={host}, recipient_kid={kid}, error={err}"
-        )
-    };
-
-    Box::new(io::Error::new(kind, message))
 }

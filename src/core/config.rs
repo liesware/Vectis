@@ -245,10 +245,9 @@ fn validate_tls_paths_for_mode(
     tls_key_path: Option<&PathBuf>,
 ) -> Result<(), DynError> {
     if mode == "prod" && (tls_cert_path.is_none() || tls_key_path.is_none()) {
-        return Err(Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "VECTIS_TLS_CERT_PATH and VECTIS_TLS_KEY_PATH are required when VECTIS_MODE=prod",
-        )));
+        ));
     }
 
     Ok(())
@@ -264,16 +263,14 @@ pub fn validate_http_path_field(field: &str, value: &str) -> Result<String, DynE
     validation::validate_text_field(field, value)?;
 
     if !value.starts_with('/') {
-        return Err(Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("{field} must start with /"),
+        return Err(crate::error::invalid_input(format!(
+            "{field} must start with /"
         )));
     }
 
     if value.contains(' ') {
-        return Err(Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("{field} must not contain spaces"),
+        return Err(crate::error::invalid_input(format!(
+            "{field} must not contain spaces"
         )));
     }
 
@@ -292,28 +289,19 @@ fn validate_optional_tls_path(field: &str, value: &str) -> Result<Option<PathBuf
     validation::validate_text_field(field, value)?;
     let path = PathBuf::from(value);
     let metadata = fs::metadata(&path).map_err(|err| {
-        Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("{field} must exist and be readable: {err}"),
-        )) as DynError
+        crate::error::invalid_input(format!("{field} must exist and be readable: {err}"))
     })?;
 
     if !metadata.is_file() {
-        return Err(Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("{field} must point to a file"),
+        return Err(crate::error::invalid_input(format!(
+            "{field} must point to a file"
         )));
     }
 
     fs::OpenOptions::new()
         .read(true)
         .open(&path)
-        .map_err(|err| {
-            Box::new(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                format!("{field} must allow read access: {err}"),
-            )) as DynError
-        })?;
+        .map_err(|err| crate::error::forbidden(format!("{field} must allow read access: {err}")))?;
 
     Ok(Some(path))
 }
@@ -335,24 +323,21 @@ fn validate_sqlite_path(value: &str) -> Result<PathBuf, DynError> {
 
     let path = PathBuf::from(value);
     let metadata = fs::metadata(&path).map_err(|err| {
-        Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("VECTIS_SQLITE_PATH must exist and be readable: {err}"),
-        )) as DynError
+        crate::error::invalid_input(format!(
+            "VECTIS_SQLITE_PATH must exist and be readable: {err}"
+        ))
     })?;
 
     if !metadata.is_file() {
-        return Err(Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "VECTIS_SQLITE_PATH must point to a file",
-        )));
+        ));
     }
 
     if metadata.permissions().readonly() {
-        return Err(Box::new(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
+        return Err(crate::error::forbidden(
             "VECTIS_SQLITE_PATH must be writable",
-        )));
+        ));
     }
 
     fs::OpenOptions::new()
@@ -360,10 +345,9 @@ fn validate_sqlite_path(value: &str) -> Result<PathBuf, DynError> {
         .write(true)
         .open(&path)
         .map_err(|err| {
-            Box::new(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                format!("VECTIS_SQLITE_PATH must allow read/write access: {err}"),
-            )) as DynError
+            crate::error::forbidden(format!(
+                "VECTIS_SQLITE_PATH must allow read/write access: {err}"
+            ))
         })?;
 
     Ok(path)

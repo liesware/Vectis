@@ -8,7 +8,6 @@ use crate::ops::init::ValidatedInitState;
 use crate::ops::key_material::VariantDerKeyPair;
 use crate::ops::keys::{self, KeysDbState, LoadedOpsKey};
 use serde_json::Value;
-use std::io;
 use std::path::Path;
 use tracing::{debug, info};
 
@@ -124,10 +123,7 @@ pub fn verify_config_file_signature(
     signature_content: &str,
 ) -> Result<(), DynError> {
     let token = parse_timestamp_token(serde_json::from_str(signature_content).map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("config signature must be valid JSON: {err}"),
-        )) as DynError
+        crate::error::invalid_input(format!("config signature must be valid JSON: {err}"))
     })?)?;
     validate_signed_payload_token(&token, CONFIG_TOKEN_TYPE, INIT_KEYS_KID)?;
     let expected_info = validation::build_aad(&[
@@ -136,10 +132,9 @@ pub fn verify_config_file_signature(
         ("path", &config_path.display().to_string()),
     ]);
     if token.payload.info != expected_info {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "config signature payload.info does not match config path",
-        )));
+        ));
     }
 
     let canonical_config = config_file::canonical_config_json(config_content)?;
@@ -150,10 +145,9 @@ pub fn verify_config_file_signature(
     if token.payload.message_hash.alg != config::INTERNAL_KEYS_HASH
         || token.payload.message_hash.hex != expected_hash
     {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "config signature message_hash does not match config content",
-        )));
+        ));
     }
 
     let status = verify_hybrid_payload(
@@ -163,10 +157,9 @@ pub fn verify_config_file_signature(
         init_state.init_keys.keys().ml_dsa(),
     )?;
     if status.eddsa != "ok" || status.ml_dsa != "ok" {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::PermissionDenied,
+        return Err(crate::error::invalid_signature(
             "config signature verification failed",
-        )));
+        ));
     }
 
     Ok(())
@@ -245,12 +238,8 @@ fn verify_payload_with_public_keys(
 pub fn parse_sign_input(request: Value) -> Result<SignInput, DynError> {
     debug!("parsing sign request");
 
-    serde_json::from_value(request).map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("invalid sign request: {err}"),
-        )) as DynError
-    })
+    serde_json::from_value(request)
+        .map_err(|err| crate::error::invalid_input(format!("invalid sign request: {err}")))
 }
 
 pub fn sign_timestamp_from_state(
@@ -289,12 +278,8 @@ pub fn validate_sign_input(input: SignInput) -> Result<ValidatedSignInput, DynEr
 pub fn parse_timestamp_token(request: Value) -> Result<TimestampToken, DynError> {
     debug!("parsing timestamp verification token");
 
-    serde_json::from_value(request).map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("invalid timestamp token: {err}"),
-        )) as DynError
-    })
+    serde_json::from_value(request)
+        .map_err(|err| crate::error::invalid_input(format!("invalid timestamp token: {err}")))
 }
 
 pub fn verify_timestamp(
@@ -350,16 +335,14 @@ pub fn verify_timestamp_with_peer_keys(
 ) -> Result<VerificationOutput, DynError> {
     validate_timestamp_token(token)?;
     if token.signatures.eddsa.alg != peer.eddsa.alg {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "signatures.eddsa.alg does not match peer public key",
-        )));
+        ));
     }
     if token.signatures.ml_dsa.alg != peer.ml_dsa.alg {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "signatures.ml-dsa.alg does not match peer public key",
-        )));
+        ));
     }
 
     let status = verify_payload_with_public_keys(
@@ -435,10 +418,9 @@ fn validate_signed_payload_token(
     protocol::validate_protocol_version("version", &token.version)?;
     protocol::validate_protocol_version("payload.version", &token.payload.version)?;
     if token.version != token.payload.version {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "token version does not match signed payload version",
-        )));
+        ));
     }
     validation::validate_allowed_value(
         "payload.type",
@@ -448,20 +430,16 @@ fn validate_signed_payload_token(
     validation::validate_text_field("payload.created_at", &token.payload.created_at)?;
     validation::validate_text_field("payload.info", &token.payload.info)?;
     if token.payload.kid != expected_kid {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "payload.kid does not match expected signer",
-        )));
+        ));
     }
     validation::validate_hex_field("payload.serial", &token.payload.serial)?;
     let expected_serial_len = crypto::hash_bytes(config::INTERNAL_KEYS_HASH, &[])?.len() * 2;
     if token.payload.serial.len() != expected_serial_len {
-        return Err(Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!(
-                "payload.serial must be {expected_serial_len} hex characters, got {}",
-                token.payload.serial.len()
-            ),
+        return Err(crate::error::invalid_input(format!(
+            "payload.serial must be {expected_serial_len} hex characters, got {}",
+            token.payload.serial.len()
         )));
     }
     validate_message_hash(&token.payload.message_hash)?;
@@ -487,28 +465,24 @@ fn validate_timestamp_token_for_key(
 ) -> Result<(), DynError> {
     validate_timestamp_token(token)?;
     if token.payload.kid != loaded_key.id() {
-        return Err(Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "payload.kid does not match loaded key",
-        )));
+        ));
     }
     if token.payload.info != loaded_key.aad() {
-        return Err(Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "payload.info does not match loaded key aad",
-        )));
+        ));
     }
     if token.signatures.eddsa.alg != loaded_key.keys().eddsa().variant() {
-        return Err(Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "signatures.eddsa.alg does not match loaded key",
-        )));
+        ));
     }
     if token.signatures.ml_dsa.alg != loaded_key.keys().ml_dsa().variant() {
-        return Err(Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "signatures.ml-dsa.alg does not match loaded key",
-        )));
+        ));
     }
 
     Ok(())

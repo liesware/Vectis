@@ -1,3 +1,4 @@
+use crate::error::VectisError;
 use axum::Json;
 use axum::http::StatusCode;
 use serde::Serialize;
@@ -46,6 +47,19 @@ fn log_internal_error(status: StatusCode, err: &(dyn std::error::Error + 'static
 }
 
 pub fn status_for_error(err: &(dyn std::error::Error + 'static)) -> StatusCode {
+    if let Some(vectis_err) = err.downcast_ref::<VectisError>() {
+        return match vectis_err {
+            VectisError::InvalidInput(_) | VectisError::InvalidSignature(_) => {
+                StatusCode::BAD_REQUEST
+            }
+            VectisError::NotFound(_) => StatusCode::NOT_FOUND,
+            VectisError::Forbidden(_) => StatusCode::FORBIDDEN,
+            VectisError::RemoteUnreachable(_)
+            | VectisError::Storage(_)
+            | VectisError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+    }
+
     let Some(io_err) = err.downcast_ref::<io::Error>() else {
         return StatusCode::INTERNAL_SERVER_ERROR;
     };
@@ -72,27 +86,76 @@ fn public_error_message_for_error(
     status: StatusCode,
     err: &(dyn std::error::Error + 'static),
 ) -> String {
-    let detail = err.to_string();
-
     if status == StatusCode::BAD_REQUEST || status == StatusCode::FORBIDDEN {
-        return detail;
+        return err.to_string();
     }
 
-    if detail.contains("recipient_kid not found in remote /pub response") {
-        return String::from("recipent kid not found");
+    match err.downcast_ref::<VectisError>() {
+        Some(VectisError::NotFound(message)) => message.clone(),
+        Some(VectisError::RemoteUnreachable(_)) => {
+            String::from("internal server error final app can't be reached")
+        }
+        _ => public_error_message(status),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_vectis_variants_to_status() {
+        assert_eq!(
+            status_for_error(&VectisError::InvalidInput(String::from("x"))),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            status_for_error(&VectisError::InvalidSignature(String::from("x"))),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            status_for_error(&VectisError::NotFound(String::from("x"))),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            status_for_error(&VectisError::Forbidden(String::from("x"))),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            status_for_error(&VectisError::RemoteUnreachable(String::from("x"))),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
+            status_for_error(&VectisError::Storage(String::from("x"))),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 
-    if detail.contains("recipient route not found") {
-        return String::from("recipient route not found");
+    #[test]
+    fn io_errors_keep_fallback_mapping() {
+        let err = io::Error::new(io::ErrorKind::NotFound, "gone");
+        assert_eq!(status_for_error(&err), StatusCode::NOT_FOUND);
+        let err = io::Error::other("boom");
+        assert_eq!(status_for_error(&err), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    if detail.contains("recipient can't be reached") {
-        return String::from("internal server error final app can't be reached");
+    #[test]
+    fn remote_unreachable_hides_detail() {
+        let err = VectisError::RemoteUnreachable(String::from(
+            "final app can't be reached: addr=10.0.0.1:9,path=/x",
+        ));
+        assert_eq!(
+            public_error_message_for_error(StatusCode::INTERNAL_SERVER_ERROR, &err),
+            "internal server error final app can't be reached"
+        );
     }
 
-    if detail.contains("final app can't be reached") {
-        return String::from("internal server error final app can't be reached");
+    #[test]
+    fn internal_error_returns_generic_message() {
+        let err = VectisError::Internal(String::from("secret detail"));
+        assert_eq!(
+            public_error_message_for_error(StatusCode::INTERNAL_SERVER_ERROR, &err),
+            "internal server error"
+        );
     }
-
-    public_error_message(status)
 }

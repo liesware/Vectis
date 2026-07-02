@@ -836,19 +836,19 @@ Relevant public errors:
 
 ```json
 {
-  "error": "recipent kid not found"
+  "error": "recipient route has no registered public keys in the signed config"
 }
 ```
 
 ```json
 {
-  "error": "internal server error - recipient can't be reached"
+  "error": "internal server error final app can't be reached"
 }
 ```
 
 ### POST /message
 
-Receives a protected message from another Vectis instance. This endpoint does not require auth because authenticity is validated with EdDSA and ML-DSA signatures.
+Receives a protected message from another Vectis instance. This endpoint does not require auth because authenticity is validated with EdDSA and ML-DSA signatures. The sender `kid` must match an active `remote_routes` entry with registered `public_keys` in the signed config; messages from unregistered senders are rejected with `403`.
 
 Request:
 
@@ -1088,7 +1088,7 @@ Top level:
 | `remote_addr` | yes | `host:port` | Address of the remote Vectis instance. |
 | `allowed_local_kids` | yes | non-empty array; `["*"]` or explicit loaded kids (no mixing) | Which local sender KIDs may use this route. |
 | `status` | yes | `active` \| `disabled` | Disabled routes load but cannot send. |
-| `public_keys` | no | object (see below) | Peer's trusted public keys for direct use and cross-instance verification. |
+| `public_keys` | no | object (see below) | Peer's trusted public keys. Required for `/message` send/receive with that peer and for cross-instance verification; entries without it are routing metadata only. |
 
 `public_keys` object (optional; the `keys` object from the peer's `GET /pub/{kid}`): `eddsa`/`ml-dsa`/`ml-kem` each `{ "alg", "public_key_der_hex" }`, and `xecdh` `{ "alg", "public_key_hex" }`. When present, Vectis validates the material before loading it: DER public keys must be loadable by Botan, X25519/X448 raw public keys must be exactly 32/56 bytes, and ML-KEM public keys must be loadable and usable for encapsulation.
 
@@ -1114,9 +1114,10 @@ The config file is operational configuration. Vectis does not create it automati
 
 `POST /message/{sender_kid}` never accepts a destination host from the request body; it resolves `recipient_kid` through the signed `remote_routes` section. A route can allow specific local sender KIDs, or `allowed_local_kids: ["*"]` for any loaded local KID. The wildcard cannot be mixed with explicit KIDs. Disabled routes are loaded and listed, but cannot be used to send messages.
 
-Each `remote_routes` entry may carry an optional `public_keys` object — the full public key set of that peer, exactly as returned by the remote's `GET /pub/{kid}`. It is trusted because the operator signs the config. When present:
+Each `remote_routes` entry may carry an optional `public_keys` object — the full public key set of that peer, exactly as returned by the remote's `GET /pub/{kid}`. It is trusted because the operator signs the config, and it is the **only** source of peer public keys: Vectis never fetches keys from a remote `/pub` endpoint at runtime.
 
-- `/message` uses those keys directly for the peer (no `/pub` fetch); when absent, Vectis fetches `/pub` on demand (trust on first use).
+- `POST /message/{sender_kid}` requires the recipient route to carry `public_keys`; a route without them is routing-only and sending returns `403`.
+- `POST /message` requires the sender `kid` to match an active `remote_routes` entry with `public_keys`; messages from unregistered senders return `403`.
 - `POST /sign/verification` can verify timestamp tokens whose signer `kid` is not local, resolving the signer's public keys from the matching active `remote_routes` entry.
 - Invalid or non-operational public key material rejects config load/reload. Startup falls back to empty config sections; runtime reload keeps the previous in-memory config.
 

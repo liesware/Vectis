@@ -7,7 +7,6 @@ use crate::core::{config, storage::StorageState};
 use crate::error::DynError;
 use crate::ops::init::ValidatedInitState;
 use crate::ops::keys;
-use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, warn};
@@ -118,16 +117,10 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
 
     if config.server_scheme == "https" {
         let cert_path = config.tls_cert_path.as_ref().ok_or_else(|| {
-            Box::new(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "VECTIS_TLS_CERT_PATH is required when VECTIS_MODE=prod",
-            )) as DynError
+            crate::error::invalid_input("VECTIS_TLS_CERT_PATH is required when VECTIS_MODE=prod")
         })?;
         let key_path = config.tls_key_path.as_ref().ok_or_else(|| {
-            Box::new(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "VECTIS_TLS_KEY_PATH is required when VECTIS_MODE=prod",
-            )) as DynError
+            crate::error::invalid_input("VECTIS_TLS_KEY_PATH is required when VECTIS_MODE=prod")
         })?;
         let tls_config =
             axum_server::tls_rustls::RustlsConfig::from_pem_file(cert_path, key_path).await?;

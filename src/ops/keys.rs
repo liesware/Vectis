@@ -7,7 +7,6 @@ use crate::ops::key_material::{
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::io;
 use tracing::{error, info};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -156,10 +155,7 @@ fn blocked_lifecycle_error(status: &str) -> Result<(), DynError> {
 }
 
 fn lifecycle_error(message: &str) -> Result<(), DynError> {
-    Err(Box::new(io::Error::new(
-        io::ErrorKind::PermissionDenied,
-        message,
-    )))
+    Err(crate::error::forbidden(message))
 }
 
 pub(crate) fn get_loaded_key<'a>(
@@ -169,10 +165,7 @@ pub(crate) fn get_loaded_key<'a>(
     let id = KeyId::parse(id)?;
 
     keys_db_state.get(id.as_str()).ok_or_else(|| {
-        Box::new(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("ops key not loaded in state: {}", id.as_str()),
-        )) as DynError
+        crate::error::not_found(format!("ops key not loaded in state: {}", id.as_str()))
     })
 }
 
@@ -448,10 +441,9 @@ fn validate_key_id_matches_enc_keys(id: &str, enc_keys: &str) -> Result<(), DynE
     let expected_id = create_key_id(parts[0])?;
 
     if id != expected_id {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "id does not match INTERNAL_KEYS_HASH(enc_keys payload)",
-        )));
+        ));
     }
 
     Ok(())
@@ -459,54 +451,38 @@ fn validate_key_id_matches_enc_keys(id: &str, enc_keys: &str) -> Result<(), DynE
 
 pub fn parse_create_keys_input(request: Value) -> Result<CreateKeysInput, DynError> {
     let Some(object) = request.as_object() else {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "request body must be a JSON object",
-        )));
+        ));
     };
 
     if let Some(tag) = object.get("tag")
         && !tag.is_string()
     {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "tag must be a string",
-        )));
+        return Err(crate::error::invalid_input("tag must be a string"));
     }
     if let Some(profile) = object.get("profile")
         && !profile.is_string()
     {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "profile must be a string",
-        )));
+        return Err(crate::error::invalid_input("profile must be a string"));
     }
 
-    serde_json::from_value(request).map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("invalid keys request: {err}"),
-        )) as DynError
-    })
+    serde_json::from_value(request)
+        .map_err(|err| crate::error::invalid_input(format!("invalid keys request: {err}")))
 }
 
 pub fn parse_update_lifecycle_input(request: Value) -> Result<UpdateLifecycleInput, DynError> {
     let Some(object) = request.as_object() else {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "request body must be a JSON object",
-        )));
+        ));
     };
 
     validate_json_string_field(object, "status")?;
     validate_json_string_field(object, "reason")?;
 
-    let input: UpdateLifecycleInput = serde_json::from_value(request).map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("invalid lifecycle request: {err}"),
-        )) as DynError
-    })?;
+    let input: UpdateLifecycleInput = serde_json::from_value(request)
+        .map_err(|err| crate::error::invalid_input(format!("invalid lifecycle request: {err}")))?;
     validate_lifecycle_status("status", &input.status)?;
     validation::validate_text_field("reason", &input.reason)?;
 
@@ -722,9 +698,8 @@ fn decrypt_ops_key_properties_payload(
 fn split_internal_payload<'a>(field: &str, value: &'a str) -> Result<Vec<&'a str>, DynError> {
     let parts = value.split('.').collect::<Vec<_>>();
     if parts.len() != 3 {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{field} must have ciphertext.nonce.aad base64 sections"),
+        return Err(crate::error::invalid_input(format!(
+            "{field} must have ciphertext.nonce.aad base64 sections"
         )));
     }
 
@@ -807,10 +782,9 @@ fn parse_aad_fields(aad: &str) -> Result<Vec<(String, String)>, DynError> {
 
     for part in aad.split(';') {
         let Some((key, value)) = part.split_once('=') else {
-            return Err(Box::new(io::Error::new(
-                io::ErrorKind::InvalidInput,
+            return Err(crate::error::invalid_input(
                 "aad must contain key=value fields",
-            )));
+            ));
         };
 
         validation::validate_text_field("aad key", key)?;
@@ -826,19 +800,13 @@ fn aad_field<'a>(fields: &'a [(String, String)], key: &str) -> Result<&'a str, D
         .iter()
         .find(|(field_key, _)| field_key == key)
         .map(|(_, value)| value.as_str())
-        .ok_or_else(|| {
-            Box::new(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("aad missing {key}"),
-            )) as DynError
-        })
+        .ok_or_else(|| crate::error::invalid_input(format!("aad missing {key}")))
 }
 
 fn validate_aad_field(field: &str, actual: &str, expected: &str) -> Result<(), DynError> {
     if actual != expected {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{field} does not match expected value"),
+        return Err(crate::error::invalid_input(format!(
+            "{field} does not match expected value"
         )));
     }
 
@@ -894,9 +862,8 @@ fn validate_lifecycle_transition(current: &str, next: &str) -> Result<(), DynErr
         return Ok(());
     }
 
-    Err(Box::new(io::Error::new(
-        io::ErrorKind::InvalidInput,
-        format!("invalid lifecycle transition: {current} -> {next}"),
+    Err(crate::error::invalid_input(format!(
+        "invalid lifecycle transition: {current} -> {next}"
     )))
 }
 
@@ -906,14 +873,10 @@ fn validate_json_string_field(
 ) -> Result<(), DynError> {
     match object.get(field) {
         Some(value) if value.is_string() => Ok(()),
-        Some(_) => Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{field} must be a string"),
+        Some(_) => Err(crate::error::invalid_input(format!(
+            "{field} must be a string"
         ))),
-        None => Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{field} is required"),
-        ))),
+        None => Err(crate::error::invalid_input(format!("{field} is required"))),
     }
 }
 
@@ -1050,10 +1013,9 @@ fn validate_crypto_policy(
         || input.ml_dsa_variant.is_some()
         || input.ml_kem_variant.is_some()
     {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "individual algorithm overrides are rejected when VECTIS_CRYPTO_POLICY=profile-only",
-        )));
+        ));
     }
 
     Ok(())
@@ -1088,9 +1050,8 @@ fn crypto_profile(name: &str) -> Result<CryptoProfile, DynError> {
             ml_dsa_variant: "ML-DSA-87",
             ml_kem_variant: "ML-KEM-1024",
         }),
-        _ => Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("unsupported crypto profile: {name}"),
+        _ => Err(crate::error::invalid_input(format!(
+            "unsupported crypto profile: {name}"
         ))),
     }
 }

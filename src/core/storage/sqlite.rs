@@ -2,7 +2,6 @@ use crate::core::storage::OpsKeyRow;
 use crate::error::DynError;
 use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
-use std::io;
 use tracing::info;
 
 pub struct SqliteStorage {
@@ -15,10 +14,7 @@ impl SqliteStorage {
             .filename(path)
             .create_if_missing(false);
         let pool = SqlitePool::connect_with(options).await.map_err(|err| {
-            Box::new(io::Error::new(
-                io::ErrorKind::ConnectionRefused,
-                format!("failed to connect to ops sqlite: {err}"),
-            )) as DynError
+            crate::error::storage(format!("failed to connect to ops sqlite: {err}"))
         })?;
         info!(path = %path.display(), "connected to ops sqlite");
 
@@ -67,10 +63,7 @@ impl SqliteStorage {
         .await?;
 
         let Some(row) = row else {
-            return Err(Box::new(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("ops key not found: {id}"),
-            )));
+            return Err(crate::error::not_found(format!("ops key not found: {id}")));
         };
 
         Ok(OpsKeyRow {
@@ -121,10 +114,7 @@ impl SqliteStorage {
         .await?;
 
         if result.rows_affected() == 0 {
-            return Err(Box::new(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("ops key not found: {id}"),
-            )));
+            return Err(crate::error::not_found(format!("ops key not found: {id}")));
         }
 
         info!(id, "updated ops key properties");
@@ -144,29 +134,18 @@ async fn validate_ops_keys_schema(db: &SqlitePool) -> Result<(), DynError> {
         .await?;
 
     if rows.is_empty() {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidData,
+        return Err(crate::error::storage(
             "sqlite schema is missing ops_keys table",
-        )));
+        ));
     }
 
-    let id = find_column(&rows, "id").ok_or_else(|| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "sqlite schema is missing ops_keys.id column",
-        )) as DynError
-    })?;
+    let id = find_column(&rows, "id")
+        .ok_or_else(|| crate::error::storage("sqlite schema is missing ops_keys.id column"))?;
     let enc_keys = find_column(&rows, "enc_keys").ok_or_else(|| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "sqlite schema is missing ops_keys.enc_keys column",
-        )) as DynError
+        crate::error::storage("sqlite schema is missing ops_keys.enc_keys column")
     })?;
     let properties = find_column(&rows, "properties").ok_or_else(|| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "sqlite schema is missing ops_keys.properties column",
-        )) as DynError
+        crate::error::storage("sqlite schema is missing ops_keys.properties column")
     })?;
 
     validate_column(&id, "id", "VARCHAR(128)", false, true)?;
@@ -215,11 +194,8 @@ fn validate_column(
         || column.notnull != expected_notnull
         || column.primary_key != expected_primary_key
     {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "sqlite schema mismatch for ops_keys.{expected_name}: expected type={expected_type}, notnull={expected_notnull}, primary_key={expected_primary_key}",
-            ),
+        return Err(crate::error::storage(format!(
+            "sqlite schema mismatch for ops_keys.{expected_name}: expected type={expected_type}, notnull={expected_notnull}, primary_key={expected_primary_key}",
         )));
     }
 

@@ -4,7 +4,6 @@ use crate::ops::key_material::{
     KeyMaterialOutput, VariantDerKeyPair, VariantKeyAgreementKeyPair, VariantSymmetricKey,
 };
 use serde::Serialize;
-use std::io;
 use tracing::info;
 use zeroize::Zeroizing;
 
@@ -140,10 +139,7 @@ fn symmetric_cipher(algorithm: &str) -> Result<crypto::SymmetricCipherSpec, DynE
     )?;
 
     crypto::symmetric_cipher(algorithm).ok_or_else(|| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("invalid symmetric algorithm: {algorithm}"),
-        )) as DynError
+        crate::error::invalid_input(format!("invalid symmetric algorithm: {algorithm}"))
     })
 }
 
@@ -176,9 +172,9 @@ fn validate_xecdh(keys: &VariantKeyAgreementKeyPair) -> Result<bool, DynError> {
 
 fn validate_ml_dsa(keys: &VariantDerKeyPair, message: &str) -> Result<bool, DynError> {
     if crypto::MlDsaVariant::from_name(keys.variant()).is_none() {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("invalid stored ml-dsa variant: {}", keys.variant()),
+        return Err(crate::error::invalid_input(format!(
+            "invalid stored ml-dsa variant: {}",
+            keys.variant()
         )));
     }
 
@@ -195,10 +191,10 @@ fn validate_ml_dsa(keys: &VariantDerKeyPair, message: &str) -> Result<bool, DynE
 
 fn validate_ml_kem(keys: &VariantDerKeyPair) -> Result<bool, DynError> {
     let variant = crypto::MlKemVariant::from_name(keys.variant()).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("invalid ML-KEM variant in key material: {}", keys.variant()),
-        )
+        crate::error::invalid_input(format!(
+            "invalid ML-KEM variant in key material: {}",
+            keys.variant()
+        ))
     })?;
     let private_key = crypto::load_private_key_der_hex(keys.private_key_der_hex())?;
     let public_key = crypto::load_public_key_der_hex(keys.public_key_der_hex())?;
@@ -242,9 +238,8 @@ fn ensure_valid(name: &str, valid: bool) -> Result<(), DynError> {
     if valid {
         Ok(())
     } else {
-        Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("{name} key validation failed"),
+        Err(crate::error::internal(format!(
+            "{name} key validation failed"
         )))
     }
 }

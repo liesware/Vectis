@@ -44,10 +44,7 @@ pub fn config_signature_path(path: &Path, configured_path: &Path) -> PathBuf {
 
 pub fn canonical_config_json(content: &str) -> Result<String, DynError> {
     let config_file: ConfigFile = serde_json::from_str(content).map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("config file must be valid JSON: {err}"),
-        )) as DynError
+        crate::error::invalid_input(format!("config file must be valid JSON: {err}"))
     })?;
     protocol::validate_protocol_version("config.version", &config_file.version)?;
 
@@ -102,7 +99,7 @@ pub fn reload_config_state(
 ) -> Result<ConfigState, DynError> {
     match load_config_file(&config.config_path, verify_config, config, &is_loaded_kid) {
         Ok(state) => Ok(state),
-        Err(err) if is_not_found_error(err.as_ref()) => Ok(empty_config_state(config)),
+        Err(err) if crate::error::is_not_found(err.as_ref()) => Ok(empty_config_state(config)),
         Err(err) => Err(err),
     }
 }
@@ -116,10 +113,7 @@ fn load_config_file(
     let content = read_config_file(path)?;
     verify_config(path, &content)?;
     let config_file: ConfigFile = serde_json::from_str(&content).map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("config file must be valid JSON: {err}"),
-        )) as DynError
+        crate::error::invalid_input(format!("config file must be valid JSON: {err}"))
     })?;
     protocol::validate_protocol_version("config.version", &config_file.version)?;
 
@@ -152,11 +146,6 @@ fn empty_config_state(config: &config::AppConfig) -> ConfigState {
     }
 }
 
-fn is_not_found_error(err: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
-    err.downcast_ref::<io::Error>()
-        .is_some_and(|err| err.kind() == io::ErrorKind::NotFound)
-}
-
 fn read_limited_config_file(
     path: &Path,
     max_size_bytes: u64,
@@ -164,26 +153,21 @@ fn read_limited_config_file(
 ) -> Result<String, DynError> {
     let metadata = fs::metadata(path).map_err(|err| {
         if err.kind() == io::ErrorKind::NotFound {
-            Box::new(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("{label} does not exist"),
-            )) as DynError
+            crate::error::not_found(format!("{label} does not exist"))
         } else {
             Box::new(err) as DynError
         }
     })?;
 
     if !metadata.is_file() {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{label} must point to a file"),
+        return Err(crate::error::invalid_input(format!(
+            "{label} must point to a file"
         )));
     }
 
     if metadata.len() > max_size_bytes {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{label} exceeds maximum allowed size"),
+        return Err(crate::error::invalid_input(format!(
+            "{label} exceeds maximum allowed size"
         )));
     }
 
@@ -280,12 +264,7 @@ mod tests {
         let config = test_config(path.clone());
         let result = reload_config_state(
             &config,
-            |_, _| {
-                Err(
-                    Box::new(io::Error::new(io::ErrorKind::InvalidData, "bad signature"))
-                        as DynError,
-                )
-            },
+            |_, _| Err(crate::error::invalid_signature("bad signature")),
             |_| true,
         );
         let _ = fs::remove_file(&path);

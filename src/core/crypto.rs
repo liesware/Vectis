@@ -4,7 +4,6 @@ use botan::{
     HashFunction, KeyDecapsulation, KeyEncapsulation, Privkey, Pubkey, RandomNumberGenerator,
     Signer, Verifier,
 };
-use std::io;
 use zeroize::Zeroizing;
 
 pub fn random_bytes(size: usize) -> Result<Vec<u8>, botan::Error> {
@@ -195,10 +194,7 @@ pub fn validate_der_public_key_hex(
     public_key_der_hex: &str,
 ) -> Result<Pubkey, DynError> {
     load_public_key_der_hex(public_key_der_hex).map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{field_name} is not a valid public key: {err}"),
-        )) as DynError
+        crate::error::invalid_input(format!("{field_name} is not a valid public key: {err}"))
     })
 }
 
@@ -247,20 +243,16 @@ pub fn validate_x_key_agreement_public_key_hex(
         "X25519" => 32,
         "X448" => 56,
         _ => {
-            return Err(Box::new(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("{field_name} algorithm is not supported"),
+            return Err(crate::error::invalid_input(format!(
+                "{field_name} algorithm is not supported"
             )));
         }
     };
 
     if public_key.len() != expected_size {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "{field_name} must be {expected_size} bytes for {algorithm}, got {}",
-                public_key.len()
-            ),
+        return Err(crate::error::invalid_input(format!(
+            "{field_name} must be {expected_size} bytes for {algorithm}, got {}",
+            public_key.len()
         )));
     }
 
@@ -403,10 +395,7 @@ pub fn validate_ml_kem_public_key_hex(
     let public_key = validate_der_public_key_hex(field_name, public_key_der_hex)?;
     let salt = Zeroizing::new(random_bytes(32)?);
     encapsulate_ml_kem_shared_key(&public_key, &salt, shared_key_len).map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{field_name} cannot encapsulate: {err}"),
-        )) as DynError
+        crate::error::invalid_input(format!("{field_name} cannot encapsulate: {err}"))
     })?;
 
     Ok(())

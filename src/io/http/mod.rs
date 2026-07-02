@@ -32,7 +32,6 @@ use crate::error::DynError;
 use crate::ops::init::{InitValidationOutput, ValidatedInitState};
 use crate::ops::internal_keys::InternalDerivedKeysState;
 use crate::ops::keys::{KeysDbState, LoadedOpsKey};
-use crate::ops::message::{RemotePublicKeys, RemotePublicKeysState};
 use metrics_exporter_prometheus::PrometheusHandle;
 
 pub use app::run;
@@ -46,7 +45,6 @@ pub struct HttpState {
     storage: Arc<StorageState>,
     started_at: Arc<String>,
     keys_db_state: Arc<RwLock<Zeroizing<KeysDbState>>>,
-    remote_public_keys_state: Arc<RwLock<Zeroizing<RemotePublicKeysState>>>,
     config_state: Arc<RwLock<Zeroizing<ConfigState>>>,
     metrics_handle: Option<Arc<PrometheusHandle>>,
 }
@@ -73,9 +71,6 @@ impl HttpState {
             storage: Arc::new(input.storage),
             started_at: Arc::new(input.started_at),
             keys_db_state: Arc::new(RwLock::new(input.keys_db_state)),
-            remote_public_keys_state: Arc::new(RwLock::new(Zeroizing::new(
-                RemotePublicKeysState::default(),
-            ))),
             config_state: Arc::new(RwLock::new(Zeroizing::new(input.config_state))),
             metrics_handle: input.metrics_handle,
         }
@@ -249,17 +244,6 @@ impl HttpState {
         *keys_db_state = reloaded;
 
         Ok(())
-    }
-
-    async fn remote_public_keys(&self, host: &str, kid: &str) -> Option<RemotePublicKeys> {
-        let remote_public_keys_state = self.remote_public_keys_state.read().await;
-
-        remote_public_keys_state.get(host, kid).cloned()
-    }
-
-    async fn upsert_remote_public_keys(&self, remote_key: RemotePublicKeys) {
-        let mut remote_public_keys_state = self.remote_public_keys_state.write().await;
-        remote_public_keys_state.upsert(remote_key);
     }
 
     async fn final_app_route_for(&self, kid: &str) -> FinalAppRoute {

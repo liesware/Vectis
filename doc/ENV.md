@@ -109,7 +109,7 @@ Runtime route operations:
 
 The `remote_routes` config section is the only source of authorized outbound Vectis destinations for `POST /message/{sender_kid}`. The request body supplies `recipient_kid`; Vectis uses the signed route to find `remote_addr`. `allowed_local_kids` limits which local sender KIDs may use the route; use `["*"]` to allow any loaded local KID.
 
-Each entry may also include an optional `public_keys` object (the peer's full public key set, as returned by its `GET /pub/{kid}`). When present, `/message` uses those trusted keys directly instead of fetching `/pub`, and `POST /sign/verification` can verify timestamp tokens signed by that remote `kid` (cross-instance verification). Without it, Vectis fetches `/pub` on first use.
+Each entry may also include an optional `public_keys` object (the peer's full public key set, as returned by its `GET /pub/{kid}`). The signed config is the only source of peer public keys: `/message` send requires the recipient route to carry `public_keys`, `/message` receive requires the sender `kid` to match an active entry with `public_keys`, and `POST /sign/verification` can verify timestamp tokens signed by that remote `kid` (cross-instance verification). Entries without `public_keys` are routing metadata only and cannot be used to exchange messages; Vectis never fetches peer keys from a remote `/pub` endpoint at runtime.
 
 When `public_keys` is present, Vectis validates the key material before loading it: DER public keys must be loadable by Botan, X25519/X448 raw public keys must be exactly 32/56 bytes, and ML-KEM public keys must be loadable and usable for encapsulation. Invalid or non-operational public key material rejects config load/reload.
 

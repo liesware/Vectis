@@ -3,7 +3,6 @@ use crate::error::DynError;
 use crate::ops::keys;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::io;
 
 const REMOTE_ROUTE_ML_KEM_SHARED_KEY_SIZE_BYTES: usize = 32;
 
@@ -92,25 +91,16 @@ impl RemoteRoutesState {
             .get(recipient_kid)
             .and_then(|index| self.routes.get(*index))
             .cloned()
-            .ok_or_else(|| {
-                Box::new(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    "recipient route not found",
-                )) as DynError
-            })?;
+            .ok_or_else(|| crate::error::not_found("recipient route not found"))?;
 
         if route.status != "active" {
-            return Err(Box::new(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "recipient route is disabled",
-            )));
+            return Err(crate::error::forbidden("recipient route is disabled"));
         }
 
         if !route.allows_local_kid(sender_kid) {
-            return Err(Box::new(io::Error::new(
-                io::ErrorKind::PermissionDenied,
+            return Err(crate::error::forbidden(
                 "sender kid is not allowed for recipient route",
-            )));
+            ));
         }
 
         Ok(route)
@@ -164,19 +154,13 @@ pub(crate) fn validate_remote_routes(
 
     for route in routes {
         keys::KeyId::parse(&route.remote_kid).map_err(|err| {
-            Box::new(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("remote_routes.remote_kid is invalid: {err}"),
-            )) as DynError
+            crate::error::invalid_input(format!("remote_routes.remote_kid is invalid: {err}"))
         })?;
 
         if !seen.insert(route.remote_kid.clone()) {
-            return Err(Box::new(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "remote routes file has duplicated remote_kid: {}",
-                    route.remote_kid
-                ),
+            return Err(crate::error::invalid_input(format!(
+                "remote routes file has duplicated remote_kid: {}",
+                route.remote_kid
             )));
         }
 
@@ -270,18 +254,16 @@ fn validate_allowed_local_kids(
     local_kid_exists: impl Fn(&str) -> bool,
 ) -> Result<(), DynError> {
     if allowed_local_kids.is_empty() {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "remote_routes.allowed_local_kids must not be empty",
-        )));
+        ));
     }
 
     let has_wildcard = allowed_local_kids.iter().any(|kid| kid == "*");
     if has_wildcard && allowed_local_kids.len() > 1 {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "remote_routes.allowed_local_kids wildcard cannot be mixed with explicit kids",
-        )));
+        ));
     }
     if has_wildcard {
         return Ok(());
@@ -290,23 +272,20 @@ fn validate_allowed_local_kids(
     let mut seen = HashSet::new();
     for kid in allowed_local_kids {
         keys::KeyId::parse(kid).map_err(|err| {
-            Box::new(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("remote_routes.allowed_local_kids contains invalid kid: {err}"),
-            )) as DynError
+            crate::error::invalid_input(format!(
+                "remote_routes.allowed_local_kids contains invalid kid: {err}"
+            ))
         })?;
 
         if !seen.insert(kid.clone()) {
-            return Err(Box::new(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("remote_routes.allowed_local_kids has duplicated kid: {kid}"),
+            return Err(crate::error::invalid_input(format!(
+                "remote_routes.allowed_local_kids has duplicated kid: {kid}"
             )));
         }
 
         if !local_kid_exists(kid) {
-            return Err(Box::new(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("remote_routes.allowed_local_kids contains unloaded kid: {kid}"),
+            return Err(crate::error::invalid_input(format!(
+                "remote_routes.allowed_local_kids contains unloaded kid: {kid}"
             )));
         }
     }

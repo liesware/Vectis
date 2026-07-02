@@ -28,12 +28,9 @@ pub fn validate_symmetric_key(
 
     let expected_hex_len = key_size_bytes * 2;
     if key_hex.len() != expected_hex_len {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "{field} must be {expected_hex_len} hex characters for a {key_size_bytes}-byte symmetric key, got {}",
-                key_hex.len(),
-            ),
+        return Err(crate::error::invalid_input(format!(
+            "{field} must be {expected_hex_len} hex characters for a {key_size_bytes}-byte symmetric key, got {}",
+            key_hex.len(),
         )));
     }
 
@@ -52,9 +49,8 @@ pub fn validate_encrypted_payload(
     validate_hex_field(ciphertext_field, ciphertext_hex)?;
 
     if ciphertext_hex.len() < 32 {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{ciphertext_field} must include at least a 16-byte authentication tag"),
+        return Err(crate::error::invalid_input(format!(
+            "{ciphertext_field} must include at least a 16-byte authentication tag"
         )));
     }
 
@@ -62,19 +58,15 @@ pub fn validate_encrypted_payload(
 
     let expected_nonce_hex_len = nonce_size_bytes * 2;
     if nonce_hex.len() != expected_nonce_hex_len {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "{nonce_field} must be {expected_nonce_hex_len} hex characters for a {nonce_size_bytes}-byte nonce, got {}",
-                nonce_hex.len()
-            ),
+        return Err(crate::error::invalid_input(format!(
+            "{nonce_field} must be {expected_nonce_hex_len} hex characters for a {nonce_size_bytes}-byte nonce, got {}",
+            nonce_hex.len()
         )));
     }
 
     if aad.trim().is_empty() {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{aad_field} must not be empty"),
+        return Err(crate::error::invalid_input(format!(
+            "{aad_field} must not be empty"
         )));
     }
 
@@ -83,16 +75,14 @@ pub fn validate_encrypted_payload(
 
 pub fn validate_text_field(field: &str, value: &str) -> Result<(), DynError> {
     if value.trim().is_empty() {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{field} must not be empty"),
+        return Err(crate::error::invalid_input(format!(
+            "{field} must not be empty"
         )));
     }
 
     if value.chars().any(char::is_control) {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{field} must not contain control characters"),
+        return Err(crate::error::invalid_input(format!(
+            "{field} must not contain control characters"
         )));
     }
 
@@ -103,10 +93,7 @@ pub fn validate_socket_addr(field: &str, value: &str) -> Result<SocketAddr, DynE
     validate_text_field(field, value)?;
 
     value.parse::<SocketAddr>().map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{field} must be a valid socket address: {err}"),
-        )) as DynError
+        crate::error::invalid_input(format!("{field} must be a valid socket address: {err}"))
     })
 }
 
@@ -118,23 +105,18 @@ pub fn validate_host_port(field: &str, value: &str) -> Result<String, DynError> 
     }
 
     let Some((host, port)) = value.rsplit_once(':') else {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{field} must be a valid host:port value"),
+        return Err(crate::error::invalid_input(format!(
+            "{field} must be a valid host:port value"
         )));
     };
 
     validate_hostname(&format!("{field}.host"), host)?;
     let port = port.parse::<u16>().map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{field}.port must be a valid TCP port: {err}"),
-        )) as DynError
+        crate::error::invalid_input(format!("{field}.port must be a valid TCP port: {err}"))
     })?;
     if port == 0 {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{field}.port must be greater than 0"),
+        return Err(crate::error::invalid_input(format!(
+            "{field}.port must be greater than 0"
         )));
     }
 
@@ -149,10 +131,9 @@ pub fn validate_hostname(field: &str, value: &str) -> Result<(), DynError> {
     }
 
     addr::parse_domain_name(value).map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{field} must be a valid hostname or IP address: {err}"),
-        )) as DynError
+        crate::error::invalid_input(format!(
+            "{field} must be a valid hostname or IP address: {err}"
+        ))
     })?;
 
     Ok(())
@@ -168,32 +149,29 @@ pub fn validate_allowed_value(
     if allowed_values.contains(&value) {
         Ok(())
     } else {
-        Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{field} must be one of {}", allowed_values.join(", ")),
+        Err(crate::error::invalid_input(format!(
+            "{field} must be one of {}",
+            allowed_values.join(", ")
         )))
     }
 }
 
 pub fn validate_hex_field(field: &str, value: &str) -> Result<(), DynError> {
     if value.is_empty() {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{field} must not be empty"),
+        return Err(crate::error::invalid_input(format!(
+            "{field} must not be empty"
         )));
     }
 
     if !value.len().is_multiple_of(2) {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{field} must have an even number of hex characters"),
+        return Err(crate::error::invalid_input(format!(
+            "{field} must have an even number of hex characters"
         )));
     }
 
     if !value.as_bytes().iter().all(u8::is_ascii_hexdigit) {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{field} must contain only hexadecimal characters"),
+        return Err(crate::error::invalid_input(format!(
+            "{field} must contain only hexadecimal characters"
         )));
     }
 
@@ -210,12 +188,9 @@ pub fn validate_hash_hex_field(
 
     let expected_hex_len = crypto::hash_bytes(hash_algorithm, &[])?.len() * 2;
     if value.len() != expected_hex_len {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "{field} must be {expected_hex_len} hex characters for {hash_algorithm}, got {}",
-                value.len()
-            ),
+        return Err(crate::error::invalid_input(format!(
+            "{field} must be {expected_hex_len} hex characters for {hash_algorithm}, got {}",
+            value.len()
         )));
     }
 
@@ -226,10 +201,7 @@ pub fn current_timestamp() -> Result<String, DynError> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|err| {
-            Box::new(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("system time is before UNIX_EPOCH: {err}"),
-            )) as DynError
+            crate::error::invalid_input(format!("system time is before UNIX_EPOCH: {err}"))
         })?
         .as_secs();
 
@@ -260,9 +232,8 @@ pub fn read_unseal_key(prompt: &str) -> Result<Zeroizing<String>, DynError> {
             }
         }
         Err(err) => {
-            return Err(Box::new(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("VECTIS_UNSEAL_KEY could not be read: {err}"),
+            return Err(crate::error::invalid_input(format!(
+                "VECTIS_UNSEAL_KEY could not be read: {err}"
             )));
         }
     };
@@ -309,9 +280,8 @@ fn unseal_key_file_path() -> Result<(PathBuf, bool), DynError> {
                 Ok((PathBuf::from(DEFAULT_UNSEAL_KEY_FILE), false))
             }
         }
-        Err(err) => Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("VECTIS_UNSEAL_KEY_FILE could not be read: {err}"),
+        Err(err) => Err(crate::error::invalid_input(format!(
+            "VECTIS_UNSEAL_KEY_FILE could not be read: {err}"
         ))),
     }
 }

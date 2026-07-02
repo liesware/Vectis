@@ -5,7 +5,6 @@ use crate::ops;
 use reqwest::{Method, Url};
 use serde_json::{Map, Value, json};
 use std::fs;
-use std::io;
 use std::path::Path;
 use std::time::Duration;
 
@@ -679,7 +678,7 @@ fn print_response(payload: &str, output: OutputFormat) -> Result<(), DynError> {
 }
 
 fn invalid_input(message: impl Into<String>) -> DynError {
-    Box::new(io::Error::new(io::ErrorKind::InvalidInput, message.into()))
+    crate::error::invalid_input(message.into())
 }
 
 fn is_help_request(args: &[String]) -> bool {

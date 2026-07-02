@@ -2605,6 +2605,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sqlx",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-appender",

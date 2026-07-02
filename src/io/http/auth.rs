@@ -5,7 +5,6 @@ use crate::error::DynError;
 use crate::ops::internal_keys::InternalDerivedKeysState;
 use axum::Json;
 use axum::http::{HeaderMap, HeaderName, StatusCode};
-use std::io;
 use zeroize::Zeroizing;
 
 const API_KEY_HEADER: HeaderName = HeaderName::from_static("x-api-key");
@@ -26,10 +25,7 @@ impl HttpAuthState {
         }
 
         let root_api_key_hash_bytes = hex::decode(&config.api_key_hash).map_err(|err| {
-            Box::new(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("VECTIS_APIKEY_HASH could not be decoded: {err}"),
-            )) as DynError
+            crate::error::invalid_input(format!("VECTIS_APIKEY_HASH could not be decoded: {err}"))
         })?;
 
         Ok(Self {

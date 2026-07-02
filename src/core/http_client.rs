@@ -2,7 +2,6 @@ use crate::core::{config, validation};
 use crate::error::DynError;
 use reqwest::StatusCode;
 use serde::{Serialize, de::DeserializeOwned};
-use std::io;
 use std::sync::OnceLock;
 use std::time::Duration;
 use tracing::warn;
@@ -15,18 +14,6 @@ struct HttpClientState {
 }
 
 static HTTP_CLIENT: OnceLock<HttpClientState> = OnceLock::new();
-
-pub async fn get_remote_json<T>(host: &str, path: &str) -> Result<T, DynError>
-where
-    T: DeserializeOwned,
-{
-    let state = client_state()?;
-    let url = http_url(&state.config.remote_scheme, host, path)?;
-    let response = state.client.get(url).send().await?;
-    let response = ensure_success(host, response).await?;
-
-    Ok(response.json::<T>().await?)
-}
 
 pub async fn post_remote_json<TRequest, TResponse>(
     host: &str,
@@ -78,9 +65,9 @@ fn client_state() -> Result<&'static HttpClientState, DynError> {
         .build()?;
     let _ = HTTP_CLIENT.set(HttpClientState { client, config });
 
-    HTTP_CLIENT.get().ok_or_else(|| {
-        Box::new(io::Error::other("HTTP client could not be initialized")) as DynError
-    })
+    HTTP_CLIENT
+        .get()
+        .ok_or_else(|| crate::error::internal("HTTP client could not be initialized"))
 }
 
 fn http_url(scheme: &str, host: &str, path: &str) -> Result<String, DynError> {
@@ -106,17 +93,15 @@ async fn ensure_success(
         "remote HTTP request returned non-success status"
     );
 
-    Err(Box::new(io::Error::new(
-        error_kind_for_status(status),
-        format!("remote HTTP request failed with status {}", status.as_u16()),
-    )))
+    Err(error_for_status(status))
 }
 
-fn error_kind_for_status(status: StatusCode) -> io::ErrorKind {
+fn error_for_status(status: StatusCode) -> DynError {
+    let message = format!("remote HTTP request failed with status {}", status.as_u16());
     match status.as_u16() {
-        400 => io::ErrorKind::InvalidInput,
-        401 | 403 => io::ErrorKind::PermissionDenied,
-        404 => io::ErrorKind::NotFound,
-        _ => io::ErrorKind::InvalidData,
+        400 => crate::error::invalid_input(message),
+        401 | 403 => crate::error::forbidden(message),
+        404 => crate::error::not_found(message),
+        _ => crate::error::internal(message),
     }
 }

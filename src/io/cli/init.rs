@@ -2,16 +2,14 @@ use crate::core::{config, validation};
 use crate::error::DynError;
 use crate::ops;
 use std::fs;
-use std::io;
 use tracing::info;
 
 pub fn run_init() -> Result<String, DynError> {
     let init_keys_path = config::init_keys_file_path()?;
     if init_keys_path.try_exists()? {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(crate::error::invalid_input(
             "init keys file already exists; refusing to overwrite existing init material; delete it manually before running init again",
-        )));
+        ));
     }
 
     let output = ops::init::create_encrypted_init_output_json()?;

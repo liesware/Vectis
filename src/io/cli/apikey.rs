@@ -1,7 +1,6 @@
 use crate::core::validation;
 use crate::error::DynError;
 use crate::{io::cli::init, ops};
-use std::io;
 
 const PROGRAM_NAME: &str = "vectis";
 
@@ -140,5 +139,5 @@ fn is_help_request(args: &[String]) -> bool {
 }
 
 fn invalid_input(message: impl Into<String>) -> DynError {
-    Box::new(io::Error::new(io::ErrorKind::InvalidInput, message.into()))
+    crate::error::invalid_input(message.into())
 }

@@ -529,7 +529,7 @@ def write_test_routes(key_ids, final_app_addr):
     write_config()
 
 
-def write_test_remote_routes(key_ids, recipient_host, wildcard=False):
+def write_test_remote_routes(client, key_ids, recipient_host, wildcard=False):
     _CONFIG["remote_routes"] = [
         {
             "remote_kid": key_id,
@@ -537,6 +537,7 @@ def write_test_remote_routes(key_ids, recipient_host, wildcard=False):
             "remote_addr": recipient_host,
             "allowed_local_kids": ["*"] if wildcard else [key_id],
             "status": "active",
+            "public_keys": client.get(f"/pub/{key_id}")["keys"],
         }
         for index, key_id in enumerate(key_ids, start=1)
     ]
@@ -1015,7 +1016,7 @@ def main():
     validate_routes_list(client.get("/routes", auth=True))
     print("List routes: OK\n")
     passed_count += 1
-    write_test_remote_routes([key_id for key_id, _ in created], recipient_host)
+    write_test_remote_routes(client, [key_id for key_id, _ in created], recipient_host)
     reload_config(client)
     print("Reload remote routes config: OK\n")
     passed_count += 1
@@ -1048,7 +1049,7 @@ def main():
     validate_remote_route_public_keys(peer_route["public_keys"], peer_case)
     print("Remote route public_keys round-trip: OK\n")
     passed_count += 1
-    write_test_remote_routes([key_id for key_id, _ in created], recipient_host)
+    write_test_remote_routes(client, [key_id for key_id, _ in created], recipient_host)
     reload_config(client)
 
     permission_rows = validate_permissions_flow(args.base_url, client, created[0][0], created[0][1])
@@ -1109,7 +1110,7 @@ def main():
             verify_signature(client, token)
             verify_rows.append((f"{key_id} {hash_alg}", "OK"))
 
-    write_test_remote_routes([key_id for key_id, _ in created], recipient_host, wildcard=True)
+    write_test_remote_routes(client, [key_id for key_id, _ in created], recipient_host, wildcard=True)
     reload_config(client)
     wildcard_result = send_message(
         client,

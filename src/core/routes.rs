@@ -3,7 +3,6 @@ use crate::error::DynError;
 use crate::ops::keys;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::io;
 
 #[derive(Clone, Serialize)]
 pub struct FinalAppRoute {
@@ -94,26 +93,19 @@ pub(crate) fn validate_routes(
     let mut validated = Vec::with_capacity(routes.len());
 
     for route in routes {
-        keys::KeyId::parse(&route.kid).map_err(|err| {
-            Box::new(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("routes.kid is invalid: {err}"),
-            )) as DynError
-        })?;
+        keys::KeyId::parse(&route.kid)
+            .map_err(|err| crate::error::invalid_input(format!("routes.kid is invalid: {err}")))?;
         if !is_loaded_kid(&route.kid) {
-            return Err(Box::new(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "routes file references kid not loaded in memory: {}",
-                    route.kid
-                ),
+            return Err(crate::error::invalid_input(format!(
+                "routes file references kid not loaded in memory: {}",
+                route.kid
             )));
         }
 
         if !seen.insert(route.kid.clone()) {
-            return Err(Box::new(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("routes file has duplicated kid: {}", route.kid),
+            return Err(crate::error::invalid_input(format!(
+                "routes file has duplicated kid: {}",
+                route.kid
             )));
         }
 

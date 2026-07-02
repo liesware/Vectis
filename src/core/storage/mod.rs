@@ -1,7 +1,6 @@
 use crate::core::config;
 use crate::error::DynError;
 use serde::Serialize;
-use std::io;
 
 mod sqlite;
 
@@ -77,8 +76,7 @@ impl StorageState {
 }
 
 fn unsupported_storage<T>(storage: &str) -> Result<T, DynError> {
-    Err(Box::new(io::Error::new(
-        io::ErrorKind::InvalidInput,
-        format!("unsupported VECTIS_STORAGE: {storage}"),
+    Err(crate::error::invalid_input(format!(
+        "unsupported VECTIS_STORAGE: {storage}"
     )))
 }

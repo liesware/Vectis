@@ -170,7 +170,6 @@ It holds:
 - storage backend state;
 - service startup timestamp;
 - loaded operational keys from storage;
-- cached remote public keys fetched from remote peers;
 - signed config state;
 - optional Prometheus metrics handle.
 
@@ -408,8 +407,11 @@ If `public_keys` is present, Vectis validates the material before loading it:
 - X448 public keys must be 56 bytes;
 - ML-KEM public keys must be loadable and usable for encapsulation.
 
-If `public_keys` is absent, Vectis can fetch `/pub/{kid}` from the remote peer
-on first use and cache the result in memory.
+The signed config is the only source of peer public keys. If `public_keys` is
+absent, the entry is routing metadata only: sending to that peer returns `403`,
+and inbound messages from a sender `kid` without a registered entry are
+rejected with `403`. Vectis never fetches peer keys from a remote `/pub`
+endpoint at runtime.
 
 ## Permissions
 
@@ -460,7 +462,8 @@ For `POST /message/{sender_kid}`:
 5. Enforce lifecycle for new use.
 6. Resolve `recipient_kid` through signed remote routes.
 7. Ensure `sender_kid` is allowed by the route.
-8. Resolve recipient public keys from signed config, cache, or remote `/pub`.
+8. Resolve recipient public keys from the route's `public_keys` in the signed
+   config; reject with `403` if the route has none.
 9. Generate hybrid KEM material using XECDH and ML-KEM.
 10. Derive a message key with HKDF.
 11. Build AAD binding protocol metadata.
@@ -473,7 +476,9 @@ For `POST /message/{sender_kid}`:
 For `POST /message`:
 
 1. Validate the protected message schema.
-2. Resolve sender public keys locally or through trusted remote config.
+2. Resolve sender public keys from the matching active `remote_routes` entry
+   with `public_keys` in the signed config; reject unregistered senders with
+   `403`.
 3. Verify EdDSA and ML-DSA signatures.
 4. Load recipient private key.
 5. Enforce lifecycle for decrypt/verify.
@@ -651,7 +656,7 @@ HTTP client commands:
 - routes;
 - remote routes;
 - config reload;
-- public key fetch;
+- public key lookup (`GET /pub`);
 - sign;
 - message send/decrypt;
 - self-test.
@@ -1001,7 +1006,7 @@ Rebuild confidence with:
 
 - init;
 - key creation;
-- public key fetch;
+- public key lookup (`GET /pub`);
 - self-test;
 - sign/verify;
 - message send/receive/decrypt;
@@ -1018,8 +1023,8 @@ Vectis is still experimental. Important boundaries:
 - no custom CA bundle support yet;
 - production TLS policy exists, but deployment hardening still needs more work;
 - config reload is whole-file, not per-section transactional;
-- remote peer trust can rely on signed `public_keys` or first-use `/pub` fetch
-  depending on configuration;
+- message exchange requires peer `public_keys` registered in the signed config;
+  there is no runtime key fetch and no trust-on-first-use path;
 - cryptographic implementation depends on Botan availability and correctness;
 - no formal external security audit has been completed.
 
@@ -1085,5 +1090,4 @@ When changing Vectis, check:
   remote Vectis peer.
 - **Root API key**: API key verified by `VECTIS_APIKEY_HASH`.
 - **Signed config**: Canonicalized `config.json` verified by `config_sign.json`.
-- **TOFU**: Trust on first use. Used only when remote public keys are not pinned
-  in signed config.
+  The only source of peer public keys; Vectis has no trust-on-first-use path.

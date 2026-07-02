@@ -3,7 +3,6 @@ use crate::error::DynError;
 use crate::ops::key_material::{KeyMaterialOutput, KeyMaterialSpec, create_key_material};
 use crate::ops::key_validation::{KeyValidationOutput, validate_key_material};
 use serde::{Deserialize, Serialize};
-use std::io;
 use zeroize::Zeroizing;
 
 pub type InitOutput = KeyMaterialOutput;
@@ -163,12 +162,9 @@ fn decrypt_encrypted_init_output(
         encrypted_input.aad.as_bytes(),
     )
     .map_err(|err| {
-        Box::new(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!(
+        crate::error::forbidden(format!(
                 "init keys file could not be decrypted: wrong init AES-256 key, stale VECTIS_UNSEAL_KEY, or init key material was regenerated ({err})"
-            ),
-        )) as DynError
+            ))
     })?;
     let mut plaintext_bytes = Zeroizing::new(decrypted);
     let plaintext = Zeroizing::new(String::from_utf8(std::mem::take(&mut *plaintext_bytes))?);

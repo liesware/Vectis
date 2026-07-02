@@ -3,7 +3,6 @@ use crate::error::DynError;
 use crate::ops::keys;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::io;
 use tracing::warn;
 use zeroize::Zeroize;
 
@@ -333,10 +332,7 @@ pub(crate) fn validate_permission_clients(
                 validate_global_actions(&actions)?;
             } else {
                 keys::validate_key_id(&permission.kid).map_err(|err| {
-                    Box::new(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        format!("permissions.kid is invalid: {err}"),
-                    )) as DynError
+                    crate::error::invalid_input(format!("permissions.kid is invalid: {err}"))
                 })?;
                 if !is_loaded_kid(&permission.kid) {
                     return invalid_permissions(format!(
@@ -405,17 +401,11 @@ fn is_global_permission_action(action: &str) -> bool {
 }
 
 fn permission_denied(message: &str) -> Result<(), DynError> {
-    Err(Box::new(io::Error::new(
-        io::ErrorKind::PermissionDenied,
-        message,
-    )))
+    Err(crate::error::forbidden(message))
 }
 
 fn invalid_permissions<T>(message: impl Into<String>) -> Result<T, DynError> {
-    Err(Box::new(io::Error::new(
-        io::ErrorKind::InvalidInput,
-        message.into(),
-    )))
+    Err(crate::error::invalid_input(message.into()))
 }
 
 #[cfg(test)]

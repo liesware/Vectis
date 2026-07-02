@@ -1,7 +1,6 @@
 use crate::core::{config, crypto};
 use crate::error::DynError;
 use serde::{Deserialize, Serialize};
-use std::io;
 use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -187,10 +186,10 @@ impl VariantKeyAgreementKeyPair {
 pub(crate) fn create_key_material(spec: &KeyMaterialSpec) -> Result<KeyMaterialOutput, DynError> {
     let symmetric_cipher =
         crypto::symmetric_cipher(&spec.symmetric_algorithm).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("invalid symmetric algorithm: {}", spec.symmetric_algorithm),
-            )
+            crate::error::invalid_input(format!(
+                "invalid symmetric algorithm: {}",
+                spec.symmetric_algorithm
+            ))
         })?;
     let symmetric_key = Zeroizing::new(crypto::random_bytes(symmetric_cipher.key_size_bytes)?);
 
@@ -202,20 +201,14 @@ pub(crate) fn create_key_material(spec: &KeyMaterialSpec) -> Result<KeyMaterialO
 
     let ml_dsa_variant =
         crypto::MlDsaVariant::from_name(&spec.ml_dsa_variant).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("invalid ml_dsa_variant: {}", spec.ml_dsa_variant),
-            )
+            crate::error::invalid_input(format!("invalid ml_dsa_variant: {}", spec.ml_dsa_variant))
         })?;
     let ml_dsa_private_key = crypto::create_ml_dsa_private_key(&ml_dsa_variant)?;
     let ml_dsa_public_key = crypto::public_key(&ml_dsa_private_key)?;
 
     let ml_kem_variant =
         crypto::MlKemVariant::from_name(&spec.ml_kem_variant).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("invalid ml_kem_variant: {}", spec.ml_kem_variant),
-            )
+            crate::error::invalid_input(format!("invalid ml_kem_variant: {}", spec.ml_kem_variant))
         })?;
     let ml_kem_private_key = crypto::create_ml_kem_private_key(&ml_kem_variant)?;
     let ml_kem_public_key = crypto::public_key(&ml_kem_private_key)?;
