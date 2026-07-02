@@ -532,3 +532,73 @@ fn status_text(valid: bool) -> String {
         String::from("fail")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn hex64(seed: char) -> String {
+        String::from(seed).repeat(64)
+    }
+
+    fn token(eddsa_alg: &str, ml_dsa_alg: &str, payload_version: &str) -> TimestampToken {
+        serde_json::from_value(json!({
+            "version": "v1",
+            "payload": {
+                "version": payload_version,
+                "type": "vectis-sign",
+                "created_at": "2024-01-01T00:00:00Z",
+                "info": "peer-info",
+                "kid": hex64('a'),
+                "serial": hex64('b'),
+                "message_hash": {"alg": "BLAKE2b(256)", "hex": hex64('c')}
+            },
+            "signatures": {
+                "eddsa": {"alg": eddsa_alg, "sig": "aa"},
+                "ml-dsa": {"alg": ml_dsa_alg, "sig": "aa"}
+            }
+        }))
+        .unwrap()
+    }
+
+    fn peer(eddsa_alg: &str, ml_dsa_alg: &str) -> PeerPublicKeys {
+        serde_json::from_value(json!({
+            "eddsa": {"alg": eddsa_alg, "public_key_der_hex": "aa"},
+            "xecdh": {"alg": "X25519", "public_key_hex": "aa"},
+            "ml-dsa": {"alg": ml_dsa_alg, "public_key_der_hex": "aa"},
+            "ml-kem": {"alg": "ML-KEM-512", "public_key_der_hex": "aa"}
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn validate_timestamp_token_accepts_well_formed_token() {
+        assert!(validate_timestamp_token(&token("Ed25519", "ML-DSA-44", "v1")).is_ok());
+    }
+
+    #[test]
+    fn validate_timestamp_token_rejects_wrong_token_type() {
+        let mut value = serde_json::to_value(token("Ed25519", "ML-DSA-44", "v1")).unwrap();
+        value["payload"]["type"] = json!("vectis-config");
+        let token: TimestampToken = serde_json::from_value(value).unwrap();
+        assert!(validate_timestamp_token(&token).is_err());
+    }
+
+    #[test]
+    fn validate_timestamp_token_rejects_unsupported_payload_version() {
+        assert!(validate_timestamp_token(&token("Ed25519", "ML-DSA-44", "v2")).is_err());
+    }
+
+    #[test]
+    fn verify_timestamp_with_peer_keys_rejects_eddsa_alg_mismatch() {
+        let token = token("Ed25519", "ML-DSA-44", "v1");
+        assert!(verify_timestamp_with_peer_keys(&token, &peer("Ed448", "ML-DSA-44")).is_err());
+    }
+
+    #[test]
+    fn verify_timestamp_with_peer_keys_rejects_ml_dsa_alg_mismatch() {
+        let token = token("Ed25519", "ML-DSA-44", "v1");
+        assert!(verify_timestamp_with_peer_keys(&token, &peer("Ed25519", "ML-DSA-65")).is_err());
+    }
+}

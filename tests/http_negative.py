@@ -787,6 +787,50 @@ def main():
         status, _ = client.post("/remote-routes/reload", {}, auth=True)
         require_status("remote routes invalid status", status, 400)
 
+    def _peer_public_keys():
+        return {
+            "eddsa": {"alg": "Ed25519", "public_key_der_hex": "aa"},
+            "xecdh": {"alg": "X25519", "public_key_hex": "aa"},
+            "ml-dsa": {"alg": "ML-DSA-44", "public_key_der_hex": "aa"},
+            "ml-kem": {"alg": "ML-KEM-512", "public_key_der_hex": "aa"},
+        }
+
+    def remote_routes_invalid_public_key_alg():
+        public_keys = _peer_public_keys()
+        public_keys["eddsa"]["alg"] = "RSA"
+        write_remote_routes(
+            [
+                {
+                    "remote_kid": key_id,
+                    "name": "bad public key alg",
+                    "remote_addr": recipient_host,
+                    "allowed_local_kids": [key_id],
+                    "status": "active",
+                    "public_keys": public_keys,
+                }
+            ]
+        )
+        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        require_status("remote routes invalid public key alg", status, 400)
+
+    def remote_routes_invalid_public_key_hex():
+        public_keys = _peer_public_keys()
+        public_keys["xecdh"]["public_key_hex"] = "zz"
+        write_remote_routes(
+            [
+                {
+                    "remote_kid": key_id,
+                    "name": "bad public key hex",
+                    "remote_addr": recipient_host,
+                    "allowed_local_kids": [key_id],
+                    "status": "active",
+                    "public_keys": public_keys,
+                }
+            ]
+        )
+        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        require_status("remote routes invalid public key hex", status, 400)
+
     def permissions_missing_kid():
         write_permissions(
             [
@@ -856,6 +900,8 @@ def main():
         ("remote routes invalid allowed local kid", remote_routes_invalid_allowed_local_kid),
         ("remote routes unloaded allowed local kid", remote_routes_unloaded_allowed_local_kid),
         ("remote routes invalid status", remote_routes_invalid_status),
+        ("remote routes invalid public key alg", remote_routes_invalid_public_key_alg),
+        ("remote routes invalid public key hex", remote_routes_invalid_public_key_hex),
         ("permissions missing kid", permissions_missing_kid),
         ("permissions invalid apikey_hash", permissions_invalid_apikey_hash),
         ("permissions invalid status", permissions_invalid_status),

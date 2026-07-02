@@ -151,3 +151,106 @@ fn is_not_found_error(err: &(dyn std::error::Error + Send + Sync + 'static)) -> 
     err.downcast_ref::<io::Error>()
         .is_some_and(|err| err.kind() == io::ErrorKind::NotFound)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn unique_path(tag: &str) -> PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "vectis_cfgtest_{}_{tag}_{seq}.json",
+            std::process::id()
+        ))
+    }
+
+    fn test_config(config_path: PathBuf) -> config::AppConfig {
+        config::AppConfig {
+            http_bind_addr: "127.0.0.1:3000".parse().unwrap(),
+            mode: String::from("dev"),
+            server_scheme: String::from("http"),
+            remote_scheme: String::from("http"),
+            final_app_scheme: String::from("http"),
+            public_addr: String::from("localhost:3000"),
+            final_app_addr: String::from("localhost:3999"),
+            final_app_path: String::from("/message"),
+            tls_cert_path: None,
+            tls_key_path: None,
+            tls_skip_verify: false,
+            config_path,
+            config_sign_path: PathBuf::from("config_sign.json"),
+            api_key_hash: String::new(),
+            protocol_version: String::from("v1"),
+            storage_type: String::from("sqlite"),
+            sqlite_path: PathBuf::from("data.db"),
+            sender_hostname: String::from("a"),
+            receiver_hostname: String::from("b"),
+            default_crypto_profile: String::from("hybrid-performance-v1"),
+            crypto_policy: String::from("profile-only"),
+            plaintext_message: String::new(),
+            metrics_enabled: true,
+        }
+    }
+
+    #[test]
+    fn canonical_config_json_is_order_independent() {
+        let a = r#"{"version":"v1","routes":[],"remote_routes":[],"permissions":[]}"#;
+        let b = r#"{"permissions":[],"remote_routes":[],"routes":[],"version":"v1"}"#;
+        assert_eq!(
+            canonical_config_json(a).unwrap(),
+            canonical_config_json(b).unwrap()
+        );
+    }
+
+    #[test]
+    fn canonical_config_json_rejects_unsupported_version() {
+        let bad = r#"{"version":"v2","routes":[],"remote_routes":[],"permissions":[]}"#;
+        assert!(canonical_config_json(bad).is_err());
+    }
+
+    #[test]
+    fn canonical_config_json_rejects_invalid_json() {
+        assert!(canonical_config_json("{ not json").is_err());
+    }
+
+    #[test]
+    fn load_config_state_is_lenient_when_missing() {
+        let config = test_config(unique_path("load_missing"));
+        let state = load_config_state(&config, |_, _| Ok(()), |_| true);
+        assert_eq!(state.routes.len(), 0);
+        assert_eq!(state.remote_routes.len(), 0);
+        assert_eq!(state.permissions.len(), 0);
+    }
+
+    #[test]
+    fn reload_config_state_returns_empty_when_missing() {
+        let config = test_config(unique_path("reload_missing"));
+        let state = reload_config_state(&config, |_, _| Ok(()), |_| true).unwrap();
+        assert_eq!(state.routes.len(), 0);
+    }
+
+    #[test]
+    fn reload_config_state_propagates_verify_error() {
+        let path = unique_path("reload_verify_err");
+        fs::write(
+            &path,
+            r#"{"version":"v1","routes":[],"remote_routes":[],"permissions":[]}"#,
+        )
+        .unwrap();
+        let config = test_config(path.clone());
+        let result = reload_config_state(
+            &config,
+            |_, _| {
+                Err(Box::new(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "bad signature",
+                )) as DynError)
+            },
+            |_| true,
+        );
+        let _ = fs::remove_file(&path);
+        assert!(result.is_err());
+    }
+}

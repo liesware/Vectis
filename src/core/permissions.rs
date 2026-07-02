@@ -357,3 +357,128 @@ fn invalid_permissions<T>(message: impl Into<String>) -> Result<T, DynError> {
         message.into(),
     )))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn hex64(seed: char) -> String {
+        String::from(seed).repeat(64)
+    }
+
+    fn client(
+        name: &str,
+        apikey_hash: &str,
+        status: &str,
+        permissions: serde_json::Value,
+    ) -> PermissionClientInput {
+        serde_json::from_value(json!({
+            "client": name,
+            "apikey_hash": apikey_hash,
+            "status": status,
+            "permissions": permissions
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn accepts_active_client_with_loaded_kid() {
+        let clients = vec![client(
+            "app",
+            &hex64('1'),
+            "active",
+            json!([{"kid": hex64('a'), "actions": ["message"]}]),
+        )];
+        let state = validate_permission_clients(clients, |_| true).unwrap();
+        assert_eq!(state.len(), 1);
+        let authed = state.authenticate_hash(&hex64('1')).unwrap();
+        assert!(!authed.is_admin());
+    }
+
+    #[test]
+    fn accepts_wildcard_kid_with_global_action() {
+        let clients = vec![client(
+            "m",
+            &hex64('2'),
+            "active",
+            json!([{"kid": "*", "actions": ["metrics"]}]),
+        )];
+        assert!(validate_permission_clients(clients, |_| true).is_ok());
+    }
+
+    #[test]
+    fn rejects_wildcard_kid_with_non_global_action() {
+        let clients = vec![client(
+            "m",
+            &hex64('2'),
+            "active",
+            json!([{"kid": "*", "actions": ["message"]}]),
+        )];
+        assert!(validate_permission_clients(clients, |_| true).is_err());
+    }
+
+    #[test]
+    fn admin_becomes_admin_client_without_kid_permissions() {
+        let clients = vec![client(
+            "root-like",
+            &hex64('3'),
+            "active",
+            json!([{"kid": hex64('a'), "actions": ["admin"]}]),
+        )];
+        let state = validate_permission_clients(clients, |_| true).unwrap();
+        assert!(state.authenticate_hash(&hex64('3')).unwrap().is_admin());
+    }
+
+    #[test]
+    fn rejects_duplicate_client_name() {
+        let clients = vec![
+            client("dup", &hex64('4'), "active", json!([])),
+            client("dup", &hex64('5'), "active", json!([])),
+        ];
+        assert!(validate_permission_clients(clients, |_| true).is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_apikey_hash() {
+        let clients = vec![
+            client("a", &hex64('6'), "active", json!([])),
+            client("b", &hex64('6'), "active", json!([])),
+        ];
+        assert!(validate_permission_clients(clients, |_| true).is_err());
+    }
+
+    #[test]
+    fn rejects_wrong_length_apikey_hash() {
+        let clients = vec![client("a", "aa", "active", json!([]))];
+        assert!(validate_permission_clients(clients, |_| true).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_status() {
+        let clients = vec![client("a", &hex64('7'), "banned", json!([]))];
+        assert!(validate_permission_clients(clients, |_| true).is_err());
+    }
+
+    #[test]
+    fn rejects_explicit_kid_not_loaded() {
+        let clients = vec![client(
+            "a",
+            &hex64('8'),
+            "active",
+            json!([{"kid": hex64('a'), "actions": ["message"]}]),
+        )];
+        assert!(validate_permission_clients(clients, |_| false).is_err());
+    }
+
+    #[test]
+    fn omits_disabled_and_revoked_clients() {
+        let clients = vec![
+            client("d", &hex64('1'), "disabled", json!([])),
+            client("r", &hex64('2'), "revoked", json!([])),
+        ];
+        let state = validate_permission_clients(clients, |_| true).unwrap();
+        assert_eq!(state.len(), 0);
+        assert!(state.authenticate_hash(&hex64('1')).is_none());
+    }
+}

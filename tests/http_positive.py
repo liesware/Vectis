@@ -438,6 +438,31 @@ def validate_remote_routes_list(response):
             item.get("status") in ("active", "disabled"),
             "remote routes list item status must be active or disabled",
         )
+        if "public_keys" in item:
+            validate_remote_route_public_keys(item["public_keys"])
+
+
+def validate_remote_route_public_keys(block, case=None):
+    require(isinstance(block, dict), "remote route public_keys must be an object")
+    fields = {
+        "eddsa": ("public_key_der_hex", "eddsa_algorithm"),
+        "xecdh": ("public_key_hex", "xecdh_algorithm"),
+        "ml-dsa": ("public_key_der_hex", "ml_dsa_variant"),
+        "ml-kem": ("public_key_der_hex", "ml_kem_variant"),
+    }
+    for field, (key_field, case_key) in fields.items():
+        sub = block.get(field)
+        require(isinstance(sub, dict), f"remote route public_keys.{field} must be an object")
+        require(
+            isinstance(sub.get("alg"), str) and sub["alg"],
+            f"remote route public_keys.{field}.alg must be a non-empty string",
+        )
+        if case is not None:
+            require(
+                sub.get("alg") == case[case_key],
+                f"remote route public_keys.{field}.alg mismatch",
+            )
+        require_hex(sub.get(key_field), f"remote route public_keys.{field}.{key_field}")
 
 
 def backup_file(path):
@@ -941,6 +966,34 @@ def main():
     validate_remote_routes_list(client.get("/remote-routes", auth=True))
     print("List remote routes: OK\n")
     passed_count += 1
+
+    peer_key_id, peer_case = created[0]
+    peer_pub = client.get(f"/pub/{peer_key_id}")
+    _CONFIG["remote_routes"] = [
+        {
+            "remote_kid": peer_key_id,
+            "name": "positive-peer-keys",
+            "remote_addr": recipient_host,
+            "allowed_local_kids": ["*"],
+            "status": "active",
+            "public_keys": peer_pub["keys"],
+        }
+    ]
+    write_config()
+    validate_remote_routes_list(client.post("/remote-routes/reload", {}, auth=True))
+    listed_peer = client.get("/remote-routes", auth=True)
+    validate_remote_routes_list(listed_peer)
+    peer_route = next(
+        (route for route in listed_peer["routes"] if route.get("remote_kid") == peer_key_id),
+        None,
+    )
+    require(peer_route is not None, "peer remote route must be listed")
+    require("public_keys" in peer_route, "peer remote route must expose public_keys")
+    validate_remote_route_public_keys(peer_route["public_keys"], peer_case)
+    print("Remote route public_keys round-trip: OK\n")
+    passed_count += 1
+    write_test_remote_routes([key_id for key_id, _ in created], recipient_host)
+    validate_remote_routes_list(client.post("/remote-routes/reload", {}, auth=True))
 
     permission_rows = validate_permissions_flow(args.base_url, client, created[0][0], created[0][1])
     print_section("permissions", permission_rows)

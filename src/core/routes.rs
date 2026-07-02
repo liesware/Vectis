@@ -131,3 +131,49 @@ pub(crate) fn validate_routes(
 
     Ok(validated)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn kid(seed: char) -> String {
+        String::from(seed).repeat(64)
+    }
+
+    fn route_input(kid: &str, final_app_addr: &str) -> RouteInput {
+        serde_json::from_value(json!({
+            "kid": kid,
+            "final_app_addr": final_app_addr,
+            "final_app_path": "/message"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn accepts_valid_route_for_loaded_kid() {
+        let routes = vec![route_input(&kid('a'), "127.0.0.1:3999")];
+        assert_eq!(validate_routes(routes, |_| true).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn rejects_unloaded_kid() {
+        let routes = vec![route_input(&kid('a'), "127.0.0.1:3999")];
+        assert!(validate_routes(routes, |_| false).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_final_app_addr() {
+        let routes = vec![route_input(&kid('a'), "not-a-host-port")];
+        assert!(validate_routes(routes, |_| true).is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_kid() {
+        let routes = vec![
+            route_input(&kid('a'), "127.0.0.1:3999"),
+            route_input(&kid('a'), "127.0.0.1:4000"),
+        ];
+        assert!(validate_routes(routes, |_| true).is_err());
+    }
+}

@@ -293,3 +293,118 @@ fn validate_allowed_local_kids(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn kid(seed: char) -> String {
+        String::from(seed).repeat(64)
+    }
+
+    fn valid_public_keys() -> serde_json::Value {
+        json!({
+            "eddsa": {"alg": "Ed25519", "public_key_der_hex": "aa"},
+            "xecdh": {"alg": "X25519", "public_key_hex": "aa"},
+            "ml-dsa": {"alg": "ML-DSA-44", "public_key_der_hex": "aa"},
+            "ml-kem": {"alg": "ML-KEM-512", "public_key_der_hex": "aa"}
+        })
+    }
+
+    fn route_input(
+        remote_kid: &str,
+        status: &str,
+        public_keys: Option<serde_json::Value>,
+    ) -> RemoteRouteInput {
+        let mut value = json!({
+            "remote_kid": remote_kid,
+            "name": "peer",
+            "remote_addr": "127.0.0.1:3002",
+            "allowed_local_kids": ["*"],
+            "status": status
+        });
+        if let Some(keys) = public_keys {
+            value
+                .as_object_mut()
+                .unwrap()
+                .insert(String::from("public_keys"), keys);
+        }
+        serde_json::from_value(value).unwrap()
+    }
+
+    fn state_with(
+        remote_kid: &str,
+        status: &str,
+        public_keys: Option<serde_json::Value>,
+    ) -> RemoteRoutesState {
+        let validated =
+            validate_remote_routes(vec![route_input(remote_kid, status, public_keys)], |_| true)
+                .unwrap();
+        RemoteRoutesState::from_routes(validated)
+    }
+
+    #[test]
+    fn accepts_routes_with_and_without_public_keys() {
+        let routes = vec![
+            route_input(&kid('a'), "active", Some(valid_public_keys())),
+            route_input(&kid('b'), "disabled", None),
+        ];
+        assert_eq!(validate_remote_routes(routes, |_| true).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn rejects_duplicate_remote_kid() {
+        let routes = vec![
+            route_input(&kid('a'), "active", None),
+            route_input(&kid('a'), "active", None),
+        ];
+        assert!(validate_remote_routes(routes, |_| true).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_status() {
+        let routes = vec![route_input(&kid('a'), "paused", None)];
+        assert!(validate_remote_routes(routes, |_| true).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_public_key_alg() {
+        let mut keys = valid_public_keys();
+        keys["eddsa"]["alg"] = json!("RSA");
+        let routes = vec![route_input(&kid('a'), "active", Some(keys))];
+        assert!(validate_remote_routes(routes, |_| true).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_public_key_hex() {
+        let mut keys = valid_public_keys();
+        keys["xecdh"]["public_key_hex"] = json!("zz");
+        let routes = vec![route_input(&kid('a'), "active", Some(keys))];
+        assert!(validate_remote_routes(routes, |_| true).is_err());
+    }
+
+    #[test]
+    fn public_keys_for_active_with_keys_returns_some() {
+        let state = state_with(&kid('a'), "active", Some(valid_public_keys()));
+        assert!(state.public_keys_for(&kid('a')).is_some());
+    }
+
+    #[test]
+    fn public_keys_for_disabled_returns_none() {
+        let state = state_with(&kid('a'), "disabled", Some(valid_public_keys()));
+        assert!(state.public_keys_for(&kid('a')).is_none());
+    }
+
+    #[test]
+    fn public_keys_for_active_without_keys_returns_none() {
+        let state = state_with(&kid('a'), "active", None);
+        assert!(state.public_keys_for(&kid('a')).is_none());
+    }
+
+    #[test]
+    fn public_keys_for_unknown_kid_returns_none() {
+        let state = state_with(&kid('a'), "active", Some(valid_public_keys()));
+        assert!(state.public_keys_for(&kid('b')).is_none());
+    }
+}
