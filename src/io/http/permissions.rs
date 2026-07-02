@@ -1,41 +1,28 @@
 use super::HttpState;
-use super::error::{ErrorResponse, error_response};
+use super::error::ErrorResponse;
+use crate::core::permissions::ListPermissionsOutput;
 use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
-use serde::Serialize;
-use tracing::{error, info};
+use tracing::info;
 
-#[derive(Serialize)]
-pub struct ReloadPermissionsResponse {
-    status: String,
-    clients_loaded: usize,
-}
-
-pub async fn reload_endpoint(
+pub async fn list_endpoint(
     State(state): State<HttpState>,
     headers: HeaderMap,
-) -> Result<Json<ReloadPermissionsResponse>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<ListPermissionsOutput>, (StatusCode, Json<ErrorResponse>)> {
     let client = state.authorize_api_key(&headers).await?;
     state.require_permission(&client, None, "admin").await?;
 
     info!(
-        endpoint = "POST /permissions/reload",
-        "permissions reload request accepted"
+        endpoint = "GET /permissions",
+        "permissions list request accepted"
     );
-    if let Err(err) = state.reload_permissions_state().await {
-        error!(error = %err, "permissions reload endpoint failed");
-        return Err(error_response(err.as_ref()));
-    }
-
-    let clients_loaded = state.permissions_loaded().await;
+    let response = state.permissions_output().await;
     info!(
-        endpoint = "POST /permissions/reload",
-        clients_loaded, "permissions reload response ready"
+        endpoint = "GET /permissions",
+        clients_count = response.clients_len(),
+        "permissions list response ready"
     );
 
-    Ok(Json(ReloadPermissionsResponse {
-        status: String::from("reloaded"),
-        clients_loaded,
-    }))
+    Ok(Json(response))
 }

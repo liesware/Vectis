@@ -80,9 +80,9 @@ fn print_help() {
     println!("  test                  Call protected test endpoints through HTTP");
     println!("  keys                  Create, list, or reload operational keys through HTTP");
     println!("  lifecycle             Update operational key lifecycle metadata");
-    println!("  routes                List or reload final app routes");
-    println!("  remote-routes         List or reload remote Vectis routes");
-    println!("  permissions           Reload API key permissions");
+    println!("  routes                List final app routes");
+    println!("  remote-routes         List remote Vectis routes");
+    println!("  permissions           List loaded API key permissions");
     println!("  config                Sign, list, or reload the unified signed config");
     println!("  pub                   Fetch public keys through HTTP");
     println!("  sign                  Create or verify timestamp signatures through HTTP");

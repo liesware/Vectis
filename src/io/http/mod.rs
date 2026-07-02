@@ -8,6 +8,7 @@ use zeroize::Zeroizing;
 
 mod app;
 mod auth;
+mod config;
 mod error;
 mod health;
 mod keys;
@@ -155,6 +156,12 @@ impl HttpState {
         config_state.routes.len()
     }
 
+    async fn remote_routes_loaded(&self) -> usize {
+        let config_state = self.config_state.read().await;
+
+        config_state.remote_routes.len()
+    }
+
     async fn permissions_loaded(&self) -> usize {
         let config_state = self.config_state.read().await;
 
@@ -173,6 +180,12 @@ impl HttpState {
         config_state.remote_routes.list()
     }
 
+    async fn permissions_output(&self) -> crate::core::permissions::ListPermissionsOutput {
+        let config_state = self.config_state.read().await;
+
+        config_state.permissions.list()
+    }
+
     async fn reload_config_state(&self) -> Result<(), DynError> {
         let loaded_key_ids = {
             let keys_db_state = self.keys_db_state.read().await;
@@ -185,7 +198,8 @@ impl HttpState {
                     config_path,
                     &self.config.config_sign_path,
                 );
-                let signature_content = std::fs::read_to_string(&config_sign_path)?;
+                let signature_content =
+                    crate::core::config_file::read_config_signature_file(&config_sign_path)?;
                 crate::ops::sign::verify_config_file_signature(
                     self.init_state(),
                     config_path,
@@ -199,18 +213,6 @@ impl HttpState {
         *config_state = Zeroizing::new(reloaded);
 
         Ok(())
-    }
-
-    async fn reload_remote_routes_state(&self) -> Result<(), DynError> {
-        self.reload_config_state().await
-    }
-
-    async fn reload_routes_state(&self) -> Result<(), DynError> {
-        self.reload_config_state().await
-    }
-
-    async fn reload_permissions_state(&self) -> Result<(), DynError> {
-        self.reload_config_state().await
     }
 
     async fn with_keys_db_state<T>(&self, f: impl FnOnce(&KeysDbState) -> T) -> T {
@@ -299,14 +301,10 @@ pub fn router(state: HttpState) -> Router {
         .route("/keys/properties/{kid}", get(keys::get_properties_endpoint))
         .route("/keys/properties", get(keys::list_properties_endpoint))
         .route("/lifecycle/{kid}", post(keys::update_lifecycle_endpoint))
+        .route("/config/reload", post(config::reload_endpoint))
         .route("/routes", get(routes::list_endpoint))
-        .route("/routes/reload", post(routes::reload_endpoint))
         .route("/remote-routes", get(remote_routes::list_endpoint))
-        .route(
-            "/remote-routes/reload",
-            post(remote_routes::reload_endpoint),
-        )
-        .route("/permissions/reload", post(permissions::reload_endpoint))
+        .route("/permissions", get(permissions::list_endpoint))
         .route(
             "/keys",
             get(keys::list_endpoint).post(keys::create_endpoint),

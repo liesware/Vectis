@@ -200,10 +200,16 @@ def write_remote_routes(routes, sign=True):
     write_config(sign=sign)
 
 
-def reload_permissions(client):
-    status, response = client.post("/permissions/reload", {}, auth=True)
-    require_status("POST /permissions/reload", status, 200)
-    require(response.get("status") == "reloaded", "permissions reload status must be reloaded")
+def reload_config(client):
+    status, response = client.post("/config/reload", {}, auth=True)
+    require_status("POST /config/reload", status, 200)
+    require(response.get("status") == "reloaded", "config reload status must be reloaded")
+    require(isinstance(response.get("routes_loaded"), int), "config routes_loaded must be int")
+    require(
+        isinstance(response.get("remote_routes_loaded"), int),
+        "config remote_routes_loaded must be int",
+    )
+    require(isinstance(response.get("clients_loaded"), int), "config clients_loaded must be int")
     return response
 
 
@@ -375,17 +381,17 @@ def main():
         status, _ = client.get("/routes", headers={"X-API-Key": "00" * 32})
         require_status("GET /routes invalid auth", status, 401)
 
-    def routes_reload_without_auth():
-        status, _ = client.post("/routes/reload", {})
-        require_status("POST /routes/reload without auth", status, 401)
+    def config_reload_without_auth():
+        status, _ = client.post("/config/reload", {})
+        require_status("POST /config/reload without auth", status, 401)
 
-    def routes_reload_invalid_auth():
+    def config_reload_invalid_auth():
         status, _ = client.post(
-            "/routes/reload",
+            "/config/reload",
             {},
             headers={"X-API-Key": "00" * 32},
         )
-        require_status("POST /routes/reload invalid auth", status, 401)
+        require_status("POST /config/reload invalid auth", status, 401)
 
     def remote_routes_list_without_auth():
         status, _ = client.get("/remote-routes")
@@ -395,17 +401,13 @@ def main():
         status, _ = client.get("/remote-routes", headers={"X-API-Key": "00" * 32})
         require_status("GET /remote-routes invalid auth", status, 401)
 
-    def remote_routes_reload_without_auth():
-        status, _ = client.post("/remote-routes/reload", {})
-        require_status("POST /remote-routes/reload without auth", status, 401)
+    def permissions_list_without_auth():
+        status, _ = client.get("/permissions")
+        require_status("GET /permissions without auth", status, 401)
 
-    def remote_routes_reload_invalid_auth():
-        status, _ = client.post(
-            "/remote-routes/reload",
-            {},
-            headers={"X-API-Key": "00" * 32},
-        )
-        require_status("POST /remote-routes/reload invalid auth", status, 401)
+    def permissions_list_invalid_auth():
+        status, _ = client.get("/permissions", headers={"X-API-Key": "00" * 32})
+        require_status("GET /permissions invalid auth", status, 401)
 
     def keys_tag_not_string():
         request = dict(VALID_KEY_REQUEST)
@@ -479,7 +481,7 @@ def main():
             },
         ]
     )
-    reload_permissions(client)
+    reload_config(client)
     limited_client = Client(args.base_url, limited_api_key)
     metrics_client = Client(args.base_url, metrics_api_key)
     admin_client = Client(args.base_url, admin_api_key)
@@ -517,9 +519,9 @@ def main():
         )
         require_status("limited client blocks sign", status, 403)
 
-    def limited_blocks_permissions_reload():
-        status, _ = limited_client.post("/permissions/reload", {}, auth=True)
-        require_status("limited client blocks permissions reload", status, 403)
+    def limited_blocks_config_reload():
+        status, _ = limited_client.post("/config/reload", {}, auth=True)
+        require_status("limited client blocks config reload", status, 403)
 
     def limited_blocks_metrics():
         status, _ = limited_client.get("/metrics", auth=True)
@@ -533,10 +535,24 @@ def main():
         status, _ = metrics_client.get("/routes", auth=True)
         require_status("metrics client blocks admin", status, 403)
 
-    def admin_allows_permissions_reload():
-        status, response = admin_client.post("/permissions/reload", {}, auth=True)
-        require_status("admin client allows permissions reload", status, 200)
-        require(response.get("status") == "reloaded", "admin permissions reload status")
+    def limited_blocks_permissions_list():
+        status, _ = limited_client.get("/permissions", auth=True)
+        require_status("limited client blocks permissions list", status, 403)
+
+    def metrics_client_blocks_permissions_list():
+        status, _ = metrics_client.get("/permissions", auth=True)
+        require_status("metrics client blocks permissions list", status, 403)
+
+    def admin_allows_config_reload():
+        status, response = admin_client.post("/config/reload", {}, auth=True)
+        require_status("admin client allows config reload", status, 200)
+        require(response.get("status") == "reloaded", "admin config reload status")
+
+    def admin_allows_permissions_list():
+        status, response = admin_client.get("/permissions", auth=True)
+        require_status("admin client allows permissions list", status, 200)
+        require(isinstance(response.get("clients"), list), "permissions.clients must be a list")
+        require("apikey_hash" not in json.dumps(response), "permissions list must not expose apikey_hash")
 
     for name, func in (
         ("limited client can message", limited_can_message),
@@ -544,11 +560,14 @@ def main():
         ("limited client blocks routes", limited_blocks_routes),
         ("limited client blocks self-test init", limited_blocks_self_test),
         ("limited client blocks sign", limited_blocks_sign),
-        ("limited client blocks permissions reload", limited_blocks_permissions_reload),
+        ("limited client blocks config reload", limited_blocks_config_reload),
         ("limited client blocks metrics", limited_blocks_metrics),
         ("metrics client allows metrics", metrics_client_allows_metrics),
         ("metrics client blocks admin", metrics_client_blocks_admin),
-        ("admin client allows permissions reload", admin_allows_permissions_reload),
+        ("limited client blocks permissions list", limited_blocks_permissions_list),
+        ("metrics client blocks permissions list", metrics_client_blocks_permissions_list),
+        ("admin client allows config reload", admin_allows_config_reload),
+        ("admin client allows permissions list", admin_allows_permissions_list),
     ):
         run_case(rows, name, func)
 
@@ -570,12 +589,12 @@ def main():
         ("POST /lifecycle/{id} reason not string", lifecycle_reason_not_string),
         ("GET /routes without auth", routes_list_without_auth),
         ("GET /routes invalid auth", routes_list_invalid_auth),
-        ("POST /routes/reload without auth", routes_reload_without_auth),
-        ("POST /routes/reload invalid auth", routes_reload_invalid_auth),
+        ("POST /config/reload without auth", config_reload_without_auth),
+        ("POST /config/reload invalid auth", config_reload_invalid_auth),
         ("GET /remote-routes without auth", remote_routes_list_without_auth),
         ("GET /remote-routes invalid auth", remote_routes_list_invalid_auth),
-        ("POST /remote-routes/reload without auth", remote_routes_reload_without_auth),
-        ("POST /remote-routes/reload invalid auth", remote_routes_reload_invalid_auth),
+        ("GET /permissions without auth", permissions_list_without_auth),
+        ("GET /permissions invalid auth", permissions_list_invalid_auth),
         ("POST /keys tag not string", keys_tag_not_string),
         ("POST /keys invalid algorithm", keys_invalid_algorithm),
         ("POST /keys invalid profile", keys_invalid_profile),
@@ -622,7 +641,7 @@ def main():
                 },
             ]
         )
-        reload_permissions(client)
+        reload_config(client)
 
     def permissions_invalid_action_pub():
         write_permissions(
@@ -635,7 +654,7 @@ def main():
                 }
             ]
         )
-        status, _ = client.post("/permissions/reload", {}, auth=True)
+        status, _ = client.post("/config/reload", {}, auth=True)
         require_status("permissions invalid action pub", status, 400)
 
     def permissions_invalid_action_routes():
@@ -649,7 +668,7 @@ def main():
                 }
             ]
         )
-        status, _ = client.post("/permissions/reload", {}, auth=True)
+        status, _ = client.post("/config/reload", {}, auth=True)
         require_status("permissions invalid action routes", status, 400)
 
     def permissions_wildcard_non_global_action():
@@ -663,7 +682,7 @@ def main():
                 }
             ]
         )
-        status, _ = client.post("/permissions/reload", {}, auth=True)
+        status, _ = client.post("/config/reload", {}, auth=True)
         require_status("permissions wildcard non-global action", status, 400)
 
     def remote_routes_invalid_kid():
@@ -678,7 +697,7 @@ def main():
                 }
             ]
         )
-        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        status, _ = client.post("/config/reload", {}, auth=True)
         require_status("remote routes invalid kid", status, 400)
 
     def remote_routes_invalid_addr():
@@ -693,7 +712,7 @@ def main():
                 }
             ]
         )
-        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        status, _ = client.post("/config/reload", {}, auth=True)
         require_status("remote routes invalid addr", status, 400)
 
     def remote_routes_invalid_signature():
@@ -709,7 +728,7 @@ def main():
             ]
         )
         CONFIG_SIGN_PATH.write_text('{"invalid":true}\n', encoding="utf-8")
-        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        status, _ = client.post("/config/reload", {}, auth=True)
         require_status("remote routes invalid signature", status, 400)
 
     def remote_routes_empty_allowed_local_kids():
@@ -724,7 +743,7 @@ def main():
                 }
             ]
         )
-        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        status, _ = client.post("/config/reload", {}, auth=True)
         require_status("remote routes empty allowed local kids", status, 400)
 
     def remote_routes_wildcard_mixed_with_kid():
@@ -739,7 +758,7 @@ def main():
                 }
             ]
         )
-        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        status, _ = client.post("/config/reload", {}, auth=True)
         require_status("remote routes wildcard mixed with kid", status, 400)
 
     def remote_routes_invalid_allowed_local_kid():
@@ -754,7 +773,7 @@ def main():
                 }
             ]
         )
-        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        status, _ = client.post("/config/reload", {}, auth=True)
         require_status("remote routes invalid allowed local kid", status, 400)
 
     def remote_routes_unloaded_allowed_local_kid():
@@ -769,7 +788,7 @@ def main():
                 }
             ]
         )
-        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        status, _ = client.post("/config/reload", {}, auth=True)
         require_status("remote routes unloaded allowed local kid", status, 400)
 
     def remote_routes_invalid_status():
@@ -784,7 +803,7 @@ def main():
                 }
             ]
         )
-        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        status, _ = client.post("/config/reload", {}, auth=True)
         require_status("remote routes invalid status", status, 400)
 
     def _peer_public_keys():
@@ -809,7 +828,7 @@ def main():
                 }
             ]
         )
-        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        status, _ = client.post("/config/reload", {}, auth=True)
         require_status("remote routes invalid public key alg", status, 400)
 
     def remote_routes_invalid_public_key_hex():
@@ -827,7 +846,7 @@ def main():
                 }
             ]
         )
-        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        status, _ = client.post("/config/reload", {}, auth=True)
         require_status("remote routes invalid public key hex", status, 400)
 
     def remote_routes_invalid_public_key_der():
@@ -845,7 +864,7 @@ def main():
                 }
             ]
         )
-        status, _ = client.post("/remote-routes/reload", {}, auth=True)
+        status, _ = client.post("/config/reload", {}, auth=True)
         require_status("remote routes invalid public key der", status, 400)
 
     def permissions_missing_kid():
@@ -859,7 +878,7 @@ def main():
                 }
             ]
         )
-        status, _ = client.post("/permissions/reload", {}, auth=True)
+        status, _ = client.post("/config/reload", {}, auth=True)
         require_status("permissions missing kid", status, 400)
 
     def permissions_invalid_apikey_hash():
@@ -873,7 +892,7 @@ def main():
                 }
             ]
         )
-        status, _ = client.post("/permissions/reload", {}, auth=True)
+        status, _ = client.post("/config/reload", {}, auth=True)
         require_status("permissions invalid apikey_hash", status, 400)
 
     def permissions_invalid_status():
@@ -887,7 +906,7 @@ def main():
                 }
             ]
         )
-        status, _ = client.post("/permissions/reload", {}, auth=True)
+        status, _ = client.post("/config/reload", {}, auth=True)
         require_status("permissions invalid status", status, 400)
 
     def permissions_invalid_signature():
@@ -902,7 +921,7 @@ def main():
             ]
         )
         CONFIG_SIGN_PATH.write_text('{"invalid":true}\n', encoding="utf-8")
-        status, _ = client.post("/permissions/reload", {}, auth=True)
+        status, _ = client.post("/config/reload", {}, auth=True)
         require_status("permissions invalid signature", status, 400)
 
     for name, func in (
@@ -1106,8 +1125,8 @@ def main():
 
     def message_recipient_route_not_found():
         write_remote_routes([])
-        status, _ = client.post("/remote-routes/reload", {}, auth=True)
-        require_status("POST /remote-routes/reload empty", status, 200)
+        status, _ = client.post("/config/reload", {}, auth=True)
+        require_status("POST /config/reload empty", status, 200)
         status, _ = client.post(
             f"/message/{key_id}",
             valid_message_request(key_id),
@@ -1127,8 +1146,8 @@ def main():
                 }
             ]
         )
-        status, _ = client.post("/remote-routes/reload", {}, auth=True)
-        require_status("POST /remote-routes/reload disabled", status, 200)
+        status, _ = client.post("/config/reload", {}, auth=True)
+        require_status("POST /config/reload disabled", status, 200)
         status, _ = client.post(
             f"/message/{key_id}",
             valid_message_request(key_id),
@@ -1148,8 +1167,8 @@ def main():
                 }
             ]
         )
-        status, _ = client.post("/remote-routes/reload", {}, auth=True)
-        require_status("POST /remote-routes/reload sender not allowed", status, 200)
+        status, _ = client.post("/config/reload", {}, auth=True)
+        require_status("POST /config/reload sender not allowed", status, 200)
         status, _ = client.post(
             f"/message/{key_id}",
             valid_message_request(key_id),
@@ -1397,7 +1416,7 @@ def main():
     _CONFIG["remote_routes"] = []
     _CONFIG["permissions"] = []
     write_config()
-    status, _ = client.post("/permissions/reload", {}, auth=True)
+    status, _ = client.post("/config/reload", {}, auth=True)
     require_status("restore config reload", status, 200)
     restore_file(CONFIG_PATH, config_backup)
     restore_file(CONFIG_SIGN_PATH, config_sign_backup)

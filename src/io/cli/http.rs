@@ -151,11 +151,6 @@ async fn run_routes(args: Vec<String>, output: OutputFormat) -> Result<(), DynEr
                 .send(Method::GET, "/routes", true, None, output)
                 .await
         }
-        "reload" => {
-            client
-                .send(Method::POST, "/routes/reload", true, None, output)
-                .await
-        }
         _ => Err(invalid_input(format!(
             "unknown routes command: {subcommand}"
         ))),
@@ -172,11 +167,6 @@ async fn run_remote_routes(args: Vec<String>, output: OutputFormat) -> Result<()
                 .send(Method::GET, "/remote-routes", true, None, output)
                 .await
         }
-        "reload" => {
-            client
-                .send(Method::POST, "/remote-routes/reload", true, None, output)
-                .await
-        }
         _ => Err(invalid_input(format!(
             "unknown remote-routes command: {subcommand}"
         ))),
@@ -188,9 +178,9 @@ async fn run_permissions(args: Vec<String>, output: OutputFormat) -> Result<(), 
     expect_no_args(&rest, &format!("permissions {subcommand}"))?;
     let client = CliHttpClient::from_env()?;
     match subcommand.as_str() {
-        "reload" => {
+        "list" => {
             client
-                .send(Method::POST, "/permissions/reload", true, None, output)
+                .send(Method::GET, "/permissions", true, None, output)
                 .await
         }
         _ => Err(invalid_input(format!(
@@ -208,7 +198,7 @@ async fn run_config(args: Vec<String>, output: OutputFormat) -> Result<(), DynEr
         "reload" => {
             let client = CliHttpClient::from_env()?;
             client
-                .send(Method::POST, "/routes/reload", true, None, output)
+                .send(Method::POST, "/config/reload", true, None, output)
                 .await
         }
         _ => Err(invalid_input(format!(
@@ -220,12 +210,13 @@ async fn run_config(args: Vec<String>, output: OutputFormat) -> Result<(), DynEr
 fn run_config_sign(output: OutputFormat) -> Result<(), DynError> {
     let config = config::app_config()?;
     let init_state = init::load_init_state()?;
-    let config_content = fs::read_to_string(&config.config_path).map_err(|err| {
-        invalid_input(format!(
-            "VECTIS_CONFIG_PATH could not be read from {}: {err}",
-            config.config_path.display()
-        ))
-    })?;
+    let config_content =
+        crate::core::config_file::read_config_file(&config.config_path).map_err(|err| {
+            invalid_input(format!(
+                "VECTIS_CONFIG_PATH could not be read from {}: {err}",
+                config.config_path.display()
+            ))
+        })?;
     let token = ops::sign::sign_config_file(&init_state, &config.config_path, &config_content)?;
     let config_sign_path = crate::core::config_file::config_signature_path(
         &config.config_path,
@@ -246,12 +237,13 @@ fn run_config_sign(output: OutputFormat) -> Result<(), DynError> {
 
 fn run_config_list(output: OutputFormat) -> Result<(), DynError> {
     let config = config::app_config()?;
-    let config_content = fs::read_to_string(&config.config_path).map_err(|err| {
-        invalid_input(format!(
-            "VECTIS_CONFIG_PATH could not be read from {}: {err}",
-            config.config_path.display()
-        ))
-    })?;
+    let config_content =
+        crate::core::config_file::read_config_file(&config.config_path).map_err(|err| {
+            invalid_input(format!(
+                "VECTIS_CONFIG_PATH could not be read from {}: {err}",
+                config.config_path.display()
+            ))
+        })?;
     let value: Value = serde_json::from_str(&config_content)
         .map_err(|err| invalid_input(format!("config file must be valid JSON: {err}")))?;
 
@@ -708,10 +700,8 @@ fn print_http_help() {
     println!("  {PROGRAM_NAME} keys reload");
     println!("  {PROGRAM_NAME} lifecycle <kid> --status <status> --reason <reason>");
     println!("  {PROGRAM_NAME} routes list");
-    println!("  {PROGRAM_NAME} routes reload");
     println!("  {PROGRAM_NAME} remote-routes list");
-    println!("  {PROGRAM_NAME} remote-routes reload");
-    println!("  {PROGRAM_NAME} permissions reload");
+    println!("  {PROGRAM_NAME} permissions list");
     println!("  {PROGRAM_NAME} config sign");
     println!("  {PROGRAM_NAME} config list");
     println!("  {PROGRAM_NAME} config reload");
@@ -827,68 +817,51 @@ fn print_lifecycle_help() {
 fn print_routes_help() {
     println!("Usage:");
     println!("  {PROGRAM_NAME} routes list");
-    println!("  {PROGRAM_NAME} routes reload");
     println!();
-    println!("Lists or reloads final app routes through the HTTP API.");
-    println!("(Sign the unified config with `{PROGRAM_NAME} config sign`.)");
+    println!("Lists final app routes currently loaded in memory.");
     println!();
     println!("Commands:");
     println!("  list                  GET /routes, requires VECTIS_APIKEY");
-    println!("  reload                POST /routes/reload, requires VECTIS_APIKEY");
     println!();
     println!("Behavior:");
     println!("  list                  Returns routes currently loaded in memory");
-    println!("  reload                Re-reads VECTIS_CONFIG_PATH and refreshes in-memory routes");
     println!();
     println!("Notes:");
-    println!(
-        "  Missing routes file reloads to an empty route list and keeps default final app fallback."
-    );
-    println!("  Each route kid must exist in the keys currently loaded in memory.");
-    println!("  Invalid routes file or unloaded route kid keeps the previous in-memory routes.");
+    println!("  Use `{PROGRAM_NAME} config reload` to reload the unified signed config.");
     print_output_help();
 }
 
 fn print_remote_routes_help() {
     println!("Usage:");
     println!("  {PROGRAM_NAME} remote-routes list");
-    println!("  {PROGRAM_NAME} remote-routes reload");
     println!();
-    println!("Lists or reloads authorized remote Vectis routes through the HTTP API.");
-    println!("(Sign the unified config with `{PROGRAM_NAME} config sign`.)");
+    println!("Lists authorized remote Vectis routes currently loaded in memory.");
     println!();
     println!("Commands:");
     println!("  list                  GET /remote-routes, requires VECTIS_APIKEY");
-    println!("  reload                POST /remote-routes/reload, requires VECTIS_APIKEY");
     println!();
     println!("Behavior:");
     println!("  list                  Returns remote routes currently loaded in memory");
-    println!(
-        "  reload                Re-reads VECTIS_CONFIG_PATH and refreshes in-memory remote routes"
-    );
     println!();
     println!("Notes:");
-    println!("  Missing remote routes file reloads to an empty remote route list.");
-    println!("  Each route needs remote_kid, name, remote_addr, allowed_local_kids, and status.");
-    println!("  Invalid remote routes file keeps the previous in-memory remote routes.");
+    println!("  Use `{PROGRAM_NAME} config reload` to reload the unified signed config.");
     print_output_help();
 }
 
 fn print_permissions_help() {
     println!("Usage:");
-    println!("  {PROGRAM_NAME} permissions reload");
+    println!("  {PROGRAM_NAME} permissions list");
     println!();
-    println!("Reloads API key permissions from the signed config.");
-    println!("(Sign the unified config with `{PROGRAM_NAME} config sign`.)");
+    println!("Lists effective API key permissions currently loaded in memory.");
     println!();
     println!("Commands:");
-    println!("  reload                POST /permissions/reload, requires admin VECTIS_APIKEY");
+    println!("  list                  GET /permissions, requires admin VECTIS_APIKEY");
     println!();
-    println!("Environment:");
-    println!("  VECTIS_APIKEY                Root or admin API key for reload");
+    println!("Behavior:");
+    println!("  list                  Returns active permission clients without apikey_hash");
     println!();
-    println!("Examples:");
-    println!("  {PROGRAM_NAME} permissions reload");
+    println!("Notes:");
+    println!("  Use `{PROGRAM_NAME} config reload` to reload the unified signed config.");
     print_output_help();
 }
 
@@ -903,7 +876,7 @@ fn print_config_help() {
     println!("Commands:");
     println!("  sign                  Signs VECTIS_CONFIG_PATH with init keys (local)");
     println!("  list                  Prints VECTIS_CONFIG_PATH (local)");
-    println!("  reload                Reloads the config in the running service");
+    println!("  reload                POST /config/reload, requires admin VECTIS_APIKEY");
     println!();
     println!("Environment:");
     println!("  VECTIS_CONFIG_PATH      Config JSON path, default config.json");

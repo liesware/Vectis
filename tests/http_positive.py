@@ -572,14 +572,53 @@ def write_permissions(clients):
     write_config()
 
 
-def reload_permissions(client):
-    response = client.post("/permissions/reload", {}, auth=True)
-    require(response.get("status") == "reloaded", "permissions reload status must be reloaded")
+def reload_config(client):
+    response = client.post("/config/reload", {}, auth=True)
+    require(response.get("status") == "reloaded", "config reload status must be reloaded")
+    require(
+        isinstance(response.get("routes_loaded"), int),
+        "config reload routes_loaded must be an integer",
+    )
+    require(
+        isinstance(response.get("remote_routes_loaded"), int),
+        "config reload remote_routes_loaded must be an integer",
+    )
     require(
         isinstance(response.get("clients_loaded"), int),
-        "permissions reload clients_loaded must be an integer",
+        "config reload clients_loaded must be an integer",
     )
     return response
+
+
+def assert_no_apikey_hash(value):
+    if isinstance(value, dict):
+        require("apikey_hash" not in value, "permissions output must not expose apikey_hash")
+        for item in value.values():
+            assert_no_apikey_hash(item)
+    elif isinstance(value, list):
+        for item in value:
+            assert_no_apikey_hash(item)
+
+
+def validate_permissions_list(response):
+    clients = response.get("clients")
+    require(isinstance(clients, list), "permissions.clients must be a list")
+    assert_no_apikey_hash(response)
+
+    for client in clients:
+        require(isinstance(client.get("client"), str), "permissions.client must be string")
+        require(isinstance(client.get("admin"), bool), "permissions.admin must be bool")
+        permissions = client.get("permissions")
+        require(isinstance(permissions, list), "permissions.permissions must be list")
+        for permission in permissions:
+            require(isinstance(permission.get("kid"), str), "permissions.kid must be string")
+            actions = permission.get("actions")
+            require(isinstance(actions, list), "permissions.actions must be list")
+            require(actions, "permissions.actions must not be empty")
+            for action in actions:
+                require(isinstance(action, str), "permissions.actions item must be string")
+
+    return clients
 
 
 def clear_permissions_state(client):
@@ -587,7 +626,7 @@ def clear_permissions_state(client):
     _CONFIG["permissions"] = []
     write_config()
     try:
-        reload_permissions(client)
+        reload_config(client)
     finally:
         _CONFIG["permissions"] = saved
         write_config()
@@ -598,7 +637,7 @@ def clear_routes_state(client):
     _CONFIG["routes"] = []
     write_config()
     try:
-        validate_routes_list(client.post("/routes/reload", {}, auth=True))
+        reload_config(client)
     finally:
         _CONFIG["routes"] = saved
         write_config()
@@ -609,7 +648,7 @@ def clear_remote_routes_state(client):
     _CONFIG["remote_routes"] = []
     write_config()
     try:
-        validate_remote_routes_list(client.post("/remote-routes/reload", {}, auth=True))
+        reload_config(client)
     finally:
         _CONFIG["remote_routes"] = saved
         write_config()
@@ -803,22 +842,39 @@ def validate_permissions_flow(base_url, root_client, key_id, case):
             },
         ]
     )
-    reload_permissions(root_client)
+    reload_config(root_client)
 
     limited_client = Client(base_url, limited_key)
     admin_client = Client(base_url, admin_key)
     metrics_client = Client(base_url, metrics_key)
 
+    root_permissions = validate_permissions_list(root_client.get("/permissions", auth=True))
+    admin_permissions = validate_permissions_list(admin_client.get("/permissions", auth=True))
+    require(len(root_permissions) == 3, "root permissions list must include active clients")
+    require(len(admin_permissions) == 3, "admin permissions list must include active clients")
+    admin_entry = next(
+        (client for client in root_permissions if client.get("client") == "positive-admin"),
+        None,
+    )
+    require(admin_entry is not None, "permissions list must include admin client")
+    require(admin_entry.get("admin") is True, "permissions list admin flag must be true")
+    require(
+        admin_entry.get("permissions") == [{"kid": "*", "actions": ["admin"]}],
+        "permissions list must expose effective admin permission",
+    )
+
     limited_result = encrypt_internal_message(limited_client, 1, key_id, case)
     validate_metrics(metrics_client)
     validate_init(admin_client.get("/self-test/init", auth=True))
     validate_routes_list(admin_client.get("/routes", auth=True))
-    reload_permissions(admin_client)
+    reload_config(admin_client)
 
     return [
         ("limited message key", "OK"),
         ("metrics key", "OK"),
         ("admin key", "OK"),
+        ("root permissions list", "OK"),
+        ("admin permissions list", "OK"),
         (f"limited ctx_hex_len {limited_result['ctx_hex_len']}", "OK"),
     ]
 
@@ -953,15 +1009,15 @@ def main():
     print("Reload keys: OK\n")
     passed_count += 1
     write_test_routes([key_id for key_id, _ in created], args.final_app_addr)
-    validate_routes_list(client.post("/routes/reload", {}, auth=True))
-    print("Reload routes: OK\n")
+    reload_config(client)
+    print("Reload config: OK\n")
     passed_count += 1
     validate_routes_list(client.get("/routes", auth=True))
     print("List routes: OK\n")
     passed_count += 1
     write_test_remote_routes([key_id for key_id, _ in created], recipient_host)
-    validate_remote_routes_list(client.post("/remote-routes/reload", {}, auth=True))
-    print("Reload remote routes: OK\n")
+    reload_config(client)
+    print("Reload remote routes config: OK\n")
     passed_count += 1
     validate_remote_routes_list(client.get("/remote-routes", auth=True))
     print("List remote routes: OK\n")
@@ -980,7 +1036,7 @@ def main():
         }
     ]
     write_config()
-    validate_remote_routes_list(client.post("/remote-routes/reload", {}, auth=True))
+    reload_config(client)
     listed_peer = client.get("/remote-routes", auth=True)
     validate_remote_routes_list(listed_peer)
     peer_route = next(
@@ -993,7 +1049,7 @@ def main():
     print("Remote route public_keys round-trip: OK\n")
     passed_count += 1
     write_test_remote_routes([key_id for key_id, _ in created], recipient_host)
-    validate_remote_routes_list(client.post("/remote-routes/reload", {}, auth=True))
+    reload_config(client)
 
     permission_rows = validate_permissions_flow(args.base_url, client, created[0][0], created[0][1])
     print_section("permissions", permission_rows)
@@ -1054,7 +1110,7 @@ def main():
             verify_rows.append((f"{key_id} {hash_alg}", "OK"))
 
     write_test_remote_routes([key_id for key_id, _ in created], recipient_host, wildcard=True)
-    validate_remote_routes_list(client.post("/remote-routes/reload", {}, auth=True))
+    reload_config(client)
     wildcard_result = send_message(
         client,
         len(message_rows) + 1,
@@ -1091,7 +1147,7 @@ def main():
     _CONFIG["remote_routes"] = []
     _CONFIG["permissions"] = []
     write_config()
-    client.post("/routes/reload", {}, auth=True)
+    reload_config(client)
     restore_config_file(config_backup)
     restore_config_sign_file(config_sign_backup)
     final_app.shutdown()

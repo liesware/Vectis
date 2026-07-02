@@ -46,6 +46,24 @@ struct KidPermission {
     actions: Vec<String>,
 }
 
+#[derive(Serialize)]
+pub struct ListPermissionsOutput {
+    clients: Vec<PermissionClientOutput>,
+}
+
+#[derive(Serialize)]
+struct PermissionClientOutput {
+    client: String,
+    admin: bool,
+    permissions: Vec<KidPermissionOutput>,
+}
+
+#[derive(Serialize)]
+struct KidPermissionOutput {
+    kid: String,
+    actions: Vec<String>,
+}
+
 #[derive(Deserialize, Serialize)]
 pub(crate) struct PermissionClientInput {
     client: String,
@@ -124,6 +142,16 @@ impl PermissionsState {
         self.clients.len()
     }
 
+    pub fn list(&self) -> ListPermissionsOutput {
+        ListPermissionsOutput {
+            clients: self
+                .clients
+                .iter()
+                .map(PermissionClientOutput::from_permission_client)
+                .collect(),
+        }
+    }
+
     pub fn authenticate_hash(&self, apikey_hash: &str) -> Option<AuthenticatedClient> {
         let candidate = apikey_hash.as_bytes();
         let mut matched: Option<usize> = None;
@@ -179,6 +207,38 @@ impl PermissionsState {
         }
 
         permission_denied("api key does not have permission for this kid")
+    }
+}
+
+impl PermissionClientOutput {
+    fn from_permission_client(client: &PermissionClient) -> Self {
+        let permissions = if client.admin {
+            vec![KidPermissionOutput {
+                kid: String::from("*"),
+                actions: vec![String::from("admin")],
+            }]
+        } else {
+            client
+                .permissions
+                .iter()
+                .map(|permission| KidPermissionOutput {
+                    kid: permission.kid.clone(),
+                    actions: permission.actions.clone(),
+                })
+                .collect()
+        };
+
+        Self {
+            client: client.client.clone(),
+            admin: client.admin,
+            permissions,
+        }
+    }
+}
+
+impl ListPermissionsOutput {
+    pub fn clients_len(&self) -> usize {
+        self.clients.len()
     }
 }
 

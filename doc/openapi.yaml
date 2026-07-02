@@ -16,8 +16,10 @@ tags:
   - name: Self Test
   - name: Health
   - name: Keys
+  - name: Config
   - name: Routes
   - name: Remote Routes
+  - name: Permissions
   - name: Public Keys
   - name: Signatures
   - name: Messages
@@ -270,20 +272,20 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
-  /routes/reload:
+  /config/reload:
     post:
-      tags: [Routes]
+      tags: [Config]
       summary: Reload the unified signed config
       description: Administrative endpoint requiring root or an admin client. Reloads the unified config (routes, remote_routes, permissions) only after VECTIS_CONFIG_PATH and VECTIS_CONFIG_SIGN_PATH are successfully read, verified, and validated. Every route kid must exist in the keys currently loaded in memory. A missing config reloads to empty sections; an invalid signature, invalid file, or unloaded kid returns an error and keeps the previous in-memory config.
       security:
         - ApiKeyAuth: []
       responses:
         "200":
-          description: Reloaded final app routes
+          description: Reloaded unified config
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/RoutesOutput"
+                $ref: "#/components/schemas/ReloadConfigResponse"
         default:
           $ref: "#/components/responses/Error"
 
@@ -304,37 +306,20 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
-  /remote-routes/reload:
-    post:
-      tags: [Remote Routes]
-      summary: Reload the unified signed config
-      description: Administrative endpoint requiring root or an admin client. Reloads the unified config (routes, remote_routes, permissions) only after VECTIS_CONFIG_PATH and VECTIS_CONFIG_SIGN_PATH are successfully read, verified, and validated. A missing config reloads to empty sections; an invalid signature or invalid file returns an error and keeps the previous in-memory config.
-      security:
-        - ApiKeyAuth: []
-      responses:
-        "200":
-          description: Reloaded remote Vectis routes
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/RemoteRoutesOutput"
-        default:
-          $ref: "#/components/responses/Error"
-
-  /permissions/reload:
-    post:
+  /permissions:
+    get:
       tags: [Permissions]
-      summary: Reload the unified signed config
-      description: Administrative endpoint. Reloads the unified config (routes, remote_routes, permissions) only after VECTIS_CONFIG_PATH and VECTIS_CONFIG_SIGN_PATH are successfully read, verified, and validated. A missing config reloads to empty sections; invalid signature, invalid file, or unloaded non-admin kid returns an error and keeps the previous config.
+      summary: List effective API key permissions loaded in memory
+      description: Administrative endpoint requiring root or an admin client. Returns active clients loaded from the signed config, redacts apikey_hash, and does not read VECTIS_CONFIG_PATH directly.
       security:
         - ApiKeyAuth: []
       responses:
         "200":
-          description: Reloaded API key permissions
+          description: Redacted active permission clients
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ReloadPermissionsResponse"
+                $ref: "#/components/schemas/PermissionsOutput"
         default:
           $ref: "#/components/responses/Error"
 
@@ -752,12 +737,57 @@ components:
           items:
             $ref: "#/components/schemas/RemoteRoute"
 
-    ReloadPermissionsResponse:
+    PermissionsOutput:
       type: object
-      required: [status, clients_loaded]
+      required: [clients]
+      properties:
+        clients:
+          type: array
+          items:
+            $ref: "#/components/schemas/PermissionClientOutput"
+
+    PermissionClientOutput:
+      type: object
+      required: [client, admin, permissions]
+      properties:
+        client:
+          type: string
+          example: clinic-app
+        admin:
+          type: boolean
+          example: false
+        permissions:
+          type: array
+          items:
+            $ref: "#/components/schemas/KidPermissionOutput"
+
+    KidPermissionOutput:
+      type: object
+      required: [kid, actions]
+      properties:
+        kid:
+          type: string
+          example: f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed
+        actions:
+          type: array
+          items:
+            type: string
+            enum: [admin, keys, lifecycle, self-test, sign, message, metrics]
+          example:
+            - message
+
+    ReloadConfigResponse:
+      type: object
+      required: [status, routes_loaded, remote_routes_loaded, clients_loaded]
       properties:
         status:
           const: reloaded
+        routes_loaded:
+          type: integer
+          minimum: 0
+        remote_routes_loaded:
+          type: integer
+          minimum: 0
         clients_loaded:
           type: integer
           minimum: 0

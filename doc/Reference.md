@@ -340,6 +340,9 @@ The content is canonicalized before signing. The signature is stored in
 `VECTIS_CONFIG_SIGN_PATH`. The config is signed with init keys through
 `vectis config sign`.
 
+Vectis rejects config files above 8 MiB and config signature files above 1 MiB
+before parsing, canonicalizing, signing, or verifying them.
+
 The unified config exists to keep policy changes explicit, reviewable, and
 protected against local tampering.
 
@@ -436,8 +439,9 @@ Supported actions:
 - `metrics`.
 
 `admin` grants access to all protected endpoints and ignores kid-scoped grants.
-There is intentionally no permission listing endpoint. Permission material is
-administrative state, not public discovery data.
+`GET /permissions` exposes a redacted administrative view of the effective
+permission clients loaded in memory. It requires root or `admin` and never
+returns `apikey_hash`.
 
 Permissions are indexed by API key hash in memory for efficient lookup.
 
@@ -614,9 +618,9 @@ Vectis exposes these major endpoint groups:
 - metrics: `/metrics`;
 - keys: `/keys`, `/keys/reload`, `/keys/properties`;
 - lifecycle: `/lifecycle/{kid}`;
-- routes: `/routes`, `/routes/reload`;
-- remote routes: `/remote-routes`, `/remote-routes/reload`;
-- permissions: `/permissions/reload`;
+- config: `/config/reload`;
+- routes: `/routes`;
+- remote routes: `/remote-routes`;
 - public keys: `/pub/{kid}`;
 - signing: `/sign/{kid}`, `/sign/verification`;
 - messaging: `/message/{sender_kid}`, `/message`, `/message/decrypt`;
@@ -646,7 +650,7 @@ HTTP client commands:
 - lifecycle;
 - routes;
 - remote routes;
-- permissions reload;
+- config reload;
 - public key fetch;
 - sign;
 - message send/decrypt;
@@ -944,7 +948,7 @@ Implement:
 - root API key verification;
 - permission clients from signed config;
 - action-based permission checks;
-- no permission listing endpoint.
+- redacted admin-only permission listing endpoint.
 
 Index clients by API key hash.
 

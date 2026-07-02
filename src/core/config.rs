@@ -23,6 +23,8 @@ pub const CRYPTO_POLICIES: &[&str] = &["profile-only", "allow-overrides"];
 pub const HTTP_SCHEMES: &[&str] = &["http", "https"];
 pub const VECTIS_MODES: &[&str] = &["dev", "prod"];
 pub const DEFAULT_INIT_KEYS_FILE: &str = "init.json";
+pub const CONFIG_FILE_MAX_SIZE_BYTES: u64 = 8 * 1024 * 1024;
+pub const CONFIG_SIGN_FILE_MAX_SIZE_BYTES: u64 = 1024 * 1024;
 
 pub struct AppConfig {
     pub http_bind_addr: SocketAddr,

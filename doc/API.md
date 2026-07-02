@@ -51,7 +51,7 @@ X-API-Key: <VECTIS_APIKEY>
 
 `VECTIS_APIKEY` is the client secret sent in the `X-API-Key` header. `vectis init` and `vectis apikey create` generate it from Botan's cryptographic random number generator. The server validates it against `VECTIS_APIKEY_HASH`, which is derived with the init API auth key.
 
-`VECTIS_APIKEY` and `VECTIS_APIKEY_HASH` are the root API key pair. Root can access every protected endpoint. Additional clients can be authorized through the `permissions` section of the signed config; clients with `admin` can also access protected administrative endpoints, including `POST /permissions/reload`.
+`VECTIS_APIKEY` and `VECTIS_APIKEY_HASH` are the root API key pair. Root can access every protected endpoint. Additional clients can be authorized through the `permissions` section of the signed config; clients with `admin` can also access protected administrative endpoints, including `POST /config/reload`.
 
 Endpoints requiring auth:
 
@@ -60,11 +60,10 @@ Endpoints requiring auth:
 - `GET /keys/properties/{kid}`
 - `POST /keys/reload`
 - `POST /lifecycle/{kid}`
+- `POST /config/reload`
 - `GET /routes`
-- `POST /routes/reload`
 - `GET /remote-routes`
-- `POST /remote-routes/reload`
-- `POST /permissions/reload`
+- `GET /permissions`
 - `GET /metrics`
 - `GET /self-test/init`
 - `GET /self-test/keys/{kid}`
@@ -484,6 +483,27 @@ Response:
 }
 ```
 
+## Config
+
+### POST /config/reload
+
+Administrative refresh operation. Reloads the unified signed config into memory.
+
+Requires auth with root or an admin client.
+
+If `config.json` is missing, Vectis reloads to empty config sections. If the config exists but is invalid, unsigned, has an invalid signature, references an unloaded KID where a loaded KID is required, or contains invalid section data, the request fails and the previous in-memory config remains active.
+
+Response:
+
+```json
+{
+  "status": "reloaded",
+  "routes_loaded": 1,
+  "remote_routes_loaded": 1,
+  "clients_loaded": 1
+}
+```
+
 ## Routes
 
 ### GET /routes
@@ -506,22 +526,6 @@ Response:
 }
 ```
 
-### POST /routes/reload
-
-Administrative refresh operation. Reloads the unified signed config into memory.
-
-Requires auth.
-
-If the routes file does not exist, Vectis reloads to an empty route list and keeps using the default final app fallback. If the file exists but is invalid, or if any route references a `kid` not loaded in memory, the request fails and the previous in-memory routes remain active.
-
-Response:
-
-```json
-{
-  "routes": []
-}
-```
-
 ### GET /remote-routes
 
 Administrative endpoint. Lists authorized remote Vectis routes currently loaded in memory.
@@ -541,22 +545,6 @@ Response:
       "status": "active"
     }
   ]
-}
-```
-
-### POST /remote-routes/reload
-
-Administrative refresh operation. Reloads the unified signed config into memory.
-
-Requires auth.
-
-If the remote routes file does not exist, Vectis reloads to an empty route list. If the file exists but is invalid or unsigned, the request fails and the previous in-memory remote routes remain active.
-
-Response:
-
-```json
-{
-  "routes": []
 }
 ```
 
@@ -596,7 +584,7 @@ Permission mapping:
 
 | Permission | Endpoints |
 | --- | --- |
-| `admin` | `POST /keys`, `POST /keys/reload`, `GET /keys/properties`, `GET /routes`, `POST /routes/reload`, `GET /remote-routes`, `POST /remote-routes/reload`, `POST /permissions/reload`, `GET /self-test/init`, `GET /metrics` |
+| `admin` | `POST /keys`, `POST /keys/reload`, `GET /keys/properties`, `POST /config/reload`, `GET /routes`, `GET /remote-routes`, `GET /permissions`, `GET /self-test/init`, `GET /metrics` |
 | `keys` | `GET /keys/properties/{kid}` |
 | `lifecycle` | `POST /lifecycle/{kid}` |
 | `self-test` | `GET /self-test/keys/{kid}` |
@@ -627,24 +615,44 @@ Permissions file shape:
 }
 ```
 
-There is no `GET /permissions` endpoint and no CLI list command.
+### GET /permissions
 
-### POST /permissions/reload
+Administrative endpoint. Lists the effective API key permissions currently loaded in memory. It does not read `config.json` directly and never returns `apikey_hash`.
 
-Administrative refresh operation. Reloads the unified signed config into memory.
-
-Requires auth with root or an admin client.
-
-If `config.json` is missing, Vectis reloads to an empty client list and only root remains authorized. If the config exists but is invalid, unsigned, has an invalid signature, references an unloaded KID for a KID-scoped non-admin permission, or uses `kid: "*"` with a non-global action, the request fails and the previous in-memory config remains active.
+Requires root or `admin`.
 
 Response:
 
 ```json
 {
-  "status": "reloaded",
-  "clients_loaded": 1
+  "clients": [
+    {
+      "client": "clinic-app",
+      "admin": false,
+      "permissions": [
+        {
+          "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+          "actions": ["message"]
+        }
+      ]
+    },
+    {
+      "client": "ops-admin",
+      "admin": true,
+      "permissions": [
+        {
+          "kid": "*",
+          "actions": ["admin"]
+        }
+      ]
+    }
+  ]
 }
 ```
+
+Admin clients are shown with the effective permission `kid: "*", actions: ["admin"]` because Vectis ignores kid-scoped grants once a client has `admin`.
+
+Reload permissions by reloading the unified config with `POST /config/reload`.
 
 ## Public Keys
 
@@ -1000,7 +1008,7 @@ The final app can call `POST /message/decrypt` to recover the plaintext.
 
 ## Configuration File (`config.json`)
 
-Vectis loads a single signed config file (`config.json`) with three sections — `routes`, `remote_routes`, and `permissions` — plus a top-level `version`. It is loaded when `vectis serve` starts and can be reloaded at runtime with `POST /routes/reload`, `POST /remote-routes/reload`, or `POST /permissions/reload` (each reloads the whole config). Create/update its signature with `vectis config sign`; inspect it with `vectis config list`.
+Vectis loads a single signed config file (`config.json`) with three sections — `routes`, `remote_routes`, and `permissions` — plus a top-level `version`. It is loaded when `vectis serve` starts and can be reloaded at runtime with `POST /config/reload`. Create/update its signature with `vectis config sign`; inspect it with `vectis config list`.
 
 Default paths:
 
@@ -1008,6 +1016,13 @@ Default paths:
 VECTIS_CONFIG_PATH=config.json
 VECTIS_CONFIG_SIGN_PATH=config_sign.json
 ```
+
+Size limits:
+
+- `config.json`: 8 MiB maximum.
+- `config_sign.json`: 1 MiB maximum.
+
+Vectis checks these limits before parsing, canonicalizing, signing, or verifying config material.
 
 Expected file shape:
 
@@ -1154,13 +1169,11 @@ CLI output defaults to YAML for readability. Add `--output json` to HTTP client 
 | `vectis keys reload` | `POST /keys/reload` | Yes |
 | `vectis lifecycle <kid>` | `POST /lifecycle/{kid}` | Yes |
 | `vectis routes list` | `GET /routes` | Yes |
-| `vectis routes reload` | `POST /routes/reload` | Yes |
 | `vectis remote-routes list` | `GET /remote-routes` | Yes |
-| `vectis remote-routes reload` | `POST /remote-routes/reload` | Yes |
-| `vectis permissions reload` | `POST /permissions/reload` | Yes |
+| `vectis permissions list` | `GET /permissions` | Yes |
 | `vectis config sign` | Local `config_sign.json` update | No HTTP |
 | `vectis config list` | Prints local `config.json` | No HTTP |
-| `vectis config reload` | `POST /routes/reload` | Yes |
+| `vectis config reload` | `POST /config/reload` | Yes |
 | `vectis pub <kid>` | `GET /pub/{kid}` | No |
 | `vectis sign <kid>` | `POST /sign/{kid}` | Yes |
 | `vectis sign verify` | `POST /sign/verification` | No |

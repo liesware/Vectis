@@ -76,13 +76,13 @@ These variables are used by CLI commands that call the HTTP API. `serve` and `in
 The `routes`/`remote_routes`/`permissions` sections live in the unified signed `config.json`.
 Vectis does not create it and `POST /keys` does not modify it.
 If `config.json` exists, `config_sign.json` must exist and verify before the config is loaded.
+Vectis rejects `config.json` above 8 MiB and `config_sign.json` above 1 MiB before parsing or verifying.
 
 Runtime route operations:
 
 - `GET /routes` lists routes currently loaded in memory and requires `VECTIS_APIKEY`.
-- `POST /routes/reload` reloads the unified config and requires `VECTIS_APIKEY`.
 - `GET /remote-routes` lists authorized remote Vectis routes currently loaded in memory and requires `VECTIS_APIKEY`.
-- `POST /remote-routes/reload` reloads the unified config and requires `VECTIS_APIKEY`.
+- `POST /config/reload` reloads the unified config and requires root or an admin `VECTIS_APIKEY`.
 - `vectis config sign` signs `VECTIS_CONFIG_PATH` locally with init keys and updates `VECTIS_CONFIG_SIGN_PATH`.
 - Every route `kid` must exist in the keys currently loaded in memory.
 - A missing file reloads to an empty manual route list.
@@ -140,7 +140,7 @@ Security notes:
 
 ## API Key Permissions
 
-`VECTIS_APIKEY` and `VECTIS_APIKEY_HASH` are the root API key pair. Root can use every protected endpoint. Clients with `admin` can also call protected administrative endpoints, including `POST /permissions/reload`.
+`VECTIS_APIKEY` and `VECTIS_APIKEY_HASH` are the root API key pair. Root can use every protected endpoint. Clients with `admin` can also call protected administrative endpoints, including `POST /config/reload`.
 
 Additional clients are loaded from the `permissions` section of `VECTIS_CONFIG_PATH` when the config exists and its `VECTIS_CONFIG_SIGN_PATH` signature verifies.
 
@@ -167,7 +167,7 @@ Allowed actions:
 
 Permission mapping summary:
 
-- `admin`: administrative protected endpoints, including `POST /keys`, `POST /keys/reload`, `GET /keys/properties`, `GET /routes`, `POST /routes/reload`, `GET /remote-routes`, `POST /remote-routes/reload`, `POST /permissions/reload`, `GET /self-test/init`, and `GET /metrics`.
+- `admin`: administrative protected endpoints, including `POST /keys`, `POST /keys/reload`, `GET /keys/properties`, `POST /config/reload`, `GET /routes`, `GET /remote-routes`, `GET /permissions`, `GET /self-test/init`, and `GET /metrics`.
 - `keys`: `GET /keys/properties/{kid}`.
 - `lifecycle`: `POST /lifecycle/{kid}`.
 - `self-test`: `GET /self-test/keys/{kid}`.

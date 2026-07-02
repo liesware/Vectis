@@ -56,6 +56,18 @@ pub fn canonical_config_json(content: &str) -> Result<String, DynError> {
     )?)?)
 }
 
+pub fn read_config_file(path: &Path) -> Result<String, DynError> {
+    read_limited_config_file(path, config::CONFIG_FILE_MAX_SIZE_BYTES, "config file")
+}
+
+pub fn read_config_signature_file(path: &Path) -> Result<String, DynError> {
+    read_limited_config_file(
+        path,
+        config::CONFIG_SIGN_FILE_MAX_SIZE_BYTES,
+        "config signature file",
+    )
+}
+
 pub fn load_config_state(
     config: &config::AppConfig,
     verify_config: impl Fn(&Path, &str) -> Result<(), DynError>,
@@ -101,16 +113,7 @@ fn load_config_file(
     config: &config::AppConfig,
     is_loaded_kid: &impl Fn(&str) -> bool,
 ) -> Result<ConfigState, DynError> {
-    let content = fs::read_to_string(path).map_err(|err| {
-        if err.kind() == io::ErrorKind::NotFound {
-            Box::new(io::Error::new(
-                io::ErrorKind::NotFound,
-                "config file does not exist",
-            )) as DynError
-        } else {
-            Box::new(err) as DynError
-        }
-    })?;
+    let content = read_config_file(path)?;
     verify_config(path, &content)?;
     let config_file: ConfigFile = serde_json::from_str(&content).map_err(|err| {
         Box::new(io::Error::new(
@@ -152,6 +155,39 @@ fn empty_config_state(config: &config::AppConfig) -> ConfigState {
 fn is_not_found_error(err: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
     err.downcast_ref::<io::Error>()
         .is_some_and(|err| err.kind() == io::ErrorKind::NotFound)
+}
+
+fn read_limited_config_file(
+    path: &Path,
+    max_size_bytes: u64,
+    label: &str,
+) -> Result<String, DynError> {
+    let metadata = fs::metadata(path).map_err(|err| {
+        if err.kind() == io::ErrorKind::NotFound {
+            Box::new(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("{label} does not exist"),
+            )) as DynError
+        } else {
+            Box::new(err) as DynError
+        }
+    })?;
+
+    if !metadata.is_file() {
+        return Err(Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{label} must point to a file"),
+        )));
+    }
+
+    if metadata.len() > max_size_bytes {
+        return Err(Box::new(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{label} exceeds maximum allowed size"),
+        )));
+    }
+
+    fs::read_to_string(path).map_err(|err| Box::new(err) as DynError)
 }
 
 #[cfg(test)]
@@ -254,5 +290,51 @@ mod tests {
         );
         let _ = fs::remove_file(&path);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn reload_config_state_rejects_oversized_config_file() {
+        let path = unique_path("oversized_config");
+        let file = fs::File::create(&path).unwrap();
+        file.set_len(config::CONFIG_FILE_MAX_SIZE_BYTES + 1)
+            .unwrap();
+        drop(file);
+
+        let config = test_config(path.clone());
+        let result = reload_config_state(&config, |_, _| Ok(()), |_| true);
+
+        let _ = fs::remove_file(&path);
+        let err = match result {
+            Ok(_) => panic!("oversized config file must be rejected"),
+            Err(err) => err.to_string(),
+        };
+        assert!(err.contains("config file exceeds maximum allowed size"));
+    }
+
+    #[test]
+    fn read_config_signature_file_rejects_oversized_signature_file() {
+        let path = unique_path("oversized_config_sign");
+        let file = fs::File::create(&path).unwrap();
+        file.set_len(config::CONFIG_SIGN_FILE_MAX_SIZE_BYTES + 1)
+            .unwrap();
+        drop(file);
+
+        let result = read_config_signature_file(&path);
+
+        let _ = fs::remove_file(&path);
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("config signature file exceeds maximum allowed size"));
+    }
+
+    #[test]
+    fn read_config_file_accepts_small_file() {
+        let path = unique_path("small_config");
+        let content = r#"{"version":"v1","routes":[],"remote_routes":[],"permissions":[]}"#;
+        fs::write(&path, content).unwrap();
+
+        let result = read_config_file(&path).unwrap();
+
+        let _ = fs::remove_file(&path);
+        assert_eq!(result, content);
     }
 }

@@ -34,7 +34,8 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
                 config_path,
                 &config.config_sign_path,
             );
-            let signature_content = std::fs::read_to_string(&config_sign_path)?;
+            let signature_content =
+                crate::core::config_file::read_config_signature_file(&config_sign_path)?;
             crate::ops::sign::verify_config_file_signature(
                 &init_state,
                 config_path,
