@@ -7,6 +7,7 @@ import random
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -19,12 +20,25 @@ UNSEAL_KEY_FILE = Path(".unseal_key")
 CORPUS_DIR = Path(__file__).resolve().parent / "fuzz-corpus"
 
 ALLOWED_STATUS = {200, 400, 401, 403, 404, 413}
+FRAMEWORK_STATUS = ALLOWED_STATUS | {405, 415}
 REMOTE_UNREACHABLE_MARKER = "final app can't be reached"
 KID_HEX = "a" * 64
 RECIPIENT_HEX = "b" * 64
 INTERNAL_SEED_PLAINTEXT = "fuzz seed plaintext"
 
-KEY_CASE = {
+# Minimal, policy-safe key requests (one per crypto profile) used to CREATE seed
+# keys. Creating with only tag+profile works under both crypto policies, and the
+# different profiles exercise AES-256/GCM (12-byte nonce) vs ChaCha20 (24-byte),
+# and Ed448/X448 vs Ed25519/X25519.
+KEY_CASES = [
+    {"tag": "fuzz-performance", "profile": "hybrid-performance-v1"},
+    {"tag": "fuzz-high-assurance", "profile": "hybrid-high-assurance-v1"},
+    {"tag": "fuzz-long-term", "profile": "hybrid-long-term-v1"},
+]
+
+# Full-shape request used as the seed for the /keys fuzz target (all fields
+# present so mutations can hit every one).
+KEY_TARGET_SEED = {
     "tag": "fuzz",
     "profile": "hybrid-performance-v1",
     "hash_algorithm": "BLAKE2b(256)",
@@ -56,6 +70,54 @@ BAD_VALUES = [
     float("nan"),
     float("inf"),
 ]
+
+NEAR_MISS_ENUMS = [
+    "Ed25518",
+    "Ed449",
+    "ML-DSA-45",
+    "ML-DSA-43",
+    "ML-KEM-513",
+    "ChaCha20Poly1306",
+    "X25518",
+    "X449",
+    "AES-257/GCM",
+    "AES-128/CBC",
+    "SHA-385",
+    "BLAKE2b(257)",
+]
+
+NUMERIC_EDGE_STRINGS = ["1e400", "-0", "007", "0x1F", "1_000", str(2**64), "NaN"]
+
+NASTY_KIDS = [
+    "",
+    "..",
+    "../..",
+    "%2e%2e",
+    "..%2f..",
+    "\x00\x00",
+    "🔥",
+    "a" * 10000,
+    "not-hex",
+    "z" * 64,
+    "0" * 63,
+    "0" * 65,
+    "0" * 64,
+    " ",
+    "null",
+]
+
+BAD_APIKEYS = [
+    "",
+    "x",
+    "00" * 32,
+    "not-a-hex-key",
+    "café" * 10,
+    "a" * 5000,
+    "0" * 63,
+    "0" * 65,
+]
+
+WRONG_METHODS = ["GET", "PUT", "DELETE", "PATCH", "HEAD"]
 
 
 class FuzzClient:
@@ -95,6 +157,9 @@ class FuzzClient:
         return self.request(
             "POST", path, raw, {"Content-Type": "application/json"}, auth
         )
+
+
+# --- mutation engine ---------------------------------------------------------
 
 
 def all_paths(node, prefix=()):
@@ -153,6 +218,32 @@ def corrupt_string(value, rng):
     return value[:-1] if len(value) > 1 else value + "a"
 
 
+def looks_hex(value):
+    return (
+        isinstance(value, str)
+        and len(value) >= 2
+        and all(c in "0123456789abcdefABCDEF" for c in value)
+    )
+
+
+def domain_mutate(key, value, rng):
+    key_lower = str(key).lower()
+    if "alg" in key_lower or "variant" in key_lower or "cipher" in key_lower:
+        return rng.choice(NEAR_MISS_ENUMS)
+    if looks_hex(value):
+        op = rng.choice(["drop1", "add1", "double", "halve", "oddbyte"])
+        if op == "drop1":
+            return value[:-1]
+        if op == "add1":
+            return value + "a"
+        if op == "double":
+            return value + value
+        if op == "halve":
+            return value[: len(value) // 2]
+        return value + "abc"
+    return rng.choice(NUMERIC_EDGE_STRINGS)
+
+
 def mutate_structured(seed, rng):
     node = json.loads(json.dumps(seed))
     for _ in range(rng.randint(1, 3)):
@@ -162,7 +253,11 @@ def mutate_structured(seed, rng):
             node = del_at(node, path)
             continue
         current = get_at(node, path) if path else node
-        if isinstance(current, str) and rng.random() < 0.6:
+        last_key = path[-1] if path else None
+        roll = rng.random()
+        if isinstance(current, str) and last_key is not None and roll < 0.3:
+            new_value = domain_mutate(last_key, current, rng)
+        elif isinstance(current, str) and roll < 0.7:
             new_value = corrupt_string(current, rng)
         else:
             new_value = copy.deepcopy(rng.choice(BAD_VALUES))
@@ -190,35 +285,16 @@ def mutate_raw(seed, rng):
         i = rng.randrange(len(data))
         return data[:i] + b"\x00" + data[i:]
     if op == "dupkey":
-        return data.replace(b"{", b'{"version":"v1","version":"v2",', 1)
+        obj = _parse(data.decode("utf-8", "replace"))
+        if isinstance(obj, dict) and obj:
+            key = rng.choice(list(obj.keys()))
+            duplicate = json.dumps({key: obj[key]})[1:-1]
+            return data.replace(b"{", b"{" + duplicate.encode("utf-8") + b",", 1)
+        return data + b',"dup":"dup"'
     return data * rng.randint(2, 5)
 
 
-def oracle(status, body, apikey, unseal, allow_remote_unreachable):
-    findings = []
-    if status == 0:
-        findings.append("connection failed (possible crash or hang)")
-        return findings
-    if status not in ALLOWED_STATUS:
-        known_unreachable = (
-            status == 500
-            and allow_remote_unreachable
-            and REMOTE_UNREACHABLE_MARKER in body
-        )
-        if not known_unreachable:
-            findings.append(f"unexpected status {status}")
-    if 400 <= status < 500:
-        try:
-            obj = json.loads(body)
-            extra = sorted(set(obj.keys()) - {"error"})
-            if extra:
-                findings.append(f"4xx error body has extra keys: {extra}")
-        except (json.JSONDecodeError, AttributeError):
-            findings.append("4xx body is not a JSON error object")
-    for name, secret in (("apikey", apikey), ("unseal-key", unseal)):
-        if secret and secret in body:
-            findings.append(f"possible {name} leak in response body")
-    return findings
+# --- oracle ------------------------------------------------------------------
 
 
 def _parse(body):
@@ -226,6 +302,36 @@ def _parse(body):
         return json.loads(body)
     except (json.JSONDecodeError, TypeError):
         return None
+
+
+def oracle(status, body, apikey, unseal, allowed_status, allow_ru, require_json_error=True):
+    findings = []
+    if status == 0:
+        findings.append("connection failed (possible crash or hang)")
+        return findings
+    if status not in allowed_status:
+        known_unreachable = (
+            status == 500
+            and allow_ru
+            and REMOTE_UNREACHABLE_MARKER in body
+        )
+        if not known_unreachable:
+            findings.append(f"unexpected status {status}")
+    if require_json_error and 400 <= status < 500:
+        parsed = _parse(body)
+        if isinstance(parsed, dict):
+            extra = sorted(set(parsed.keys()) - {"error"})
+            if extra:
+                findings.append(f"4xx error body has extra keys: {extra}")
+        else:
+            findings.append("4xx body is not a JSON error object")
+    for name, secret in (("apikey", apikey), ("unseal-key", unseal)):
+        if secret and secret in body:
+            findings.append(f"possible {name} leak in response body")
+    return findings
+
+
+# --- semantic oracles --------------------------------------------------------
 
 
 def token_semantic(sent_value, seed, status, body):
@@ -285,6 +391,9 @@ def config_semantic(status, body):
     return []
 
 
+# --- reporting ---------------------------------------------------------------
+
+
 def save_crash(target, seed, index, description, findings):
     CORPUS_DIR.mkdir(parents=True, exist_ok=True)
     artifact = CORPUS_DIR / f"crash_{target}_{seed}_{index}.json"
@@ -301,42 +410,99 @@ def save_crash(target, seed, index, description, findings):
     return artifact
 
 
-def describe(path, raw, body):
-    if raw:
-        return {"method": "POST", "path": path, "raw": True, "body": body[:2000].decode("latin-1")}
-    return {"method": "POST", "path": path, "raw": False, "body": body}
+def describe(method, path, raw, body):
+    if isinstance(body, bytes):
+        rendered = body[:2000].decode("latin-1")
+    else:
+        rendered = body
+    return {"method": method, "path": path[:2000], "raw": raw, "body": rendered}
 
 
-def fuzz_message_like(
-    name, client, rng, seed_obj, path, auth, allow_ru, args, secrets, semantic=None
-):
-    counters = {"passed": 0, "failed": 0}
+def check_and_record(name, client, args, index, status, findings, description, counters):
+    if index % args.liveness_every == 0 and client.get_status("/healthz/live") != 200:
+        findings.append("server not alive after case")
+    if findings:
+        counters["failed"] += 1
+        artifact = save_crash(name, args.seed, index, description, findings)
+        print(f"[{name}] FINDING at #{index}: {findings} -> {artifact}")
+        if status == 0 and client.get_status("/healthz/live") != 200:
+            print(f"[{name}] server appears down; aborting target")
+            return True
+    else:
+        counters["passed"] += 1
+    return False
+
+
+# --- runners -----------------------------------------------------------------
+
+
+def run_body(target, client, rng, args, secrets):
     apikey, unseal = secrets
+    seeds = target["seed_factory"](client)
+    auth = target.get("auth", False)
+    allow_ru = target.get("allow_ru", False)
+    semantic = target.get("semantic")
+    allowed = target.get("allowed_status", ALLOWED_STATUS)
+    counters = {"passed": 0, "failed": 0}
     for index in range(args.iterations):
+        path, seed_obj = rng.choice(seeds)
         if rng.random() < 0.3:
             body = mutate_raw(seed_obj, rng)
             status, response = client.post_raw(path, body, auth=auth)
-            description = describe(path, True, body)
             sent_value = _parse(body.decode("utf-8", "replace"))
+            description = describe("POST", path, True, body)
         else:
             body = mutate_structured(seed_obj, rng)
             status, response = client.post_json(path, body, auth=auth)
-            description = describe(path, False, body)
             sent_value = body
-        findings = oracle(status, response, apikey, unseal, allow_ru)
+            description = describe("POST", path, False, body)
+        findings = oracle(status, response, apikey, unseal, allowed, allow_ru)
         if semantic is not None:
             findings.extend(semantic(sent_value, seed_obj, status, response))
-        if index % args.liveness_every == 0 and client.get_status("/healthz/live") != 200:
-            findings.append("server not alive after case")
-        if findings:
-            counters["failed"] += 1
-            artifact = save_crash(name, args.seed, index, description, findings)
-            print(f"[{name}] FINDING at #{index}: {findings} -> {artifact}")
-            if status == 0 and client.get_status("/healthz/live") != 200:
-                print(f"[{name}] server appears down; aborting target")
-                break
+        if check_and_record(target["name"], client, args, index, status, findings, description, counters):
+            break
+    return counters
+
+
+def run_path_param(target, client, rng, args, secrets):
+    apikey, unseal = secrets
+    endpoints = target["endpoints"]
+    allowed = target.get("allowed_status", ALLOWED_STATUS)
+    require_json = target.get("require_json_error", True)
+    counters = {"passed": 0, "failed": 0}
+    for index in range(args.iterations):
+        template, auth = rng.choice(endpoints)
+        raw_kid = rng.choice(NASTY_KIDS) if rng.random() < 0.5 else corrupt_string(KID_HEX, rng)
+        path = template.format(urllib.parse.quote(raw_kid, safe=""))
+        status, response = client.request("GET", path, auth=auth)
+        description = {"method": "GET", "path": path[:2000], "kid": raw_kid[:200]}
+        findings = oracle(status, response, apikey, unseal, allowed, False, require_json_error=require_json)
+        if check_and_record(target["name"], client, args, index, status, findings, description, counters):
+            break
+    return counters
+
+
+def run_headers(target, client, rng, args, secrets):
+    apikey, unseal = secrets
+    allowed = target.get("allowed_status", FRAMEWORK_STATUS)
+    counters = {"passed": 0, "failed": 0}
+    for index in range(args.iterations):
+        if rng.random() < 0.5:
+            bad_key = rng.choice(BAD_APIKEYS)
+            status, response = client.request(
+                "GET", "/keys/properties", headers={"X-API-Key": bad_key}
+            )
+            description = {"mode": "apikey", "apikey_len": len(bad_key)}
         else:
-            counters["passed"] += 1
+            method = rng.choice(WRONG_METHODS)
+            status, response = client.request(
+                method, "/sign/verification", data=b"{}",
+                headers={"Content-Type": "application/json"},
+            )
+            description = {"mode": "method", "method": method}
+        findings = oracle(status, response, apikey, unseal, allowed, False, require_json_error=False)
+        if check_and_record(target["name"], client, args, index, status, findings, description, counters):
+            break
     return counters
 
 
@@ -375,9 +541,9 @@ def build_config_baseline():
     return baseline_cfg, baseline_sig
 
 
-def fuzz_config(client, rng, args, secrets):
-    counters = {"passed": 0, "failed": 0}
+def run_config(target, client, rng, args, secrets):
     apikey, unseal = secrets
+    counters = {"passed": 0, "failed": 0}
     baseline_cfg, baseline_sig = build_config_baseline()
     for index in range(args.iterations):
         if rng.random() < 0.7:
@@ -401,31 +567,33 @@ def fuzz_config(client, rng, args, secrets):
             CONFIG_SIGN_PATH.write_bytes(mutated)
             target_file = "config_sign.json"
         status, response = client.post_json("/config/reload", {}, auth=True)
-        findings = oracle(status, response, apikey, unseal, allow_remote_unreachable=False)
+        findings = oracle(status, response, apikey, unseal, ALLOWED_STATUS, False)
         findings.extend(config_semantic(status, response))
-        if index % args.liveness_every == 0 and client.get_status("/healthz/live") != 200:
-            findings.append("server not alive after case")
-        if findings:
-            counters["failed"] += 1
-            description = {
-                "endpoint": "POST /config/reload",
-                "mutated_file": target_file,
-                "content": mutated[:2000].decode("latin-1"),
-            }
-            artifact = save_crash("config", args.seed, index, description, findings)
-            print(f"[config] FINDING at #{index}: {findings} -> {artifact}")
-            if status == 0 and client.get_status("/healthz/live") != 200:
-                print("[config] server appears down; aborting target")
-                break
-        else:
-            counters["passed"] += 1
+        description = {
+            "endpoint": "POST /config/reload",
+            "mutated_file": target_file,
+            "content": mutated[:2000].decode("latin-1"),
+        }
+        aborted = check_and_record("config", client, args, index, status, findings, description, counters)
         CONFIG_PATH.write_bytes(baseline_cfg)
         CONFIG_SIGN_PATH.write_bytes(baseline_sig)
+        if aborted:
+            break
     return counters
 
 
-def message_seed():
-    return {
+# --- seed factories ----------------------------------------------------------
+
+
+def _create_key(client, case):
+    status, body = client.post_json("/keys", case, auth=True)
+    if status != 200:
+        raise RuntimeError(f"could not create seed key ({case}): HTTP {status}: {body}")
+    return json.loads(body)["id"]
+
+
+def message_seeds(_client):
+    envelope = {
         "version": "v1",
         "payload": {
             "version": "v1",
@@ -452,35 +620,91 @@ def message_seed():
             "ml-dsa": {"alg": "ML-DSA-44", "sig": "aa" * 32},
         },
     }
+    return [("/message", envelope)]
 
 
-def token_seed(client):
-    status, body = client.post_json("/keys", KEY_CASE, auth=True)
-    if status != 200:
-        raise RuntimeError(f"could not create seed key: HTTP {status}: {body}")
-    kid = json.loads(body)["id"]
-    message_hash = {"alg": "BLAKE2b(256)", "hex": "cd" * 32}
-    status, body = client.post_json(
-        f"/sign/{kid}", {"message_hash": message_hash}, auth=True
-    )
-    if status != 200:
-        raise RuntimeError(f"could not sign seed token: HTTP {status}: {body}")
-    return json.loads(body)
+def token_seeds(client):
+    seeds = []
+    for case in KEY_CASES:
+        kid = _create_key(client, case)
+        status, body = client.post_json(
+            f"/sign/{kid}", {"message_hash": {"alg": "BLAKE2b(256)", "hex": "cd" * 32}}, auth=True
+        )
+        if status != 200:
+            raise RuntimeError(f"could not sign seed token: HTTP {status}: {body}")
+        seeds.append(("/sign/verification", json.loads(body)))
+    return seeds
 
 
-def internal_seed(client):
-    status, body = client.post_json("/keys", KEY_CASE, auth=True)
-    if status != 200:
-        raise RuntimeError(f"could not create seed key: HTTP {status}: {body}")
-    kid = json.loads(body)["id"]
-    status, body = client.post_json(
-        f"/message/internal/encrypt/{kid}",
-        {"plaintext": INTERNAL_SEED_PLAINTEXT},
-        auth=True,
-    )
-    if status != 200:
-        raise RuntimeError(f"could not encrypt seed message: HTTP {status}: {body}")
-    return json.loads(body)
+def internal_seeds(client):
+    seeds = []
+    for case in KEY_CASES:
+        kid = _create_key(client, case)
+        status, body = client.post_json(
+            f"/message/internal/encrypt/{kid}", {"plaintext": INTERNAL_SEED_PLAINTEXT}, auth=True
+        )
+        if status != 200:
+            raise RuntimeError(f"could not encrypt seed message: HTTP {status}: {body}")
+        seeds.append(("/message/internal/decrypt", json.loads(body)))
+    return seeds
+
+
+def keys_seeds(_client):
+    return [("/keys", copy.deepcopy(KEY_TARGET_SEED))]
+
+
+def sign_body_seeds(client):
+    seeds = []
+    for case in KEY_CASES:
+        kid = _create_key(client, case)
+        seeds.append((f"/sign/{kid}", {"message_hash": {"alg": "BLAKE2b(256)", "hex": "cd" * 32}}))
+    return seeds
+
+
+def lifecycle_seeds(client):
+    kid = _create_key(client, {"tag": "fuzz-lifecycle", "profile": "hybrid-performance-v1"})
+    return [(f"/lifecycle/{kid}", {"status": "disabled", "reason": "fuzz"})]
+
+
+def decrypt_seeds(_client):
+    delivery = {
+        "sender_host": "127.0.0.1:3000",
+        "sender_kid": KID_HEX,
+        "timestamp": "1782058090",
+        "message": {
+            "ctx": "aabbccddeeff0011",
+            "nonce": "aa" * 12,
+            "aad": "version=v1;type=protected-message;sender_kid=" + KID_HEX,
+            "variant": "ChaCha20Poly1305",
+        },
+    }
+    return [("/message/decrypt", delivery)]
+
+
+TARGETS = [
+    {"name": "token", "runner": run_body, "seed_factory": token_seeds,
+     "path": "/sign/verification", "auth": False, "semantic": token_semantic},
+    {"name": "message", "runner": run_body, "seed_factory": message_seeds,
+     "auth": False, "allow_ru": True},
+    {"name": "internal", "runner": run_body, "seed_factory": internal_seeds,
+     "auth": True, "semantic": internal_semantic},
+    {"name": "keys", "runner": run_body, "seed_factory": keys_seeds, "auth": True},
+    {"name": "sign_body", "runner": run_body, "seed_factory": sign_body_seeds, "auth": True},
+    {"name": "lifecycle", "runner": run_body, "seed_factory": lifecycle_seeds, "auth": True},
+    {"name": "decrypt", "runner": run_body, "seed_factory": decrypt_seeds, "auth": True},
+    {"name": "config", "runner": run_config},
+    {"name": "pubkid", "runner": run_path_param, "require_json_error": False, "endpoints": [
+        ("/pub/{}", False),
+        ("/keys/properties/{}", True),
+        ("/self-test/keys/{}", True),
+    ]},
+    {"name": "headers", "runner": run_headers, "allowed_status": FRAMEWORK_STATUS},
+]
+
+TARGET_NAMES = [t["name"] for t in TARGETS]
+
+
+# --- offline self-test of the semantic oracle --------------------------------
 
 
 def self_check():
@@ -534,11 +758,7 @@ def main():
     parser.add_argument("--apikey")
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--iterations", type=int, default=300)
-    parser.add_argument(
-        "--target",
-        choices=["all", "token", "message", "internal", "config"],
-        default="all",
-    )
+    parser.add_argument("--target", choices=["all", *TARGET_NAMES], default="all")
     parser.add_argument("--liveness-every", type=int, default=1)
     parser.add_argument(
         "--self-check",
@@ -563,35 +783,10 @@ def main():
 
     passed = 0
     failed = 0
-
-    if args.target in ("all", "token"):
-        counters = fuzz_message_like(
-            "token", client, rng, token_seed(client),
-            "/sign/verification", False, False, args, secrets,
-            semantic=token_semantic,
-        )
-        passed += counters["passed"]
-        failed += counters["failed"]
-
-    if args.target in ("all", "message"):
-        counters = fuzz_message_like(
-            "message", client, rng, message_seed(),
-            "/message", False, True, args, secrets,
-        )
-        passed += counters["passed"]
-        failed += counters["failed"]
-
-    if args.target in ("all", "internal"):
-        counters = fuzz_message_like(
-            "internal", client, rng, internal_seed(client),
-            "/message/internal/decrypt", True, False, args, secrets,
-            semantic=internal_semantic,
-        )
-        passed += counters["passed"]
-        failed += counters["failed"]
-
-    if args.target in ("all", "config"):
-        counters = fuzz_config(client, rng, args, secrets)
+    for target in TARGETS:
+        if args.target not in ("all", target["name"]):
+            continue
+        counters = target["runner"](target, client, rng, args, secrets)
         passed += counters["passed"]
         failed += counters["failed"]
 

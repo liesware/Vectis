@@ -95,7 +95,14 @@ uv run tests/http_fuzz.py --base-url http://127.0.0.1:3000 --apikey <VECTIS_APIK
 ```
 
 `tests/http_fuzz.py` is a targeted mutation helper. It is separate from
-Schemathesis and is useful for project-specific negative cases.
+Schemathesis and is useful for project-specific negative cases. It mutates
+seeds across crypto profiles (ChaCha20 and AES-256/GCM) with domain-aware
+mutations, and drives a table of targets (`--target`): `token`, `message`,
+`internal`, `keys`, `sign_body`, `lifecycle`, `decrypt`, `config`, `pubkid`
+(fuzzes the `{kid}` path segment) and `headers` (fuzzes `X-API-Key` and the HTTP
+method). Beyond crash/status hygiene it runs semantic oracles that flag
+verification, AEAD, and config-integrity bypasses; `--self-check` tests those
+oracles offline.
 
 ## Schemathesis OpenAPI Tests
 
