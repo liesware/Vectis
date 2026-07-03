@@ -19,6 +19,18 @@ pub fn build_aad(fields: &[(&str, &str)]) -> String {
         .join(";")
 }
 
+pub fn validate_aad_value(field: &str, value: &str) -> Result<(), DynError> {
+    validate_text_field(field, value)?;
+
+    if value.contains(';') || value.contains('=') {
+        return Err(crate::error::invalid_input(format!(
+            "{field} must not contain ';' or '='"
+        )));
+    }
+
+    Ok(())
+}
+
 pub fn validate_symmetric_key(
     field: &str,
     key_hex: &str,
@@ -337,6 +349,107 @@ mod tests {
             "BLAKE2b(512)" | "SHA-512" | "SHA-3(512)" | "Whirlpool" => 128,
             _ => unreachable!("test must use supported hash algorithms"),
         }
+    }
+
+    #[test]
+    fn validate_text_field_rejects_control_and_empty() {
+        for value in [
+            "",
+            "   ",
+            "\u{0}",
+            "\u{1d}",
+            "\u{7f}",
+            "\u{8a}",
+            "before\u{1d}after",
+            "line\nbreak",
+            "tab\tstop",
+        ] {
+            assert!(
+                validate_text_field("field", value).is_err(),
+                "must reject {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_text_field_accepts_unicode_and_long_text() {
+        for value in ["café", "naïve", "日本語のテキスト", "with emoji 🔥"] {
+            assert!(
+                validate_text_field("field", value).is_ok(),
+                "must accept {value:?}"
+            );
+        }
+        assert!(validate_text_field("field", &"a".repeat(100_000)).is_ok());
+    }
+
+    #[test]
+    fn validate_hex_field_rejects_non_hex_and_bad_length() {
+        for value in [
+            "", "a", "AAA", "gg", "café", "aa\u{1d}", "aa bb", "0xdead", "  ",
+        ] {
+            assert!(
+                validate_hex_field("hex", value).is_err(),
+                "must reject {value:?}"
+            );
+        }
+        assert!(validate_hex_field("hex", "deadBEEF00").is_ok());
+    }
+
+    #[test]
+    fn validate_host_port_rejects_malformed_and_control() {
+        for value in [
+            "",
+            "   ",
+            "nocolon",
+            "host:notaport",
+            "host:0",
+            "host:99999",
+            "\u{1d}host:80",
+            "host:8\u{0}0",
+        ] {
+            assert!(
+                validate_host_port("addr", value).is_err(),
+                "must reject {value:?}"
+            );
+        }
+        assert!(validate_host_port("addr", "127.0.0.1:3000").is_ok());
+        assert!(validate_host_port("addr", "localhost:80").is_ok());
+    }
+
+    #[test]
+    fn validate_aad_value_rejects_delimiters() {
+        for value in ["a;b", "a=b", "tag;", "=", ";", "x=y;z", "ctrl\u{1d}", ""] {
+            assert!(
+                validate_aad_value("tag", value).is_err(),
+                "must reject {value:?}"
+            );
+        }
+        for value in ["plain", "café🔥", "with space", "dash-under_dot."] {
+            assert!(
+                validate_aad_value("tag", value).is_ok(),
+                "must accept {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_allowed_value_rejects_control_and_unlisted() {
+        let allowed = ["active", "disabled"];
+        for value in [
+            "",
+            "\u{1d}",
+            "active\u{0}",
+            "activ",
+            "ACTIVE",
+            "unknown",
+            "café",
+        ] {
+            assert!(
+                validate_allowed_value("status", value, &allowed).is_err(),
+                "must reject {value:?}"
+            );
+        }
+        assert!(validate_allowed_value("status", "active", &allowed).is_ok());
     }
 
     proptest! {

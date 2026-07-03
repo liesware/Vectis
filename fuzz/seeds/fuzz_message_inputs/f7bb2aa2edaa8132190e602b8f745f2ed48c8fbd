@@ -1,0 +1,1 @@
+{"version":"v1","payload":{"version":"v1","type":"protected-message","created_at":"0","sender":{"host":"127.0.0.1:3000","kid":"aprotected-message","ct":"aabb"}},"signatures":{"eaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"recipient":{"kid":"aaaaaaaaŸžžsig":"aa"}}}

@@ -1,0 +1,1 @@
+{"version":"v1","payload":{"version":"v1","type":"protected-message","created_at":"1","sender":{"host":"127.0.0.1:3000","kid":"aprotected-message","ct":"aabb"}},ost":"127.0.0.1:3000","kid":"apro"signatures":{"eaaaaaaaaaaaaaaaaaaa¡aaaaaaaaaaaaablic":":{"eddsa":{"alg":"Ed25518","sig":"aa"},"ml-dsa":{"alg":"ML-DSA-44","sig":"aa"}}}

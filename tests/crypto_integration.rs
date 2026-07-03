@@ -185,6 +185,171 @@ fn corrupt_public_material_fails_cleanly() {
     assert!(crypto::validate_ml_kem_public_key_hex("ml_kem_public_key_der_hex", "aa", 32).is_err());
 }
 
+#[test]
+fn aead_rejects_tampered_inputs() {
+    for case in PROFILE_CASES {
+        let cipher = crypto::symmetric_cipher(case.symmetric).expect(case.name);
+        let key = crypto::random_bytes(cipher.key_size_bytes).expect(case.name);
+        let nonce = crypto::random_bytes(cipher.nonce_size_bytes).expect(case.name);
+        let aad = b"version=v1;type=aead-negative";
+        let plaintext = "authentic message";
+        let ciphertext = crypto::encrypt_symmetric(cipher.algorithm, plaintext, &key, &nonce, aad)
+            .expect(case.name);
+
+        assert!(
+            crypto::decrypt_symmetric(cipher.algorithm, &ciphertext, &key, &nonce, aad).is_ok(),
+            "{} baseline decrypt",
+            case.name
+        );
+
+        let mut tampered = ciphertext.clone();
+        tampered[0] ^= 0x01;
+        assert!(
+            crypto::decrypt_symmetric(cipher.algorithm, &tampered, &key, &nonce, aad).is_err(),
+            "{} tampered ciphertext",
+            case.name
+        );
+
+        let wrong_key = crypto::random_bytes(cipher.key_size_bytes).expect(case.name);
+        assert!(
+            crypto::decrypt_symmetric(cipher.algorithm, &ciphertext, &wrong_key, &nonce, aad)
+                .is_err(),
+            "{} wrong key",
+            case.name
+        );
+
+        let mut wrong_nonce = nonce.clone();
+        wrong_nonce[0] ^= 0x01;
+        assert!(
+            crypto::decrypt_symmetric(cipher.algorithm, &ciphertext, &key, &wrong_nonce, aad)
+                .is_err(),
+            "{} wrong nonce",
+            case.name
+        );
+
+        let wrong_aad = b"version=v1;type=different";
+        assert!(
+            crypto::decrypt_symmetric(cipher.algorithm, &ciphertext, &key, &nonce, wrong_aad)
+                .is_err(),
+            "{} wrong aad",
+            case.name
+        );
+    }
+}
+
+fn is_verified<E>(result: Result<bool, E>) -> bool {
+    matches!(result, Ok(true))
+}
+
+#[test]
+fn signatures_reject_tampering() {
+    let message = "signed by vectis";
+    for case in PROFILE_CASES {
+        let material = create_profile_material(case);
+        let keys = material.keys();
+
+        let eddsa_private =
+            crypto::load_private_key_der_hex(keys.eddsa().private_key_der_hex()).expect(case.name);
+        let eddsa_public =
+            crypto::load_public_key_der_hex(keys.eddsa().public_key_der_hex()).expect(case.name);
+        let eddsa_sig = crypto::sign_message(&eddsa_private, message).expect(case.name);
+        assert!(
+            is_verified(crypto::verify_message(&eddsa_public, message, &eddsa_sig)),
+            "{} eddsa valid",
+            case.name
+        );
+        assert!(
+            !is_verified(crypto::verify_message(
+                &eddsa_public,
+                "tampered message",
+                &eddsa_sig
+            )),
+            "{} eddsa tampered message",
+            case.name
+        );
+        let mut bad_eddsa_sig = eddsa_sig.clone();
+        bad_eddsa_sig[0] ^= 0x01;
+        assert!(
+            !is_verified(crypto::verify_message(
+                &eddsa_public,
+                message,
+                &bad_eddsa_sig
+            )),
+            "{} eddsa tampered signature",
+            case.name
+        );
+
+        let ml_dsa_private =
+            crypto::load_private_key_der_hex(keys.ml_dsa().private_key_der_hex()).expect(case.name);
+        let ml_dsa_public =
+            crypto::load_public_key_der_hex(keys.ml_dsa().public_key_der_hex()).expect(case.name);
+        let ml_dsa_sig = crypto::sign_ml_dsa_message(&ml_dsa_private, message).expect(case.name);
+        assert!(
+            is_verified(crypto::verify_ml_dsa_message(
+                &ml_dsa_public,
+                message,
+                &ml_dsa_sig
+            )),
+            "{} ml-dsa valid",
+            case.name
+        );
+        assert!(
+            !is_verified(crypto::verify_ml_dsa_message(
+                &ml_dsa_public,
+                "tampered message",
+                &ml_dsa_sig
+            )),
+            "{} ml-dsa tampered message",
+            case.name
+        );
+        let mut bad_ml_dsa_sig = ml_dsa_sig.clone();
+        bad_ml_dsa_sig[0] ^= 0x01;
+        assert!(
+            !is_verified(crypto::verify_ml_dsa_message(
+                &ml_dsa_public,
+                message,
+                &bad_ml_dsa_sig
+            )),
+            "{} ml-dsa tampered signature",
+            case.name
+        );
+    }
+}
+
+#[test]
+fn ml_kem_decapsulation_rejects_wrong_ciphertext() {
+    for case in PROFILE_CASES {
+        let material = create_profile_material(case);
+        let keys = material.keys();
+        let public_key =
+            crypto::load_public_key_der_hex(keys.ml_kem().public_key_der_hex()).expect(case.name);
+        let private_key =
+            crypto::load_private_key_der_hex(keys.ml_kem().private_key_der_hex()).expect(case.name);
+        let salt = crypto::random_bytes(32).expect(case.name);
+        let encapsulation =
+            crypto::encapsulate_ml_kem_shared_key(&public_key, &salt, 32).expect(case.name);
+
+        let good = crypto::decapsulate_ml_kem_shared_key(
+            &private_key,
+            &encapsulation.encapsulated_key,
+            &salt,
+            32,
+        )
+        .expect(case.name);
+        assert_eq!(good, encapsulation.shared_key, "{}", case.name);
+
+        let mut wrong_ciphertext = encapsulation.encapsulated_key.clone();
+        wrong_ciphertext[0] ^= 0x01;
+        // Tampered ciphertext must not recover the original shared secret; ML-KEM
+        // implicit rejection yields a different key, and a hard error is also fine.
+        if let Ok(shared) =
+            crypto::decapsulate_ml_kem_shared_key(&private_key, &wrong_ciphertext, &salt, 32)
+        {
+            assert_ne!(shared, encapsulation.shared_key, "{}", case.name);
+        }
+    }
+}
+
 fn assert_variant_valid(value: &Value, field: &str, variant: &str, case_name: &str) {
     assert_eq!(value[field]["variant"], variant, "{case_name}");
     assert_eq!(value[field]["valid"], true, "{case_name}");

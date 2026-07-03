@@ -11,6 +11,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from test_config import require_apikey
+from http_support import StatusClient as Client, parse_json
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:3000"
@@ -31,63 +32,6 @@ _CONFIG = {"version": "v1", "routes": [], "remote_routes": [], "permissions": []
 
 class NegativeTestError(Exception):
     pass
-
-
-class Client:
-    def __init__(self, base_url, apikey):
-        self.base_url = base_url.rstrip("/")
-        self.apikey = apikey
-
-    def get(self, path, auth=False, headers=None):
-        request_headers = {}
-        if headers:
-            request_headers.update(headers)
-        if auth:
-            request_headers["X-API-Key"] = self.apikey
-
-        return self._request("GET", path, headers=request_headers)
-
-    def post(self, path, body, auth=False, headers=None):
-        request_headers = {"Content-Type": "application/json"}
-        if headers:
-            request_headers.update(headers)
-        if auth:
-            request_headers["X-API-Key"] = self.apikey
-
-        return self._request("POST", path, body=body, headers=request_headers)
-
-    def _request(self, method, path, body=None, headers=None):
-        url = f"{self.base_url}{path}"
-        data = None
-        if body is not None:
-            data = json.dumps(body).encode("utf-8")
-
-        request = urllib.request.Request(
-            url,
-            data=data,
-            headers=headers or {},
-            method=method,
-        )
-
-        try:
-            with urllib.request.urlopen(request, timeout=60) as response:
-                payload = response.read().decode("utf-8")
-                return response.status, parse_json(payload)
-        except urllib.error.HTTPError as err:
-            payload = err.read().decode("utf-8", errors="replace")
-            return err.code, parse_json(payload)
-        except urllib.error.URLError as err:
-            raise NegativeTestError(f"{method} {path} failed: {err}") from err
-
-
-def parse_json(payload):
-    if not payload:
-        return {}
-
-    try:
-        return json.loads(payload)
-    except json.JSONDecodeError:
-        return {"raw": payload}
 
 
 def require(condition, message):
@@ -439,6 +383,13 @@ def main():
         status, _ = client.post("/keys", request, auth=True)
         require_status("POST /keys invalid symmetric algorithm", status, 400)
 
+    def keys_tag_with_aad_delimiters():
+        for bad_tag in ("has;semicolon", "has=equals"):
+            request = dict(VALID_KEY_REQUEST)
+            request["tag"] = bad_tag
+            status, _ = client.post("/keys", request, auth=True)
+            require_status(f"POST /keys tag {bad_tag!r}", status, 400)
+
     def keys_control_char_field_name():
         request = dict(VALID_KEY_REQUEST)
         request["badfield"] = "x"
@@ -611,6 +562,7 @@ def main():
         ("POST /keys invalid profile", keys_invalid_profile),
         ("POST /keys invalid hash algorithm", keys_invalid_hash_algorithm),
         ("POST /keys invalid symmetric algorithm", keys_invalid_symmetric_algorithm),
+        ("POST /keys tag with aad delimiters", keys_tag_with_aad_delimiters),
         ("POST /keys control-char field name", keys_control_char_field_name),
     ):
         run_case(rows, name, func)

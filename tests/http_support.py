@@ -139,6 +139,63 @@ class Client:
             raise WorkflowError(f"{method} {path} returned invalid JSON: {payload}") from err
 
 
+def parse_json(payload):
+    if not payload:
+        return {}
+
+    try:
+        return json.loads(payload)
+    except json.JSONDecodeError:
+        return {"raw": payload}
+
+
+class StatusClient:
+    """HTTP client that returns (status, body) tuples instead of raising on 4xx/5xx."""
+
+    def __init__(self, base_url, apikey):
+        self.base_url = base_url.rstrip("/")
+        self.apikey = apikey
+
+    def get(self, path, auth=False, headers=None):
+        request_headers = {}
+        if headers:
+            request_headers.update(headers)
+        if auth:
+            request_headers["X-API-Key"] = self.apikey
+
+        return self._request("GET", path, headers=request_headers)
+
+    def post(self, path, body, auth=False, headers=None):
+        request_headers = {"Content-Type": "application/json"}
+        if headers:
+            request_headers.update(headers)
+        if auth:
+            request_headers["X-API-Key"] = self.apikey
+
+        return self._request("POST", path, body=body, headers=request_headers)
+
+    def _request(self, method, path, body=None, headers=None):
+        url = f"{self.base_url}{path}"
+        data = None
+        if body is not None:
+            data = json.dumps(body).encode("utf-8")
+
+        request = urllib.request.Request(
+            url,
+            data=data,
+            headers=headers or {},
+            method=method,
+        )
+
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return response.status, parse_json(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as err:
+            return err.code, parse_json(err.read().decode("utf-8", errors="replace"))
+        except urllib.error.URLError as err:
+            raise WorkflowError(f"{method} {path} failed: {err}") from err
+
+
 def require(condition, message):
     if not condition:
         raise WorkflowError(message)

@@ -909,7 +909,7 @@ fn resolve_keys_input(
 ) -> Result<ResolvedKeysInput, DynError> {
     let timestamp = validation::current_timestamp()?;
     let tag = input.tag.clone().unwrap_or_else(|| timestamp.clone());
-    validation::validate_text_field("tag", &tag)?;
+    validation::validate_aad_value("tag", &tag)?;
 
     let profile_name = input
         .profile

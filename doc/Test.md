@@ -146,8 +146,18 @@ Run all native fuzz targets with:
 Increase or reduce the number of runs with:
 
 ```sh
-RUNS=10000 ./tests_cargo-fuzz.sh
+RUNS=100000 ./tests_cargo-fuzz.sh
 ```
+
+Or bound each target by wall-clock time (seconds) for a longer hardening run:
+
+```sh
+MAX_TOTAL_TIME=120 ./tests_cargo-fuzz.sh
+```
+
+Committed seed inputs live in `fuzz/seeds/<target>/` and are copied into the
+(git-ignored) `fuzz/corpus/<target>/` before each run to bootstrap coverage from
+realistic examples.
 
 The script runs:
 
@@ -166,6 +176,16 @@ Additional registered targets can be run manually with `cargo fuzz run`:
 These targets intentionally avoid Botan, SQLite, networking, and server startup
 inside the fuzz loop. They focus on parser safety, validation boundaries,
 canonical JSON determinism, and config parsing robustness.
+
+### Error message hygiene
+
+Some parse/validation targets assert that error messages contain no control
+characters. The **guarantee** is that the HTTP boundary sanitizes every public
+error message (`ErrorResponse::new` in `src/io/http/error.rs`, unit-tested
+there): responses always conform to the OpenAPI `TextField` contract regardless
+of what deeper code interpolates. The fuzz-target assertions are **defense in
+depth** — the `ops`/`core` layers should not gratuitously inject control
+characters into error text — not the primary guarantee.
 
 `cargo-fuzz` is currently a local/manual hardening tool rather than a CI gate.
 Botan itself stays outside these fuzz loops; Vectis' contract with Botan is

@@ -542,6 +542,12 @@ components:
       minLength: 1
       pattern: '^[^\x00-\x1F\x7F-\x9F]+$'
 
+    AadSafeText:
+      type: string
+      minLength: 1
+      pattern: '^[^\x00-\x1F\x7F-\x9F;=]+$'
+      description: Text safe to embed in a key=value;... AAD string (no ';' or '=').
+
     Timestamp:
       type: string
       pattern: "^[0-9]+$"
@@ -593,7 +599,7 @@ components:
       additionalProperties: false
       properties:
         tag:
-          $ref: "#/components/schemas/TextField"
+          $ref: "#/components/schemas/AadSafeText"
           example: payments
         profile:
           $ref: "#/components/schemas/CryptoProfile"

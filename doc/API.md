@@ -290,7 +290,7 @@ All fields are optional:
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `tag` | string | No | Human-readable label for the key. If missing, Vectis uses a timestamp. |
+| `tag` | string | No | Human-readable label for the key. Must not contain `;` or `=` (the value is embedded in the key's `info`/AAD string, formatted as `version=v1;...;tag=<tag>;...`). If missing, Vectis uses a timestamp. |
 | `profile` | string | No | Crypto profile used as the base algorithm policy. If missing, Vectis uses `VECTIS_DEFAULT_CRYPTO_PROFILE`. |
 | `hash_algorithm` | string | No | Individual hash override. Accepted only when `VECTIS_CRYPTO_POLICY=allow-overrides`. |
 | `symmetric_algorithm` | string | No | Individual symmetric algorithm override. Accepted only when `VECTIS_CRYPTO_POLICY=allow-overrides`. |

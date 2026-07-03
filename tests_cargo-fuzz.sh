@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-RUNS="${RUNS:-1000}"
+RUNS="${RUNS:-20000}"
+MAX_TOTAL_TIME="${MAX_TOTAL_TIME:-}"
 TOOLCHAIN="${TOOLCHAIN:-nightly-aarch64-apple-darwin}"
 NIGHTLY_BIN="$HOME/.rustup/toolchains/$TOOLCHAIN/bin"
 
@@ -45,9 +46,22 @@ echo "cargo-fuzz targets:"
 cargo fuzz list
 echo
 
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+libfuzzer_args=(-runs="$RUNS")
+if [[ -n "$MAX_TOTAL_TIME" ]]; then
+  libfuzzer_args+=(-max_total_time="$MAX_TOTAL_TIME")
+fi
+
 for target in "${TARGETS[@]}"; do
-  echo "== cargo fuzz run $target -- -runs=$RUNS =="
-  cargo fuzz run "$target" -- "-runs=$RUNS"
+  seed_dir="$REPO_DIR/fuzz/seeds/$target"
+  if [[ -d "$seed_dir" ]]; then
+    mkdir -p "$REPO_DIR/fuzz/corpus/$target"
+    cp -n "$seed_dir"/* "$REPO_DIR/fuzz/corpus/$target/" 2>/dev/null || true
+  fi
+
+  echo "== cargo fuzz run $target -- ${libfuzzer_args[*]} =="
+  cargo fuzz run "$target" -- "${libfuzzer_args[@]}"
   echo
 done
 
