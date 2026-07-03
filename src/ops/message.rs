@@ -208,7 +208,7 @@ impl PreparedReceiveMessage {
 
 pub fn parse_send_message_input(request: Value) -> Result<SendMessageInput, DynError> {
     serde_json::from_value(request)
-        .map_err(|err| crate::error::invalid_input(format!("invalid message request: {err}")))
+        .map_err(|_| crate::error::invalid_input("invalid message request"))
 }
 
 pub fn prepare_send_message(
@@ -227,29 +227,26 @@ pub fn prepare_send_message(
 
 pub fn parse_message_envelope(request: Value) -> Result<ProtectedMessageToken, DynError> {
     serde_json::from_value(request)
-        .map_err(|err| crate::error::invalid_input(format!("invalid protected message: {err}")))
+        .map_err(|_| crate::error::invalid_input("invalid protected message"))
 }
 
 pub fn parse_decrypt_message_input(request: Value) -> Result<DecryptMessageInput, DynError> {
-    serde_json::from_value(request).map_err(|err| {
-        crate::error::invalid_input(format!("invalid message decrypt request: {err}"))
-    })
+    serde_json::from_value(request)
+        .map_err(|_| crate::error::invalid_input("invalid message decrypt request"))
 }
 
 pub fn parse_internal_encrypt_message_input(
     request: Value,
 ) -> Result<InternalEncryptMessageInput, DynError> {
-    serde_json::from_value(request).map_err(|err| {
-        crate::error::invalid_input(format!("invalid internal message encrypt request: {err}"))
-    })
+    serde_json::from_value(request)
+        .map_err(|_| crate::error::invalid_input("invalid internal message encrypt request"))
 }
 
 pub fn parse_internal_decrypt_message_input(
     request: Value,
 ) -> Result<InternalMessageOutput, DynError> {
-    serde_json::from_value(request).map_err(|err| {
-        crate::error::invalid_input(format!("invalid internal message decrypt request: {err}"))
-    })
+    serde_json::from_value(request)
+        .map_err(|_| crate::error::invalid_input("invalid internal message decrypt request"))
 }
 
 pub fn decrypt_message_recipient_kid(input: &DecryptMessageInput) -> Result<String, DynError> {

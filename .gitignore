@@ -14,6 +14,7 @@ permissions_sign.json
 config.json
 config_sign.json
 .DS_Store
+Notes.md
 *.swp
 .*.swp
 __pycache__
