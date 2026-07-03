@@ -202,6 +202,8 @@ fn read_limited_config_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+    use serde_json::json;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn unique_path(tag: &str) -> PathBuf {
@@ -340,5 +342,79 @@ mod tests {
 
         let _ = fs::remove_file(&path);
         assert_eq!(result, content);
+    }
+
+    proptest! {
+        #[test]
+        fn canonical_config_json_stays_stable_for_equivalent_empty_config(
+            include_routes in any::<bool>(),
+            include_remote_routes in any::<bool>(),
+            include_permissions in any::<bool>()
+        ) {
+            let mut first = serde_json::Map::new();
+            first.insert(String::from("version"), json!("v1"));
+            if include_routes {
+                first.insert(String::from("routes"), json!([]));
+            }
+            if include_remote_routes {
+                first.insert(String::from("remote_routes"), json!([]));
+            }
+            if include_permissions {
+                first.insert(String::from("permissions"), json!([]));
+            }
+
+            let second = json!({
+                "permissions": if include_permissions { json!([]) } else { json!(null) },
+                "remote_routes": if include_remote_routes { json!([]) } else { json!(null) },
+                "routes": if include_routes { json!([]) } else { json!(null) },
+                "version": "v1"
+            });
+            let mut second_object = second.as_object().unwrap().clone();
+            if !include_permissions {
+                second_object.remove("permissions");
+            }
+            if !include_remote_routes {
+                second_object.remove("remote_routes");
+            }
+            if !include_routes {
+                second_object.remove("routes");
+            }
+
+            let first_json = serde_json::to_string(&first).unwrap();
+            let second_json = serde_json::to_string(&second_object).unwrap();
+            let canonical = canonical_config_json(&first_json).unwrap();
+
+            prop_assert_eq!(&canonical, &canonical_config_json(&second_json).unwrap());
+            prop_assert!(serde_json::from_str::<serde_json::Value>(&canonical).is_ok());
+            prop_assert_eq!(&canonical, &canonical_config_json(&canonical).unwrap());
+        }
+    }
+
+    #[test]
+    fn validate_config_content_accepts_minimal_empty_config() {
+        let config = test_config(PathBuf::from("config.json"));
+        let state = validate_config_content(r#"{"version":"v1"}"#, &config, |_| true).unwrap();
+
+        assert!(state.routes.is_empty());
+        assert!(state.remote_routes.is_empty());
+        assert!(state.permissions.is_empty());
+    }
+
+    #[test]
+    fn validate_config_content_rejects_malformed_sections() {
+        let config = test_config(PathBuf::from("config.json"));
+
+        assert!(validate_config_content(r#"{"version":"v2"}"#, &config, |_| true).is_err());
+        assert!(
+            validate_config_content(r#"{"version":"v1","routes":{}}"#, &config, |_| true).is_err()
+        );
+        assert!(
+            validate_config_content(r#"{"version":"v1","remote_routes":{}}"#, &config, |_| true)
+                .is_err()
+        );
+        assert!(
+            validate_config_content(r#"{"version":"v1","permissions":{}}"#, &config, |_| true)
+                .is_err()
+        );
     }
 }

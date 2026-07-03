@@ -4,13 +4,13 @@ use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Clone, Deserialize, Serialize)]
-pub(crate) struct KeyMaterialOutput {
+pub struct KeyMaterialOutput {
     pub(crate) hash: VariantHash,
     pub(crate) keys: KeyMaterialKeys,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
-pub(crate) struct KeyMaterialKeys {
+pub struct KeyMaterialKeys {
     pub(crate) symmetric: VariantSymmetricKey,
     pub(crate) eddsa: VariantDerKeyPair,
     pub(crate) xecdh: VariantKeyAgreementKeyPair,
@@ -21,31 +21,31 @@ pub(crate) struct KeyMaterialKeys {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
-pub(crate) struct VariantHash {
+pub struct VariantHash {
     pub(crate) variant: String,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
-pub(crate) struct VariantSymmetricKey {
+pub struct VariantSymmetricKey {
     pub(crate) variant: String,
     pub(crate) key_hex: String,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
-pub(crate) struct VariantKeyAgreementKeyPair {
+pub struct VariantKeyAgreementKeyPair {
     pub(crate) variant: String,
     pub(crate) private_key_der_hex: String,
     pub(crate) public_key_hex: String,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
-pub(crate) struct VariantDerKeyPair {
+pub struct VariantDerKeyPair {
     pub(crate) variant: String,
     pub(crate) private_key_der_hex: String,
     pub(crate) public_key_der_hex: String,
 }
 
-pub(crate) struct KeyMaterialSpec {
+pub struct KeyMaterialSpec {
     pub(crate) hash_algorithm: String,
     pub(crate) symmetric_algorithm: String,
     pub(crate) eddsa_algorithm: String,
@@ -55,6 +55,24 @@ pub(crate) struct KeyMaterialSpec {
 }
 
 impl KeyMaterialSpec {
+    pub fn new(
+        hash_algorithm: impl Into<String>,
+        symmetric_algorithm: impl Into<String>,
+        eddsa_algorithm: impl Into<String>,
+        xecdh_algorithm: impl Into<String>,
+        ml_dsa_variant: impl Into<String>,
+        ml_kem_variant: impl Into<String>,
+    ) -> Self {
+        Self {
+            hash_algorithm: hash_algorithm.into(),
+            symmetric_algorithm: symmetric_algorithm.into(),
+            eddsa_algorithm: eddsa_algorithm.into(),
+            xecdh_algorithm: xecdh_algorithm.into(),
+            ml_dsa_variant: ml_dsa_variant.into(),
+            ml_kem_variant: ml_kem_variant.into(),
+        }
+    }
+
     pub(crate) fn internal_keys() -> Self {
         Self {
             hash_algorithm: config::INTERNAL_KEYS_HASH.to_string(),
@@ -114,76 +132,76 @@ impl Zeroize for VariantKeyAgreementKeyPair {
 }
 
 impl KeyMaterialOutput {
-    pub(crate) fn hash_variant(&self) -> &str {
+    pub fn hash_variant(&self) -> &str {
         &self.hash.variant
     }
 
-    pub(crate) fn keys(&self) -> &KeyMaterialKeys {
+    pub fn keys(&self) -> &KeyMaterialKeys {
         &self.keys
     }
 }
 
 impl KeyMaterialKeys {
-    pub(crate) fn symmetric(&self) -> &VariantSymmetricKey {
+    pub fn symmetric(&self) -> &VariantSymmetricKey {
         &self.symmetric
     }
 
-    pub(crate) fn eddsa(&self) -> &VariantDerKeyPair {
+    pub fn eddsa(&self) -> &VariantDerKeyPair {
         &self.eddsa
     }
 
-    pub(crate) fn xecdh(&self) -> &VariantKeyAgreementKeyPair {
+    pub fn xecdh(&self) -> &VariantKeyAgreementKeyPair {
         &self.xecdh
     }
 
-    pub(crate) fn ml_dsa(&self) -> &VariantDerKeyPair {
+    pub fn ml_dsa(&self) -> &VariantDerKeyPair {
         &self.ml_dsa
     }
 
-    pub(crate) fn ml_kem(&self) -> &VariantDerKeyPair {
+    pub fn ml_kem(&self) -> &VariantDerKeyPair {
         &self.ml_kem
     }
 }
 
 impl VariantSymmetricKey {
-    pub(crate) fn variant(&self) -> &str {
+    pub fn variant(&self) -> &str {
         &self.variant
     }
 
-    pub(crate) fn key_hex(&self) -> &str {
+    pub fn key_hex(&self) -> &str {
         &self.key_hex
     }
 }
 
 impl VariantDerKeyPair {
-    pub(crate) fn variant(&self) -> &str {
+    pub fn variant(&self) -> &str {
         &self.variant
     }
 
-    pub(crate) fn private_key_der_hex(&self) -> &str {
+    pub fn private_key_der_hex(&self) -> &str {
         &self.private_key_der_hex
     }
 
-    pub(crate) fn public_key_der_hex(&self) -> &str {
+    pub fn public_key_der_hex(&self) -> &str {
         &self.public_key_der_hex
     }
 }
 
 impl VariantKeyAgreementKeyPair {
-    pub(crate) fn variant(&self) -> &str {
+    pub fn variant(&self) -> &str {
         &self.variant
     }
 
-    pub(crate) fn private_key_der_hex(&self) -> &str {
+    pub fn private_key_der_hex(&self) -> &str {
         &self.private_key_der_hex
     }
 
-    pub(crate) fn public_key_hex(&self) -> &str {
+    pub fn public_key_hex(&self) -> &str {
         &self.public_key_hex
     }
 }
 
-pub(crate) fn create_key_material(spec: &KeyMaterialSpec) -> Result<KeyMaterialOutput, DynError> {
+pub fn create_key_material(spec: &KeyMaterialSpec) -> Result<KeyMaterialOutput, DynError> {
     let symmetric_cipher =
         crypto::symmetric_cipher(&spec.symmetric_algorithm).ok_or_else(|| {
             crate::error::invalid_input(format!(

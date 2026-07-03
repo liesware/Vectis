@@ -536,6 +536,10 @@ mod tests {
         .unwrap()
     }
 
+    fn token_value() -> serde_json::Value {
+        serde_json::to_value(token("Ed25519", "ML-DSA-44", "v1")).unwrap()
+    }
+
     fn peer(eddsa_alg: &str, ml_dsa_alg: &str) -> PeerPublicKeys {
         serde_json::from_value(json!({
             "eddsa": {"alg": eddsa_alg, "public_key_der_hex": "aa"},
@@ -603,6 +607,89 @@ mod tests {
             let result = validate_message_hash(&message_hash);
 
             prop_assert_eq!(result.is_ok(), message_hash.hex.len() == 64);
+        }
+
+        #[test]
+        fn parse_timestamp_token_rejects_extra_fields(suffix in "[A-Za-z0-9_]{1,24}") {
+            let extra_field = format!("extra_{suffix}");
+
+            let mut top_level = token_value();
+            top_level
+                .as_object_mut()
+                .unwrap()
+                .insert(extra_field.clone(), json!("unexpected"));
+            prop_assert!(parse_timestamp_token(top_level).is_err());
+
+            let mut payload = token_value();
+            payload["payload"]
+                .as_object_mut()
+                .unwrap()
+                .insert(extra_field.clone(), json!("unexpected"));
+            prop_assert!(parse_timestamp_token(payload).is_err());
+
+            let mut signatures = token_value();
+            signatures["signatures"]
+                .as_object_mut()
+                .unwrap()
+                .insert(extra_field.clone(), json!("unexpected"));
+            prop_assert!(parse_timestamp_token(signatures).is_err());
+
+            let mut eddsa = token_value();
+            eddsa["signatures"]["eddsa"]
+                .as_object_mut()
+                .unwrap()
+                .insert(extra_field.clone(), json!("unexpected"));
+            prop_assert!(parse_timestamp_token(eddsa).is_err());
+
+            let mut ml_dsa = token_value();
+            ml_dsa["signatures"]["ml-dsa"]
+                .as_object_mut()
+                .unwrap()
+                .insert(extra_field, json!("unexpected"));
+            prop_assert!(parse_timestamp_token(ml_dsa).is_err());
+        }
+
+        #[test]
+        fn validate_timestamp_token_rejects_invalid_kid(kid in "[A-Za-z0-9]{0,80}") {
+            prop_assume!(kid.len() != 64 || !kid.chars().all(|item| item.is_ascii_hexdigit()));
+            let mut token = token("Ed25519", "ML-DSA-44", "v1");
+            token.payload.kid = kid;
+
+            prop_assert!(validate_timestamp_token(&token).is_err());
+        }
+
+        #[test]
+        fn validate_timestamp_token_rejects_invalid_serial(serial in "[A-Za-z0-9]{0,80}") {
+            prop_assume!(serial.len() != 64 || !serial.chars().all(|item| item.is_ascii_hexdigit()));
+            let mut token = token("Ed25519", "ML-DSA-44", "v1");
+            token.payload.serial = serial;
+
+            prop_assert!(validate_timestamp_token(&token).is_err());
+        }
+
+        #[test]
+        fn validate_timestamp_token_rejects_invalid_signature_fields(
+            eddsa_alg in "[A-Za-z0-9_-]{1,24}",
+            ml_dsa_alg in "[A-Za-z0-9_-]{1,24}",
+            sig in "[A-Za-z0-9_-]{1,32}"
+        ) {
+            prop_assume!(!["Ed25519", "Ed448"].contains(&eddsa_alg.as_str()));
+            prop_assume!(!["ML-DSA-44", "ML-DSA-65", "ML-DSA-87"].contains(&ml_dsa_alg.as_str()));
+            prop_assume!(!sig.chars().all(|item| item.is_ascii_hexdigit()) || sig.len() % 2 != 0);
+
+            let invalid_eddsa = token(&eddsa_alg, "ML-DSA-44", "v1");
+            prop_assert!(validate_timestamp_token(&invalid_eddsa).is_err());
+
+            let invalid_ml_dsa = token("Ed25519", &ml_dsa_alg, "v1");
+            prop_assert!(validate_timestamp_token(&invalid_ml_dsa).is_err());
+
+            let mut invalid_sig = token("Ed25519", "ML-DSA-44", "v1");
+            invalid_sig.signatures.eddsa.sig = sig.clone();
+            prop_assert!(validate_timestamp_token(&invalid_sig).is_err());
+
+            let mut invalid_ml_sig = token("Ed25519", "ML-DSA-44", "v1");
+            invalid_ml_sig.signatures.ml_dsa.sig = sig;
+            prop_assert!(validate_timestamp_token(&invalid_ml_sig).is_err());
         }
     }
 }

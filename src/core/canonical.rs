@@ -71,5 +71,70 @@ mod tests {
 
             prop_assert_eq!(parsed, value);
         }
+
+        #[test]
+        fn nested_objects_are_independent_of_key_order(
+            outer in btree_map("[a-z]{1,8}", "[A-Za-z0-9_.-]{1,16}", 1..16),
+            inner in btree_map("[a-z]{1,8}", any::<i64>(), 1..16)
+        ) {
+            let mut first_inner = serde_json::Map::new();
+            for (key, value) in &inner {
+                first_inner.insert(key.clone(), json!(value));
+            }
+            let mut first = serde_json::Map::new();
+            for (key, value) in &outer {
+                first.insert(key.clone(), json!(value));
+            }
+            first.insert(String::from("nested"), Value::Object(first_inner));
+
+            let mut second_inner = serde_json::Map::new();
+            for (key, value) in inner.iter().rev() {
+                second_inner.insert(key.clone(), json!(value));
+            }
+            let mut second = serde_json::Map::new();
+            second.insert(String::from("nested"), Value::Object(second_inner));
+            for (key, value) in outer.iter().rev() {
+                second.insert(key.clone(), json!(value));
+            }
+
+            prop_assert_eq!(
+                canonical_json_v1(&Value::Object(first)).unwrap(),
+                canonical_json_v1(&Value::Object(second)).unwrap()
+            );
+        }
+
+        #[test]
+        fn arrays_preserve_generated_order(items in proptest::collection::vec("[A-Za-z0-9_.-]{0,16}", 0..32)) {
+            let value = json!({ "items": items });
+            let canonical = canonical_json_v1(&value).unwrap();
+            let parsed: Value = serde_json::from_slice(&canonical).unwrap();
+
+            prop_assert_eq!(parsed, value);
+        }
+
+        #[test]
+        fn scalar_values_round_trip(value in prop_oneof![
+            "[A-Za-z0-9_.-]{0,32}".prop_map(Value::String),
+            any::<i64>().prop_map(|item| json!(item)),
+            any::<bool>().prop_map(Value::Bool),
+            Just(Value::Null),
+        ]) {
+            let canonical = canonical_json_v1(&value).unwrap();
+            let parsed: Value = serde_json::from_slice(&canonical).unwrap();
+
+            prop_assert_eq!(&parsed, &value);
+            prop_assert_eq!(&canonical, &canonical_json_v1(&parsed).unwrap());
+        }
+
+        #[test]
+        fn canonical_output_is_compact(entries in btree_map("[a-z]{1,8}", "[A-Za-z0-9_.-]{0,16}", 1..16)) {
+            let value = json!({ "items": entries });
+            let canonical = canonical_json_v1(&value).unwrap();
+            let text = String::from_utf8(canonical).unwrap();
+
+            prop_assert!(!text.contains('\n'));
+            prop_assert!(!text.contains(": "));
+            prop_assert!(!text.contains(", "));
+        }
     }
 }

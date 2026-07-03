@@ -593,6 +593,45 @@ mod tests {
 
             prop_assert!(validate_permission_clients(clients, |_| true).is_err());
         }
+
+        #[test]
+        fn kid_scoped_permission_requires_matching_kid_and_action(
+            allowed_kid in "[0-9a-f]{64}",
+            other_kid in "[0-9a-f]{64}",
+            action in prop::sample::select(&["keys", "lifecycle", "self-test", "sign", "message"])
+        ) {
+            prop_assume!(allowed_kid != other_kid);
+            let hash = hex64('1');
+            let clients = vec![client(
+                "app",
+                &hash,
+                "active",
+                json!([{"kid": allowed_kid, "actions": [action]}]),
+            )];
+            let state = validate_permission_clients(clients, |_| true).unwrap();
+            let authed = state.authenticate_hash(&hash).unwrap();
+
+            prop_assert!(state.require_permission(&authed, Some(&allowed_kid), action).is_ok());
+            prop_assert!(state.require_permission(&authed, Some(&other_kid), action).is_err());
+            prop_assert!(state.require_permission(&authed, None, action).is_err());
+        }
+
+        #[test]
+        fn metrics_permission_is_global_and_does_not_require_kid(kid in "[0-9a-f]{64}") {
+            let hash = hex64('1');
+            let clients = vec![client(
+                "metrics",
+                &hash,
+                "active",
+                json!([{"kid": "*", "actions": ["metrics"]}]),
+            )];
+            let state = validate_permission_clients(clients, |_| true).unwrap();
+            let authed = state.authenticate_hash(&hash).unwrap();
+
+            prop_assert!(state.require_permission(&authed, None, "metrics").is_ok());
+            prop_assert!(state.require_permission(&authed, Some(&kid), "metrics").is_ok());
+            prop_assert!(state.require_permission(&authed, Some(&kid), "message").is_err());
+        }
     }
 
     #[test]

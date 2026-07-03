@@ -11,6 +11,9 @@ TARGETS=(
   fuzz_timestamp_token
   fuzz_message_inputs
   fuzz_config_file
+  fuzz_keys_inputs
+  fuzz_validation
+  fuzz_routes_permissions
 )
 
 if [[ ! -x "$NIGHTLY_BIN/cargo" ]]; then

@@ -521,6 +521,51 @@ mod tests {
 
             prop_assert_eq!(result.is_ok(), matches!(status.as_str(), "active" | "disabled"));
         }
+
+        #[test]
+        fn route_for_requires_active_status_and_allowed_sender(
+            sender in "[0-9a-f]{64}",
+            other_sender in "[0-9a-f]{64}",
+            remote_kid in "[0-9a-f]{64}",
+            status in prop::sample::select(&["active", "disabled"])
+        ) {
+            prop_assume!(sender != other_sender);
+            let route = RemoteRoute {
+                remote_kid: remote_kid.clone(),
+                name: String::from("peer"),
+                remote_addr: String::from("127.0.0.1:3002"),
+                allowed_local_kids: vec![sender.clone()],
+                status: status.to_string(),
+                public_keys: None,
+            };
+            let state = RemoteRoutesState::from_routes(vec![route]);
+
+            prop_assert_eq!(
+                state.route_for(&sender, &remote_kid).is_ok(),
+                status == "active"
+            );
+            prop_assert!(state.route_for(&other_sender, &remote_kid).is_err());
+            prop_assert!(state.route_for(&sender, &kid('f')).is_err());
+        }
+
+        #[test]
+        fn validate_allowed_local_kids_requires_loaded_explicit_kids(
+            sender in "[0-9a-f]{64}",
+            loaded in any::<bool>()
+        ) {
+            let route: RemoteRouteInput = serde_json::from_value(json!({
+                "remote_kid": kid('a'),
+                "name": "peer",
+                "remote_addr": "127.0.0.1:3002",
+                "allowed_local_kids": [sender],
+                "status": "active"
+            }))
+            .unwrap();
+
+            let result = validate_remote_routes(vec![route], |kid| loaded && kid == sender);
+
+            prop_assert_eq!(result.is_ok(), loaded);
+        }
     }
 
     #[test]

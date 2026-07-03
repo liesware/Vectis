@@ -378,5 +378,53 @@ mod tests {
             let long = "a".repeat(expected_len + 2);
             prop_assert!(validate_hash_hex_field("hash", &long, algorithm).is_err());
         }
+
+        #[test]
+        fn validate_host_port_accepts_localhost_ip_and_domain(port in 1u16..=65535) {
+            let localhost = format!("localhost:{port}");
+            let ip = format!("127.0.0.1:{port}");
+            let domain = format!("vectis-{port}.example.com:{port}");
+
+            prop_assert!(validate_host_port("addr", &localhost).is_ok());
+            prop_assert!(validate_host_port("addr", &ip).is_ok());
+            prop_assert!(validate_host_port("addr", &domain).is_ok());
+        }
+
+        #[test]
+        fn validate_host_port_rejects_malformed_values(value in "[A-Za-z0-9.:/_-]{0,64}") {
+            let invalid = [
+                String::new(),
+                String::from("localhost"),
+                String::from("localhost:0"),
+                String::from("localhost:notaport"),
+                String::from("http://localhost:3000"),
+                format!("{value}\n"),
+            ];
+
+            for item in invalid {
+                prop_assert!(validate_host_port("addr", &item).is_err());
+            }
+        }
+
+        #[test]
+        fn build_aad_is_deterministic_and_order_sensitive(
+            first_key in "[a-z]{1,8}",
+            first_value in "[A-Za-z0-9_.-]{1,16}",
+            second_key in "[a-z]{1,8}",
+            second_value in "[A-Za-z0-9_.-]{1,16}"
+        ) {
+            prop_assume!(first_key != second_key || first_value != second_value);
+
+            let first = build_aad(&[(&first_key, &first_value), (&second_key, &second_value)]);
+            let repeated = build_aad(&[(&first_key, &first_value), (&second_key, &second_value)]);
+            let reversed = build_aad(&[(&second_key, &second_value), (&first_key, &first_value)]);
+
+            prop_assert_eq!(&first, &repeated);
+            prop_assert_eq!(
+                &first,
+                &format!("{first_key}={first_value};{second_key}={second_value}")
+            );
+            prop_assert_ne!(&first, &reversed);
+        }
     }
 }

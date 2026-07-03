@@ -131,6 +131,7 @@ pub(crate) fn validate_routes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use serde_json::json;
 
     fn kid(seed: char) -> String {
@@ -138,10 +139,14 @@ mod tests {
     }
 
     fn route_input(kid: &str, final_app_addr: &str) -> RouteInput {
+        route_input_with_path(kid, final_app_addr, "/message")
+    }
+
+    fn route_input_with_path(kid: &str, final_app_addr: &str, final_app_path: &str) -> RouteInput {
         serde_json::from_value(json!({
             "kid": kid,
             "final_app_addr": final_app_addr,
-            "final_app_path": "/message"
+            "final_app_path": final_app_path
         }))
         .unwrap()
     }
@@ -171,5 +176,73 @@ mod tests {
             route_input(&kid('a'), "127.0.0.1:4000"),
         ];
         assert!(validate_routes(routes, |_| true).is_err());
+    }
+
+    proptest! {
+        #[test]
+        fn validates_route_when_kid_is_loaded(
+            route_kid in "[0-9a-f]{64}",
+            port in 1u16..=65535,
+            path in "/[A-Za-z0-9_./-]{0,32}"
+        ) {
+            let addr = format!("localhost:{port}");
+            let routes = vec![route_input_with_path(&route_kid, &addr, &path)];
+
+            prop_assert!(validate_routes(routes, |kid| kid == route_kid).is_ok());
+        }
+
+        #[test]
+        fn rejects_invalid_route_inputs(
+            route_kid in "[0-9a-f]{64}",
+            bad_kid in "[A-Za-z0-9]{0,63}",
+            bad_path in "[A-Za-z0-9_.-]{0,32}"
+        ) {
+            prop_assume!(bad_kid.len() != 64 || !bad_kid.chars().all(|item| item.is_ascii_hexdigit()));
+
+            prop_assert!(validate_routes(vec![route_input(&bad_kid, "localhost:3999")], |_| true).is_err());
+            prop_assert!(validate_routes(vec![route_input(&route_kid, "not-a-host-port")], |_| true).is_err());
+            prop_assert!(
+                validate_routes(
+                    vec![route_input_with_path(&route_kid, "localhost:3999", &bad_path)],
+                    |_| true
+                )
+                .is_err()
+            );
+            prop_assert!(validate_routes(vec![route_input(&route_kid, "localhost:3999")], |_| false).is_err());
+        }
+
+        #[test]
+        fn route_for_returns_specific_route_or_default(route_kid in "[0-9a-f]{64}", other_kid in "[0-9a-f]{64}") {
+            prop_assume!(route_kid != other_kid);
+            let route = FinalAppRoute {
+                kid: route_kid.clone(),
+                final_app_addr: String::from("localhost:4001"),
+                final_app_path: String::from("/specific"),
+            };
+            let state = RoutesState::from_parts(
+                String::from("localhost:3999"),
+                String::from("/default"),
+                vec![route],
+            );
+
+            let specific = state.route_for(&route_kid);
+            prop_assert_eq!(specific.final_app_addr(), "localhost:4001");
+            prop_assert_eq!(specific.final_app_path(), "/specific");
+
+            let fallback = state.route_for(&other_kid);
+            prop_assert_eq!(fallback.kid(), other_kid);
+            prop_assert_eq!(fallback.final_app_addr(), "localhost:3999");
+            prop_assert_eq!(fallback.final_app_path(), "/default");
+        }
+
+        #[test]
+        fn duplicate_kids_are_rejected(route_kid in "[0-9a-f]{64}", port in 1u16..=65535) {
+            let routes = vec![
+                route_input(&route_kid, "localhost:3999"),
+                route_input(&route_kid, &format!("localhost:{port}")),
+            ];
+
+            prop_assert!(validate_routes(routes, |_| true).is_err());
+        }
     }
 }

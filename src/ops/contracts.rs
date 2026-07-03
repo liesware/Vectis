@@ -97,12 +97,14 @@ pub(crate) struct PublicRawKey {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SendMessageInput {
     pub recipient_kid: String,
     pub message: String,
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProtectedMessageToken {
     pub(crate) version: String,
     pub(crate) payload: ProtectedMessagePayload,
@@ -124,6 +126,7 @@ impl ProtectedMessageToken {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ProtectedMessagePayload {
     pub(crate) version: String,
     #[serde(rename = "type")]
@@ -136,17 +139,20 @@ pub(crate) struct ProtectedMessagePayload {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct MessageSender {
     pub(crate) host: String,
     pub(crate) kid: String,
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct MessageRecipient {
     pub(crate) kid: String,
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct MessageKem {
     pub(crate) alg: String,
     pub(crate) xecdh_ephemeral_public: String,
@@ -156,6 +162,7 @@ pub(crate) struct MessageKem {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct MessageCipher {
     pub(crate) alg: String,
     pub(crate) nonce: String,

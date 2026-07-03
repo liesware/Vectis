@@ -421,6 +421,7 @@ pub fn clean_env_value(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn dev_mode_uses_http() {
@@ -463,5 +464,57 @@ mod tests {
     #[test]
     fn dev_mode_does_not_require_tls_cert_or_key_paths() {
         assert!(validate_tls_paths_for_mode("dev", None, None).is_ok());
+    }
+
+    proptest! {
+        #[test]
+        fn validate_bool_field_accepts_only_true_or_false(value in "[A-Za-z0-9_-]{0,16}") {
+            let result = validate_bool_field("flag", &value);
+
+            prop_assert_eq!(result.is_ok(), matches!(value.as_str(), "true" | "false"));
+            if value == "true" {
+                prop_assert_eq!(result.unwrap(), true);
+            } else if value == "false" {
+                prop_assert_eq!(result.unwrap(), false);
+            }
+        }
+
+        #[test]
+        fn validate_http_scheme_accepts_only_http_or_https(value in "[A-Za-z0-9+.-]{0,16}") {
+            let result = validate_http_scheme(&value);
+
+            prop_assert_eq!(result.is_ok(), matches!(value.as_str(), "http" | "https"));
+        }
+
+        #[test]
+        fn validate_vectis_mode_accepts_only_dev_or_prod(value in "[A-Za-z0-9_-]{0,16}") {
+            let result = validate_vectis_mode(&value);
+
+            prop_assert_eq!(result.is_ok(), matches!(value.as_str(), "dev" | "prod"));
+        }
+
+        #[test]
+        fn validate_http_path_field_accepts_simple_absolute_paths(path in "/[A-Za-z0-9_./-]{0,63}") {
+            prop_assert!(validate_http_path_field("path", &path).is_ok());
+        }
+
+        #[test]
+        fn validate_http_path_field_rejects_invalid_shapes(value in "[A-Za-z0-9_./:-]{0,64}") {
+            let invalid = [
+                String::new(),
+                value.clone(),
+                format!("http://{value}"),
+                format!("https://{value}"),
+                format!("/{value} path"),
+                format!("/{value}\n"),
+            ];
+
+            for item in invalid {
+                if !item.is_empty() && item.starts_with('/') && !item.contains(' ') && !item.chars().any(char::is_control) {
+                    continue;
+                }
+                prop_assert!(validate_http_path_field("path", &item).is_err());
+            }
+        }
     }
 }

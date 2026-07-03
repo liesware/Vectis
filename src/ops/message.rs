@@ -91,6 +91,7 @@ pub struct LocalCipherOutput {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DecryptMessageInput {
     pub sender_host: String,
     pub sender_kid: String,
@@ -99,6 +100,7 @@ pub struct DecryptMessageInput {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DecryptMessageCipher {
     pub ctx: String,
     pub nonce: String,
@@ -112,11 +114,13 @@ pub struct DecryptMessageOutput {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InternalEncryptMessageInput {
     pub plaintext: String,
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InternalMessageOutput {
     pub timestamp: String,
     pub kid: String,
@@ -124,6 +128,7 @@ pub struct InternalMessageOutput {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InternalMessageCipher {
     pub ctx: String,
     pub nonce: String,
@@ -1301,4 +1306,316 @@ pub fn remote_public_keys_from_peer(
     validate_remote_public_keys(&remote_key)?;
 
     Ok(remote_key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+    use serde_json::json;
+
+    fn nonce_hex_for(cipher_alg: &str) -> String {
+        let cipher = crypto::symmetric_cipher(cipher_alg).expect("test cipher must be supported");
+
+        "a".repeat(cipher.nonce_size_bytes * 2)
+    }
+
+    fn stored_message_aad(sender_kid: &str, recipient_kid: &str, cipher_alg: &str) -> String {
+        validation::build_aad(&[
+            ("type", "stored-protected-message"),
+            ("sender_kid", sender_kid),
+            ("recipient_kid", recipient_kid),
+            ("source_created_at", "123456"),
+            ("cipher_alg", cipher_alg),
+        ])
+    }
+
+    fn internal_message_aad(kid: &str, cipher_alg: &str) -> String {
+        validation::build_aad(&[
+            ("type", "internal-message"),
+            ("kid", kid),
+            ("timestamp", "123456"),
+            ("cipher_alg", cipher_alg),
+        ])
+    }
+
+    fn protected_message_json(sender_kid: &str, recipient_kid: &str) -> serde_json::Value {
+        let cipher_alg = "AES-256/GCM";
+        let kem_alg = "X25519+ML-KEM-512";
+        let sender_host = "localhost:3000";
+        let created_at = "123456";
+
+        json!({
+            "version": protocol::PROTOCOL_VERSION_V1,
+            "payload": {
+                "version": protocol::PROTOCOL_VERSION_V1,
+                "type": PROTECTED_MESSAGE_TYPE,
+                "created_at": created_at,
+                "sender": {
+                    "host": sender_host,
+                    "kid": sender_kid,
+                },
+                "recipient": {
+                    "kid": recipient_kid,
+                },
+                "kem": {
+                    "alg": kem_alg,
+                    "xecdh_ephemeral_public": "aa",
+                    "ml_kem_ciphertext": "aa",
+                    "ml_kem_salt": "aa",
+                    "hkdf_salt": "aa",
+                },
+                "cipher": {
+                    "alg": cipher_alg,
+                    "nonce": nonce_hex_for(cipher_alg),
+                    "aad": build_message_aad(
+                        protocol::PROTOCOL_VERSION_V1,
+                        created_at,
+                        sender_host,
+                        sender_kid,
+                        recipient_kid,
+                        kem_alg,
+                        cipher_alg,
+                    ),
+                    "ct": "aa",
+                },
+            },
+            "signatures": {
+                "eddsa": {
+                    "alg": "Ed25519",
+                    "sig": "aa",
+                },
+                "ml-dsa": {
+                    "alg": "ML-DSA-44",
+                    "sig": "aa",
+                },
+            },
+        })
+    }
+
+    proptest! {
+        #[test]
+        fn parse_send_message_input_accepts_current_shape(
+            recipient_kid in "[0-9a-f]{64}",
+            message in "[A-Za-z0-9._:-][A-Za-z0-9 ._:-]{0,63}"
+        ) {
+            let input = parse_send_message_input(json!({
+                "recipient_kid": recipient_kid,
+                "message": message,
+            }))
+            .expect("generated send message input must parse");
+
+            prop_assert!(validate_send_message_input(input).is_ok());
+        }
+
+        #[test]
+        fn parse_send_message_input_rejects_legacy_or_unknown_fields(
+            recipient_kid in "[0-9a-f]{64}",
+            message in "[A-Za-z0-9._:-][A-Za-z0-9 ._:-]{0,63}",
+            extra_value in "[A-Za-z0-9 ._:-]{1,32}"
+        ) {
+            let legacy_result = parse_send_message_input(json!({
+                "recipient_host": "localhost:3000",
+                "recipient_kid": recipient_kid,
+                "message": message,
+            }));
+            prop_assert!(legacy_result.is_err());
+
+            let unknown_result = parse_send_message_input(json!({
+                "recipient_kid": recipient_kid,
+                "message": message,
+                "unexpected": extra_value,
+            }));
+            prop_assert!(unknown_result.is_err());
+        }
+
+        #[test]
+        fn internal_encrypt_input_accepts_only_valid_plaintext(
+            plaintext in "[A-Za-z0-9._:-][A-Za-z0-9 ._:-]{0,63}"
+        ) {
+            let input = parse_internal_encrypt_message_input(json!({
+                "plaintext": plaintext,
+            }))
+            .expect("generated internal encrypt input must parse");
+            prop_assert!(validate_internal_encrypt_message_input(input).is_ok());
+
+            let null_result = parse_internal_encrypt_message_input(json!({
+                "plaintext": null,
+            }));
+            prop_assert!(null_result.is_err());
+            let number_result = parse_internal_encrypt_message_input(json!({
+                "plaintext": 123,
+            }));
+            prop_assert!(number_result.is_err());
+            let bool_result = parse_internal_encrypt_message_input(json!({
+                "plaintext": true,
+            }));
+            prop_assert!(bool_result.is_err());
+            let array_result = parse_internal_encrypt_message_input(json!({
+                "plaintext": ["text"],
+            }));
+            prop_assert!(array_result.is_err());
+            let object_result = parse_internal_encrypt_message_input(json!({
+                "plaintext": {"text": "hello"},
+            }));
+            prop_assert!(object_result.is_err());
+
+            let empty = parse_internal_encrypt_message_input(json!({
+                "plaintext": "",
+            }))
+            .expect("empty plaintext input must parse before validation");
+            prop_assert!(validate_internal_encrypt_message_input(empty).is_err());
+        }
+
+        #[test]
+        fn decrypt_message_recipient_kid_round_trips_valid_aad(
+            sender_kid in "[0-9a-f]{64}",
+            recipient_kid in "[0-9a-f]{64}",
+            cipher_alg in prop::sample::select(crypto::SYMMETRIC_ALGORITHMS)
+        ) {
+            let input = parse_decrypt_message_input(json!({
+                "sender_host": "localhost:3000",
+                "sender_kid": sender_kid,
+                "timestamp": "123456",
+                "message": {
+                    "ctx": "aa",
+                    "nonce": nonce_hex_for(cipher_alg),
+                    "aad": stored_message_aad(&sender_kid, &recipient_kid, cipher_alg),
+                    "variant": cipher_alg,
+                }
+            }))
+            .expect("generated decrypt message input must parse");
+
+            prop_assert_eq!(
+                decrypt_message_recipient_kid(&input)
+                    .expect("valid aad must expose recipient kid"),
+                recipient_kid
+            );
+            prop_assert!(validate_decrypt_message_input(input).is_ok());
+        }
+
+        #[test]
+        fn decrypt_message_input_enforces_nonce_length_and_aad_type(
+            sender_kid in "[0-9a-f]{64}",
+            recipient_kid in "[0-9a-f]{64}",
+            cipher_alg in prop::sample::select(crypto::SYMMETRIC_ALGORITHMS)
+        ) {
+            let short_nonce = parse_decrypt_message_input(json!({
+                "sender_host": "localhost:3000",
+                "sender_kid": sender_kid,
+                "timestamp": "123456",
+                "message": {
+                    "ctx": "aa",
+                    "nonce": "aa",
+                    "aad": stored_message_aad(&sender_kid, &recipient_kid, cipher_alg),
+                    "variant": cipher_alg,
+                }
+            }))
+            .expect("short nonce decrypt message input must parse");
+            prop_assert!(validate_decrypt_message_input(short_nonce).is_err());
+
+            let wrong_type_aad = validation::build_aad(&[
+                ("type", "internal-message"),
+                ("sender_kid", &sender_kid),
+                ("recipient_kid", &recipient_kid),
+                ("source_created_at", "123456"),
+                ("cipher_alg", cipher_alg),
+            ]);
+            let wrong_type = parse_decrypt_message_input(json!({
+                "sender_host": "localhost:3000",
+                "sender_kid": sender_kid,
+                "timestamp": "123456",
+                "message": {
+                    "ctx": "aa",
+                    "nonce": nonce_hex_for(cipher_alg),
+                    "aad": wrong_type_aad,
+                    "variant": cipher_alg,
+                }
+            }))
+            .expect("wrong aad type decrypt message input must parse");
+            prop_assert!(validate_decrypt_message_input(wrong_type).is_err());
+        }
+
+        #[test]
+        fn internal_decrypt_input_enforces_hex_nonce_and_aad_shape(
+            kid in "[0-9a-f]{64}",
+            cipher_alg in prop::sample::select(crypto::SYMMETRIC_ALGORITHMS)
+        ) {
+            let valid = parse_internal_decrypt_message_input(json!({
+                "timestamp": "123456",
+                "kid": kid,
+                "message": {
+                    "ctx": "aa",
+                    "nonce": nonce_hex_for(cipher_alg),
+                    "aad": internal_message_aad(&kid, cipher_alg),
+                    "variant": cipher_alg,
+                }
+            }))
+            .expect("generated internal decrypt input must parse");
+            prop_assert!(validate_internal_decrypt_message_input(valid).is_ok());
+
+            let invalid_hex = parse_internal_decrypt_message_input(json!({
+                "timestamp": "123456",
+                "kid": kid,
+                "message": {
+                    "ctx": "not-hex",
+                    "nonce": nonce_hex_for(cipher_alg),
+                    "aad": internal_message_aad(&kid, cipher_alg),
+                    "variant": cipher_alg,
+                }
+            }))
+            .expect("invalid hex internal decrypt input must parse");
+            prop_assert!(validate_internal_decrypt_message_input(invalid_hex).is_err());
+
+            let missing_aad_field = validation::build_aad(&[
+                ("type", "internal-message"),
+                ("kid", &kid),
+                ("timestamp", "123456"),
+            ]);
+            let missing_aad = parse_internal_decrypt_message_input(json!({
+                "timestamp": "123456",
+                "kid": kid,
+                "message": {
+                    "ctx": "aa",
+                    "nonce": nonce_hex_for(cipher_alg),
+                    "aad": missing_aad_field,
+                    "variant": cipher_alg,
+                }
+            }))
+            .expect("missing aad field internal decrypt input must parse");
+            prop_assert!(validate_internal_decrypt_message_input(missing_aad).is_err());
+        }
+
+        #[test]
+        fn parse_message_envelope_rejects_unknown_fields(
+            sender_kid in "[0-9a-f]{64}",
+            recipient_kid in "[0-9a-f]{64}",
+            extra_field in "[A-Za-z_][A-Za-z0-9_]{0,24}"
+        ) {
+            prop_assume!(!["version", "payload", "signatures"].contains(&extra_field.as_str()));
+            let mut top_level = protected_message_json(&sender_kid, &recipient_kid);
+            top_level
+                .as_object_mut()
+                .unwrap()
+                .insert(extra_field.clone(), json!("unexpected"));
+            prop_assert!(parse_message_envelope(top_level).is_err());
+
+            prop_assume!(![
+                "version",
+                "type",
+                "created_at",
+                "sender",
+                "recipient",
+                "kem",
+                "cipher",
+            ]
+            .contains(&extra_field.as_str()));
+            let mut nested = protected_message_json(&sender_kid, &recipient_kid);
+            nested["payload"]
+                .as_object_mut()
+                .unwrap()
+                .insert(extra_field, json!("unexpected"));
+            prop_assert!(parse_message_envelope(nested).is_err());
+        }
+    }
 }

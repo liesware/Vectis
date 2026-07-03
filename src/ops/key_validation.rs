@@ -42,7 +42,7 @@ struct VariantKeyValidation {
     valid: bool,
 }
 
-pub(crate) fn validate_key_material(
+pub fn validate_key_material(
     output: &KeyMaterialOutput,
     aad: &str,
     message: &str,

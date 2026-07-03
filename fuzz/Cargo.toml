@@ -48,3 +48,24 @@ path = "fuzz_targets/fuzz_config_file.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fuzz_keys_inputs"
+path = "fuzz_targets/fuzz_keys_inputs.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_validation"
+path = "fuzz_targets/fuzz_validation.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_routes_permissions"
+path = "fuzz_targets/fuzz_routes_permissions.rs"
+test = false
+doc = false
+bench = false

@@ -55,6 +55,19 @@ cargo test
 config loading, permissions, routes, remote routes, lifecycle policy, signing
 input parsing, and related internal behavior.
 
+## Rust Crypto Integration Tests
+
+Run the focused Vectis/Botan integration smoke tests with:
+
+```sh
+cargo test --test crypto_integration
+```
+
+These tests do not try to duplicate Botan's own primitive test suite. They
+validate Vectis' contract with Botan: supported algorithm names, DER/raw key
+handling, profile key material generation, key validation, hybrid XECDH + ML-KEM
+composition, HKDF-derived message keys, and symmetric encryption/decryption.
+
 ## Python HTTP Tests
 
 Install/sync the base Python environment:
@@ -144,9 +157,19 @@ The script runs:
 - `fuzz_message_inputs`
 - `fuzz_config_file`
 
+Additional registered targets can be run manually with `cargo fuzz run`:
+
+- `fuzz_keys_inputs`
+- `fuzz_validation`
+- `fuzz_routes_permissions`
+
 These targets intentionally avoid Botan, SQLite, networking, and server startup
 inside the fuzz loop. They focus on parser safety, validation boundaries,
 canonical JSON determinism, and config parsing robustness.
+
+`cargo-fuzz` is currently a local/manual hardening tool rather than a CI gate.
+Botan itself stays outside these fuzz loops; Vectis' contract with Botan is
+covered by `tests/crypto_integration.rs`.
 
 If a fuzz target finds a crash, keep the minimized artifact, add a regression
 test, fix the issue, and rerun the target against the artifact and the normal
@@ -180,6 +203,8 @@ uses sanitizer builds, and is heavier than the normal HTTP test suite.
 ## Test File Reference
 
 - `tests/cli_init.py`: CLI init behavior.
+- `tests/crypto_integration.rs`: focused Vectis/Botan crypto integration smoke
+  tests.
 - `tests/final_app_server.py`: mock final app receiver and decrypt helper.
 - `tests/http_all.py`: positive + negative summary runner.
 - `tests/http_fuzz.py`: targeted manual HTTP mutation tests.

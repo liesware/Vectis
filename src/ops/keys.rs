@@ -297,6 +297,7 @@ impl OpsKeyLifecycle {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateLifecycleInput {
     status: String,
     reason: String,
@@ -1094,6 +1095,9 @@ fn create_stored_key_material(input: &ResolvedKeysInput) -> Result<OpsKeysOutput
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ops::key_material::{
+        VariantDerKeyPair, VariantHash, VariantKeyAgreementKeyPair, VariantSymmetricKey,
+    };
     use proptest::prelude::*;
     use serde_json::json;
 
@@ -1120,6 +1124,57 @@ mod tests {
         )
     }
 
+    fn loaded_key_with_lifecycle(status: &str) -> LoadedOpsKey {
+        LoadedOpsKey {
+            id: "a".repeat(64),
+            aad: String::from("type=ops-keys"),
+            properties_aad: String::from("type=ops-key-properties"),
+            key_material: KeyMaterialOutput {
+                hash: VariantHash {
+                    variant: String::from("SHA-256"),
+                },
+                keys: KeyMaterialKeys {
+                    symmetric: VariantSymmetricKey {
+                        variant: String::from("AES-256/GCM"),
+                        key_hex: "a".repeat(64),
+                    },
+                    eddsa: VariantDerKeyPair {
+                        variant: String::from("Ed25519"),
+                        private_key_der_hex: String::from("aa"),
+                        public_key_der_hex: String::from("aa"),
+                    },
+                    xecdh: VariantKeyAgreementKeyPair {
+                        variant: String::from("X25519"),
+                        private_key_der_hex: String::from("aa"),
+                        public_key_hex: "a".repeat(64),
+                    },
+                    ml_dsa: VariantDerKeyPair {
+                        variant: String::from("ML-DSA-44"),
+                        private_key_der_hex: String::from("aa"),
+                        public_key_der_hex: String::from("aa"),
+                    },
+                    ml_kem: VariantDerKeyPair {
+                        variant: String::from("ML-KEM-512"),
+                        private_key_der_hex: String::from("aa"),
+                        public_key_der_hex: String::from("aa"),
+                    },
+                },
+            },
+            properties: OpsKeyProperties {
+                version: 1,
+                profile: String::from("custom"),
+                tag: String::from("test"),
+                created_at: String::from("1"),
+                lifecycle: OpsKeyLifecycle {
+                    status: status.to_string(),
+                    reason: String::from("test"),
+                    changed_at: String::from("1"),
+                },
+                access: None,
+            },
+        }
+    }
+
     proptest! {
         #[test]
         fn lifecycle_transition_matches_policy(
@@ -1136,6 +1191,25 @@ mod tests {
             prop_assert!(validate_lifecycle_status("status", &status).is_err());
             prop_assert!(validate_lifecycle_transition(&status, "active").is_err());
             prop_assert!(validate_lifecycle_transition("active", &status).is_err());
+        }
+
+        #[test]
+        fn lifecycle_requirement_helpers_match_policy(status in "[A-Za-z0-9_-]{1,32}") {
+            let loaded_key = loaded_key_with_lifecycle(&status);
+            let known_status = LIFECYCLE.contains(&status.as_str());
+
+            prop_assert_eq!(require_lifecycle_for_new_use(&loaded_key).is_ok(), status == "active");
+            prop_assert_eq!(
+                require_lifecycle_for_decrypt_or_verify(&loaded_key).is_ok(),
+                status == "active" || status == "retired"
+            );
+            prop_assert_eq!(require_lifecycle_for_public_keys(&loaded_key).is_ok(), status == "active");
+
+            if !known_status {
+                prop_assert!(require_lifecycle_for_new_use(&loaded_key).is_err());
+                prop_assert!(require_lifecycle_for_decrypt_or_verify(&loaded_key).is_err());
+                prop_assert!(require_lifecycle_for_public_keys(&loaded_key).is_err());
+            }
         }
 
         #[test]
@@ -1170,6 +1244,144 @@ mod tests {
             for value in [Value::Null, json!(1), json!(true), json!([]), json!({})] {
                 let request = json!({ field: value });
                 prop_assert!(parse_create_keys_input(request).is_err());
+            }
+        }
+
+        #[test]
+        fn parse_update_lifecycle_input_accepts_valid_shape(
+            status in prop::sample::select(LIFECYCLE),
+            reason in "[A-Za-z0-9._:-][A-Za-z0-9 ._:-]{0,63}"
+        ) {
+            let input = parse_update_lifecycle_input(json!({
+                "status": status,
+                "reason": reason,
+            }))
+            .expect("generated lifecycle update input must parse");
+
+            prop_assert_eq!(input.status(), status);
+            prop_assert!(validate_lifecycle_status("status", input.status()).is_ok());
+            prop_assert!(validation::validate_text_field("reason", &reason).is_ok());
+        }
+
+        #[test]
+        fn parse_update_lifecycle_input_rejects_unknown_fields(
+            status in prop::sample::select(LIFECYCLE),
+            reason in "[A-Za-z0-9._:-][A-Za-z0-9 ._:-]{0,63}",
+            field in "[A-Za-z_][A-Za-z0-9_]{0,24}"
+        ) {
+            prop_assume!(!["status", "reason"].contains(&field.as_str()));
+            let request = json!({
+                "status": status,
+                "reason": reason,
+                field: "unexpected",
+            });
+
+            prop_assert!(parse_update_lifecycle_input(request).is_err());
+        }
+
+        #[test]
+        fn parse_update_lifecycle_input_rejects_non_string_fields(field in prop::sample::select(&["status", "reason"])) {
+            for value in [Value::Null, json!(1), json!(true), json!([]), json!({})] {
+                let request = if field == "status" {
+                    json!({"status": value, "reason": "ok"})
+                } else {
+                    json!({"status": "active", "reason": value})
+                };
+                prop_assert!(parse_update_lifecycle_input(request).is_err());
+            }
+        }
+
+        #[test]
+        fn parsed_lifecycle_update_validates_status_and_reason(
+            status in "[A-Za-z0-9_-]{1,32}",
+            reason in "[A-Za-z0-9 ._:-]{0,64}"
+        ) {
+            let result = parse_update_lifecycle_input(json!({
+                "status": status,
+                "reason": reason,
+            }));
+            let valid = LIFECYCLE.contains(&status.as_str()) && !reason.trim().is_empty();
+
+            prop_assert_eq!(result.is_ok(), valid);
+        }
+
+        #[test]
+        fn aad_fields_parse_and_lookup_round_trip(
+            first_key in "[a-z]{1,8}",
+            first_value in "[A-Za-z0-9_.-]{1,16}",
+            second_key in "[a-z]{1,8}",
+            second_value in "[A-Za-z0-9_.-]{1,16}"
+        ) {
+            prop_assume!(first_key != second_key);
+            let aad = validation::build_aad(&[
+                (&first_key, &first_value),
+                (&second_key, &second_value),
+            ]);
+            let fields = parse_aad_fields(&aad).expect("generated aad must parse");
+
+            prop_assert_eq!(aad_field(&fields, &first_key).unwrap(), first_value);
+            prop_assert_eq!(aad_field(&fields, &second_key).unwrap(), second_value);
+            prop_assert!(aad_field(&fields, "missing").is_err());
+        }
+
+        #[test]
+        fn aad_fields_reject_invalid_parts(
+            key in "[A-Za-z0-9_.-]{0,16}",
+            value in "[A-Za-z0-9_.-]{0,16}"
+        ) {
+            let empty_key = format!("={value}");
+            let empty_value = format!("{key}=");
+            let missing_separator = format!("{key}=ok;badpart");
+            let control_char = format!("{key}=ok\n");
+
+            prop_assert!(parse_aad_fields("missing_separator").is_err());
+            prop_assert!(parse_aad_fields(&empty_key).is_err());
+            prop_assert!(parse_aad_fields(&empty_value).is_err());
+            prop_assert!(parse_aad_fields(&missing_separator).is_err());
+            prop_assert!(parse_aad_fields(&control_char).is_err());
+        }
+
+        #[test]
+        fn aad_field_validation_requires_exact_match(
+            actual in "[A-Za-z0-9_.-]{1,16}",
+            expected in "[A-Za-z0-9_.-]{1,16}"
+        ) {
+            prop_assert_eq!(
+                validate_aad_field("field", &actual, &expected).is_ok(),
+                actual == expected
+            );
+        }
+
+        #[test]
+        fn split_internal_payload_requires_exactly_three_sections(
+            first in "[A-Za-z0-9+/=]{1,16}",
+            second in "[A-Za-z0-9+/=]{1,16}",
+            third in "[A-Za-z0-9+/=]{1,16}",
+            extra in "[A-Za-z0-9+/=]{1,16}"
+        ) {
+            let valid = format!("{first}.{second}.{third}");
+            let two_sections = format!("{first}.{second}");
+            let four_sections = format!("{first}.{second}.{third}.{extra}");
+
+            prop_assert_eq!(split_internal_payload("payload", &valid).unwrap().len(), 3);
+
+            prop_assert!(split_internal_payload("payload", &first).is_err());
+            prop_assert!(split_internal_payload("payload", &two_sections).is_err());
+            prop_assert!(split_internal_payload("payload", &four_sections).is_err());
+        }
+
+        #[test]
+        fn key_id_must_match_enc_keys_payload(payload in "[A-Za-z0-9_-]{1,64}") {
+            let payload_b64 = general_purpose::STANDARD.encode(payload.as_bytes());
+            let nonce_b64 = general_purpose::STANDARD.encode(b"nonce");
+            let aad_b64 = general_purpose::STANDARD.encode(b"aad");
+            let enc_keys = format!("{payload_b64}.{nonce_b64}.{aad_b64}");
+            let id = create_key_id(&payload_b64).expect("generated key id must hash");
+            let wrong_id = "f".repeat(64);
+
+            prop_assert!(validate_key_id_matches_enc_keys(&id, &enc_keys).is_ok());
+            if wrong_id != id {
+                prop_assert!(validate_key_id_matches_enc_keys(&wrong_id, &enc_keys).is_err());
             }
         }
     }
