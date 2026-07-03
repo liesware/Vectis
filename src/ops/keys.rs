@@ -39,6 +39,10 @@ impl KeysDbState {
         self.keys_db.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.keys_db.is_empty()
+    }
+
     pub(crate) fn get(&self, id: &str) -> Option<&LoadedOpsKey> {
         self.keys_db.iter().find(|loaded_key| loaded_key.id == id)
     }
@@ -450,21 +454,39 @@ fn validate_key_id_matches_enc_keys(id: &str, enc_keys: &str) -> Result<(), DynE
 }
 
 pub fn parse_create_keys_input(request: Value) -> Result<CreateKeysInput, DynError> {
+    const ALLOWED_FIELDS: &[&str] = &[
+        "tag",
+        "profile",
+        "hash_algorithm",
+        "symmetric_algorithm",
+        "eddsa_algorithm",
+        "xecdh_algorithm",
+        "ml_dsa_variant",
+        "ml_kem_variant",
+    ];
+
     let Some(object) = request.as_object() else {
         return Err(crate::error::invalid_input(
             "request body must be a JSON object",
         ));
     };
 
-    if let Some(tag) = object.get("tag")
-        && !tag.is_string()
-    {
-        return Err(crate::error::invalid_input("tag must be a string"));
+    for field in object.keys() {
+        if !ALLOWED_FIELDS.contains(&field.as_str()) {
+            return Err(crate::error::invalid_input(format!(
+                "unexpected field: {field}"
+            )));
+        }
     }
-    if let Some(profile) = object.get("profile")
-        && !profile.is_string()
-    {
-        return Err(crate::error::invalid_input("profile must be a string"));
+
+    for field in ALLOWED_FIELDS {
+        if let Some(value) = object.get(*field)
+            && !value.is_string()
+        {
+            return Err(crate::error::invalid_input(format!(
+                "{field} must be a string"
+            )));
+        }
     }
 
     serde_json::from_value(request)
@@ -512,7 +534,7 @@ pub async fn load_keys_db_state(
     Ok(Zeroizing::new(KeysDbState { keys_db }))
 }
 
-pub async fn load_keys_db_entry(
+pub(crate) async fn load_keys_db_entry(
     storage: &StorageState,
     internal_keys: &InternalDerivedKeysState,
     id: &str,
@@ -1067,4 +1089,88 @@ fn create_stored_key_material(input: &ResolvedKeysInput) -> Result<OpsKeysOutput
     };
 
     create_key_material(&spec)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+    use serde_json::json;
+
+    const LIFECYCLE: &[&str] = &["active", "disabled", "retired", "compromised", "destroyed"];
+    const CREATE_KEYS_FIELDS: &[&str] = &[
+        "tag",
+        "profile",
+        "hash_algorithm",
+        "symmetric_algorithm",
+        "eddsa_algorithm",
+        "xecdh_algorithm",
+        "ml_dsa_variant",
+        "ml_kem_variant",
+    ];
+
+    fn lifecycle_transition_allowed(current: &str, next: &str) -> bool {
+        matches!(
+            (current, next),
+            ("active", "disabled")
+                | ("active", "retired")
+                | ("active", "compromised")
+                | ("active", "destroyed")
+                | ("disabled", "active")
+        )
+    }
+
+    proptest! {
+        #[test]
+        fn lifecycle_transition_matches_policy(
+            current in prop::sample::select(LIFECYCLE),
+            next in prop::sample::select(LIFECYCLE)
+        ) {
+            let result = validate_lifecycle_transition(current, next);
+            prop_assert_eq!(result.is_ok(), lifecycle_transition_allowed(current, next));
+        }
+
+        #[test]
+        fn lifecycle_rejects_unknown_statuses(status in "[A-Za-z0-9_-]{1,32}") {
+            prop_assume!(!LIFECYCLE.contains(&status.as_str()));
+            prop_assert!(validate_lifecycle_status("status", &status).is_err());
+            prop_assert!(validate_lifecycle_transition(&status, "active").is_err());
+            prop_assert!(validate_lifecycle_transition("active", &status).is_err());
+        }
+
+        #[test]
+        fn parse_create_keys_input_accepts_known_string_fields(
+            tag in "[A-Za-z0-9_.-]{1,32}",
+            profile in prop::sample::select(config::CRYPTO_PROFILES)
+        ) {
+            let value = json!({
+                "tag": tag,
+                "profile": profile,
+                "hash_algorithm": "SHA-256",
+                "symmetric_algorithm": "AES-256/GCM",
+                "eddsa_algorithm": "Ed25519",
+                "xecdh_algorithm": "X25519",
+                "ml_dsa_variant": "ML-DSA-44",
+                "ml_kem_variant": "ML-KEM-512"
+            });
+
+            prop_assert!(parse_create_keys_input(value).is_ok());
+        }
+
+        #[test]
+        fn parse_create_keys_input_rejects_unknown_fields(field in "[A-Za-z0-9_]{1,32}") {
+            prop_assume!(!CREATE_KEYS_FIELDS.contains(&field.as_str()));
+            let value = json!({ "tag": "ok", field: "unexpected" });
+
+            prop_assert!(parse_create_keys_input(value).is_err());
+        }
+
+        #[test]
+        fn parse_create_keys_input_rejects_non_string_known_fields(field in prop::sample::select(CREATE_KEYS_FIELDS)) {
+            for value in [Value::Null, json!(1), json!(true), json!([]), json!({})] {
+                let request = json!({ field: value });
+                prop_assert!(parse_create_keys_input(request).is_err());
+            }
+        }
+    }
 }

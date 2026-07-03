@@ -64,6 +64,10 @@ impl RoutesState {
         self.routes.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.routes.is_empty()
+    }
+
     pub fn list(&self) -> ListRoutesOutput {
         ListRoutesOutput {
             routes: self.routes.clone(),

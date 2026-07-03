@@ -53,6 +53,17 @@ pub fn canonical_config_json(content: &str) -> Result<String, DynError> {
     )?)?)
 }
 
+pub fn validate_config_content(
+    content: &str,
+    config: &config::AppConfig,
+    is_loaded_kid: impl Fn(&str) -> bool,
+) -> Result<ConfigState, DynError> {
+    let config_file: ConfigFile = serde_json::from_str(content).map_err(|err| {
+        crate::error::invalid_input(format!("config file must be valid JSON: {err}"))
+    })?;
+    validate_config_file(config_file, config, &is_loaded_kid)
+}
+
 pub fn read_config_file(path: &Path) -> Result<String, DynError> {
     read_limited_config_file(path, config::CONFIG_FILE_MAX_SIZE_BYTES, "config file")
 }
@@ -115,6 +126,14 @@ fn load_config_file(
     let config_file: ConfigFile = serde_json::from_str(&content).map_err(|err| {
         crate::error::invalid_input(format!("config file must be valid JSON: {err}"))
     })?;
+    validate_config_file(config_file, config, is_loaded_kid)
+}
+
+fn validate_config_file(
+    config_file: ConfigFile,
+    config: &config::AppConfig,
+    is_loaded_kid: &impl Fn(&str) -> bool,
+) -> Result<ConfigState, DynError> {
     protocol::validate_protocol_version("config.version", &config_file.version)?;
 
     let validated_routes = routes::validate_routes(config_file.routes, is_loaded_kid)?;
@@ -155,7 +174,7 @@ fn read_limited_config_file(
         if err.kind() == io::ErrorKind::NotFound {
             crate::error::not_found(format!("{label} does not exist"))
         } else {
-            Box::new(err) as DynError
+            crate::error::internal(format!("{label} could not be read"))
         }
     })?;
 
@@ -171,7 +190,13 @@ fn read_limited_config_file(
         )));
     }
 
-    fs::read_to_string(path).map_err(|err| Box::new(err) as DynError)
+    fs::read_to_string(path).map_err(|err| match err.kind() {
+        io::ErrorKind::NotFound => crate::error::not_found(format!("{label} does not exist")),
+        io::ErrorKind::InvalidData => {
+            crate::error::invalid_input(format!("{label} is not valid UTF-8"))
+        }
+        _ => crate::error::internal(format!("{label} could not be read")),
+    })
 }
 
 #[cfg(test)]

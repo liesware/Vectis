@@ -22,7 +22,7 @@ pub struct ValidatedSignInput {
     input: SignInput,
 }
 
-pub fn sign_timestamp(
+fn sign_timestamp(
     loaded_key: &LoadedOpsKey,
     input: ValidatedSignInput,
 ) -> Result<TimestampToken, DynError> {
@@ -238,8 +238,7 @@ fn verify_payload_with_public_keys(
 pub fn parse_sign_input(request: Value) -> Result<SignInput, DynError> {
     debug!("parsing sign request");
 
-    serde_json::from_value(request)
-        .map_err(|err| crate::error::invalid_input(format!("invalid sign request: {err}")))
+    serde_json::from_value(request).map_err(|_| crate::error::invalid_input("invalid sign request"))
 }
 
 pub fn sign_timestamp_from_state(
@@ -282,7 +281,7 @@ pub fn parse_timestamp_token(request: Value) -> Result<TimestampToken, DynError>
         .map_err(|err| crate::error::invalid_input(format!("invalid timestamp token: {err}")))
 }
 
-pub fn verify_timestamp(
+fn verify_timestamp(
     loaded_key: &LoadedOpsKey,
     token: &TimestampToken,
 ) -> Result<VerificationOutput, DynError> {
@@ -510,6 +509,7 @@ fn status_text(valid: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use serde_json::json;
 
     fn hex64(seed: char) -> String {
@@ -574,5 +574,35 @@ mod tests {
     fn verify_timestamp_with_peer_keys_rejects_ml_dsa_alg_mismatch() {
         let token = token("Ed25519", "ML-DSA-44", "v1");
         assert!(verify_timestamp_with_peer_keys(&token, &peer("Ed25519", "ML-DSA-65")).is_err());
+    }
+
+    proptest! {
+        #[test]
+        fn parse_sign_input_rejects_extra_fields_without_reflecting_field_name(extra_field in ".{1,32}") {
+            prop_assume!(extra_field != "message_hash");
+            let value = json!({
+                "message_hash": {"alg": "SHA-256", "hex": hex64('a')},
+                extra_field.clone(): "unexpected"
+            });
+
+            let err = match parse_sign_input(value) {
+                Ok(_) => panic!("sign input with extra fields must be rejected"),
+                Err(err) => err,
+            };
+            let public_error = err.to_string();
+
+            prop_assert_eq!(public_error.as_str(), "invalid sign request");
+        }
+
+        #[test]
+        fn validate_message_hash_requires_exact_hash_length(hex in "[0-9a-fA-F]{0,130}") {
+            let message_hash = MessageHash {
+                alg: String::from("SHA-256"),
+                hex,
+            };
+            let result = validate_message_hash(&message_hash);
+
+            prop_assert_eq!(result.is_ok(), message_hash.hex.len() == 64);
+        }
     }
 }

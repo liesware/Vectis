@@ -4,7 +4,7 @@ use crate::ops::keys::{self, KeysDbState, LoadedOpsKey};
 
 pub use crate::ops::contracts::PublicKeysOutput;
 
-pub fn public_keys(loaded_key: &LoadedOpsKey) -> PublicKeysOutput {
+fn public_keys(loaded_key: &LoadedOpsKey) -> PublicKeysOutput {
     let keys = loaded_key.keys();
 
     PublicKeysOutput {

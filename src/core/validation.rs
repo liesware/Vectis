@@ -322,3 +322,61 @@ fn clean_env_value(value: &str) -> String {
         value.to_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn expected_hash_hex_len(algorithm: &str) -> usize {
+        match algorithm {
+            "BLAKE2b(160)" => 40,
+            "BLAKE2b(224)" | "SHA-224" | "SHA-3(224)" => 56,
+            "BLAKE2b(256)" | "SHA-256" | "SHA-512-256" | "SHA-3(256)" => 64,
+            "BLAKE2b(384)" | "SHA-384" | "SHA-3(384)" => 96,
+            "BLAKE2b(512)" | "SHA-512" | "SHA-3(512)" | "Whirlpool" => 128,
+            _ => unreachable!("test must use supported hash algorithms"),
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn validate_text_field_accepts_non_empty_text(value in "[A-Za-z0-9_.-][A-Za-z0-9 _.-]{0,63}") {
+            prop_assert!(validate_text_field("field", &value).is_ok());
+        }
+
+        #[test]
+        fn validate_text_field_rejects_empty_or_control_chars(prefix in "[A-Za-z0-9 _.-]{0,16}", suffix in "[A-Za-z0-9 _.-]{0,16}", control in 0u8..=31) {
+            prop_assert!(validate_text_field("field", "").is_err());
+            let value = format!("{prefix}{}{suffix}", char::from(control));
+            prop_assert!(validate_text_field("field", &value).is_err());
+        }
+
+        #[test]
+        fn validate_hex_field_accepts_even_hex(value in "([0-9a-fA-F]{2}){1,64}") {
+            prop_assert!(validate_hex_field("hex", &value).is_ok());
+        }
+
+        #[test]
+        fn validate_hex_field_rejects_invalid_shapes(value in "[0-9a-fA-F]{0,63}") {
+            if value.is_empty() || !value.len().is_multiple_of(2) {
+                prop_assert!(validate_hex_field("hex", &value).is_err());
+            }
+            let invalid = format!("{value}zz");
+            prop_assert!(validate_hex_field("hex", &invalid).is_err());
+        }
+
+        #[test]
+        fn validate_hash_hex_field_enforces_algorithm_length(algorithm in prop::sample::select(crypto::HASH_ALGORITHMS)) {
+            let expected_len = expected_hash_hex_len(algorithm);
+            let valid = "a".repeat(expected_len);
+            prop_assert!(validate_hash_hex_field("hash", &valid, algorithm).is_ok());
+
+            let short = "a".repeat(expected_len.saturating_sub(2));
+            prop_assert!(validate_hash_hex_field("hash", &short, algorithm).is_err());
+
+            let long = "a".repeat(expected_len + 2);
+            prop_assert!(validate_hash_hex_field("hash", &long, algorithm).is_err());
+        }
+    }
+}

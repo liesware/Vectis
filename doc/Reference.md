@@ -753,30 +753,12 @@ Important invariants:
 
 ## Testing Strategy
 
-Current tests include:
+Vectis uses layered tests: Rust unit/property tests, Python HTTP workflows,
+Schemathesis OpenAPI contract fuzzing, and native `cargo-fuzz` targets.
 
-- Rust unit tests for config, permissions, routes, remote routes, and other core
-  behavior;
-- Python HTTP positive workflow;
-- Python HTTP negative workflow;
-- CLI init tests;
-- config tests.
-
-Recommended test categories:
-
-- happy-path end-to-end messaging;
-- lifecycle enforcement;
-- signed config reload success/failure;
-- permissions and root auth;
-- public key validation;
-- storage reload and on-demand key loading;
-- message signature verification;
-- final app delivery failure;
-- TLS mode behavior;
-- metrics/auth edge cases.
-
-The current project already uses HTTP positive and negative scripts to exercise
-large parts of the runtime behavior.
+The canonical testing guide is [doc/Test.md](Test.md). It explains the current
+test files, what each layer proves, prerequisites such as `uv` and Rust nightly,
+and the recommended commands for local validation.
 
 ## Design Decisions
 

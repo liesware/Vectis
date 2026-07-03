@@ -17,3 +17,9 @@ config_sign.json
 *.swp
 .*.swp
 __pycache__
+.venv
+tests/fuzz-corpus/
+.schemathesis/
+fuzz/artifacts/
+fuzz/corpus/
+fuzz/target/

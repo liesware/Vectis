@@ -110,6 +110,10 @@ impl RemoteRoutesState {
         self.routes.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.routes.is_empty()
+    }
+
     pub fn public_keys_for(&self, kid: &str) -> Option<&PeerPublicKeys> {
         self.by_remote_kid
             .get(kid)
@@ -297,6 +301,7 @@ fn validate_allowed_local_kids(
 mod tests {
     use super::*;
     use crate::ops::key_material::{KeyMaterialSpec, create_key_material};
+    use proptest::prelude::*;
     use serde_json::json;
     use std::sync::OnceLock;
 
@@ -476,5 +481,107 @@ mod tests {
     fn public_keys_for_unknown_kid_returns_none() {
         let state = state_with(&kid('a'), "active", Some(valid_public_keys()));
         assert!(state.public_keys_for(&kid('b')).is_none());
+    }
+
+    proptest! {
+        #[test]
+        fn wildcard_allowed_local_kids_allows_any_sender(sender in "[0-9a-f]{64}") {
+            let route = RemoteRoute {
+                remote_kid: kid('a'),
+                name: String::from("peer"),
+                remote_addr: String::from("127.0.0.1:3002"),
+                allowed_local_kids: vec![String::from("*")],
+                status: String::from("active"),
+                public_keys: None,
+            };
+
+            prop_assert!(route.allows_local_kid(&sender));
+        }
+
+        #[test]
+        fn explicit_allowed_local_kids_match_only_listed_sender(sender in "[0-9a-f]{64}", other in "[0-9a-f]{64}") {
+            prop_assume!(sender != other);
+            let route = RemoteRoute {
+                remote_kid: kid('a'),
+                name: String::from("peer"),
+                remote_addr: String::from("127.0.0.1:3002"),
+                allowed_local_kids: vec![sender.clone()],
+                status: String::from("active"),
+                public_keys: None,
+            };
+
+            prop_assert!(route.allows_local_kid(&sender));
+            prop_assert!(!route.allows_local_kid(&other));
+        }
+
+        #[test]
+        fn status_accepts_only_active_or_disabled(status in "[A-Za-z0-9_-]{1,32}") {
+            let routes = vec![route_input(&kid('a'), &status, None)];
+            let result = validate_remote_routes(routes, |_| true);
+
+            prop_assert_eq!(result.is_ok(), matches!(status.as_str(), "active" | "disabled"));
+        }
+    }
+
+    #[test]
+    fn rejects_wildcard_mixed_with_explicit_kids() {
+        let mut value = json!({
+            "remote_kid": kid('a'),
+            "name": "peer",
+            "remote_addr": "127.0.0.1:3002",
+            "allowed_local_kids": ["*", kid('b')],
+            "status": "active"
+        });
+        let route: RemoteRouteInput = serde_json::from_value(value.take()).unwrap();
+
+        assert!(validate_remote_routes(vec![route], |_| true).is_err());
+    }
+
+    #[test]
+    fn rejects_duplicated_allowed_local_kids() {
+        let explicit_kid = kid('b');
+        let mut value = json!({
+            "remote_kid": kid('a'),
+            "name": "peer",
+            "remote_addr": "127.0.0.1:3002",
+            "allowed_local_kids": [explicit_kid, explicit_kid],
+            "status": "active"
+        });
+        let route: RemoteRouteInput = serde_json::from_value(value.take()).unwrap();
+
+        assert!(validate_remote_routes(vec![route], |_| true).is_err());
+    }
+
+    #[test]
+    fn remote_route_index_matches_linear_lookup() {
+        let first = RemoteRoute {
+            remote_kid: kid('a'),
+            name: String::from("a"),
+            remote_addr: String::from("127.0.0.1:3001"),
+            allowed_local_kids: vec![String::from("*")],
+            status: String::from("active"),
+            public_keys: None,
+        };
+        let second = RemoteRoute {
+            remote_kid: kid('b'),
+            name: String::from("b"),
+            remote_addr: String::from("127.0.0.1:3002"),
+            allowed_local_kids: vec![String::from("*")],
+            status: String::from("active"),
+            public_keys: None,
+        };
+        let routes = vec![first, second];
+        let state = RemoteRoutesState::from_routes(routes.clone());
+
+        for (index, route) in routes.iter().enumerate() {
+            assert_eq!(state.by_remote_kid.get(&route.remote_kid), Some(&index));
+            assert_eq!(
+                state
+                    .route_for(&kid('c'), &route.remote_kid)
+                    .unwrap()
+                    .remote_addr(),
+                route.remote_addr
+            );
+        }
     }
 }

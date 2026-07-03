@@ -5,7 +5,7 @@ use crate::ops::key_validation::{KeyValidationOutput, validate_key_material};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-pub type InitOutput = KeyMaterialOutput;
+pub(crate) type InitOutput = KeyMaterialOutput;
 pub type InitValidationOutput = KeyValidationOutput;
 
 #[derive(Serialize)]
@@ -30,7 +30,7 @@ pub struct EncryptedInitJsonOutput {
 }
 
 pub struct ValidatedInitState {
-    pub init_keys: Zeroizing<InitOutput>,
+    pub(crate) init_keys: Zeroizing<InitOutput>,
     pub validation: InitValidationOutput,
 }
 
@@ -50,7 +50,7 @@ impl ValidatedInitState {
     }
 }
 
-pub fn create_init_output() -> Result<InitOutput, DynError> {
+pub(crate) fn create_init_output() -> Result<InitOutput, DynError> {
     let spec = KeyMaterialSpec::internal_keys();
 
     create_key_material(&spec)

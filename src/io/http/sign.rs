@@ -1,18 +1,18 @@
 use super::HttpState;
 use super::error::{ErrorResponse, error_response};
+use super::extract::JsonBody;
 use crate::core::{audit, metrics};
 use crate::ops;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
-use serde_json::Value;
 use tracing::{error, info};
 
 pub async fn sign_endpoint(
     State(state): State<HttpState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-    Json(request): Json<Value>,
+    JsonBody(request): JsonBody,
 ) -> Result<Json<ops::sign::TimestampToken>, (StatusCode, Json<ErrorResponse>)> {
     let client = state.authorize_api_key(&headers).await?;
     state
@@ -113,7 +113,7 @@ pub async fn sign_endpoint(
 
 pub async fn sign_verification_endpoint(
     State(state): State<HttpState>,
-    Json(request): Json<Value>,
+    JsonBody(request): JsonBody,
 ) -> Result<Json<ops::sign::VerificationOutput>, (StatusCode, Json<ErrorResponse>)> {
     let request = ops::sign::parse_timestamp_token(request).map_err(|err| {
         audit::operation_failed("verify.failed", None, None, None, None, &err.to_string());

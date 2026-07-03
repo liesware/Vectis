@@ -1,17 +1,20 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SignInput {
     pub message_hash: MessageHash,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct MessageHash {
     pub alg: String,
     pub hex: String,
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TimestampToken {
     pub(crate) version: String,
     pub(crate) payload: TimestampPayload,
@@ -25,6 +28,7 @@ impl TimestampToken {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct TimestampPayload {
     pub(crate) version: String,
     #[serde(rename = "type")]
@@ -37,6 +41,7 @@ pub(crate) struct TimestampPayload {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct TimestampSignatures {
     pub(crate) eddsa: SignatureBlock,
     #[serde(rename = "ml-dsa")]
@@ -44,6 +49,7 @@ pub(crate) struct TimestampSignatures {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct SignatureBlock {
     pub(crate) alg: String,
     pub(crate) sig: String,

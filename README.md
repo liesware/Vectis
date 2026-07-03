@@ -284,10 +284,17 @@ In development and tests, individual algorithm overrides can be enabled with:
 VECTIS_CRYPTO_POLICY=allow-overrides
 ```
 
+## Testing
+
+See [doc/Test.md](doc/Test.md) for the full testing strategy, including Rust
+checks, Python HTTP workflows with `uv`, Schemathesis OpenAPI fuzzing, and
+native `cargo-fuzz` targets.
+
 ## Documentation
 
 - [doc/API.md](doc/API.md): HTTP API and CLI mapping.
 - [doc/ENV.md](doc/ENV.md): environment variables and expected values.
+- [doc/Test.md](doc/Test.md): testing strategy and test commands.
 - [doc/openapi.yaml](doc/openapi.yaml): OpenAPI specification.
 - [doc/ThreatModel.md](doc/ThreatModel.md): threat model, explicit assumptions, and limitations.
 - [doc/Reference.md](doc/Reference.md): architecture and design reference.

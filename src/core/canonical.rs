@@ -9,6 +9,9 @@ pub fn canonical_json_v1<T: Serialize>(value: &T) -> Result<Vec<u8>, DynError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::collection::btree_map;
+    use proptest::prelude::*;
+    use serde_json::{Value, json};
 
     #[test]
     fn sorts_object_keys_and_compacts() {
@@ -35,5 +38,38 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(r#"{"xs":["c","a","b"]}"#).unwrap();
         let canonical = canonical_json_v1(&value).unwrap();
         assert_eq!(canonical, br#"{"xs":["c","a","b"]}"#);
+    }
+
+    proptest! {
+        #[test]
+        fn canonical_json_is_independent_of_object_insertion_order(
+            entries in btree_map("[a-z]{1,8}", any::<i64>(), 1..32)
+        ) {
+            let mut first = serde_json::Map::new();
+            for (key, value) in &entries {
+                first.insert(key.clone(), json!(value));
+            }
+
+            let mut second = serde_json::Map::new();
+            for (key, value) in entries.iter().rev() {
+                second.insert(key.clone(), json!(value));
+            }
+
+            prop_assert_eq!(
+                canonical_json_v1(&Value::Object(first)).unwrap(),
+                canonical_json_v1(&Value::Object(second)).unwrap()
+            );
+        }
+
+        #[test]
+        fn canonical_json_output_is_parseable(
+            entries in btree_map("[a-z]{1,8}", "[A-Za-z0-9 _.-]{0,32}", 0..32)
+        ) {
+            let value = json!({ "items": entries });
+            let canonical = canonical_json_v1(&value).unwrap();
+            let parsed: Value = serde_json::from_slice(&canonical).unwrap();
+
+            prop_assert_eq!(parsed, value);
+        }
     }
 }

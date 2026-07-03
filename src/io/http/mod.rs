@@ -10,6 +10,7 @@ mod app;
 mod auth;
 mod config;
 mod error;
+mod extract;
 mod health;
 mod keys;
 mod message;

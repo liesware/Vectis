@@ -1,12 +1,12 @@
 use super::HttpState;
 use super::error::{ErrorResponse, error_response, public_error_message};
+use super::extract::JsonBody;
 use crate::core::{audit, metrics};
 use crate::ops;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use serde::Serialize;
-use serde_json::Value;
 use tracing::{error, info};
 
 #[derive(Serialize)]
@@ -17,7 +17,7 @@ pub struct CreateKeysResponse {
 pub async fn create_endpoint(
     State(state): State<HttpState>,
     headers: HeaderMap,
-    Json(request): Json<Value>,
+    JsonBody(request): JsonBody,
 ) -> Result<Json<CreateKeysResponse>, (StatusCode, Json<ErrorResponse>)> {
     let client = state.authorize_api_key(&headers).await?;
     state
@@ -207,7 +207,7 @@ pub async fn update_lifecycle_endpoint(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Json(request): Json<Value>,
+    JsonBody(request): JsonBody,
 ) -> Result<Json<ops::keys::UpdateLifecycleOutput>, (StatusCode, Json<ErrorResponse>)> {
     let client = state.authorize_api_key(&headers).await?;
     state

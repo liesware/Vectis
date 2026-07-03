@@ -1,11 +1,7 @@
-mod core;
-mod error;
-mod io;
-mod ops;
-
-use crate::error::DynError;
 use std::env;
 use tracing::{error, info};
+use vectis::error::DynError;
+use vectis::{core, io};
 
 const PROGRAM_NAME: &str = "vectis";
 

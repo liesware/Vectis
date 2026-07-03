@@ -1,18 +1,18 @@
 use super::HttpState;
 use super::error::{ErrorResponse, error_response};
+use super::extract::JsonBody;
 use crate::core::{audit, metrics};
 use crate::ops;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
-use serde_json::Value;
 use tracing::error;
 
 pub async fn send_endpoint(
     State(state): State<HttpState>,
     Path(sender_kid): Path<String>,
     headers: HeaderMap,
-    Json(request): Json<Value>,
+    JsonBody(request): JsonBody,
 ) -> Result<Json<ops::message::SendMessageOutput>, (StatusCode, Json<ErrorResponse>)> {
     let client = state.authorize_api_key(&headers).await?;
     state
@@ -128,7 +128,7 @@ pub async fn send_endpoint(
 
 pub async fn receive_endpoint(
     State(state): State<HttpState>,
-    Json(request): Json<Value>,
+    JsonBody(request): JsonBody,
 ) -> Result<Json<ops::message::ReceiveMessageOutput>, (StatusCode, Json<ErrorResponse>)> {
     let envelope = ops::message::parse_message_envelope(request).map_err(|err| {
         audit::operation_failed(
@@ -259,7 +259,7 @@ pub async fn receive_endpoint(
 pub async fn decrypt_endpoint(
     State(state): State<HttpState>,
     headers: HeaderMap,
-    Json(request): Json<Value>,
+    JsonBody(request): JsonBody,
 ) -> Result<Json<ops::message::DecryptMessageOutput>, (StatusCode, Json<ErrorResponse>)> {
     let client = state.authorize_api_key(&headers).await?;
     let actor = audit::actor_from_client(&client);
@@ -367,7 +367,7 @@ pub async fn internal_encrypt_endpoint(
     State(state): State<HttpState>,
     Path(kid): Path<String>,
     headers: HeaderMap,
-    Json(request): Json<Value>,
+    JsonBody(request): JsonBody,
 ) -> Result<Json<ops::message::InternalMessageOutput>, (StatusCode, Json<ErrorResponse>)> {
     let client = state.authorize_api_key(&headers).await?;
     state
@@ -466,7 +466,7 @@ pub async fn internal_encrypt_endpoint(
 pub async fn internal_decrypt_endpoint(
     State(state): State<HttpState>,
     headers: HeaderMap,
-    Json(request): Json<Value>,
+    JsonBody(request): JsonBody,
 ) -> Result<Json<ops::message::DecryptMessageOutput>, (StatusCode, Json<ErrorResponse>)> {
     let client = state.authorize_api_key(&headers).await?;
     let actor = audit::actor_from_client(&client);

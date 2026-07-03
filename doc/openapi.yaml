@@ -537,6 +537,11 @@ components:
       type: string
       pattern: "^[0-9a-fA-F]+$"
 
+    TextField:
+      type: string
+      minLength: 1
+      pattern: '^[^\x00-\x1F\x7F-\x9F]+$'
+
     Timestamp:
       type: string
       pattern: "^[0-9]+$"
@@ -547,7 +552,7 @@ components:
       required: [error]
       properties:
         error:
-          type: string
+          $ref: "#/components/schemas/TextField"
           example: invalid request
 
     StartupHealthOutput:
@@ -588,7 +593,7 @@ components:
       additionalProperties: false
       properties:
         tag:
-          type: string
+          $ref: "#/components/schemas/TextField"
           example: payments
         profile:
           $ref: "#/components/schemas/CryptoProfile"
@@ -607,6 +612,7 @@ components:
       description: >
         When VECTIS_CRYPTO_POLICY=profile-only, only tag and profile are accepted.
         Individual algorithm fields are accepted only when VECTIS_CRYPTO_POLICY=allow-overrides.
+        Optional fields may be omitted, but explicit null values are rejected.
 
     CreateKeysResponse:
       type: object
@@ -628,7 +634,7 @@ components:
               kid:
                 $ref: "#/components/schemas/Kid"
               info:
-                type: string
+                $ref: "#/components/schemas/TextField"
                 example: version=v1;hostname=localhost;type=ops-keys;cipher=AES-256/GCM;tag=payments;profile=hybrid-high-assurance-v1;timestamp=1782058090
 
     ListKeysPropertiesOutput:
@@ -644,9 +650,9 @@ components:
               kid:
                 $ref: "#/components/schemas/Kid"
               info:
-                type: string
+                $ref: "#/components/schemas/TextField"
               properties_info:
-                type: string
+                $ref: "#/components/schemas/TextField"
               properties:
                 $ref: "#/components/schemas/OpsKeyProperties"
 
@@ -657,9 +663,9 @@ components:
         kid:
           $ref: "#/components/schemas/Kid"
         info:
-          type: string
+          $ref: "#/components/schemas/TextField"
         properties_info:
-          type: string
+          $ref: "#/components/schemas/TextField"
         properties:
           $ref: "#/components/schemas/OpsKeyProperties"
 
@@ -676,7 +682,7 @@ components:
             - hybrid-long-term-v1
             - custom
         tag:
-          type: string
+          $ref: "#/components/schemas/TextField"
           example: payments-prod
         created_at:
           $ref: "#/components/schemas/Timestamp"
@@ -692,7 +698,7 @@ components:
         status:
           $ref: "#/components/schemas/LifecycleStatus"
         reason:
-          type: string
+          $ref: "#/components/schemas/TextField"
           example: initial creation
         changed_at:
           type: string
@@ -710,7 +716,7 @@ components:
         status:
           $ref: "#/components/schemas/LifecycleStatus"
         reason:
-          type: string
+          $ref: "#/components/schemas/TextField"
           example: maintenance window
 
     UpdateLifecycleOutput:
@@ -754,7 +760,7 @@ components:
       required: [client, admin, permissions]
       properties:
         client:
-          type: string
+          $ref: "#/components/schemas/TextField"
           example: clinic-app
         admin:
           type: boolean
@@ -802,10 +808,10 @@ components:
         kid:
           $ref: "#/components/schemas/Kid"
         final_app_addr:
-          type: string
+          $ref: "#/components/schemas/TextField"
           example: 127.0.0.1:3999
         final_app_path:
-          type: string
+          $ref: "#/components/schemas/TextField"
           example: /message
 
     RemoteRoute:
@@ -815,10 +821,10 @@ components:
         remote_kid:
           $ref: "#/components/schemas/Kid"
         name:
-          type: string
+          $ref: "#/components/schemas/TextField"
           example: site-b
         remote_addr:
-          type: string
+          $ref: "#/components/schemas/TextField"
           example: vectis-b.example.com:443
         allowed_local_kids:
           type: array
@@ -857,7 +863,7 @@ components:
       required: [info, keys]
       properties:
         info:
-          type: string
+          $ref: "#/components/schemas/TextField"
         keys:
           type: object
           required: [eddsa, xecdh, ml-dsa, ml-kem]
@@ -876,7 +882,7 @@ components:
       required: [alg, public_key_der_hex]
       properties:
         alg:
-          type: string
+          $ref: "#/components/schemas/TextField"
         public_key_der_hex:
           $ref: "#/components/schemas/HexString"
 
@@ -885,7 +891,7 @@ components:
       required: [alg, public_key_hex]
       properties:
         alg:
-          type: string
+          $ref: "#/components/schemas/TextField"
         public_key_hex:
           $ref: "#/components/schemas/HexString"
 
@@ -896,7 +902,7 @@ components:
         timestamp:
           $ref: "#/components/schemas/Timestamp"
         aad:
-          type: string
+          $ref: "#/components/schemas/TextField"
         hash:
           type: object
           required: [variant, value_hex]
@@ -921,25 +927,104 @@ components:
       required: [variant, valid]
       properties:
         variant:
-          type: string
+          $ref: "#/components/schemas/TextField"
         valid:
           type: boolean
 
     SignInput:
       type: object
+      additionalProperties: false
       required: [message_hash]
       properties:
         message_hash:
           $ref: "#/components/schemas/MessageHash"
 
     MessageHash:
+      oneOf:
+        - $ref: "#/components/schemas/Hash160"
+        - $ref: "#/components/schemas/Hash224Blake2b"
+        - $ref: "#/components/schemas/Hash224Sha2"
+        - $ref: "#/components/schemas/Hash224Sha3"
+        - $ref: "#/components/schemas/Hash256"
+        - $ref: "#/components/schemas/Hash384"
+        - $ref: "#/components/schemas/Hash512"
+
+    Hash160:
       type: object
+      additionalProperties: false
       required: [alg, hex]
       properties:
         alg:
-          $ref: "#/components/schemas/HashAlgorithm"
+          const: BLAKE2b(160)
         hex:
-          $ref: "#/components/schemas/HexString"
+          type: string
+          pattern: "^[0-9a-fA-F]{40}$"
+
+    Hash224Blake2b:
+      type: object
+      additionalProperties: false
+      required: [alg, hex]
+      properties:
+        alg:
+          const: BLAKE2b(224)
+        hex:
+          type: string
+          pattern: "^[0-9a-fA-F]{56}$"
+
+    Hash224Sha2:
+      type: object
+      additionalProperties: false
+      required: [alg, hex]
+      properties:
+        alg:
+          const: SHA-224
+        hex:
+          type: string
+          pattern: "^[0-9a-fA-F]{56}$"
+
+    Hash224Sha3:
+      type: object
+      additionalProperties: false
+      required: [alg, hex]
+      properties:
+        alg:
+          const: SHA-3(224)
+        hex:
+          type: string
+          pattern: "^[0-9a-fA-F]{56}$"
+
+    Hash256:
+      type: object
+      additionalProperties: false
+      required: [alg, hex]
+      properties:
+        alg:
+          enum: [BLAKE2b(256), SHA-256, SHA-512-256, SHA-3(256)]
+        hex:
+          type: string
+          pattern: "^[0-9a-fA-F]{64}$"
+
+    Hash384:
+      type: object
+      additionalProperties: false
+      required: [alg, hex]
+      properties:
+        alg:
+          enum: [BLAKE2b(384), SHA-384, SHA-3(384)]
+        hex:
+          type: string
+          pattern: "^[0-9a-fA-F]{96}$"
+
+    Hash512:
+      type: object
+      additionalProperties: false
+      required: [alg, hex]
+      properties:
+        alg:
+          enum: [BLAKE2b(512), SHA-512, SHA-3(512), Whirlpool]
+        hex:
+          type: string
+          pattern: "^[0-9a-fA-F]{128}$"
 
     TimestampToken:
       type: object
@@ -960,12 +1045,12 @@ components:
             created_at:
               $ref: "#/components/schemas/Timestamp"
             info:
-              type: string
+              $ref: "#/components/schemas/TextField"
             kid:
               $ref: "#/components/schemas/Kid"
             serial:
               type: string
-              pattern: "^[0-9a-fA-F]{32}$"
+              pattern: "^[0-9a-fA-F]{64}$"
             message_hash:
               $ref: "#/components/schemas/MessageHash"
         signatures:
@@ -985,7 +1070,7 @@ components:
       required: [alg, sig]
       properties:
         alg:
-          type: string
+          $ref: "#/components/schemas/TextField"
         sig:
           $ref: "#/components/schemas/HexString"
 
@@ -1011,7 +1096,7 @@ components:
         recipient_kid:
           $ref: "#/components/schemas/Kid"
         message:
-          type: string
+          $ref: "#/components/schemas/TextField"
 
     SendMessageOutput:
       type: object
@@ -1057,7 +1142,7 @@ components:
               required: [host, kid]
               properties:
                 host:
-                  type: string
+                  $ref: "#/components/schemas/TextField"
                 kid:
                   $ref: "#/components/schemas/Kid"
             recipient:
@@ -1071,7 +1156,7 @@ components:
               required: [alg, xecdh_ephemeral_public, ml_kem_ciphertext, ml_kem_salt, hkdf_salt]
               properties:
                 alg:
-                  type: string
+                  $ref: "#/components/schemas/TextField"
                   example: X25519+ML-KEM-512
                 xecdh_ephemeral_public:
                   $ref: "#/components/schemas/HexString"
@@ -1105,7 +1190,7 @@ components:
             nonce:
               $ref: "#/components/schemas/HexString"
             aad:
-              type: string
+              $ref: "#/components/schemas/TextField"
             ct:
               $ref: "#/components/schemas/HexString"
 
@@ -1114,7 +1199,7 @@ components:
       required: [sender_host, sender_kid, timestamp, message]
       properties:
         sender_host:
-          type: string
+          $ref: "#/components/schemas/TextField"
         sender_kid:
           $ref: "#/components/schemas/Kid"
         timestamp:
@@ -1131,7 +1216,7 @@ components:
         nonce:
           $ref: "#/components/schemas/HexString"
         aad:
-          type: string
+          $ref: "#/components/schemas/TextField"
         variant:
           $ref: "#/components/schemas/SymmetricAlgorithm"
 
@@ -1140,14 +1225,14 @@ components:
       required: [plaintext]
       properties:
         plaintext:
-          type: string
+          $ref: "#/components/schemas/TextField"
 
     InternalEncryptMessageInput:
       type: object
       required: [plaintext]
       properties:
         plaintext:
-          type: string
+          $ref: "#/components/schemas/TextField"
 
     InternalMessageOutput:
       type: object
@@ -1169,7 +1254,7 @@ components:
         nonce:
           $ref: "#/components/schemas/HexString"
         aad:
-          type: string
+          $ref: "#/components/schemas/TextField"
           example: version=v1;type=internal-message;kid=f55f...;timestamp=1782058090;cipher_alg=AES-256/GCM
         variant:
           $ref: "#/components/schemas/SymmetricAlgorithm"
@@ -1183,7 +1268,7 @@ components:
         nonce:
           $ref: "#/components/schemas/HexString"
         aad:
-          type: string
+          $ref: "#/components/schemas/TextField"
         ct:
           $ref: "#/components/schemas/HexString"
 

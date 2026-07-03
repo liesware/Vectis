@@ -141,6 +141,10 @@ impl PermissionsState {
         self.clients.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.clients.is_empty()
+    }
+
     pub fn list(&self) -> ListPermissionsOutput {
         ListPermissionsOutput {
             clients: self
@@ -411,6 +415,7 @@ fn invalid_permissions<T>(message: impl Into<String>) -> Result<T, DynError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use serde_json::json;
 
     fn hex64(seed: char) -> String {
@@ -530,5 +535,99 @@ mod tests {
         let state = validate_permission_clients(clients, |_| true).unwrap();
         assert_eq!(state.len(), 0);
         assert!(state.authenticate_hash(&hex64('1')).is_none());
+    }
+
+    proptest! {
+        #[test]
+        fn admin_clients_have_effective_global_access(seed in "[0-9a-f]{1}") {
+            let hash = seed.repeat(64);
+            let clients = vec![client(
+                "admin",
+                &hash,
+                "active",
+                json!([{"kid": hex64('a'), "actions": ["admin", "message"]}]),
+            )];
+            let state = validate_permission_clients(clients, |_| true).unwrap();
+            let authed = state.authenticate_hash(&hash).unwrap();
+
+            prop_assert!(authed.is_admin());
+            prop_assert!(state.require_permission(&authed, None, "keys").is_ok());
+            prop_assert!(state.require_permission(&authed, Some(&hex64('b')), "message").is_ok());
+        }
+
+        #[test]
+        fn wildcard_kid_only_accepts_global_actions(action in prop::sample::select(PERMISSION_ACTIONS)) {
+            let clients = vec![client(
+                "app",
+                &hex64('1'),
+                "active",
+                json!([{"kid": "*", "actions": [action]}]),
+            )];
+            let result = validate_permission_clients(clients, |_| true);
+
+            prop_assert_eq!(result.is_ok(), action == "admin" || is_global_permission_action(action));
+        }
+
+        #[test]
+        fn invalid_actions_are_rejected(action in "[A-Za-z0-9_-]{1,32}") {
+            prop_assume!(!PERMISSION_ACTIONS.contains(&action.as_str()));
+            let clients = vec![client(
+                "app",
+                &hex64('1'),
+                "active",
+                json!([{"kid": hex64('a'), "actions": [action]}]),
+            )];
+
+            prop_assert!(validate_permission_clients(clients, |_| true).is_err());
+        }
+
+        #[test]
+        fn apikey_hash_must_be_64_hex(hash in "[0-9a-fA-F]{0,80}") {
+            prop_assume!(hash.len() != 64);
+            let clients = vec![client(
+                "app",
+                &hash,
+                "active",
+                json!([{"kid": hex64('a'), "actions": ["message"]}]),
+            )];
+
+            prop_assert!(validate_permission_clients(clients, |_| true).is_err());
+        }
+    }
+
+    #[test]
+    fn permission_hash_index_matches_clients() {
+        let clients = vec![
+            PermissionClient {
+                client: String::from("a"),
+                apikey_hash: hex64('1'),
+                admin: false,
+                permissions: vec![KidPermission {
+                    kid: hex64('a'),
+                    actions: vec![String::from("message")],
+                }],
+            },
+            PermissionClient {
+                client: String::from("b"),
+                apikey_hash: hex64('2'),
+                admin: false,
+                permissions: vec![KidPermission {
+                    kid: hex64('b'),
+                    actions: vec![String::from("sign")],
+                }],
+            },
+        ];
+        let state = PermissionsState::from_clients(clients.clone());
+
+        for (index, client) in clients.iter().enumerate() {
+            assert_eq!(state.by_hash.get(&client.apikey_hash), Some(&index));
+            assert_eq!(
+                state
+                    .authenticate_hash(&client.apikey_hash)
+                    .unwrap()
+                    .client_name(),
+                client.client
+            );
+        }
     }
 }
