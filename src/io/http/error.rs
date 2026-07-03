@@ -5,6 +5,8 @@ use serde::Serialize;
 use std::io;
 use tracing::{error, warn};
 
+const MAX_ERROR_MESSAGE_CHARS: usize = 256;
+
 #[derive(Serialize)]
 pub struct ErrorResponse {
     error: String,
@@ -12,7 +14,23 @@ pub struct ErrorResponse {
 
 impl ErrorResponse {
     pub fn new(error: String) -> Self {
-        Self { error }
+        Self {
+            error: sanitize_error_message(&error),
+        }
+    }
+}
+
+fn sanitize_error_message(message: &str) -> String {
+    let sanitized: String = message
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_ERROR_MESSAGE_CHARS)
+        .collect();
+
+    if sanitized.is_empty() {
+        String::from("request rejected")
+    } else {
+        sanitized
     }
 }
 
@@ -102,6 +120,43 @@ fn public_error_message_for_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sanitize_strips_control_chars() {
+        let dirty = "unexpected field: \u{1d}#\u{8a}\u{98}value";
+        let clean = sanitize_error_message(dirty);
+        assert!(!clean.chars().any(|c| c.is_control()));
+        assert_eq!(clean, "unexpected field: #value");
+    }
+
+    #[test]
+    fn sanitize_keeps_non_control_unicode() {
+        assert_eq!(sanitize_error_message("clé à 🔥"), "clé à 🔥");
+    }
+
+    #[test]
+    fn sanitize_caps_length() {
+        let long = "a".repeat(1000);
+        assert_eq!(
+            sanitize_error_message(&long).chars().count(),
+            MAX_ERROR_MESSAGE_CHARS
+        );
+    }
+
+    #[test]
+    fn sanitize_falls_back_when_empty() {
+        assert_eq!(
+            sanitize_error_message("\u{0}\u{1f}\u{7f}"),
+            "request rejected"
+        );
+        assert_eq!(sanitize_error_message(""), "request rejected");
+    }
+
+    #[test]
+    fn new_error_response_is_sanitized() {
+        let response = ErrorResponse::new(String::from("bad \u{1d}field"));
+        assert_eq!(response.error, "bad field");
+    }
 
     #[test]
     fn maps_vectis_variants_to_status() {

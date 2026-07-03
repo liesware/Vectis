@@ -474,9 +474,9 @@ pub fn parse_create_keys_input(request: Value) -> Result<CreateKeysInput, DynErr
 
     for field in object.keys() {
         if !ALLOWED_FIELDS.contains(&field.as_str()) {
-            return Err(crate::error::invalid_input(format!(
-                "unexpected field: {field}"
-            )));
+            return Err(crate::error::invalid_input(
+                "request contains an unexpected field",
+            ));
         }
     }
 

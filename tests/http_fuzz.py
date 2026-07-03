@@ -22,6 +22,7 @@ ALLOWED_STATUS = {200, 400, 401, 403, 404, 413}
 REMOTE_UNREACHABLE_MARKER = "final app can't be reached"
 KID_HEX = "a" * 64
 RECIPIENT_HEX = "b" * 64
+INTERNAL_SEED_PLAINTEXT = "fuzz seed plaintext"
 
 KEY_CASE = {
     "tag": "fuzz",
@@ -220,6 +221,70 @@ def oracle(status, body, apikey, unseal, allow_remote_unreachable):
     return findings
 
 
+def _parse(body):
+    try:
+        return json.loads(body)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def token_semantic(sent_value, seed, status, body):
+    if sent_value is None or sent_value == seed:
+        return []
+    if status != 200:
+        return []
+    parsed = _parse(body)
+    if isinstance(parsed, dict) and parsed.get("valid") == "ok":
+        return ["SEMANTIC: verification bypass (mutated token still valid=ok)"]
+    return []
+
+
+CRYPTO_MESSAGE_FIELDS = ("ctx", "nonce", "aad", "variant")
+
+
+def internal_semantic(sent_value, seed, status, body):
+    findings = []
+    if status == 200:
+        parsed = _parse(body)
+        returned = parsed.get("plaintext") if isinstance(parsed, dict) else None
+        if returned != INTERNAL_SEED_PLAINTEXT:
+            findings.append(
+                "SEMANTIC: decrypt returned unexpected plaintext for a 200 response"
+            )
+        if isinstance(sent_value, dict) and _crypto_fields_differ(sent_value, seed):
+            findings.append(
+                "SEMANTIC: AEAD bypass (mutated cipher field accepted with 200)"
+            )
+    return findings
+
+
+def _crypto_fields_differ(sent_value, seed):
+    sent_msg = sent_value.get("message")
+    seed_msg = seed.get("message")
+    if not isinstance(sent_msg, dict) or not isinstance(seed_msg, dict):
+        return True
+    return any(sent_msg.get(field) != seed_msg.get(field) for field in CRYPTO_MESSAGE_FIELDS)
+
+
+CONFIG_LOADED_COUNTS = ("routes_loaded", "remote_routes_loaded", "clients_loaded")
+
+
+def config_semantic(status, body):
+    # The baseline signed config is empty, so a legitimate 200 reload must load
+    # zero content. Comparing raw bytes would false-positive on canonically
+    # equivalent inputs (serde defaults, key order); comparing the observable
+    # loaded counts catches a real integrity break: altered content accepted
+    # under the baseline signature.
+    if status != 200:
+        return []
+    parsed = _parse(body)
+    if not isinstance(parsed, dict) or parsed.get("status") != "reloaded":
+        return []
+    if any(parsed.get(count) for count in CONFIG_LOADED_COUNTS):
+        return ["SEMANTIC: config integrity bypass (altered content loaded under baseline signature)"]
+    return []
+
+
 def save_crash(target, seed, index, description, findings):
     CORPUS_DIR.mkdir(parents=True, exist_ok=True)
     artifact = CORPUS_DIR / f"crash_{target}_{seed}_{index}.json"
@@ -242,7 +307,9 @@ def describe(path, raw, body):
     return {"method": "POST", "path": path, "raw": False, "body": body}
 
 
-def fuzz_message_like(name, client, rng, seed_obj, path, auth, allow_ru, args, secrets):
+def fuzz_message_like(
+    name, client, rng, seed_obj, path, auth, allow_ru, args, secrets, semantic=None
+):
     counters = {"passed": 0, "failed": 0}
     apikey, unseal = secrets
     for index in range(args.iterations):
@@ -250,11 +317,15 @@ def fuzz_message_like(name, client, rng, seed_obj, path, auth, allow_ru, args, s
             body = mutate_raw(seed_obj, rng)
             status, response = client.post_raw(path, body, auth=auth)
             description = describe(path, True, body)
+            sent_value = _parse(body.decode("utf-8", "replace"))
         else:
             body = mutate_structured(seed_obj, rng)
             status, response = client.post_json(path, body, auth=auth)
             description = describe(path, False, body)
+            sent_value = body
         findings = oracle(status, response, apikey, unseal, allow_ru)
+        if semantic is not None:
+            findings.extend(semantic(sent_value, seed_obj, status, response))
         if index % args.liveness_every == 0 and client.get_status("/healthz/live") != 200:
             findings.append("server not alive after case")
         if findings:
@@ -331,6 +402,7 @@ def fuzz_config(client, rng, args, secrets):
             target_file = "config_sign.json"
         status, response = client.post_json("/config/reload", {}, auth=True)
         findings = oracle(status, response, apikey, unseal, allow_remote_unreachable=False)
+        findings.extend(config_semantic(status, response))
         if index % args.liveness_every == 0 and client.get_status("/healthz/live") != 200:
             findings.append("server not alive after case")
         if findings:
@@ -396,6 +468,66 @@ def token_seed(client):
     return json.loads(body)
 
 
+def internal_seed(client):
+    status, body = client.post_json("/keys", KEY_CASE, auth=True)
+    if status != 200:
+        raise RuntimeError(f"could not create seed key: HTTP {status}: {body}")
+    kid = json.loads(body)["id"]
+    status, body = client.post_json(
+        f"/message/internal/encrypt/{kid}",
+        {"plaintext": INTERNAL_SEED_PLAINTEXT},
+        auth=True,
+    )
+    if status != 200:
+        raise RuntimeError(f"could not encrypt seed message: HTTP {status}: {body}")
+    return json.loads(body)
+
+
+def self_check():
+    failures = []
+
+    def expect(condition, label):
+        if not condition:
+            failures.append(label)
+
+    token = {
+        "version": "v1",
+        "payload": {"kid": "a" * 64},
+        "signatures": {"eddsa": {"sig": "aa"}, "ml-dsa": {"sig": "bb"}},
+    }
+    token_mut = json.loads(json.dumps(token))
+    token_mut["payload"]["kid"] = "b" * 64
+    expect(token_semantic(token_mut, token, 200, '{"valid":"ok"}'), "token flags bypass")
+    expect(not token_semantic(token, token, 200, '{"valid":"ok"}'), "token ignores identity")
+    expect(not token_semantic(token_mut, token, 200, '{"valid":"fail"}'), "token ignores valid=fail")
+    expect(not token_semantic(token_mut, token, 400, '{"error":"x"}'), "token ignores 4xx")
+
+    iseed = {
+        "timestamp": "1",
+        "kid": "a" * 64,
+        "message": {"ctx": "aa", "nonce": "bb", "aad": "c", "variant": "ChaCha20Poly1305"},
+    }
+    itamper = json.loads(json.dumps(iseed))
+    itamper["message"]["ctx"] = "ff"
+    ok_body = json.dumps({"plaintext": INTERNAL_SEED_PLAINTEXT})
+    expect(internal_semantic(itamper, iseed, 200, ok_body), "internal flags AEAD bypass")
+    expect(internal_semantic(iseed, iseed, 200, '{"plaintext":"WRONG"}'), "internal flags wrong plaintext")
+    expect(not internal_semantic(iseed, iseed, 200, ok_body), "internal ignores correct decrypt")
+    expect(not internal_semantic(itamper, iseed, 400, '{"error":"x"}'), "internal ignores 4xx")
+
+    loaded_body = '{"status":"reloaded","routes_loaded":1,"remote_routes_loaded":0,"clients_loaded":0}'
+    empty_body = '{"status":"reloaded","routes_loaded":0,"remote_routes_loaded":0,"clients_loaded":0}'
+    expect(config_semantic(200, loaded_body), "config flags integrity bypass")
+    expect(not config_semantic(200, empty_body), "config ignores empty reload")
+    expect(not config_semantic(400, '{"error":"x"}'), "config ignores rejected")
+
+    total = 13
+    for label in failures:
+        print(f"SELF-CHECK FAIL: {label}")
+    print(f"SUMMARY self-check passed={total - len(failures)} failed={len(failures)}")
+    return 1 if failures else 0
+
+
 def main():
     parser = argparse.ArgumentParser(description="Fuzz the Vectis HTTP surface.")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
@@ -403,10 +535,20 @@ def main():
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--iterations", type=int, default=300)
     parser.add_argument(
-        "--target", choices=["all", "token", "message", "config"], default="all"
+        "--target",
+        choices=["all", "token", "message", "internal", "config"],
+        default="all",
     )
     parser.add_argument("--liveness-every", type=int, default=1)
+    parser.add_argument(
+        "--self-check",
+        action="store_true",
+        help="run offline self-tests of the semantic oracle and exit",
+    )
     args = parser.parse_args()
+
+    if args.self_check:
+        sys.exit(self_check())
 
     apikey = require_apikey(args.apikey)
     client = FuzzClient(args.base_url, apikey)
@@ -426,6 +568,7 @@ def main():
         counters = fuzz_message_like(
             "token", client, rng, token_seed(client),
             "/sign/verification", False, False, args, secrets,
+            semantic=token_semantic,
         )
         passed += counters["passed"]
         failed += counters["failed"]
@@ -434,6 +577,15 @@ def main():
         counters = fuzz_message_like(
             "message", client, rng, message_seed(),
             "/message", False, True, args, secrets,
+        )
+        passed += counters["passed"]
+        failed += counters["failed"]
+
+    if args.target in ("all", "internal"):
+        counters = fuzz_message_like(
+            "internal", client, rng, internal_seed(client),
+            "/message/internal/decrypt", True, False, args, secrets,
+            semantic=internal_semantic,
         )
         passed += counters["passed"]
         failed += counters["failed"]

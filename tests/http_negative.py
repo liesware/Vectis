@@ -439,6 +439,17 @@ def main():
         status, _ = client.post("/keys", request, auth=True)
         require_status("POST /keys invalid symmetric algorithm", status, 400)
 
+    def keys_control_char_field_name():
+        request = dict(VALID_KEY_REQUEST)
+        request["badfield"] = "x"
+        status, body = client.post("/keys", request, auth=True)
+        require_status("POST /keys control-char field name", status, 400)
+        error = body.get("error", "")
+        require(
+            not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in error),
+            "error message must not contain control characters",
+        )
+
     key_id = create_valid_key(client)
 
     limited_api_key, limited_api_key_hash = create_api_key_pair()
@@ -600,6 +611,7 @@ def main():
         ("POST /keys invalid profile", keys_invalid_profile),
         ("POST /keys invalid hash algorithm", keys_invalid_hash_algorithm),
         ("POST /keys invalid symmetric algorithm", keys_invalid_symmetric_algorithm),
+        ("POST /keys control-char field name", keys_control_char_field_name),
     ):
         run_case(rows, name, func)
 
@@ -1265,8 +1277,12 @@ def main():
     def internal_decrypt_tampered_ciphertext():
         bad = copy.deepcopy(internal_message)
         bad["message"]["ctx"] = tamper_hex(bad["message"]["ctx"])
-        status, _ = client.post("/message/internal/decrypt", bad, auth=True)
-        require_status("POST /message/internal/decrypt tampered ciphertext", status, 500)
+        status, body = client.post("/message/internal/decrypt", bad, auth=True)
+        require_status("POST /message/internal/decrypt tampered ciphertext", status, 400)
+        require(
+            body.get("error") == "message authentication failed",
+            "tampered ciphertext must fail authentication cleanly",
+        )
 
     for name, func in (
         ("POST /message/internal/encrypt/{id} without auth", internal_encrypt_without_auth),

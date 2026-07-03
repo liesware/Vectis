@@ -481,16 +481,24 @@ pub fn decrypt_message(prepared: PreparedDecryptMessage) -> Result<DecryptMessag
     let key = Zeroizing::new(hex::decode(
         prepared.recipient_key.keys().symmetric().key_hex(),
     )?);
-    let nonce = Zeroizing::new(hex::decode(&input.message.nonce)?);
-    let ciphertext = hex::decode(&input.message.ctx)?;
-    let plaintext_bytes = Zeroizing::new(crypto::decrypt_symmetric(
-        cipher.algorithm,
-        &ciphertext,
-        &key,
-        &nonce,
-        input.message.aad.as_bytes(),
-    )?);
-    let plaintext = String::from_utf8((*plaintext_bytes).clone())?;
+    let nonce = Zeroizing::new(
+        hex::decode(&input.message.nonce)
+            .map_err(|_| crate::error::invalid_input("message.nonce is not valid hex"))?,
+    );
+    let ciphertext = hex::decode(&input.message.ctx)
+        .map_err(|_| crate::error::invalid_input("message.ctx is not valid hex"))?;
+    let plaintext_bytes = Zeroizing::new(
+        crypto::decrypt_symmetric(
+            cipher.algorithm,
+            &ciphertext,
+            &key,
+            &nonce,
+            input.message.aad.as_bytes(),
+        )
+        .map_err(|_| crate::error::invalid_input("message authentication failed"))?,
+    );
+    let plaintext = String::from_utf8((*plaintext_bytes).clone())
+        .map_err(|_| crate::error::invalid_input("decrypted message is not valid UTF-8"))?;
     info!(
         sender_kid = %input.sender_kid,
         recipient_kid = %prepared.recipient_key.id(),
@@ -589,16 +597,24 @@ pub fn decrypt_internal_message(
     )?;
 
     let key = Zeroizing::new(hex::decode(prepared.key.keys().symmetric().key_hex())?);
-    let nonce = Zeroizing::new(hex::decode(&input.message.nonce)?);
-    let ciphertext = hex::decode(&input.message.ctx)?;
-    let plaintext_bytes = Zeroizing::new(crypto::decrypt_symmetric(
-        cipher.algorithm,
-        &ciphertext,
-        &key,
-        &nonce,
-        input.message.aad.as_bytes(),
-    )?);
-    let plaintext = String::from_utf8((*plaintext_bytes).clone())?;
+    let nonce = Zeroizing::new(
+        hex::decode(&input.message.nonce)
+            .map_err(|_| crate::error::invalid_input("message.nonce is not valid hex"))?,
+    );
+    let ciphertext = hex::decode(&input.message.ctx)
+        .map_err(|_| crate::error::invalid_input("message.ctx is not valid hex"))?;
+    let plaintext_bytes = Zeroizing::new(
+        crypto::decrypt_symmetric(
+            cipher.algorithm,
+            &ciphertext,
+            &key,
+            &nonce,
+            input.message.aad.as_bytes(),
+        )
+        .map_err(|_| crate::error::invalid_input("message authentication failed"))?,
+    );
+    let plaintext = String::from_utf8((*plaintext_bytes).clone())
+        .map_err(|_| crate::error::invalid_input("decrypted message is not valid UTF-8"))?;
     info!(
         kid = %prepared.key.id(),
         variant = %input.message.variant,
@@ -879,23 +895,39 @@ fn open_message_cipher(
     let payload = &envelope.payload;
     let recipient_xecdh_private_key =
         crypto::load_private_key_der_hex(recipient_key.keys().xecdh().private_key_der_hex())?;
-    let ephemeral_public_key = hex::decode(&payload.kem.xecdh_ephemeral_public)?;
-    let xecdh_shared_key = Zeroizing::new(crypto::agree_key(
-        &recipient_xecdh_private_key,
-        &ephemeral_public_key,
-    )?);
+    let ephemeral_public_key = hex::decode(&payload.kem.xecdh_ephemeral_public).map_err(|_| {
+        crate::error::invalid_input("message.kem.xecdh_ephemeral_public is not valid hex")
+    })?;
+    let xecdh_shared_key = Zeroizing::new(
+        crypto::agree_key(&recipient_xecdh_private_key, &ephemeral_public_key).map_err(|_| {
+            crate::error::invalid_input("message key agreement material is invalid")
+        })?,
+    );
 
     let ml_kem_private_key =
         crypto::load_private_key_der_hex(recipient_key.keys().ml_kem().private_key_der_hex())?;
-    let ml_kem_ciphertext = hex::decode(&payload.kem.ml_kem_ciphertext)?;
-    let ml_kem_salt = Zeroizing::new(hex::decode(&payload.kem.ml_kem_salt)?);
-    let ml_kem_shared_key = Zeroizing::new(crypto::decapsulate_ml_kem_shared_key(
-        &ml_kem_private_key,
-        &ml_kem_ciphertext,
-        &ml_kem_salt,
-        HYBRID_SECRET_SIZE_BYTES,
-    )?);
-    let hkdf_salt = Zeroizing::new(hex::decode(&payload.kem.hkdf_salt)?);
+    let ml_kem_ciphertext = hex::decode(&payload.kem.ml_kem_ciphertext).map_err(|_| {
+        crate::error::invalid_input("message.kem.ml_kem_ciphertext is not valid hex")
+    })?;
+    let ml_kem_salt =
+        Zeroizing::new(hex::decode(&payload.kem.ml_kem_salt).map_err(|_| {
+            crate::error::invalid_input("message.kem.ml_kem_salt is not valid hex")
+        })?);
+    let ml_kem_shared_key = Zeroizing::new(
+        crypto::decapsulate_ml_kem_shared_key(
+            &ml_kem_private_key,
+            &ml_kem_ciphertext,
+            &ml_kem_salt,
+            HYBRID_SECRET_SIZE_BYTES,
+        )
+        .map_err(|_| {
+            crate::error::invalid_input("message key encapsulation material is invalid")
+        })?,
+    );
+    let hkdf_salt = Zeroizing::new(
+        hex::decode(&payload.kem.hkdf_salt)
+            .map_err(|_| crate::error::invalid_input("message.kem.hkdf_salt is not valid hex"))?,
+    );
     let cipher = crypto::symmetric_cipher(&payload.cipher.alg)
         .ok_or_else(|| crate::error::invalid_input("message cipher algorithm is not supported"))?;
     let message_key = derive_message_key(
@@ -905,16 +937,26 @@ fn open_message_cipher(
         payload.cipher.aad.as_bytes(),
         cipher.key_size_bytes,
     )?;
-    let nonce = Zeroizing::new(hex::decode(&payload.cipher.nonce)?);
-    let ciphertext = hex::decode(&payload.cipher.ct)?;
-    let plaintext_bytes = Zeroizing::new(crypto::decrypt_symmetric(
-        &payload.cipher.alg,
-        &ciphertext,
-        &message_key,
-        &nonce,
-        payload.cipher.aad.as_bytes(),
-    )?);
-    let plaintext = Zeroizing::new(String::from_utf8((*plaintext_bytes).clone())?);
+    let nonce = Zeroizing::new(
+        hex::decode(&payload.cipher.nonce)
+            .map_err(|_| crate::error::invalid_input("message.cipher.nonce is not valid hex"))?,
+    );
+    let ciphertext = hex::decode(&payload.cipher.ct)
+        .map_err(|_| crate::error::invalid_input("message.cipher.ct is not valid hex"))?;
+    let plaintext_bytes = Zeroizing::new(
+        crypto::decrypt_symmetric(
+            &payload.cipher.alg,
+            &ciphertext,
+            &message_key,
+            &nonce,
+            payload.cipher.aad.as_bytes(),
+        )
+        .map_err(|_| crate::error::invalid_input("message authentication failed"))?,
+    );
+    let plaintext = Zeroizing::new(
+        String::from_utf8((*plaintext_bytes).clone())
+            .map_err(|_| crate::error::invalid_input("decrypted message is not valid UTF-8"))?,
+    );
 
     Ok(plaintext)
 }
@@ -1032,14 +1074,20 @@ fn verify_message_signatures(
     let payload_bytes = canonical::canonical_json_v1(&envelope.payload)?;
     let payload_text = std::str::from_utf8(&payload_bytes)?;
     let eddsa_public_key =
-        crypto::load_public_key_der_hex(&sender_public_keys.keys.keys.eddsa.public_key_der_hex)?;
+        crypto::load_public_key_der_hex(&sender_public_keys.keys.keys.eddsa.public_key_der_hex)
+            .map_err(|_| crate::error::invalid_input("sender eddsa public key is invalid"))?;
     let ml_dsa_public_key =
-        crypto::load_public_key_der_hex(&sender_public_keys.keys.keys.ml_dsa.public_key_der_hex)?;
-    let eddsa_signature = hex::decode(&envelope.signatures.eddsa.sig)?;
-    let ml_dsa_signature = hex::decode(&envelope.signatures.ml_dsa.sig)?;
-    let eddsa_valid = crypto::verify_message(&eddsa_public_key, payload_text, &eddsa_signature)?;
+        crypto::load_public_key_der_hex(&sender_public_keys.keys.keys.ml_dsa.public_key_der_hex)
+            .map_err(|_| crate::error::invalid_input("sender ml-dsa public key is invalid"))?;
+    let eddsa_signature = hex::decode(&envelope.signatures.eddsa.sig)
+        .map_err(|_| crate::error::invalid_input("signatures.eddsa.sig is not valid hex"))?;
+    let ml_dsa_signature = hex::decode(&envelope.signatures.ml_dsa.sig)
+        .map_err(|_| crate::error::invalid_input("signatures.ml-dsa.sig is not valid hex"))?;
+    let eddsa_valid = crypto::verify_message(&eddsa_public_key, payload_text, &eddsa_signature)
+        .map_err(|_| crate::error::invalid_input("message eddsa signature is malformed"))?;
     let ml_dsa_valid =
-        crypto::verify_ml_dsa_message(&ml_dsa_public_key, payload_text, &ml_dsa_signature)?;
+        crypto::verify_ml_dsa_message(&ml_dsa_public_key, payload_text, &ml_dsa_signature)
+            .map_err(|_| crate::error::invalid_input("message ml-dsa signature is malformed"))?;
 
     if !eddsa_valid || !ml_dsa_valid {
         return Err(crate::error::invalid_input(
