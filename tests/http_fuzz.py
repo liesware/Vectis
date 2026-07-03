@@ -433,6 +433,32 @@ def check_and_record(name, client, args, index, status, findings, description, c
     return False
 
 
+def print_target_start(name, args):
+    print(f"[{name}] start iterations={args.iterations}", flush=True)
+
+
+def print_target_done(name, counters):
+    print(
+        f"[{name}] done passed={counters['passed']} failed={counters['failed']}",
+        flush=True,
+    )
+
+
+def print_progress(name, index, args, counters):
+    if args.progress_every <= 0:
+        return
+
+    current = index + 1
+    if current % args.progress_every != 0:
+        return
+
+    print(
+        f"[{name}] progress {current}/{args.iterations} "
+        f"passed={counters['passed']} failed={counters['failed']}",
+        flush=True,
+    )
+
+
 # --- runners -----------------------------------------------------------------
 
 
@@ -461,6 +487,7 @@ def run_body(target, client, rng, args, secrets):
             findings.extend(semantic(sent_value, seed_obj, status, response))
         if check_and_record(target["name"], client, args, index, status, findings, description, counters):
             break
+        print_progress(target["name"], index, args, counters)
     return counters
 
 
@@ -479,6 +506,7 @@ def run_path_param(target, client, rng, args, secrets):
         findings = oracle(status, response, apikey, unseal, allowed, False, require_json_error=require_json)
         if check_and_record(target["name"], client, args, index, status, findings, description, counters):
             break
+        print_progress(target["name"], index, args, counters)
     return counters
 
 
@@ -503,6 +531,7 @@ def run_headers(target, client, rng, args, secrets):
         findings = oracle(status, response, apikey, unseal, allowed, False, require_json_error=False)
         if check_and_record(target["name"], client, args, index, status, findings, description, counters):
             break
+        print_progress(target["name"], index, args, counters)
     return counters
 
 
@@ -579,6 +608,7 @@ def run_config(target, client, rng, args, secrets):
         CONFIG_SIGN_PATH.write_bytes(baseline_sig)
         if aborted:
             break
+        print_progress("config", index, args, counters)
     return counters
 
 
@@ -761,6 +791,12 @@ def main():
     parser.add_argument("--target", choices=["all", *TARGET_NAMES], default="all")
     parser.add_argument("--liveness-every", type=int, default=1)
     parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=0,
+        help="print per-target progress every N cases; 0 disables periodic progress",
+    )
+    parser.add_argument(
         "--self-check",
         action="store_true",
         help="run offline self-tests of the semantic oracle and exit",
@@ -781,12 +817,20 @@ def main():
     unseal = UNSEAL_KEY_FILE.read_text(encoding="utf-8").strip() if UNSEAL_KEY_FILE.exists() else ""
     secrets = (apikey, unseal)
 
+    print("HTTP fuzz:", flush=True)
+    print(
+        f"seed={args.seed} iterations={args.iterations} target={args.target}",
+        flush=True,
+    )
+
     passed = 0
     failed = 0
     for target in TARGETS:
         if args.target not in ("all", target["name"]):
             continue
+        print_target_start(target["name"], args)
         counters = target["runner"](target, client, rng, args, secrets)
+        print_target_done(target["name"], counters)
         passed += counters["passed"]
         failed += counters["failed"]
 

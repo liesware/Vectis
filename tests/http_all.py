@@ -12,29 +12,38 @@ SUMMARY_RE = re.compile(r"^SUMMARY (?P<name>\w+) passed=(?P<passed>\d+) failed=(
 
 
 def run_script(script, base_url, apikey):
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(script),
-            "--base-url",
-            base_url,
-            "--apikey",
-            apikey,
-        ],
-        capture_output=True,
+    args = [
+        sys.executable,
+        "-u",
+        str(script),
+        "--base-url",
+        base_url,
+        "--apikey",
+        apikey,
+    ]
+    process = subprocess.Popen(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
+        bufsize=1,
     )
-    if result.stdout:
-        print(result.stdout, end="")
-    if result.stderr:
-        print(result.stderr, end="", file=sys.stderr)
 
-    summary = parse_summary(result.stdout)
-    if result.returncode != 0:
+    output_lines = []
+    assert process.stdout is not None
+    for line in process.stdout:
+        output_lines.append(line)
+        print(line, end="", flush=True)
+
+    returncode = process.wait()
+    output = "".join(output_lines)
+    summary = parse_summary(output)
+
+    if returncode != 0:
         if summary is None:
             summary = (script.stem.replace("http_", ""), 0, 1)
         print_summary({summary[0]: summary})
-        raise subprocess.CalledProcessError(result.returncode, result.args)
+        raise subprocess.CalledProcessError(returncode, args)
 
     if summary is None:
         raise RuntimeError(f"{script.name} did not print a SUMMARY line")

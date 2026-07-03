@@ -213,6 +213,7 @@ def host_from_base_url(base_url):
 def run_case(rows, name, func):
     func()
     rows.append((name, "OK"))
+    print(f"- {name}: OK", flush=True)
 
 
 def main():
@@ -229,6 +230,7 @@ def main():
     atexit.register(restore_file, CONFIG_PATH, config_backup)
     atexit.register(restore_file, CONFIG_SIGN_PATH, config_sign_backup)
     rows = []
+    print("HTTP negative:", flush=True)
 
     def keys_without_auth():
         status, _ = client.post("/keys", VALID_KEY_REQUEST)
@@ -1411,7 +1413,6 @@ def main():
     restore_file(CONFIG_PATH, config_backup)
     restore_file(CONFIG_SIGN_PATH, config_sign_backup)
 
-    print_section("HTTP negative", rows)
     print(f"SUMMARY negative passed={len(rows)} failed=0")
 
 
