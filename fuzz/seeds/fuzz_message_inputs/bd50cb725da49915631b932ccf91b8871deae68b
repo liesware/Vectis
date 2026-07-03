@@ -1,1 +1,0 @@
-{"version":"v1","payl~oad":{"version":"v1","type":"protected-message","created_at":"1","sender":{"host":"127.0.0.1:3000","kid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"kem":{"alg":"X25519+ML-KEM-512","xecdh_ephemeral_puig":"aa"}}}

@@ -1,1 +1,0 @@
-{"version":"v1","payload":{"versiol":"v1","type":"vectis-sign","|reated_at":"1","info":"i","kid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","message_hash":{"alg":"BLAKE3b(256)","hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},"signatures":{"eddsa":{"alg":"Ed25519","sig":"aa"},"ml-dsa":{"alg":"ML-DSA-44","sig"i",a"}}}
