@@ -68,6 +68,23 @@ validate Vectis' contract with Botan: supported algorithm names, DER/raw key
 handling, profile key material generation, key validation, hybrid XECDH + ML-KEM
 composition, HKDF-derived message keys, and symmetric encryption/decryption.
 
+## PostgreSQL Storage Smoke Test
+
+PostgreSQL is optional and is not required for the default test loop. When a
+local PostgreSQL instance is available, apply the reference schema manually and
+run Vectis with the PostgreSQL backend:
+
+```sh
+psql "postgres://vectis_usr:123456@127.0.0.1:5432/vectis" -f src/db/postgres_schema.sql
+VECTIS_STORAGE=postgres \
+VECTIS_POSTGRES_DSN='postgres://vectis_usr:123456@127.0.0.1:5432/vectis' \
+cargo run -- serve
+```
+
+Then run the HTTP workflow. This validates the storage backend through the real
+API. Vectis does not apply migrations and does not create PostgreSQL tables at
+runtime.
+
 ## Python HTTP Tests
 
 Install/sync the base Python environment:

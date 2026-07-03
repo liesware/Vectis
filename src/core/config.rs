@@ -44,6 +44,7 @@ pub struct AppConfig {
     pub protocol_version: String,
     pub storage_type: String,
     pub sqlite_path: PathBuf,
+    pub postgres_dsn: String,
     pub sender_hostname: String,
     pub receiver_hostname: String,
     pub default_crypto_profile: String,
@@ -98,11 +99,8 @@ pub fn app_config() -> Result<AppConfig, DynError> {
     let api_key_hash = config_value(&env_file, "VECTIS_APIKEY_HASH", "");
     let protocol_version = config_value(&env_file, "VECTIS_PROTOCOL_VERSION", "v1");
     let storage_type = config_value(&env_file, "VECTIS_STORAGE", "sqlite");
-    let sqlite_path = validate_sqlite_path(&config_value(
-        &env_file,
-        "VECTIS_SQLITE_PATH",
-        &default_sqlite_path(),
-    ))?;
+    let sqlite_path_value = config_value(&env_file, "VECTIS_SQLITE_PATH", &default_sqlite_path());
+    let postgres_dsn = config_value(&env_file, "VECTIS_POSTGRES_DSN", "");
     let sender_hostname = config_value(&env_file, "VECTIS_SENDER_HOSTNAME", "localhost.local");
     let receiver_hostname = config_value(&env_file, "VECTIS_RECEIVER_HOSTNAME", "remotehost.local");
     let hash_algorithm = config_value(&env_file, "VECTIS_HASH", "BLAKE2b(256)");
@@ -134,6 +132,14 @@ pub fn app_config() -> Result<AppConfig, DynError> {
         &storage_type,
         crate::core::storage::STORAGE_TYPES,
     )?;
+    let sqlite_path = if storage_type == "sqlite" {
+        validate_sqlite_path(&sqlite_path_value)?
+    } else {
+        validate_storage_path_text("VECTIS_SQLITE_PATH", &sqlite_path_value)?
+    };
+    if storage_type == "postgres" {
+        validate_postgres_dsn(&postgres_dsn)?;
+    }
     if !api_key_hash.is_empty() {
         validation::validate_symmetric_key("VECTIS_APIKEY_HASH", &api_key_hash, 32)?;
     }
@@ -183,6 +189,7 @@ pub fn app_config() -> Result<AppConfig, DynError> {
         protocol_version,
         storage_type,
         sqlite_path,
+        postgres_dsn,
         sender_hostname,
         receiver_hostname,
         default_crypto_profile,
@@ -316,6 +323,24 @@ fn validate_config_path(field: &str, value: &str) -> Result<PathBuf, DynError> {
     validation::validate_text_field(field, value)?;
 
     Ok(PathBuf::from(value))
+}
+
+fn validate_storage_path_text(field: &str, value: &str) -> Result<PathBuf, DynError> {
+    validation::validate_text_field(field, value)?;
+
+    Ok(PathBuf::from(value))
+}
+
+fn validate_postgres_dsn(value: &str) -> Result<(), DynError> {
+    validation::validate_text_field("VECTIS_POSTGRES_DSN", value)?;
+
+    if !(value.starts_with("postgres://") || value.starts_with("postgresql://")) {
+        return Err(crate::error::invalid_input(
+            "VECTIS_POSTGRES_DSN must start with postgres:// or postgresql://",
+        ));
+    }
+
+    Ok(())
 }
 
 fn validate_sqlite_path(value: &str) -> Result<PathBuf, DynError> {

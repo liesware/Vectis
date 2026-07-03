@@ -204,8 +204,9 @@ Clients with `status` other than `active` are ignored. Invalid JSON, invalid act
 
 | Variable | Default | Expected value | Purpose |
 | --- | --- | --- | --- |
-| `VECTIS_STORAGE` | `sqlite` | `sqlite` | Storage backend. Currently only `sqlite` is supported. |
+| `VECTIS_STORAGE` | `sqlite` | `sqlite` or `postgres` | Storage backend. SQLite is local. PostgreSQL is the shared backend for multi-node deployments. |
 | `VECTIS_SQLITE_PATH` | Debug: `<repo>/src/db/data.db`; release: `<working-dir>/db/data.db` | Path to an existing readable and writable SQLite database file | SQLite database path. The file must exist, be a file, and allow read/write access. |
+| `VECTIS_POSTGRES_DSN` | empty | `postgres://user:pass@host:port/db` or `postgresql://...` | PostgreSQL connection string. Required only when `VECTIS_STORAGE=postgres`. Do not log it; it can contain credentials. |
 
 Current SQLite schema:
 
@@ -214,6 +215,22 @@ CREATE TABLE IF NOT EXISTS ops_keys (
     id VARCHAR(128) PRIMARY KEY,
     enc_keys VARCHAR(10240) NOT NULL,
     properties VARCHAR(10240) NOT NULL
+);
+```
+
+PostgreSQL uses the same storage contract with PostgreSQL-native types. Vectis
+ships the reference SQL in `src/db/postgres_schema.sql`, but it does not apply
+migrations and does not create tables at runtime. The DBA or operator owns
+database creation, schema application, backups, permissions, and tuning. Vectis
+only validates that the expected schema exists when it starts.
+
+Current PostgreSQL schema:
+
+```sql
+CREATE TABLE ops_keys (
+    id VARCHAR(128) PRIMARY KEY,
+    enc_keys TEXT NOT NULL,
+    properties TEXT NOT NULL
 );
 ```
 
@@ -333,6 +350,7 @@ VECTIS_APIKEY_HASH=
 VECTIS_PROTOCOL_VERSION=v1
 VECTIS_STORAGE=sqlite
 VECTIS_SQLITE_PATH=src/db/data.db
+VECTIS_POSTGRES_DSN=
 VECTIS_SENDER_HOSTNAME=instance-a.local
 VECTIS_RECEIVER_HOSTNAME=instance-b.local
 VECTIS_HASH=BLAKE2b(256)

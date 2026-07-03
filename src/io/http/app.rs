@@ -63,6 +63,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         log_dir = %logging.dir,
         log_file = %logging.file,
         tls_skip_verify = config.tls_skip_verify,
+        postgres_configured = !config.postgres_dsn.is_empty(),
         "http service configuration loaded"
     );
     info!(

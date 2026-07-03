@@ -91,7 +91,7 @@ protected data flows between Vectis instances.
 - HKDF-derived internal keys for storage encryption and API key verification;
 - operational key creation and validation;
 - encrypted key lifecycle metadata and runtime lifecycle enforcement;
-- SQLite-backed operational key storage behind a storage abstraction.
+- SQLite/PostgreSQL-backed operational key storage behind a storage abstraction.
 
 **Operations and observability**
 
@@ -278,8 +278,10 @@ The essentials to get a local instance running:
 - `VECTIS_MODE`: `dev` (HTTP) or `prod` (HTTPS, requires TLS cert and key);
 - `VECTIS_INIT_KEYS_FILE`: encrypted init key material, default `init.json`;
 - `VECTIS_UNSEAL_KEY_FILE`: unseal key file, default `.unseal_key`;
-- `VECTIS_SQLITE_PATH`: operational key storage, default `src/db/data.db` in
-  dev builds;
+- `VECTIS_STORAGE`: `sqlite` by default, or `postgres` for shared storage;
+- `VECTIS_SQLITE_PATH`: SQLite operational key storage, default `src/db/data.db`
+  in dev builds;
+- `VECTIS_POSTGRES_DSN`: PostgreSQL DSN when `VECTIS_STORAGE=postgres`;
 - `VECTIS_CONFIG_PATH`: signed config file, default `config.json`.
 
 See [doc/ENV.md](doc/ENV.md) for the full list and expected values.
@@ -314,8 +316,10 @@ native `cargo-fuzz` targets.
 ## Documentation
 
 - [doc/API.md](doc/API.md): HTTP API and CLI mapping.
+- [doc/CLI.md](doc/CLI.md): CLI behavior, commands, output, and environment.
 - [doc/ENV.md](doc/ENV.md): environment variables and expected values.
 - [doc/Test.md](doc/Test.md): testing strategy and test commands.
+- [doc/Clustering.md](doc/Clustering.md): multi-node behavior, HA, and DR model.
 - [doc/openapi.yaml](doc/openapi.yaml): OpenAPI specification.
 - [doc/ThreatModel.md](doc/ThreatModel.md): threat model, explicit assumptions, and limitations.
 - [doc/Reference.md](doc/Reference.md): architecture and design reference.

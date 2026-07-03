@@ -24,6 +24,7 @@ pub fn fuzz_config() -> config::AppConfig {
         protocol_version: String::from("v1"),
         storage_type: String::from("sqlite"),
         sqlite_path: PathBuf::from("data.db"),
+        postgres_dsn: String::new(),
         sender_hostname: String::from("sender.local"),
         receiver_hostname: String::from("receiver.local"),
         default_crypto_profile: String::from("hybrid-performance-v1"),

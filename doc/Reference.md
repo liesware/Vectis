@@ -15,7 +15,9 @@ This document complements:
 
 - [README.md](../README.md): overview, quick start, and demo entry point.
 - [doc/API.md](API.md): HTTP API and CLI mapping.
+- [doc/CLI.md](CLI.md): CLI behavior, commands, output, and environment.
 - [doc/ENV.md](ENV.md): environment variables and expected values.
+- [doc/Clustering.md](Clustering.md): multi-node behavior, HA, and DR model.
 - [doc/openapi.yaml](openapi.yaml): OpenAPI contract.
 
 ## What Vectis Does
@@ -37,7 +39,7 @@ At the current stage, Vectis provides:
 - local re-encryption before final application delivery;
 - a hybrid timestamp/signature protocol;
 - signed runtime configuration for routes, remote routes, and permissions;
-- SQLite-backed storage behind a storage abstraction;
+- SQLite/PostgreSQL-backed storage behind a storage abstraction;
 - API key authentication using derived verification material;
 - startup, liveness, readiness, metrics, structured logs, and audit logs;
 - a CLI that mostly behaves as an HTTP client for the runtime service.
@@ -120,6 +122,7 @@ Important modules:
 - `core/permissions.rs`: permission model and API key client authorization data.
 - `core/storage/mod.rs`: storage abstraction.
 - `core/storage/sqlite.rs`: SQLite implementation.
+- `core/storage/postgres.rs`: PostgreSQL implementation.
 - `core/http_client.rs`: outbound HTTP client construction.
 - `core/logging.rs`: structured JSON logging and audit log setup.
 - `core/audit.rs`: security audit events.
@@ -564,8 +567,8 @@ This principle applies to:
 
 ## Storage
 
-The storage abstraction currently supports SQLite only, but the interface is
-designed so future backends can be added.
+The storage abstraction supports SQLite and PostgreSQL. SQLite is the local
+default. PostgreSQL is the shared durable backend for multi-node deployments.
 
 Current logical storage operations:
 
@@ -584,6 +587,21 @@ CREATE TABLE IF NOT EXISTS ops_keys (
     properties VARCHAR(10240) NOT NULL
 );
 ```
+
+Current PostgreSQL table:
+
+```sql
+CREATE TABLE ops_keys (
+    id VARCHAR(128) PRIMARY KEY,
+    enc_keys TEXT NOT NULL,
+    properties TEXT NOT NULL
+);
+```
+
+Vectis ships SQL reference files under `src/db`. It does not apply migrations
+and does not create tables at runtime. The DBA or operator owns database
+creation, schema application, backups, permissions, and tuning. Vectis validates
+the schema when it connects.
 
 Important invariant:
 
@@ -1011,7 +1029,8 @@ Rebuild confidence with:
 
 Vectis is still experimental. Important boundaries:
 
-- only SQLite storage is implemented today;
+- SQLite and PostgreSQL storage are implemented; PostgreSQL is schema-managed by
+  the operator, not migrated by Vectis;
 - no custom CA bundle support yet;
 - production TLS policy exists, but deployment hardening still needs more work;
 - config reload is whole-file, not per-section transactional;
@@ -1024,7 +1043,7 @@ Vectis is still experimental. Important boundaries:
 
 Likely future work:
 
-- additional storage backends;
+- additional storage backends if they keep the same storage contract;
 - stronger cluster-aware key loading and cache invalidation;
 - custom trust store / CA bundle support;
 - richer permission model if endpoint-level actions become necessary;

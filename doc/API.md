@@ -1142,7 +1142,9 @@ Main variables:
 - `VECTIS_CONFIG_SIGN_PATH`: signature token for `VECTIS_CONFIG_PATH`, created by `vectis config sign`.
 - `VECTIS_APIKEY`: client-side HTTP auth key sent as `X-API-Key`.
 - `VECTIS_APIKEY_HASH`: server-side HMAC value used to verify `X-API-Key` without storing the API key in plaintext.
-- `VECTIS_SQLITE_PATH`: sqlite storage path.
+- `VECTIS_STORAGE`: storage backend, `sqlite` or `postgres`.
+- `VECTIS_SQLITE_PATH`: SQLite storage path.
+- `VECTIS_POSTGRES_DSN`: PostgreSQL connection string used when `VECTIS_STORAGE=postgres`.
 - `VECTIS_DEFAULT_CRYPTO_PROFILE`: default crypto profile for `POST /keys`.
 - `VECTIS_CRYPTO_POLICY`: controls whether `POST /keys` accepts request-level algorithm overrides.
 - `VECTIS_HASH`, `VECTIS_SYMMETRIC`, `VECTIS_EDDSA`, `VECTIS_XECDH`, `VECTIS_ML_DSA_VARIANT`, `VECTIS_ML_KEM_VARIANT`: validated legacy/dev algorithm settings; profiles are the source of key-generation defaults.
