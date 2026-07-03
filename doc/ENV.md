@@ -125,6 +125,8 @@ When `public_keys` is present, Vectis validates the key material before loading 
 
 Security notes:
 
+- Current unseal providers are `env`, `file`, and `prompt`. They are tried in
+  that order. Future providers may add Vault, KMS, or HSM support.
 - Unseal key resolution order is: `VECTIS_UNSEAL_KEY`, then `VECTIS_UNSEAL_KEY_FILE`, then hidden prompt.
 - `VECTIS_UNSEAL_KEY_FILE` can be provided as a process environment variable or in `.env`; the file content itself must not be placed in `.env`.
 - If `VECTIS_UNSEAL_KEY_FILE` is explicitly set and cannot be read, Vectis fails instead of falling back to the prompt.

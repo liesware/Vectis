@@ -11,4 +11,5 @@ pub mod protocol;
 pub mod remote_routes;
 pub mod routes;
 pub mod storage;
+pub mod unseal;
 pub mod validation;

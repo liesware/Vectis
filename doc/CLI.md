@@ -82,6 +82,14 @@ Common local bootstrap variables:
 
 `VECTIS_UNSEAL_KEY` is intentionally not read from `.env`.
 
+Current unseal providers are:
+
+1. `env`: `VECTIS_UNSEAL_KEY`;
+2. `file`: `VECTIS_UNSEAL_KEY_FILE`;
+3. `prompt`: hidden terminal prompt.
+
+There is no configurable unseal provider selector yet.
+
 ## Local Bootstrap Commands
 
 ### `vectis init`

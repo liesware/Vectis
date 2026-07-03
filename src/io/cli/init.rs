@@ -1,4 +1,4 @@
-use crate::core::{config, validation};
+use crate::core::{config, unseal};
 use crate::error::DynError;
 use crate::ops;
 use std::fs;
@@ -29,7 +29,7 @@ pub fn run_init() -> Result<String, DynError> {
 
 pub fn load_init_state() -> Result<ops::init::ValidatedInitState, DynError> {
     let init_keys_path = config::init_keys_file_path()?;
-    let key_hex = validation::read_unseal_key("VECTIS_UNSEAL_KEY:")?;
+    let key_hex = unseal::read_unseal_key("VECTIS_UNSEAL_KEY:")?;
     let encrypted_json = fs::read_to_string(&init_keys_path)?;
     let init_state = ops::init::load_validated_init_state(&encrypted_json, &key_hex)?;
 

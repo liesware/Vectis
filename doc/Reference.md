@@ -202,11 +202,15 @@ The init material includes fixed internal key families:
 - ML-KEM key pair.
 
 The init file itself is encrypted with `INTERNAL_KEYS_CIPHER`, currently
-`AES-256/GCM`. The unseal key is printed once and can later be supplied through:
+`AES-256/GCM`. The unseal key is printed once and can later be supplied through
+the current unseal providers:
 
-1. `VECTIS_UNSEAL_KEY`;
-2. `VECTIS_UNSEAL_KEY_FILE`, default `.unseal_key`;
-3. hidden terminal prompt.
+1. `env`: `VECTIS_UNSEAL_KEY`;
+2. `file`: `VECTIS_UNSEAL_KEY_FILE`, default `.unseal_key`;
+3. `prompt`: hidden terminal prompt.
+
+The provider structure is intentionally small for now. Vault, KMS, and HSM
+unseal methods are future integrations, not current behavior.
 
 ### `vectis serve`
 
