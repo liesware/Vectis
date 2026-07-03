@@ -19,6 +19,27 @@ This project is experimental and should be treated as a work in progress.
 
 **Do not use Vectis to protect real sensitive data yet.**
 
+## Philosophy
+
+Vectis tries to stay close to the Unix philosophy. Peter H. Salus summarized it
+in 1994, crediting Doug McIlroy:
+
+```text
+Write programs that do one thing and do it well.
+Write programs to work together.
+Write programs to handle text streams, because that is a universal interface.
+```
+
+Vectis has one narrow job: protect sensitive data objects as they move between
+systems. It does not try to replace TLS, KMS, HSMs, databases, access control,
+or traditional DLP tools. Those systems already have their own jobs.
+
+Vectis exposes HTTP, CLI commands, JSON, OpenAPI, logs, and metrics because
+plain interfaces are easier to inspect, automate, and combine. Features such as
+clustering, HSM/KMS support, mTLS, or distributed storage should exist only when
+the operating environment requires them, not as product tiers or decorative
+complexity.
+
 ## Why Vectis?
 
 Modern systems already use important security controls:
@@ -314,7 +335,8 @@ Vectis is not a replacement for:
 - traditional DLP products.
 
 Vectis is intended to complement existing security controls by exploring
-object-level protection for sensitive data flows.
+object-level protection for sensitive data flows. It should work with other
+tools, not absorb their responsibilities.
 
 ## Security Status
 

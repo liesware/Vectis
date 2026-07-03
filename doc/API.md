@@ -328,7 +328,7 @@ Response:
   "keys": [
     {
       "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
-      "info": "version=v1;hostname=localhost;type=ops-keys;cipher=AES-256/GCM;tag=ACME Corp.;timestamp=1782058090"
+      "info": "version=v1;hostname=localhost;type=ops-keys;cipher=AES-256/GCM;tag=ACME Corp.;profile=hybrid-high-assurance-v1;timestamp=1782058090"
     }
   ]
 }
@@ -349,7 +349,7 @@ Response:
   "keys": [
     {
       "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
-      "info": "version=v1;hostname=localhost;type=ops-keys;cipher=AES-256/GCM;tag=ACME Corp.;timestamp=1782058090",
+      "info": "version=v1;hostname=localhost;type=ops-keys;cipher=AES-256/GCM;tag=ACME Corp.;profile=hybrid-high-assurance-v1;timestamp=1782058090",
       "properties_info": "version=v1;hostname=localhost;type=ops-key-properties;cipher=AES-256/GCM;kid=f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed;tag=ACME Corp.;profile=hybrid-high-assurance-v1;timestamp=1782058090",
       "properties": {
         "version": 1,
@@ -676,7 +676,7 @@ Response:
 
 ```json
 {
-  "info": "version=v1;hostname=localhost;type=ops-keys;cipher=AES-256/GCM;tag=ACME Corp.;timestamp=1782058090",
+  "info": "version=v1;hostname=localhost;type=ops-keys;cipher=AES-256/GCM;tag=ACME Corp.;profile=hybrid-high-assurance-v1;timestamp=1782058090",
   "keys": {
     "eddsa": {
       "alg": "Ed25519",
@@ -728,7 +728,7 @@ Response:
     "version": "v1",
     "type": "vectis-sign",
     "created_at": "1782058090",
-    "info": "version=v1;hostname=localhost;type=ops-keys;cipher=AES-256/GCM;tag=ACME Corp.;timestamp=1782058090",
+    "info": "version=v1;hostname=localhost;type=ops-keys;cipher=AES-256/GCM;tag=ACME Corp.;profile=hybrid-high-assurance-v1;timestamp=1782058090",
     "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
     "serial": "...",
     "message_hash": {

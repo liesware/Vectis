@@ -70,7 +70,7 @@ In order of importance:
 | Nonce reuse under a long-lived key | Fresh key per message | Ephemeral XECDH key and fresh ML-KEM encapsulation per message; the HKDF-derived message key is used once |
 | Configuration tampering (routes, permissions, peer keys) | Mandatory config signature | `vectis-config` timestamp token over canonical JSON, verified on load and on every reload (`ops/sign.rs`, `core/config_file.rs`) |
 | Storage theft or row substitution in the database | Encryption at rest with identity binding | Operational keys encrypted with an HKDF-derived key and AAD; the `kid` is re-verified against the hash of the encrypted payload on load (`validate_key_id_matches_enc_keys`) |
-| API key brute force and timing attacks | Hashed verification in constant time | Server stores a keyed hash; comparison is constant-time and scans all clients without early exit (`core/permissions.rs`, `crypto::constant_time_eq`) |
+| API key brute force and timing attacks | Hashed verification with constant-time comparison where credentials are compared | Server stores keyed hashes; root verification compares in constant time, and permission clients are indexed by hash for lookup (`core/permissions.rs`, `crypto::constant_time_eq`) |
 | Information leakage through errors and telemetry | Typed error boundary and disciplined observability | `VectisError` variants decide HTTP status and public messages (no internal detail on 5xx); logs and metrics avoid secrets and high-cardinality labels; dedicated audit stream with request ids |
 | Use of retired or destroyed keys | Runtime lifecycle enforcement | Lifecycle states (`active`, `disabled`, `retired`, `compromised`, `destroyed`) gate every operation class (`ops/keys.rs`) |
 
@@ -93,10 +93,11 @@ satisfy them need compensating controls.
    can replace both `config.json` and `config_sign.json` with an older, validly
    signed pair can restore previous routes or permissions. Operators should
    version and monitor config changes.
-4. **The host and process are trusted.** The root API key lives in `.env`, the
-   unseal key in `.unseal_key`, and decrypted key material in process memory
-   (zeroized on drop, but readable by a host-level attacker). Host compromise
-   is out of scope.
+4. **The host and process are trusted.** The server stores the root API key
+   verifier as `VECTIS_APIKEY_HASH`; clients may store `VECTIS_APIKEY`. The
+   unseal key can live in `.unseal_key`, and decrypted key material stays in
+   process memory (zeroized on drop, but readable by a host-level attacker).
+   Host compromise is out of scope.
 5. **The system clock is reasonably correct.** Timestamps in tokens and
    messages are informative and used for audit, not for security decisions.
 6. **Lifecycle states are authoritative and final.** `destroyed` is terminal by
@@ -120,7 +121,7 @@ Vectis is not, and does not replace:
 | --- | --- | --- |
 | Object replay (assumption 1) | Accepted for v1 | Idempotent consumers; unique message ids at the application layer |
 | Config rollback (assumption 3) | Accepted for v1 | Version-control the signed config; alert on unexpected reloads via the audit log |
-| Root API key in `.env` | Known gap | Restrict file permissions; use per-client keys for applications; rotate by re-running `init` |
+| Client-side API key storage | Known gap | Restrict file permissions; use per-client keys for applications; rotate keys when exposure is suspected |
 | No key rotation flow | Known gap | Create a successor key, update routes, retire the old key manually |
 
 ## Revision

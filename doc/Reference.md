@@ -1,10 +1,10 @@
-# Vectis Software Architecture Reference
+# How Vectis Works
 
 ## Purpose
 
-This document is the architectural reference for Vectis. It is written for new
-contributors, maintainers, auditors, and technical project owners who need to
-understand not only what Vectis does, but why the system is shaped the way it is.
+This document explains how Vectis works. It is written for new contributors,
+maintainers, auditors, and technical project owners who need to understand the
+flows, invariants, and boundaries of the system.
 
 The goal is to make Vectis recoverable as a design. If the current codebase were
 lost tomorrow, rebuilding it from scratch would still be a large effort, but this
@@ -13,12 +13,12 @@ decisions needed to recreate the system deliberately.
 
 This document complements:
 
-- [README.md](../README.md): product overview, quick start, and demo entry point.
+- [README.md](../README.md): overview, quick start, and demo entry point.
 - [doc/API.md](API.md): HTTP API and CLI mapping.
 - [doc/ENV.md](ENV.md): environment variables and expected values.
 - [doc/openapi.yaml](openapi.yaml): OpenAPI contract.
 
-## Executive Summary
+## What Vectis Does
 
 Vectis is an experimental system for **Sensitive Data Lifecycle Protection**.
 TLS protects a network connection, but sensitive data often continues moving
@@ -42,12 +42,12 @@ At the current stage, Vectis provides:
 - startup, liveness, readiness, metrics, structured logs, and audit logs;
 - a CLI that mostly behaves as an HTTP client for the runtime service.
 
-Vectis is experimental. It is not yet a production-ready replacement for KMS,
-HSMs, mature DLP systems, secrets managers, or audited cryptographic products.
+Vectis is experimental. It does not replace TLS, KMS, HSMs, mature DLP systems,
+secrets managers, or audited cryptographic products.
 
-## Core Product Model
+## Core Model
 
-Vectis is built around four ideas.
+Vectis is built around four rules.
 
 ### Data Should Remain Protected Beyond Transport
 

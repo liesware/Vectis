@@ -1,11 +1,11 @@
-# Design Principles
+# Engineering Rules
 
-This document abstracts the engineering doctrine behind Vectis into a reusable
-template. It is written to be applied to **new projects in any language**: every
-rule is generic, with a Rust note describing the concrete tooling used here, and
-an "In Vectis" pointer showing the rule applied in a real codebase.
+This document distills the engineering rules behind Vectis into a reusable
+template. It is written for **new projects in any language**. Every rule is
+generic, with a Rust note describing the tooling used here and an "In Vectis"
+pointer showing the rule in a real codebase.
 
-Guiding motto: *complexity is inevitable, simplicity is intentional.*
+The aim is plain: keep the system understandable and hard to misuse.
 
 Rule format:
 

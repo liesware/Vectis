@@ -26,4 +26,4 @@ fuzz/target/
 proptest-regressions/
 
 # exception
-!fuzz/seeds/fuzz_routes_permissions/routes.json 
+!fuzz/seeds/fuzz_routes_permissions/routes.json

@@ -1,4 +1,4 @@
-# Vectis Clinical Data Exchange Demo
+# Vectis Clinical Data Flow Demo
 
 ## The Problem
 
@@ -16,11 +16,11 @@ can still be exposed or mishandled after it leaves that channel:
 In that model, protecting only the connection is not enough. The clinical record
 needs protection as a data object.
 
-## The Solution
+## What The Demo Does
 
-Vectis demonstrates **Data Lifecycle Protection**: the data is protected before
-it leaves the sender's trusted boundary and remains protected until the receiver
-explicitly unwraps it through its local Vectis instance.
+This is a synthetic flow used to exercise Vectis end to end. The data is
+protected before it leaves the sender's local boundary and remains protected
+until the receiver explicitly unwraps it through its local Vectis instance.
 
 This demo runs two local clinical sites:
 
@@ -30,9 +30,8 @@ This demo runs two local clinical sites:
 - **Vectis B** verifies, opens, and re-protects the record for Clinic B's final
   application.
 
-The demo does not replace TLS. In production, TLS should still be used. Vectis
-adds object-level protection so the clinical record remains protected beyond the
-transport session.
+The demo does not replace TLS. TLS still protects the channel. Vectis protects
+the data object after it leaves that channel.
 
 ## What Vectis Protects
 
@@ -222,17 +221,17 @@ Decrypted clinical payload:
 }
 ```
 
-That output confirms the full flow: file input, sender-side protection,
+That output confirms the test flow: file input, sender-side protection,
 cross-instance delivery, receiver-side verification, local re-encryption, and
 final app decryption.
 
 ## Important Notes
 
 - This demo uses local loopback addresses for clarity.
+- This is not a clinical product. It is a test flow using fictional data.
 - The generated `.unseal_key`, `.env`, databases, and route signatures are demo
   state and are ignored by `demo/.gitignore`.
 - The root API key stays in each site's `.env` for administrative scripts.
   Clinic apps use separate client API keys from `app.env`; those keys are
   authorized by the `permissions` section of each site's signed `config.json`.
-- The sample clinical record is fictional and should be replaced with synthetic
-  test data for real demonstrations.
+- The sample clinical record is fictional. Use synthetic data only.
