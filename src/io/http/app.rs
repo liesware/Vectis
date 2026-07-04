@@ -110,11 +110,11 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
     let art = Artbox::from_renderer(renderer);
     let target = RenderTarget::new(30, 6);
     let rendered = art.render_text("Vectis", target)?;
-    println!("\nLicense Apache 2.0, 18 June 2026");
+    println!("\nLicensed under the Apache License, Version 2.0");
     print!("{}", rendered.to_ansi_string());
     println!("\nData Lifecycle Protection");
     println!("\n-------------------------");
-    println!("\nby Liesware Corp.");
+    println!("\nby Liesware Corp. | 18 June 2026");
     println!("\nComplexity is inevitable, simplicity is intentional.");
 
     if config.server_scheme == "https" {
