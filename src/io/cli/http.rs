@@ -1,6 +1,6 @@
 use crate::core::{config, validation};
 use crate::error::DynError;
-use crate::io::cli::init;
+use crate::io::cli::{config_editor, init};
 use crate::ops;
 use reqwest::{Method, Url};
 use serde_json::{Map, Value, json};
@@ -54,7 +54,7 @@ pub fn print_help(command: &str) {
 }
 
 #[derive(Clone, Copy)]
-enum OutputFormat {
+pub(super) enum OutputFormat {
     Json,
     Yaml,
 }
@@ -190,16 +190,29 @@ async fn run_permissions(args: Vec<String>, output: OutputFormat) -> Result<(), 
 
 async fn run_config(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "config command")?;
-    expect_no_args(&rest, &format!("config {subcommand}"))?;
     match subcommand.as_str() {
-        "sign" => run_config_sign(output),
-        "list" => run_config_list(output),
+        "init" => {
+            expect_no_args(&rest, "config init")?;
+            config_editor::init_config(output)
+        }
+        "sign" => {
+            expect_no_args(&rest, "config sign")?;
+            run_config_sign(output)
+        }
+        "list" => {
+            expect_no_args(&rest, "config list")?;
+            run_config_list(output)
+        }
         "reload" => {
+            expect_no_args(&rest, "config reload")?;
             let client = CliHttpClient::from_env()?;
             client
                 .send(Method::POST, "/config/reload", true, None, output)
                 .await
         }
+        "routes" => config_editor::run_routes(rest, output).await,
+        "remote-routes" => config_editor::run_remote_routes(rest, output).await,
+        "permissions" => config_editor::run_permissions(rest, output).await,
         _ => Err(invalid_input(format!(
             "unknown config command: {subcommand}"
         ))),
@@ -661,7 +674,7 @@ fn next_flag_value<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&
         .ok_or_else(|| invalid_input(format!("{flag} requires a value")))
 }
 
-fn print_response(payload: &str, output: OutputFormat) -> Result<(), DynError> {
+pub(super) fn print_response(payload: &str, output: OutputFormat) -> Result<(), DynError> {
     if payload.trim().is_empty() {
         return Ok(());
     }
@@ -677,7 +690,7 @@ fn print_response(payload: &str, output: OutputFormat) -> Result<(), DynError> {
     Ok(())
 }
 
-fn invalid_input(message: impl Into<String>) -> DynError {
+pub(super) fn invalid_input(message: impl Into<String>) -> DynError {
     crate::error::invalid_input(message.into())
 }
 
@@ -704,6 +717,9 @@ fn print_http_help() {
     println!("  {PROGRAM_NAME} config sign");
     println!("  {PROGRAM_NAME} config list");
     println!("  {PROGRAM_NAME} config reload");
+    println!("  {PROGRAM_NAME} config routes <add|get|update|delete>");
+    println!("  {PROGRAM_NAME} config remote-routes <add|get|update|delete>");
+    println!("  {PROGRAM_NAME} config permissions <add|get|update|delete|grant|revoke>");
     println!("  {PROGRAM_NAME} pub <kid>");
     println!("  {PROGRAM_NAME} sign <kid> (--json <json>|--file <path>)");
     println!("  {PROGRAM_NAME} sign verify (--json <json>|--file <path>)");
@@ -866,24 +882,76 @@ fn print_permissions_help() {
 
 fn print_config_help() {
     println!("Usage:");
+    println!("  {PROGRAM_NAME} config init");
     println!("  {PROGRAM_NAME} config sign");
     println!("  {PROGRAM_NAME} config list");
     println!("  {PROGRAM_NAME} config reload");
+    println!(
+        "  {PROGRAM_NAME} config routes add --name <name> --kid <kid> --final-app-addr <host:port> --final-app-path <path>"
+    );
+    println!("  {PROGRAM_NAME} config routes get <name>");
+    println!(
+        "  {PROGRAM_NAME} config routes update <name> [--kid <kid>] [--final-app-addr <host:port>] [--final-app-path <path>]"
+    );
+    println!("  {PROGRAM_NAME} config routes delete <name>");
+    println!(
+        "  {PROGRAM_NAME} config remote-routes add --name <name> --remote-kid <kid> --remote-addr <host:port> --allowed-local-kid <kid|*> [--status active|disabled]"
+    );
+    println!("  {PROGRAM_NAME} config remote-routes get <name>");
+    println!(
+        "  {PROGRAM_NAME} config remote-routes update <name> [--remote-kid <kid>] [--remote-addr <host:port>] [--allowed-local-kid <kid|*>...] [--status active|disabled]"
+    );
+    println!("  {PROGRAM_NAME} config remote-routes delete <name>");
+    println!(
+        "  {PROGRAM_NAME} config permissions add --client <client> --apikey-hash <hex> [--status active|disabled|revoked]"
+    );
+    println!("  {PROGRAM_NAME} config permissions get <client>");
+    println!(
+        "  {PROGRAM_NAME} config permissions update <client> [--apikey-hash <hex>] [--status active|disabled|revoked]"
+    );
+    println!("  {PROGRAM_NAME} config permissions delete <client>");
+    println!("  {PROGRAM_NAME} config permissions grant <client> --kid <kid|*> --action <action>");
+    println!("  {PROGRAM_NAME} config permissions revoke <client> --kid <kid|*> --action <action>");
     println!();
-    println!("Signs, prints, or reloads the unified signed config file.");
+    println!("Signs, prints, reloads, or edits the unified signed config file.");
     println!();
     println!("Commands:");
+    println!("  init                  Creates an empty VECTIS_CONFIG_PATH skeleton (local)");
     println!("  sign                  Signs VECTIS_CONFIG_PATH with init keys (local)");
     println!("  list                  Prints VECTIS_CONFIG_PATH (local)");
     println!("  reload                POST /config/reload, requires admin VECTIS_APIKEY");
+    println!("  routes                Edits local config routes by unique name");
+    println!("  remote-routes         Edits local config remote_routes by unique name");
+    println!("  permissions           Edits local config permissions by unique client");
+    println!();
+    println!("Behavior:");
+    println!("  edit commands modify VECTIS_CONFIG_PATH only");
+    println!("  remote-routes add fetches public keys from remote /pub/{{kid}}");
+    println!("  remote-routes update re-fetches keys when remote_kid or remote_addr changes");
+    println!("  quote \"*\" for wildcard KIDs so the shell does not expand it");
+    println!("  permissions add/update manages clients and apikey_hash");
+    println!("  permissions grant/revoke only manages kid/action grants");
+    println!("  edit commands do not sign or reload automatically");
     println!();
     println!("Environment:");
     println!("  VECTIS_CONFIG_PATH      Config JSON path, default config.json");
     println!("  VECTIS_CONFIG_SIGN_PATH Signature JSON path, default config_sign.json");
     println!();
     println!("Examples:");
+    println!("  {PROGRAM_NAME} config init");
     println!("  {PROGRAM_NAME} config sign");
     println!("  {PROGRAM_NAME} config reload");
+    println!(
+        "  {PROGRAM_NAME} config routes add --name app-a --kid <kid> --final-app-addr 127.0.0.1:3999 --final-app-path /message"
+    );
+    println!(
+        "  {PROGRAM_NAME} config remote-routes add --name clinic-b --remote-kid <kid> --remote-addr vectis-b.example.com:443 --allowed-local-kid \"*\" --status active"
+    );
+    println!(
+        "  {PROGRAM_NAME} config permissions add --client \"Acme App\" --apikey-hash <hex> --status active"
+    );
+    println!("  {PROGRAM_NAME} config permissions grant \"Acme App\" --kid \"*\" --action admin");
+    println!("  {PROGRAM_NAME} config permissions grant \"Acme App\" --kid <kid> --action message");
     print_output_help();
 }
 

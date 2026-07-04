@@ -153,7 +153,8 @@ pub(crate) fn validate_remote_routes(
     routes: Vec<RemoteRouteInput>,
     local_kid_exists: impl Fn(&str) -> bool,
 ) -> Result<Vec<RemoteRoute>, DynError> {
-    let mut seen = HashSet::new();
+    let mut seen_remote_kids = HashSet::new();
+    let mut seen_names = HashSet::new();
     let mut validated = Vec::with_capacity(routes.len());
 
     for route in routes {
@@ -161,7 +162,7 @@ pub(crate) fn validate_remote_routes(
             crate::error::invalid_input(format!("remote_routes.remote_kid is invalid: {err}"))
         })?;
 
-        if !seen.insert(route.remote_kid.clone()) {
+        if !seen_remote_kids.insert(route.remote_kid.clone()) {
             return Err(crate::error::invalid_input(format!(
                 "remote routes file has duplicated remote_kid: {}",
                 route.remote_kid
@@ -169,6 +170,12 @@ pub(crate) fn validate_remote_routes(
         }
 
         validation::validate_text_field("remote_routes.name", &route.name)?;
+        if !seen_names.insert(route.name.clone()) {
+            return Err(crate::error::invalid_input(format!(
+                "remote routes file has duplicated name: {}",
+                route.name
+            )));
+        }
         let remote_addr =
             validation::validate_host_port("remote_routes.remote_addr", &route.remote_addr)?;
         validation::validate_allowed_value(
@@ -351,9 +358,10 @@ mod tests {
         status: &str,
         public_keys: Option<serde_json::Value>,
     ) -> RemoteRouteInput {
+        let name = format!("peer-{}", &remote_kid[..8]);
         let mut value = json!({
             "remote_kid": remote_kid,
-            "name": "peer",
+            "name": name,
             "remote_addr": "127.0.0.1:3002",
             "allowed_local_kids": ["*"],
             "status": status
@@ -393,6 +401,20 @@ mod tests {
             route_input(&kid('a'), "active", None),
             route_input(&kid('a'), "active", None),
         ];
+        assert!(validate_remote_routes(routes, |_| true).is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_name() {
+        let mut first = serde_json::to_value(route_input(&kid('a'), "active", None)).unwrap();
+        let mut second = serde_json::to_value(route_input(&kid('b'), "active", None)).unwrap();
+        first["name"] = json!("same-name");
+        second["name"] = json!("same-name");
+        let routes = vec![
+            serde_json::from_value(first).unwrap(),
+            serde_json::from_value(second).unwrap(),
+        ];
+
         assert!(validate_remote_routes(routes, |_| true).is_err());
     }
 

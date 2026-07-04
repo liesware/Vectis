@@ -85,6 +85,8 @@ Runtime route operations:
 - `GET /remote-routes` lists authorized remote Vectis routes currently loaded in memory and requires `VECTIS_APIKEY`.
 - `POST /config/reload` reloads the unified config and requires root or an admin `VECTIS_APIKEY`.
 - `vectis config sign` signs `VECTIS_CONFIG_PATH` locally with init keys and updates `VECTIS_CONFIG_SIGN_PATH`.
+- `vectis config routes`, `vectis config remote-routes`, and `vectis config permissions` edit the local `config.json`; they do not sign or reload.
+- `routes[].name`, `remote_routes[].name`, and `permissions[].client` are unique operator-facing indexes used by the CLI config editor.
 - Every route `kid` must exist in the keys currently loaded in memory.
 - A missing file reloads to an empty manual route list.
 - An invalid existing file, or a route with an unloaded `kid`, returns an error and keeps the previous in-memory routes.

@@ -127,6 +127,30 @@ vectis apikey create
 vectis apikey create --output json
 ```
 
+### `vectis config init`
+
+Creates the initial `VECTIS_CONFIG_PATH` skeleton.
+
+It writes:
+
+```json
+{
+  "version": "v1",
+  "routes": [],
+  "remote_routes": [],
+  "permissions": []
+}
+```
+
+It refuses to overwrite an existing file. There is no force option. Delete the
+file manually if you intentionally want to start over.
+
+Example:
+
+```sh
+vectis config init
+```
+
 ### `vectis config sign`
 
 Signs `VECTIS_CONFIG_PATH` using the init keys and writes
@@ -149,6 +173,79 @@ Example:
 
 ```sh
 vectis config list
+```
+
+### `vectis config routes`
+
+Edits the local `routes` section in `VECTIS_CONFIG_PATH`. The lookup key is
+`name`. Names must be unique.
+
+```sh
+vectis config routes add --name clinical-app-a --kid <kid> --final-app-addr 127.0.0.1:3999 --final-app-path /message
+vectis config routes get clinical-app-a
+vectis config routes update clinical-app-a --final-app-path /clinical/message
+vectis config routes delete clinical-app-a
+```
+
+### `vectis config remote-routes`
+
+Edits the local `remote_routes` section in `VECTIS_CONFIG_PATH`. The lookup key
+is `name`. Names must be unique.
+
+`add` fetches public keys from the peer:
+
+```text
+{scheme}://{remote_addr}/pub/{remote_kid}
+```
+
+The scheme comes from `VECTIS_MODE`: `dev` uses `http`, `prod` uses `https`.
+
+```sh
+vectis config remote-routes add --name clinic-b --remote-kid <kid> --remote-addr vectis-b.example.com:443 --allowed-local-kid <local-kid> --status active
+vectis config remote-routes add --name clinic-b --remote-kid <kid> --remote-addr vectis-b.example.com:443 --allowed-local-kid "*" --status active
+vectis config remote-routes get clinic-b
+vectis config remote-routes update clinic-b --status disabled
+vectis config remote-routes delete clinic-b
+```
+
+Quote `"*"` when using wildcard `allowed_local_kids`; otherwise shells such as
+`zsh` and `bash` may expand it to filenames in the current directory.
+
+If `remote_kid` or `remote_addr` changes through `update`, the CLI re-fetches
+`public_keys` from the peer. Updating `status` or `allowed_local_kids` does not
+fetch keys.
+
+### `vectis config permissions`
+
+Edits the local `permissions` section in `VECTIS_CONFIG_PATH`. The lookup key is
+`client`. Clients must be unique.
+
+```sh
+vectis config permissions add --client clinic-app --apikey-hash <hex> --status active
+vectis config permissions get clinic-app
+vectis config permissions update clinic-app --status disabled
+vectis config permissions grant clinic-app --kid <kid> --action message
+vectis config permissions revoke clinic-app --kid <kid> --action message
+vectis config permissions delete clinic-app
+```
+
+Permission editing is a two-step flow:
+
+```sh
+vectis config permissions add --client "Acme App" --apikey-hash <hex> --status active
+vectis config permissions grant "Acme App" --kid "*" --action admin
+```
+
+`add` and `update` manage the client record and `apikey_hash`. `grant` and
+`revoke` only manage `kid`/`action` grants. Quote `"*"` when granting wildcard
+permissions so the shell does not expand it.
+
+Config edit commands write `config.json` only. They do not sign or reload. Run:
+
+```sh
+vectis config init
+vectis config sign
+vectis config reload
 ```
 
 ## HTTP Client Commands

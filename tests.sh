@@ -24,6 +24,10 @@ cargo clippy --all-targets --all-features -- -D warnings
 echo "\n\n"
 read -p "Start Vectis now, then press Enter to run HTTP tests: "
 
+echo "\n### CLI Positive/Negative"
+uv sync
+uv run tests/cli_all.py
+
 echo "\n### HTTP Positive/Negative"
 uv sync
 uv run tests/http_all.py

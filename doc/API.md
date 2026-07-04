@@ -1187,6 +1187,9 @@ CLI output defaults to YAML for readability. Add `--output json` to HTTP client 
 | `vectis permissions list` | `GET /permissions` | Yes |
 | `vectis config sign` | Local `config_sign.json` update | No HTTP |
 | `vectis config list` | Prints local `config.json` | No HTTP |
+| `vectis config routes ...` | Edits local `config.json` routes | No HTTP |
+| `vectis config remote-routes ...` | Edits local `config.json` remote routes; `add` and identity/address updates fetch peer public keys from `/pub/{kid}` | No HTTP for most local edits; remote `/pub` for key import |
+| `vectis config permissions ...` | Edits local `config.json` permissions | No HTTP |
 | `vectis config reload` | `POST /config/reload` | Yes |
 | `vectis pub <kid>` | `GET /pub/{kid}` | No |
 | `vectis sign <kid>` | `POST /sign/{kid}` | Yes |

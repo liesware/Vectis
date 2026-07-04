@@ -100,7 +100,8 @@ pub(crate) fn validate_routes(
     routes: Vec<RouteInput>,
     is_loaded_kid: impl Fn(&str) -> bool,
 ) -> Result<Vec<FinalAppRoute>, DynError> {
-    let mut seen = HashSet::new();
+    let mut seen_kids = HashSet::new();
+    let mut seen_names = HashSet::new();
     let mut validated = Vec::with_capacity(routes.len());
 
     for route in routes {
@@ -113,7 +114,7 @@ pub(crate) fn validate_routes(
             )));
         }
 
-        if !seen.insert(route.kid.clone()) {
+        if !seen_kids.insert(route.kid.clone()) {
             return Err(crate::error::invalid_input(format!(
                 "routes file has duplicated kid: {}",
                 route.kid
@@ -121,6 +122,12 @@ pub(crate) fn validate_routes(
         }
 
         validation::validate_text_field("routes.name", &route.name)?;
+        if !seen_names.insert(route.name.clone()) {
+            return Err(crate::error::invalid_input(format!(
+                "routes file has duplicated name: {}",
+                route.name
+            )));
+        }
         let final_app_addr =
             validation::validate_host_port("routes.final_app_addr", &route.final_app_addr)?;
         let final_app_path =
@@ -207,12 +214,12 @@ mod tests {
     }
 
     #[test]
-    fn accepts_duplicate_name() {
+    fn rejects_duplicate_name() {
         let routes = vec![
             route_input_with_name(&kid('a'), "same-name"),
             route_input_with_name(&kid('b'), "same-name"),
         ];
-        assert_eq!(validate_routes(routes, |_| true).unwrap().len(), 2);
+        assert!(validate_routes(routes, |_| true).is_err());
     }
 
     #[test]

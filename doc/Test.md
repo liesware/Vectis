@@ -10,6 +10,8 @@ the system:
 
 - Rust unit and property tests validate internal invariants without running a
   server.
+- CLI tests validate local command behavior, config editing, and file isolation
+  without requiring a running server.
 - HTTP workflow tests validate the real API, storage, crypto flows, permissions,
   routing, and final app delivery behavior.
 - Schemathesis validates that `doc/openapi.yaml` stays aligned with the running
@@ -91,6 +93,41 @@ Install/sync the base Python environment:
 
 ```sh
 uv sync
+```
+
+## Python CLI Tests
+
+Run the local CLI suite with:
+
+```sh
+uv run tests/cli_all.py
+```
+
+`tests/cli_all.py` runs:
+
+- `tests/cli_init.py`: init overwrite protection and custom init file handling.
+- `tests/cli_positive.py`: local `vectis config init`, `routes`,
+  `remote-routes`, `permissions`, and `config list` happy paths.
+- `tests/cli_negative.py`: duplicate names, invalid fields, missing records, and
+  mutation safety, including missing config files and overwrite refusal.
+
+The CLI tests isolate runtime files with temporary paths:
+
+```text
+VECTIS_CONFIG_PATH
+VECTIS_CONFIG_SIGN_PATH
+VECTIS_INIT_KEYS_FILE
+VECTIS_UNSEAL_KEY_FILE
+```
+
+They must not read or write the repository's real `config.json`, `init.json`,
+`.unseal_key`, or `.env`.
+
+Most CLI tests are local and do not need Vectis to be running. An optional
+remote-route public-key import case can run when a server is available:
+
+```sh
+uv run tests/cli_all.py --base-url http://127.0.0.1:3000 --apikey <VECTIS_APIKEY>
 ```
 
 Run the positive and negative HTTP suite against a running Vectis instance:
@@ -230,23 +267,34 @@ The high-level project test script is:
 It currently runs:
 
 ```sh
+cargo fmt
+cargo test --test crypto_integration
+cargo check
+cargo test
+cargo clippy --all-targets --all-features -- -D warnings
 uv sync
+uv run tests/cli_all.py
 uv run tests/http_all.py
 uv run tests/http_fuzz.py
 uv sync --group fuzz
 uv run tests/http_schemathesis.py --profile prepared
 ```
 
-`tests.sh` assumes Vectis is already running and that the API key can be read by
-the test helpers, either from command-line arguments where supported or from the
-environment/.env flow used by `tests/test_config.py`.
+`tests.sh` runs Rust checks and local CLI tests first. It then asks the operator
+to start Vectis before the HTTP, manual fuzz, and Schemathesis layers. The HTTP
+tests need an API key available through the environment or `.env` flow used by
+`tests/test_config.py`.
 
 `tests_cargo-fuzz.sh` is intentionally separate because it requires nightly,
 uses sanitizer builds, and is heavier than the normal HTTP test suite.
 
 ## Test File Reference
 
+- `tests/cli_all.py`: streaming CLI summary runner.
 - `tests/cli_init.py`: CLI init behavior.
+- `tests/cli_negative.py`: invalid local CLI config-editing workflows.
+- `tests/cli_positive.py`: valid local CLI config-editing workflows.
+- `tests/cli_support.py`: shared Python helpers for CLI workflows.
 - `tests/crypto_integration.rs`: focused Vectis/Botan crypto integration smoke
   tests.
 - `tests/final_app_server.py`: mock final app receiver and decrypt helper.
