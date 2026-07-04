@@ -323,6 +323,7 @@ native `cargo-fuzz` targets.
 - [doc/openapi.yaml](doc/openapi.yaml): OpenAPI specification.
 - [doc/ThreatModel.md](doc/ThreatModel.md): threat model, explicit assumptions, and limitations.
 - [doc/Reference.md](doc/Reference.md): architecture and design reference.
+- [doc/Internal.md](doc/Internal.md): implementation flows and internal invariants.
 - [doc/Design.md](doc/Design.md): reusable design principles distilled from this project.
 - [demo/README.md](demo/README.md): clinical data exchange demo.
 
