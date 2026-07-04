@@ -64,6 +64,7 @@ These variables are used by CLI commands that call the HTTP API. `serve` and `in
   "routes": [
     {
       "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+      "name": "clinical-app-a",
       "final_app_addr": "127.0.0.1:3999",
       "final_app_path": "/message"
     }

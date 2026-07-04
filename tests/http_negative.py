@@ -122,6 +122,15 @@ def sign_config():
         )
 
 
+def try_sign_config():
+    return subprocess.run(
+        ["cargo", "run", "--", "config", "sign", "--output", "json"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
 def write_config(sign=True):
     CONFIG_PATH.write_text(json.dumps(_CONFIG, indent=2), encoding="utf-8")
     if sign:
@@ -141,6 +150,13 @@ def write_remote_routes(routes, sign=True):
     _CONFIG["routes"] = []
     _CONFIG["permissions"] = []
     _CONFIG["remote_routes"] = routes
+    write_config(sign=sign)
+
+
+def write_routes(routes, sign=True):
+    _CONFIG["routes"] = routes
+    _CONFIG["remote_routes"] = []
+    _CONFIG["permissions"] = []
     write_config(sign=sign)
 
 
@@ -651,6 +667,38 @@ def main():
         status, _ = client.post("/config/reload", {}, auth=True)
         require_status("permissions wildcard non-global action", status, 400)
 
+    def routes_missing_name():
+        write_routes(
+            [
+                {
+                    "kid": key_id,
+                    "final_app_addr": "localhost:3999",
+                    "final_app_path": "/message",
+                }
+            ],
+            sign=False,
+        )
+        result = try_sign_config()
+        require(result.returncode != 0, "routes missing name must fail config sign")
+        require(
+            "missing field `name`" in result.stderr,
+            "routes missing name must report missing name",
+        )
+
+    def routes_invalid_name():
+        write_routes(
+            [
+                {
+                    "kid": key_id,
+                    "name": "",
+                    "final_app_addr": "localhost:3999",
+                    "final_app_path": "/message",
+                }
+            ]
+        )
+        status, _ = client.post("/config/reload", {}, auth=True)
+        require_status("routes invalid name", status, 400)
+
     def remote_routes_invalid_kid():
         write_remote_routes(
             [
@@ -894,6 +942,8 @@ def main():
         ("permissions invalid action pub", permissions_invalid_action_pub),
         ("permissions invalid action routes", permissions_invalid_action_routes),
         ("permissions wildcard non-global action", permissions_wildcard_non_global_action),
+        ("routes missing name", routes_missing_name),
+        ("routes invalid name", routes_invalid_name),
         ("remote routes invalid kid", remote_routes_invalid_kid),
         ("remote routes invalid addr", remote_routes_invalid_addr),
         ("remote routes invalid signature", remote_routes_invalid_signature),

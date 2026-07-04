@@ -13,7 +13,7 @@ cp "${ROOT_DIR}/target/debug/vectis" "${BIN_DIR}/vectis"
 
 init_db() {
   local db_path="$1"
-  python3 - "${db_path}" "${ROOT_DIR}/src/db/data_schema.sql" <<'PY'
+  python3 - "${db_path}" "${ROOT_DIR}/src/db/sqlite_schema.sql" <<'PY'
 import pathlib
 import sqlite3
 import sys

@@ -418,6 +418,7 @@ pub async fn receive_message(
         sender_kid = %prepared.envelope.sender_kid(),
         recipient_kid = %prepared.envelope.recipient_kid(),
         route_kid = %final_app_route.kid(),
+        final_app_name = %final_app_route.name(),
         final_app_addr = %final_app_route.final_app_addr(),
         final_app_path = %final_app_route.final_app_path(),
         "message delivered to final app"

@@ -352,6 +352,10 @@ def validate_routes_list(response):
         require(isinstance(item, dict), "routes list item must be an object")
         require_kid(item.get("kid"), "routes list item kid")
         require(
+            isinstance(item.get("name"), str) and item["name"],
+            "routes list item name must be a non-empty string",
+        )
+        require(
             isinstance(item.get("final_app_addr"), str) and item["final_app_addr"],
             "routes list item final_app_addr must be a non-empty string",
         )

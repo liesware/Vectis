@@ -809,10 +809,13 @@ components:
 
     FinalAppRoute:
       type: object
-      required: [kid, final_app_addr, final_app_path]
+      required: [kid, name, final_app_addr, final_app_path]
       properties:
         kid:
           $ref: "#/components/schemas/Kid"
+        name:
+          $ref: "#/components/schemas/TextField"
+          example: clinical-app-a
         final_app_addr:
           $ref: "#/components/schemas/TextField"
           example: 127.0.0.1:3999

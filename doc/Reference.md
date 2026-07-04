@@ -380,6 +380,7 @@ Routes define where locally decrypted and re-encrypted messages are delivered.
 Each final app route binds:
 
 - local `kid`;
+- human-readable `name`;
 - `final_app_addr`;
 - `final_app_path`.
 

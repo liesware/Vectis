@@ -13,7 +13,7 @@ fi
 init_db() {
   local site_dir="$1"
   rm -f "${site_dir}/db/data.db"
-  python3 - "${site_dir}/db/data.db" "${ROOT_DIR}/src/db/data_schema.sql" <<'PY'
+  python3 - "${site_dir}/db/data.db" "${ROOT_DIR}/src/db/sqlite_schema.sql" <<'PY'
 import pathlib
 import sqlite3
 import sys

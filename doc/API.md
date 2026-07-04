@@ -526,6 +526,7 @@ Response:
   "routes": [
     {
       "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+      "name": "clinical-app-a",
       "final_app_addr": "127.0.0.1:3999",
       "final_app_path": "/message"
     }
@@ -1039,6 +1040,7 @@ Expected file shape:
   "routes": [
     {
       "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+      "name": "clinical-app-a",
       "final_app_addr": "127.0.0.1:3999",
       "final_app_path": "/message"
     }
@@ -1083,6 +1085,7 @@ Top level:
 | Field | Required | Value | Meaning |
 | --- | --- | --- | --- |
 | `kid` | yes | 64-hex kid, must be a loaded local key | Local operational key this route applies to. |
+| `name` | yes | non-empty text | Human-readable route name. Metadata only. |
 | `final_app_addr` | yes | `host:port` | Where to deliver decrypted messages for this `kid`. |
 | `final_app_path` | yes | path starting with `/` | Delivery path (e.g. `/message`). |
 

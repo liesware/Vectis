@@ -274,10 +274,11 @@ def write_test_routes(key_ids, final_app_addr):
     _CONFIG["routes"] = [
         {
             "kid": key_id,
+            "name": f"final-app-{index}",
             "final_app_addr": final_app_addr,
             "final_app_path": "/message",
         }
-        for key_id in key_ids
+        for index, key_id in enumerate(key_ids, start=1)
     ]
     write_config()
 

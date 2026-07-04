@@ -26,6 +26,7 @@ cat > "${SCRIPT_DIR}/site-a/config.json" <<JSON
   "routes": [
     {
       "kid": "${A_LOCAL_KID}",
+      "name": "site-a-clinical-app",
       "final_app_addr": "${A_APP_BIND_ADDR}",
       "final_app_path": "/message"
     }
@@ -61,6 +62,7 @@ cat > "${SCRIPT_DIR}/site-b/config.json" <<JSON
   "routes": [
     {
       "kid": "${B_LOCAL_KID}",
+      "name": "site-b-clinical-app",
       "final_app_addr": "${B_APP_BIND_ADDR}",
       "final_app_path": "/message"
     }

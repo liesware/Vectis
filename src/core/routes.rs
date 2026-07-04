@@ -7,6 +7,7 @@ use std::collections::HashSet;
 #[derive(Clone, Serialize)]
 pub struct FinalAppRoute {
     kid: String,
+    name: String,
     final_app_addr: String,
     final_app_path: String,
 }
@@ -31,6 +32,7 @@ pub struct RoutesState {
 #[derive(Deserialize, Serialize)]
 pub(crate) struct RouteInput {
     kid: String,
+    name: String,
     final_app_addr: String,
     final_app_path: String,
 }
@@ -55,6 +57,7 @@ impl RoutesState {
             .cloned()
             .unwrap_or_else(|| FinalAppRoute {
                 kid: kid.to_string(),
+                name: String::from("default-final-app"),
                 final_app_addr: self.default_addr.clone(),
                 final_app_path: self.default_path.clone(),
             })
@@ -78,6 +81,10 @@ impl RoutesState {
 impl FinalAppRoute {
     pub fn kid(&self) -> &str {
         &self.kid
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     pub fn final_app_addr(&self) -> &str {
@@ -113,6 +120,7 @@ pub(crate) fn validate_routes(
             )));
         }
 
+        validation::validate_text_field("routes.name", &route.name)?;
         let final_app_addr =
             validation::validate_host_port("routes.final_app_addr", &route.final_app_addr)?;
         let final_app_path =
@@ -120,6 +128,7 @@ pub(crate) fn validate_routes(
 
         validated.push(FinalAppRoute {
             kid: route.kid,
+            name: route.name,
             final_app_addr,
             final_app_path,
         });
@@ -145,8 +154,19 @@ mod tests {
     fn route_input_with_path(kid: &str, final_app_addr: &str, final_app_path: &str) -> RouteInput {
         serde_json::from_value(json!({
             "kid": kid,
+            "name": "final-app",
             "final_app_addr": final_app_addr,
             "final_app_path": final_app_path
+        }))
+        .unwrap()
+    }
+
+    fn route_input_with_name(kid: &str, name: &str) -> RouteInput {
+        serde_json::from_value(json!({
+            "kid": kid,
+            "name": name,
+            "final_app_addr": "localhost:3999",
+            "final_app_path": "/message"
         }))
         .unwrap()
     }
@@ -167,6 +187,32 @@ mod tests {
     fn rejects_invalid_final_app_addr() {
         let routes = vec![route_input(&kid('a'), "not-a-host-port")];
         assert!(validate_routes(routes, |_| true).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_name() {
+        let routes = vec![route_input_with_name(&kid('a'), "")];
+        assert!(validate_routes(routes, |_| true).is_err());
+    }
+
+    #[test]
+    fn rejects_missing_name() {
+        let route = serde_json::from_value::<RouteInput>(json!({
+            "kid": kid('a'),
+            "final_app_addr": "localhost:3999",
+            "final_app_path": "/message"
+        }));
+
+        assert!(route.is_err());
+    }
+
+    #[test]
+    fn accepts_duplicate_name() {
+        let routes = vec![
+            route_input_with_name(&kid('a'), "same-name"),
+            route_input_with_name(&kid('b'), "same-name"),
+        ];
+        assert_eq!(validate_routes(routes, |_| true).unwrap().len(), 2);
     }
 
     #[test]
@@ -216,6 +262,7 @@ mod tests {
             prop_assume!(route_kid != other_kid);
             let route = FinalAppRoute {
                 kid: route_kid.clone(),
+                name: String::from("specific-final-app"),
                 final_app_addr: String::from("localhost:4001"),
                 final_app_path: String::from("/specific"),
             };
@@ -226,11 +273,13 @@ mod tests {
             );
 
             let specific = state.route_for(&route_kid);
+            prop_assert_eq!(specific.name(), "specific-final-app");
             prop_assert_eq!(specific.final_app_addr(), "localhost:4001");
             prop_assert_eq!(specific.final_app_path(), "/specific");
 
             let fallback = state.route_for(&other_kid);
             prop_assert_eq!(fallback.kid(), other_kid);
+            prop_assert_eq!(fallback.name(), "default-final-app");
             prop_assert_eq!(fallback.final_app_addr(), "localhost:3999");
             prop_assert_eq!(fallback.final_app_path(), "/default");
         }
