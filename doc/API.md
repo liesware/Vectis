@@ -11,6 +11,7 @@ The `vectis` CLI is an HTTP client for the runtime API, except for `vectis init`
 - Timestamps are encoded as Unix epoch seconds in a string.
 - `kid` values are hex strings derived with Vectis' internal hash (`INTERNAL_KEYS_HASH`, currently `BLAKE2b(256)`), so they are normally 64 hex characters.
 - Binary fields (`ctx`, `nonce`, signatures, public keys) are encoded as hex.
+- Every HTTP response includes `X-Request-Id`, a 32-character hex request id also present in operational logs.
 - Public errors use this shape:
 
 ```json
@@ -803,7 +804,7 @@ Flow:
 
 1. Validate `sender_kid`, `recipient_kid`, and `message`.
 2. Resolve `recipient_kid` through the signed config `remote_routes` section.
-3. If the recipient public key is not cached, call `GET /pub/{recipient_kid}` on the authorized `remote_addr`.
+3. Load the recipient's public keys from the `public_keys` of the resolved `remote_routes` entry. The signed config is the only source of peer public keys; Vectis never fetches `/pub` at runtime.
 4. Create a hybrid secret with XECDH + ML-KEM.
 5. Derive `message_key` with HKDF.
 6. Encrypt the message.

@@ -29,6 +29,7 @@ pub struct EncryptedInitJsonOutput {
     pub api_key_hash: Zeroizing<String>,
 }
 
+#[derive(Clone)]
 pub struct ValidatedInitState {
     pub(crate) init_keys: Zeroizing<InitOutput>,
     pub validation: InitValidationOutput,
@@ -109,8 +110,7 @@ pub fn create_encrypted_init_output_json() -> Result<EncryptedInitJsonOutput, Dy
 
 fn validate_init_output(output: &InitOutput, aad: &str) -> Result<InitValidationOutput, DynError> {
     let config = config::app_config()?;
-    let message = config.plaintext_message;
-    validate_key_material(output, aad, &message)
+    validate_key_material(&config, output, aad, &config.plaintext_message)
 }
 
 pub fn load_validated_init_state(

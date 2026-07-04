@@ -7,21 +7,20 @@ use crate::ops::keys::KeysDbState;
 pub type TestOutput = KeyValidationOutput;
 
 pub fn handle_test_from_state(
+    config: &config::AppConfig,
     keys_db_state: &KeysDbState,
     id: &str,
 ) -> Result<TestOutput, DynError> {
     let loaded_key = keys::get_loaded_key(keys_db_state, id)?;
-    keys::require_lifecycle_for_new_use(loaded_key)?;
+    keys::require_lifecycle_for_new_use(&loaded_key)?;
 
-    build_test_output(loaded_key.key_material(), loaded_key.aad())
+    build_test_output(config, loaded_key.key_material(), loaded_key.aad())
 }
 
 fn build_test_output(
+    config: &config::AppConfig,
     key_material: &keys::OpsKeysOutput,
     aad: &str,
 ) -> Result<TestOutput, DynError> {
-    let config = config::app_config()?;
-    let message = config.plaintext_message;
-
-    validate_key_material(key_material, aad, &message)
+    validate_key_material(config, key_material, aad, &config.plaintext_message)
 }

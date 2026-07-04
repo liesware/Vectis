@@ -76,7 +76,7 @@ Common local bootstrap variables:
 - `VECTIS_INIT_KEYS_FILE`: encrypted init key material, default `init.json`.
 - `VECTIS_UNSEAL_KEY`: unseal key from process environment.
 - `VECTIS_UNSEAL_KEY_FILE`: file containing the unseal key, default
-  `.unseal_key`.
+  `.unseal_key`. The file must have `0600` permissions.
 - `VECTIS_CONFIG_PATH`: signed config source file, default `config.json`.
 - `VECTIS_CONFIG_SIGN_PATH`: signature file, default `config_sign.json`.
 
@@ -143,7 +143,7 @@ It writes:
 ```
 
 It refuses to overwrite an existing file. There is no force option. Delete the
-file manually if you intentionally want to start over.
+file manually to start over.
 
 Example:
 

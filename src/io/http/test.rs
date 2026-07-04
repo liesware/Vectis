@@ -100,7 +100,9 @@ pub async fn test_endpoint(
         Some("self-test"),
     );
     let result = state
-        .with_keys_db_state(|keys_db_state| ops::test::handle_test_from_state(keys_db_state, &id))
+        .with_keys_db_state(|keys_db_state| {
+            ops::test::handle_test_from_state(state.config(), keys_db_state, &id)
+        })
         .await;
 
     match result {

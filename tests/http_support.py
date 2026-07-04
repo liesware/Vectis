@@ -101,6 +101,27 @@ class Client:
         except urllib.error.URLError as err:
             raise WorkflowError(f"GET {path} failed: {err}") from err
 
+    def get_with_headers(self, path, auth=False):
+        headers = {}
+        if auth:
+            headers["X-API-Key"] = self.apikey
+
+        request = urllib.request.Request(
+            f"{self.base_url}{path}", headers=headers, method="GET"
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return (
+                    response.status,
+                    parse_json(response.read().decode("utf-8")),
+                    response.headers,
+                )
+        except urllib.error.HTTPError as err:
+            payload = err.read().decode("utf-8", errors="replace")
+            raise WorkflowError(f"GET {path} failed with {err.code}: {payload}") from err
+        except urllib.error.URLError as err:
+            raise WorkflowError(f"GET {path} failed: {err}") from err
+
     def post(self, path, body, auth=False):
         headers = {"Content-Type": "application/json"}
         if auth:
@@ -165,6 +186,15 @@ class StatusClient:
 
         return self._request("GET", path, headers=request_headers)
 
+    def get_with_headers(self, path, auth=False, headers=None):
+        request_headers = {}
+        if headers:
+            request_headers.update(headers)
+        if auth:
+            request_headers["X-API-Key"] = self.apikey
+
+        return self._request_with_headers("GET", path, headers=request_headers)
+
     def post(self, path, body, auth=False, headers=None):
         request_headers = {"Content-Type": "application/json"}
         if headers:
@@ -174,7 +204,20 @@ class StatusClient:
 
         return self._request("POST", path, body=body, headers=request_headers)
 
+    def post_with_headers(self, path, body, auth=False, headers=None):
+        request_headers = {"Content-Type": "application/json"}
+        if headers:
+            request_headers.update(headers)
+        if auth:
+            request_headers["X-API-Key"] = self.apikey
+
+        return self._request_with_headers("POST", path, body=body, headers=request_headers)
+
     def _request(self, method, path, body=None, headers=None):
+        status, payload, _ = self._request_with_headers(method, path, body=body, headers=headers)
+        return status, payload
+
+    def _request_with_headers(self, method, path, body=None, headers=None):
         url = f"{self.base_url}{path}"
         data = None
         if body is not None:
@@ -189,9 +232,17 @@ class StatusClient:
 
         try:
             with urllib.request.urlopen(request, timeout=60) as response:
-                return response.status, parse_json(response.read().decode("utf-8"))
+                return (
+                    response.status,
+                    parse_json(response.read().decode("utf-8")),
+                    response.headers,
+                )
         except urllib.error.HTTPError as err:
-            return err.code, parse_json(err.read().decode("utf-8", errors="replace"))
+            return (
+                err.code,
+                parse_json(err.read().decode("utf-8", errors="replace")),
+                err.headers,
+            )
         except urllib.error.URLError as err:
             raise WorkflowError(f"{method} {path} failed: {err}") from err
 
@@ -208,6 +259,13 @@ def require_hex(value, field):
         int(value, 16)
     except ValueError as err:
         raise WorkflowError(f"{field} must be hex") from err
+
+
+def require_request_id(headers):
+    request_id = headers.get("X-Request-Id")
+    require(isinstance(request_id, str), "response must include X-Request-Id")
+    require(len(request_id) == 32, "X-Request-Id must be 32 hex characters")
+    require_hex(request_id, "X-Request-Id")
 
 
 def require_kid(value, field):

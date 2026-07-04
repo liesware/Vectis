@@ -111,6 +111,47 @@ impl PostgresStorage {
         row.ok_or_else(|| crate::error::not_found(format!("ops key not found: {id}")))
     }
 
+    pub async fn update_ops_key_properties_if_current(
+        &self,
+        id: &str,
+        current_properties: &str,
+        new_properties: &str,
+    ) -> Result<OpsKeyRow, DynError> {
+        let mut tx = self.pool.begin().await?;
+        let result = sqlx::query(
+            "
+            UPDATE ops_keys
+            SET properties = $1
+            WHERE id = $2
+              AND properties = $3
+            ",
+        )
+        .bind(new_properties)
+        .bind(id)
+        .bind(current_properties)
+        .execute(&mut *tx)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            let row = fetch_ops_keys_tx(&mut tx, id).await?;
+            tx.commit().await?;
+
+            if row.is_none() {
+                return Err(crate::error::not_found(format!("ops key not found: {id}")));
+            }
+
+            return Err(crate::error::invalid_input(
+                "ops key properties changed concurrently; retry lifecycle update",
+            ));
+        }
+
+        let row = fetch_ops_keys_tx(&mut tx, id).await?;
+        tx.commit().await?;
+        info!(id, "updated ops key properties with compare-and-swap");
+
+        row.ok_or_else(|| crate::error::not_found(format!("ops key not found: {id}")))
+    }
+
     pub async fn health_check(&self) -> Result<(), DynError> {
         sqlx::query("SELECT 1").execute(&self.pool).await?;
 

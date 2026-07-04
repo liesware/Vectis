@@ -9,6 +9,9 @@ echo "\n###########################"
 echo "\n### Cargo fmt"
 cargo fmt
 
+echo "\n### Cargo audit"
+cargo audit
+
 echo "\n### Integration Test - Botan"
 cargo test --test crypto_integration
 
@@ -20,6 +23,7 @@ cargo test
 
 echo "\n### Cargo clippy"
 cargo clippy --all-targets --all-features -- -D warnings
+# cargo clippy --all-targets --all-features -- -W clippy::pedantic
 
 echo "\n\n"
 read -p "Start Vectis now, then press Enter to run HTTP tests: "

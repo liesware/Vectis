@@ -26,7 +26,7 @@ pub fn init() -> Result<PrometheusHandle, crate::error::DynError> {
 }
 
 pub fn record_http_request(method: &str, endpoint: &str, status: u16, secs: f64) {
-    let method = method.to_string();
+    let method = normalized_http_method(method).to_string();
     let endpoint = endpoint.to_string();
     let status = status.to_string();
 
@@ -44,6 +44,21 @@ pub fn record_http_request(method: &str, endpoint: &str, status: u16, secs: f64)
         "endpoint" => endpoint,
     )
     .record(secs);
+}
+
+fn normalized_http_method(method: &str) -> &'static str {
+    match method {
+        "GET" => "GET",
+        "POST" => "POST",
+        "PUT" => "PUT",
+        "DELETE" => "DELETE",
+        "PATCH" => "PATCH",
+        "HEAD" => "HEAD",
+        "OPTIONS" => "OPTIONS",
+        "CONNECT" => "CONNECT",
+        "TRACE" => "TRACE",
+        _ => "other",
+    }
 }
 
 pub fn record_auth(outcome: &str) {
@@ -102,4 +117,25 @@ pub fn record_crypto_operation(operation: &str, result: &str) {
         "result" => result.to_string()
     )
     .increment(1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalized_http_method_accepts_standard_methods() {
+        for method in [
+            "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "CONNECT", "TRACE",
+        ] {
+            assert_eq!(normalized_http_method(method), method);
+        }
+    }
+
+    #[test]
+    fn normalized_http_method_maps_extensions_to_other() {
+        for method in ["FOO", "FOO123", "get", "", "BREW"] {
+            assert_eq!(normalized_http_method(method), "other");
+        }
+    }
 }

@@ -121,6 +121,37 @@ impl SqliteStorage {
         self.get_ops_keys(id).await
     }
 
+    pub async fn update_ops_key_properties_if_current(
+        &self,
+        id: &str,
+        current_properties: &str,
+        new_properties: &str,
+    ) -> Result<OpsKeyRow, DynError> {
+        let result = sqlx::query(
+            "
+            UPDATE ops_keys
+            SET properties = ?
+            WHERE id = ?
+              AND properties = ?
+            ",
+        )
+        .bind(new_properties)
+        .bind(id)
+        .bind(current_properties)
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            self.get_ops_keys(id).await?;
+            return Err(crate::error::invalid_input(
+                "ops key properties changed concurrently; retry lifecycle update",
+            ));
+        }
+
+        info!(id, "updated ops key properties with compare-and-swap");
+        self.get_ops_keys(id).await
+    }
+
     pub async fn health_check(&self) -> Result<(), DynError> {
         sqlx::query("SELECT 1").execute(&self.pool).await?;
 
@@ -200,4 +231,118 @@ fn validate_column(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::{VectisError, is_not_found};
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    async fn test_storage(name: &str) -> (SqliteStorage, PathBuf) {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time must be valid")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "vectis-sqlite-cas-{}-{name}-{nonce}.db",
+            std::process::id()
+        ));
+
+        let options = SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true);
+        let pool = SqlitePool::connect_with(options)
+            .await
+            .expect("test sqlite must connect");
+        sqlx::query(
+            "
+            CREATE TABLE ops_keys (
+                id VARCHAR(128) PRIMARY KEY,
+                enc_keys VARCHAR(10240) NOT NULL,
+                properties VARCHAR(10240) NOT NULL
+            )
+            ",
+        )
+        .execute(&pool)
+        .await
+        .expect("test schema must be created");
+        pool.close().await;
+
+        let storage = SqliteStorage::new(&path)
+            .await
+            .expect("test storage must validate");
+
+        (storage, path)
+    }
+
+    async fn cleanup(path: PathBuf) {
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn cas_update_succeeds_when_properties_match() {
+        let (storage, path) = test_storage("match").await;
+        storage
+            .save_ops_keys("key-1", "enc", "properties-v1")
+            .await
+            .expect("row must be inserted");
+
+        let row = storage
+            .update_ops_key_properties_if_current("key-1", "properties-v1", "properties-v2")
+            .await
+            .expect("matching CAS must update");
+
+        assert_eq!(row.properties, "properties-v2");
+        cleanup(path).await;
+    }
+
+    #[tokio::test]
+    async fn cas_update_rejects_stale_properties() {
+        let (storage, path) = test_storage("stale").await;
+        storage
+            .save_ops_keys("key-1", "enc", "properties-v1")
+            .await
+            .expect("row must be inserted");
+        storage
+            .update_ops_key_properties_if_current("key-1", "properties-v1", "properties-v2")
+            .await
+            .expect("first CAS must update");
+
+        let err = match storage
+            .update_ops_key_properties_if_current("key-1", "properties-v1", "properties-v3")
+            .await
+        {
+            Ok(_) => panic!("stale CAS must fail"),
+            Err(err) => err,
+        };
+        assert!(matches!(
+            err.downcast_ref::<VectisError>(),
+            Some(VectisError::InvalidInput(message))
+                if message == "ops key properties changed concurrently; retry lifecycle update"
+        ));
+
+        let row = storage
+            .get_ops_keys("key-1")
+            .await
+            .expect("row must still exist");
+        assert_eq!(row.properties, "properties-v2");
+        cleanup(path).await;
+    }
+
+    #[tokio::test]
+    async fn cas_update_missing_key_returns_not_found() {
+        let (storage, path) = test_storage("missing").await;
+
+        let err = match storage
+            .update_ops_key_properties_if_current("missing", "properties-v1", "properties-v2")
+            .await
+        {
+            Ok(_) => panic!("missing row must fail"),
+            Err(err) => err,
+        };
+        assert!(is_not_found(err.as_ref()));
+        cleanup(path).await;
+    }
 }

@@ -84,10 +84,11 @@ satisfy them need compensating controls.
    indefinitely: `created_at` is informative, there is no freshness window and
    no nonce ledger. Consumers that require exactly-once semantics must
    implement idempotency or replay tracking themselves.
-2. **Vectis runs on a trusted internal network.** There is no built-in rate
-   limiting, request timeout tuning, or concurrency capping. Exposing a Vectis
-   instance publicly requires a reverse proxy or gateway providing those
-   controls.
+2. **Vectis runs on a trusted internal network.** Expensive Botan operations are
+   isolated from Tokio async workers with blocking tasks, but this is not rate
+   limiting. There is no built-in request throttling, timeout policy, or CPU
+   budget enforcement. Exposing a Vectis instance publicly requires a reverse
+   proxy, gateway, or ingress providing those controls.
 3. **Config rollback protection is the operator's responsibility.** The config
    signature proves authenticity and integrity, not freshness. An attacker who
    can replace both `config.json` and `config_sign.json` with an older, validly
@@ -112,7 +113,10 @@ Vectis is not, and does not replace:
   systems, or traditional DLP products (see the README);
 - protection against a malicious operator (the operator is the root of trust);
 - protection against compromise of the host or the process memory;
-- multi-instance deployments with shared state (single SQLite backend today);
+- automatic runtime state propagation between nodes; clustered instances share
+  durable storage (PostgreSQL) but not in-memory state, and cross-node changes
+  become visible only through explicit reload, restart, or lazy-load (see
+  `doc/Clustering.md`);
 - denial-of-service resistance.
 
 ## Residual Risks And Known Gaps

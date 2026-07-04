@@ -251,6 +251,15 @@ pub fn sign_timestamp_from_state(
     debug!(kid = %id, "loading key for timestamp signing");
     let loaded_key = keys::get_loaded_key(keys_db_state, id)?;
 
+    sign_timestamp(&loaded_key, input)
+}
+
+pub(crate) fn sign_timestamp_with_loaded_key(
+    loaded_key: &LoadedOpsKey,
+    input: SignInput,
+) -> Result<TimestampToken, DynError> {
+    let input = validate_sign_input(input)?;
+
     sign_timestamp(loaded_key, input)
 }
 
@@ -384,6 +393,15 @@ pub fn verify_timestamp_from_state(
     let kid = token.kid();
     debug!(kid = %kid, "loading key for timestamp verification");
     let loaded_key = keys::get_loaded_key(keys_db_state, kid)?;
+
+    verify_timestamp(&loaded_key, token)
+}
+
+pub(crate) fn verify_timestamp_with_loaded_key(
+    loaded_key: &LoadedOpsKey,
+    token: &TimestampToken,
+) -> Result<VerificationOutput, DynError> {
+    validate_timestamp_token(token)?;
 
     verify_timestamp(loaded_key, token)
 }

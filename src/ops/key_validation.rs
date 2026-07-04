@@ -43,6 +43,7 @@ struct VariantKeyValidation {
 }
 
 pub fn validate_key_material(
+    config: &config::AppConfig,
     output: &KeyMaterialOutput,
     aad: &str,
     message: &str,
@@ -60,7 +61,8 @@ pub fn validate_key_material(
         "message ready for key validation"
     );
 
-    let symmetric_valid = validate_symmetric_encryption(output.keys().symmetric(), message)?;
+    let symmetric_valid =
+        validate_symmetric_encryption(config, output.keys().symmetric(), message)?;
     let eddsa_valid = validate_eddsa(output.keys().eddsa(), message)?;
     let xecdh_valid = validate_xecdh(output.keys().xecdh())?;
     let ml_dsa_valid = validate_ml_dsa(output.keys().ml_dsa(), message)?;
@@ -103,10 +105,10 @@ pub fn validate_key_material(
 }
 
 fn validate_symmetric_encryption(
+    config: &config::AppConfig,
     keys: &VariantSymmetricKey,
     message: &str,
 ) -> Result<bool, DynError> {
-    let config = config::app_config()?;
     let cipher = symmetric_cipher(keys.variant())?;
     validation::validate_symmetric_key("symmetric", keys.key_hex(), cipher.key_size_bytes)?;
 
@@ -164,10 +166,10 @@ fn validate_xecdh(keys: &VariantKeyAgreementKeyPair) -> Result<bool, DynError> {
 
     let peer_private_key = crypto::create_x_key_agreement_private_key(keys.variant())?;
     let peer_public_key = crypto::key_agreement_public_key(&peer_private_key)?;
-    let shared_key = crypto::agree_key(&private_key, &peer_public_key)?;
-    let peer_shared_key = crypto::agree_key(&peer_private_key, &public_key)?;
+    let shared_key = Zeroizing::new(crypto::agree_key(&private_key, &peer_public_key)?);
+    let peer_shared_key = Zeroizing::new(crypto::agree_key(&peer_private_key, &public_key)?);
 
-    Ok(shared_key == peer_shared_key)
+    Ok(shared_key.as_slice() == peer_shared_key.as_slice())
 }
 
 fn validate_ml_dsa(keys: &VariantDerKeyPair, message: &str) -> Result<bool, DynError> {
@@ -199,39 +201,44 @@ fn validate_ml_kem(keys: &VariantDerKeyPair) -> Result<bool, DynError> {
     let private_key = crypto::load_private_key_der_hex(keys.private_key_der_hex())?;
     let public_key = crypto::load_public_key_der_hex(keys.public_key_der_hex())?;
     let peer_private_key = crypto::create_ml_kem_private_key(&variant)?;
-    let salt = crypto::random_bytes(12)?;
+    let salt = Zeroizing::new(crypto::random_bytes(12)?);
     let shared_key_len = 32;
-    let encapsulation = crypto::encapsulate_ml_kem_shared_key(&public_key, &salt, shared_key_len)?;
-    let decapsulated_shared_key = crypto::decapsulate_ml_kem_shared_key(
+    let encapsulation =
+        crypto::encapsulate_ml_kem_shared_key(&public_key, salt.as_slice(), shared_key_len)?;
+    let encapsulated_key = encapsulation.encapsulated_key;
+    let encapsulated_shared_key = Zeroizing::new(encapsulation.shared_key);
+    let decapsulated_shared_key = Zeroizing::new(crypto::decapsulate_ml_kem_shared_key(
         &private_key,
-        &encapsulation.encapsulated_key,
-        &salt,
+        &encapsulated_key,
+        salt.as_slice(),
         shared_key_len,
-    )?;
-    let peer_decapsulated_shared_key = crypto::decapsulate_ml_kem_shared_key(
+    )?);
+    let peer_decapsulated_shared_key = Zeroizing::new(crypto::decapsulate_ml_kem_shared_key(
         &peer_private_key,
-        &encapsulation.encapsulated_key,
-        &salt,
+        &encapsulated_key,
+        salt.as_slice(),
         shared_key_len,
-    )?;
-    let hkdf_salt = crypto::random_bytes(32)?;
+    )?);
+    let hkdf_salt = Zeroizing::new(crypto::random_bytes(32)?);
     let hkdf_info = format!("key-material-validation:ml-kem:{}", keys.variant());
-    let sender_key = crypto::hkdf_sha256(
-        &encapsulation.shared_key,
-        &hkdf_salt,
+    let sender_key = Zeroizing::new(crypto::hkdf_sha256(
+        encapsulated_shared_key.as_slice(),
+        hkdf_salt.as_slice(),
         hkdf_info.as_bytes(),
         32,
-    )?;
-    let receiver_key = crypto::hkdf_sha256(
-        &decapsulated_shared_key,
-        &hkdf_salt,
+    )?);
+    let receiver_key = Zeroizing::new(crypto::hkdf_sha256(
+        decapsulated_shared_key.as_slice(),
+        hkdf_salt.as_slice(),
         hkdf_info.as_bytes(),
         32,
-    )?;
+    )?);
 
-    Ok(encapsulation.shared_key == decapsulated_shared_key
-        && encapsulation.shared_key != peer_decapsulated_shared_key
-        && sender_key == receiver_key)
+    Ok(
+        encapsulated_shared_key.as_slice() == decapsulated_shared_key.as_slice()
+            && encapsulated_shared_key.as_slice() != peer_decapsulated_shared_key.as_slice()
+            && sender_key.as_slice() == receiver_key.as_slice(),
+    )
 }
 
 fn ensure_valid(name: &str, valid: bool) -> Result<(), DynError> {

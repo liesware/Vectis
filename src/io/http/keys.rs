@@ -55,7 +55,14 @@ pub async fn create_endpoint(
         "keys create request accepted"
     );
 
-    match ops::keys::create_keys(state.storage(), state.internal_keys(), request).await {
+    match ops::keys::create_keys(
+        state.config(),
+        state.storage(),
+        state.internal_keys(),
+        request,
+    )
+    .await
+    {
         Ok(output) => {
             let loaded_key = match ops::keys::load_keys_db_entry(
                 state.storage(),
@@ -84,25 +91,20 @@ pub async fn create_endpoint(
                 }
             };
 
+            info!(
+                endpoint = "POST /keys",
+                kid = %output.id,
+                info = %loaded_key.aad(),
+                hash_algorithm = %loaded_key.key_material().hash_variant(),
+                symmetric_algorithm = %loaded_key.keys().symmetric().variant(),
+                eddsa_algorithm = %loaded_key.keys().eddsa().variant(),
+                xecdh_algorithm = %loaded_key.keys().xecdh().variant(),
+                ml_dsa_variant = %loaded_key.keys().ml_dsa().variant(),
+                ml_kem_variant = %loaded_key.keys().ml_kem().variant(),
+                "keys create response ready"
+            );
             state.upsert_keys_db_entry(loaded_key).await;
             state.refresh_loaded_gauges().await;
-            let loaded_key = state
-                .with_keys_db_state(|keys_db_state| keys_db_state.get(&output.id).cloned())
-                .await;
-            if let Some(loaded_key) = loaded_key {
-                info!(
-                    endpoint = "POST /keys",
-                    kid = %output.id,
-                    info = %loaded_key.aad(),
-                    hash_algorithm = %loaded_key.key_material().hash_variant(),
-                    symmetric_algorithm = %loaded_key.keys().symmetric().variant(),
-                    eddsa_algorithm = %loaded_key.keys().eddsa().variant(),
-                    xecdh_algorithm = %loaded_key.keys().xecdh().variant(),
-                    ml_dsa_variant = %loaded_key.keys().ml_dsa().variant(),
-                    ml_kem_variant = %loaded_key.keys().ml_kem().variant(),
-                    "keys create response ready"
-                );
-            }
 
             audit::operation_success(
                 "key.create.success",

@@ -102,7 +102,7 @@ There is no cluster-wide config reload.
 Lifecycle state is loaded into local memory with the rest of the key properties.
 
 If another node changes a key lifecycle state in PostgreSQL, this node does not
-magically receive that change if the key is already loaded. This node observes
+automatically receive that change if the key is already loaded. This node observes
 the change after:
 
 - `POST /keys/reload`;
@@ -133,7 +133,7 @@ not coordinate node membership.
 
 Vectis disaster recovery is database-centered, but not database-only.
 
-To recover a Vectis deployment, you need matching copies of:
+Recovering a Vectis deployment needs matching copies of:
 
 - PostgreSQL data;
 - encrypted init key material;

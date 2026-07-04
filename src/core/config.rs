@@ -26,6 +26,7 @@ pub const DEFAULT_INIT_KEYS_FILE: &str = "init.json";
 pub const CONFIG_FILE_MAX_SIZE_BYTES: u64 = 8 * 1024 * 1024;
 pub const CONFIG_SIGN_FILE_MAX_SIZE_BYTES: u64 = 1024 * 1024;
 
+#[derive(Clone)]
 pub struct AppConfig {
     pub http_bind_addr: SocketAddr,
     pub mode: String,

@@ -3,7 +3,8 @@ use crate::error::DynError;
 use std::env;
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use tracing::info;
 use zeroize::Zeroizing;
 
@@ -39,6 +40,12 @@ fn read_env_unseal_key() -> Result<Option<Zeroizing<String>>, DynError> {
 
 fn read_file_unseal_key() -> Result<Option<Zeroizing<String>>, DynError> {
     let (path, explicit_path) = unseal_key_file_path()?;
+    match validate_unseal_key_file_permissions(&path) {
+        Ok(()) => {}
+        Err(err) if is_not_found(err.as_ref()) && !explicit_path => return Ok(None),
+        Err(err) => return Err(err),
+    }
+
     match fs::read_to_string(&path) {
         Ok(value) => {
             info!(path = %path.display(), "reading init unseal key from file");
@@ -97,6 +104,29 @@ fn resolve_unseal_key_file_path(
     Ok((PathBuf::from(DEFAULT_UNSEAL_KEY_FILE), false))
 }
 
+fn validate_unseal_key_file_permissions(path: &Path) -> Result<(), DynError> {
+    let metadata = fs::metadata(path)?;
+    if !metadata.is_file() {
+        return Err(crate::error::invalid_input(
+            "unseal key file must be a regular file",
+        ));
+    }
+
+    let mode = metadata.permissions().mode() & 0o777;
+    if mode != 0o600 {
+        return Err(crate::error::invalid_input(
+            "unseal key file must have 0600 permissions",
+        ));
+    }
+
+    Ok(())
+}
+
+fn is_not_found(err: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
+    err.downcast_ref::<io::Error>()
+        .is_some_and(|err| err.kind() == io::ErrorKind::NotFound)
+}
+
 fn env_file_value(key: &str) -> Result<Option<String>, DynError> {
     let content = match fs::read_to_string(".env") {
         Ok(content) => content,
@@ -126,6 +156,7 @@ fn env_file_value(key: &str) -> Result<Option<String>, DynError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
     use std::sync::{Mutex, MutexGuard};
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -184,11 +215,19 @@ mod tests {
         ))
     }
 
+    fn write_unseal_key_file(path: &Path, value: &str) {
+        fs::write(path, value).expect("write unseal test file");
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .expect("set unseal test file permissions");
+    }
+
     #[test]
     fn env_key_wins_over_file() {
         with_isolated_env(|| {
             let path = unique_path("env_wins");
             fs::write(&path, OTHER_VALID_KEY).expect("write unseal test file");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
+                .expect("set insecure unseal test file permissions");
             unsafe {
                 env::set_var("VECTIS_UNSEAL_KEY", VALID_KEY);
                 env::set_var("VECTIS_UNSEAL_KEY_FILE", &path);
@@ -214,13 +253,32 @@ mod tests {
     fn explicit_file_key_works() {
         with_isolated_env(|| {
             let path = unique_path("file_works");
-            fs::write(&path, VALID_KEY).expect("write unseal test file");
+            write_unseal_key_file(&path, VALID_KEY);
             unsafe { env::set_var("VECTIS_UNSEAL_KEY_FILE", &path) };
 
             let key = read_file_unseal_key()
                 .expect("read explicit file")
                 .expect("explicit file key");
             assert_eq!(&*key, VALID_KEY);
+
+            let _ = fs::remove_file(path);
+        });
+    }
+
+    #[test]
+    fn explicit_file_key_rejects_insecure_permissions() {
+        with_isolated_env(|| {
+            let path = unique_path("file_insecure_permissions");
+            fs::write(&path, VALID_KEY).expect("write unseal test file");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
+                .expect("set insecure unseal test file permissions");
+            unsafe { env::set_var("VECTIS_UNSEAL_KEY_FILE", &path) };
+
+            let err = read_file_unseal_key().expect_err("insecure file permissions must fail");
+            assert!(
+                err.to_string()
+                    .contains("unseal key file must have 0600 permissions")
+            );
 
             let _ = fs::remove_file(path);
         });
@@ -250,7 +308,7 @@ mod tests {
     fn invalid_file_key_fails() {
         with_isolated_env(|| {
             let path = unique_path("invalid_file");
-            fs::write(&path, "not-hex").expect("write unseal test file");
+            write_unseal_key_file(&path, "not-hex");
             unsafe { env::set_var("VECTIS_UNSEAL_KEY_FILE", &path) };
 
             assert!(read_file_unseal_key().is_err());

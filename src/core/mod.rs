@@ -1,4 +1,5 @@
 pub mod audit;
+pub mod blocking;
 pub mod canonical;
 pub mod config;
 pub mod config_file;

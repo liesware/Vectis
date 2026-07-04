@@ -29,7 +29,7 @@ use crate::core::permissions::AuthenticatedClient;
 use crate::core::remote_routes::{PeerPublicKeys, RemoteRoute};
 use crate::core::routes::FinalAppRoute;
 use crate::core::storage::StorageState;
-use crate::core::{audit, metrics as core_metrics};
+use crate::core::{audit, blocking, metrics as core_metrics};
 use crate::error::DynError;
 use crate::ops::init::{InitValidationOutput, ValidatedInitState};
 use crate::ops::internal_keys::InternalDerivedKeysState;
@@ -90,10 +90,6 @@ impl HttpState {
 
     fn validation(&self) -> &InitValidationOutput {
         self.init_state.validation()
-    }
-
-    fn init_state(&self) -> &ValidatedInitState {
-        &self.init_state
     }
 
     fn internal_keys(&self) -> &InternalDerivedKeysState {
@@ -216,24 +212,29 @@ impl HttpState {
             let keys_db_state = self.keys_db_state.read().await;
             keys_db_state.ids()
         };
-        let reloaded = crate::core::config_file::reload_config_state(
-            self.config(),
-            |config_path, config_content| {
-                let config_sign_path = crate::core::config_file::config_signature_path(
-                    config_path,
-                    &self.config.config_sign_path,
-                );
-                let signature_content =
-                    crate::core::config_file::read_config_signature_file(&config_sign_path)?;
-                crate::ops::sign::verify_config_file_signature(
-                    self.init_state(),
-                    config_path,
-                    config_content,
-                    &signature_content,
-                )
-            },
-            |kid| loaded_key_ids.iter().any(|id| id == kid),
-        )?;
+        let config = Arc::clone(&self.config);
+        let init_state = (*self.init_state).clone();
+        let reloaded = blocking::spawn_blocking_crypto(move || {
+            crate::core::config_file::reload_config_state(
+                &config,
+                |config_path, config_content| {
+                    let config_sign_path = crate::core::config_file::config_signature_path(
+                        config_path,
+                        &config.config_sign_path,
+                    );
+                    let signature_content =
+                        crate::core::config_file::read_config_signature_file(&config_sign_path)?;
+                    crate::ops::sign::verify_config_file_signature(
+                        &init_state,
+                        config_path,
+                        config_content,
+                        &signature_content,
+                    )
+                },
+                |kid| loaded_key_ids.iter().any(|id| id == kid),
+            )
+        })
+        .await?;
         let mut config_state = self.config_state.write().await;
         *config_state = Zeroizing::new(reloaded);
 
@@ -317,6 +318,8 @@ fn record_operation_denied_metric(event_name: &str) {
         "message.send.denied" => core_metrics::record_message("send", "denied"),
         "message.receive.denied" => core_metrics::record_message("receive", "denied"),
         "message.decrypt.denied" => core_metrics::record_message("decrypt", "denied"),
+        "message.internal.encrypt.denied" => core_metrics::record_message("send", "denied"),
+        "message.internal.decrypt.denied" => core_metrics::record_message("decrypt", "denied"),
         "sign.denied" => core_metrics::record_crypto_operation("sign", "failed"),
         "self_test.denied" => {}
         _ => {}

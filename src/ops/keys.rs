@@ -1,4 +1,4 @@
-use crate::core::{config, crypto, storage::StorageState, validation};
+use crate::core::{blocking, config, crypto, storage::StorageState, validation};
 use crate::error::DynError;
 use crate::ops::internal_keys::InternalDerivedKeysState;
 use crate::ops::key_material::{
@@ -7,6 +7,8 @@ use crate::ops::key_material::{
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::{error, info};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -20,12 +22,12 @@ const PROPERTY_PROFILES: &[&str] = &[
 ];
 const LIFECYCLE_STATUSES: &[&str] = &["active", "disabled", "retired", "compromised", "destroyed"];
 
-#[derive(Serialize)]
 pub struct KeysDbState {
-    keys_db: Vec<LoadedOpsKey>,
+    keys_db: Vec<Arc<LoadedOpsKey>>,
+    by_id: HashMap<String, usize>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Serialize)]
 pub(crate) struct LoadedOpsKey {
     id: String,
     aad: String,
@@ -35,6 +37,16 @@ pub(crate) struct LoadedOpsKey {
 }
 
 impl KeysDbState {
+    fn from_keys(keys_db: Vec<Arc<LoadedOpsKey>>) -> Self {
+        let by_id = keys_db
+            .iter()
+            .enumerate()
+            .map(|(index, loaded_key)| (loaded_key.id.clone(), index))
+            .collect();
+
+        Self { keys_db, by_id }
+    }
+
     pub fn len(&self) -> usize {
         self.keys_db.len()
     }
@@ -43,12 +55,15 @@ impl KeysDbState {
         self.keys_db.is_empty()
     }
 
-    pub(crate) fn get(&self, id: &str) -> Option<&LoadedOpsKey> {
-        self.keys_db.iter().find(|loaded_key| loaded_key.id == id)
+    pub(crate) fn get(&self, id: &str) -> Option<Arc<LoadedOpsKey>> {
+        self.by_id
+            .get(id)
+            .and_then(|index| self.keys_db.get(*index))
+            .map(Arc::clone)
     }
 
     pub fn contains_id(&self, id: &str) -> bool {
-        self.keys_db.iter().any(|loaded_key| loaded_key.id == id)
+        self.by_id.contains_key(id)
     }
 
     pub fn ids(&self) -> Vec<String> {
@@ -59,16 +74,16 @@ impl KeysDbState {
     }
 
     pub(crate) fn upsert(&mut self, loaded_key: LoadedOpsKey) {
-        if let Some(index) = self
-            .keys_db
-            .iter()
-            .position(|existing_key| existing_key.id == loaded_key.id)
-        {
-            let mut existing_key = self.keys_db.remove(index);
-            existing_key.zeroize();
+        let id = loaded_key.id.clone();
+        let loaded_key = Arc::new(loaded_key);
+        if let Some(index) = self.by_id.get(&id).copied() {
+            self.keys_db[index] = loaded_key;
+            return;
         }
 
+        let index = self.keys_db.len();
         self.keys_db.push(loaded_key);
+        self.by_id.insert(id, index);
     }
 }
 
@@ -162,10 +177,10 @@ fn lifecycle_error(message: &str) -> Result<(), DynError> {
     Err(crate::error::forbidden(message))
 }
 
-pub(crate) fn get_loaded_key<'a>(
-    keys_db_state: &'a KeysDbState,
+pub(crate) fn get_loaded_key(
+    keys_db_state: &KeysDbState,
     id: &str,
-) -> Result<&'a LoadedOpsKey, DynError> {
+) -> Result<Arc<LoadedOpsKey>, DynError> {
     let id = KeyId::parse(id)?;
 
     keys_db_state.get(id.as_str()).ok_or_else(|| {
@@ -217,12 +232,15 @@ pub fn key_properties_from_state(
     let id = KeyId::parse(id)?;
     let loaded_key = get_loaded_key(keys_db_state, id.as_str())?;
 
-    Ok(key_properties_output(loaded_key))
+    Ok(key_properties_output(&loaded_key))
 }
 
 impl Zeroize for KeysDbState {
     fn zeroize(&mut self) {
-        self.keys_db.zeroize();
+        while let Some(loaded_key) = self.keys_db.pop() {
+            drop(loaded_key);
+        }
+        self.by_id.clear();
     }
 }
 
@@ -233,6 +251,12 @@ impl Zeroize for LoadedOpsKey {
         self.properties_aad.zeroize();
         self.key_material.zeroize();
         self.properties.zeroize();
+    }
+}
+
+impl Drop for LoadedOpsKey {
+    fn drop(&mut self) {
+        self.zeroize();
     }
 }
 
@@ -369,13 +393,40 @@ struct CryptoProfile {
     ml_kem_variant: &'static str,
 }
 
+struct CreatedOpsKeyRecord {
+    id: String,
+    enc_keys: String,
+    properties: String,
+}
+
 pub async fn create_keys(
+    config: &config::AppConfig,
     storage: &StorageState,
     internal_keys: &InternalDerivedKeysState,
     input: CreateKeysInput,
 ) -> Result<CreateKeysOutput, DynError> {
-    let config = config::app_config()?;
-    let input = resolve_keys_input(input, &config)?;
+    let config = config.clone();
+    let db_key = Zeroizing::new(internal_keys.db_key().to_vec());
+    let properties_key = Zeroizing::new(internal_keys.properties_key().to_vec());
+    let record = blocking::spawn_blocking_crypto(move || {
+        let input = resolve_keys_input(input, &config)?;
+        create_ops_key_record(&config, db_key, properties_key, input)
+    })
+    .await?;
+
+    storage
+        .save_ops_keys(&record.id, &record.enc_keys, &record.properties)
+        .await?;
+
+    Ok(CreateKeysOutput { id: record.id })
+}
+
+fn create_ops_key_record(
+    config: &config::AppConfig,
+    db_key: Zeroizing<Vec<u8>>,
+    properties_key: Zeroizing<Vec<u8>>,
+    input: ResolvedKeysInput,
+) -> Result<CreatedOpsKeyRecord, DynError> {
     let keys = Zeroizing::new(create_stored_key_material(&input)?);
     let plaintext = Zeroizing::new(serde_json::to_string_pretty(&*keys)?);
 
@@ -391,7 +442,7 @@ pub async fn create_keys(
         ("profile", &input.profile),
         ("timestamp", &input.timestamp),
     ]);
-    let keys_b64 = encrypt_internal_payload(&plaintext, internal_keys.db_key(), &nonce, &aad)?;
+    let keys_b64 = encrypt_internal_payload(&plaintext, &db_key, &nonce, &aad)?;
     let nonce_b64 = general_purpose::STANDARD.encode(&*nonce);
     let aad_b64 = general_purpose::STANDARD.encode(aad.as_bytes());
     let id = create_key_id(&keys_b64)?;
@@ -414,7 +465,7 @@ pub async fn create_keys(
     ]);
     let properties_b64 = encrypt_internal_payload(
         &properties_plaintext,
-        internal_keys.properties_key(),
+        &properties_key,
         &properties_nonce,
         &properties_aad,
     )?;
@@ -422,9 +473,11 @@ pub async fn create_keys(
     let properties_aad_b64 = general_purpose::STANDARD.encode(properties_aad.as_bytes());
     let properties = format!("{properties_b64}.{properties_nonce_b64}.{properties_aad_b64}");
 
-    storage.save_ops_keys(&id, &enc_keys, &properties).await?;
-
-    Ok(CreateKeysOutput { id })
+    Ok(CreatedOpsKeyRecord {
+        id,
+        enc_keys,
+        properties,
+    })
 }
 
 fn create_key_id(keys_b64: &str) -> Result<String, DynError> {
@@ -524,7 +577,7 @@ pub async fn load_keys_db_state(
         match load_ops_key_from_row(internal_keys, row) {
             Ok(loaded_key) => {
                 info!(id = %loaded_key.id, "decrypted ops key loaded from db");
-                keys_db.push(loaded_key);
+                keys_db.push(Arc::new(loaded_key));
             }
             Err(err) => {
                 error!(id = %id, error = %err, "failed to decrypt ops key from db");
@@ -532,7 +585,7 @@ pub async fn load_keys_db_state(
         }
     }
 
-    Ok(Zeroizing::new(KeysDbState { keys_db }))
+    Ok(Zeroizing::new(KeysDbState::from_keys(keys_db)))
 }
 
 pub(crate) async fn load_keys_db_entry(
@@ -576,7 +629,7 @@ pub async fn update_key_lifecycle(
     let encrypted_properties =
         encrypt_ops_key_properties_payload(internal_keys, &properties.output, &properties.aad)?;
     storage
-        .update_ops_key_properties(id.as_str(), &encrypted_properties)
+        .update_ops_key_properties_if_current(id.as_str(), &row.properties, &encrypted_properties)
         .await?;
 
     Ok(UpdateLifecycleOutput {
@@ -674,7 +727,7 @@ fn decrypt_ops_keys_payload(
         &nonce,
         &aad,
     )?);
-    let plaintext = Zeroizing::new(String::from_utf8((*plaintext_bytes).clone())?);
+    let plaintext = zeroizing_string_from_utf8(plaintext_bytes)?;
     let output = serde_json::from_str(&plaintext)?;
 
     Ok(DecryptedOpsKeys {
@@ -709,7 +762,7 @@ fn decrypt_ops_key_properties_payload(
         &nonce,
         &aad,
     )?);
-    let plaintext = Zeroizing::new(String::from_utf8((*plaintext_bytes).clone())?);
+    let plaintext = zeroizing_string_from_utf8(plaintext_bytes)?;
     let output = serde_json::from_str(&plaintext)?;
 
     Ok(DecryptedOpsKeyProperties {
@@ -727,6 +780,19 @@ fn split_internal_payload<'a>(field: &str, value: &'a str) -> Result<Vec<&'a str
     }
 
     Ok(parts)
+}
+
+fn zeroizing_string_from_utf8(
+    mut plaintext_bytes: Zeroizing<Vec<u8>>,
+) -> Result<Zeroizing<String>, DynError> {
+    String::from_utf8(std::mem::take(&mut *plaintext_bytes))
+        .map(Zeroizing::new)
+        .map_err(|err| {
+            let utf8_error = err.utf8_error();
+            let mut bytes = err.into_bytes();
+            bytes.zeroize();
+            Box::new(utf8_error) as DynError
+        })
 }
 
 fn validate_loaded_ops_key_binding(
@@ -925,69 +991,46 @@ fn resolve_keys_input(
         || input.ml_dsa_variant.is_some()
         || input.ml_kem_variant.is_some();
 
-    let hash_algorithm = if config.crypto_policy == "allow-overrides" {
-        input
-            .hash_algorithm
-            .unwrap_or_else(|| profile.hash_algorithm.to_string())
-    } else {
-        profile.hash_algorithm.to_string()
-    };
-    validation::validate_allowed_value("hash_algorithm", &hash_algorithm, crypto::HASH_ALGORITHMS)?;
-
-    let symmetric_algorithm = if config.crypto_policy == "allow-overrides" {
-        input
-            .symmetric_algorithm
-            .unwrap_or_else(|| profile.symmetric_algorithm.to_string())
-    } else {
-        profile.symmetric_algorithm.to_string()
-    };
-    validation::validate_allowed_value(
+    let hash_algorithm = resolve_algorithm_value(
+        "hash_algorithm",
+        &config.crypto_policy,
+        input.hash_algorithm,
+        profile.hash_algorithm,
+        crypto::HASH_ALGORITHMS,
+    )?;
+    let symmetric_algorithm = resolve_algorithm_value(
         "symmetric_algorithm",
-        &symmetric_algorithm,
+        &config.crypto_policy,
+        input.symmetric_algorithm,
+        profile.symmetric_algorithm,
         crypto::SYMMETRIC_ALGORITHMS,
     )?;
-
-    let eddsa_algorithm = if config.crypto_policy == "allow-overrides" {
-        input
-            .eddsa_algorithm
-            .unwrap_or_else(|| profile.eddsa_algorithm.to_string())
-    } else {
-        profile.eddsa_algorithm.to_string()
-    };
-    validation::validate_allowed_value("eddsa_algorithm", &eddsa_algorithm, &["Ed25519", "Ed448"])?;
-
-    let xecdh_algorithm = if config.crypto_policy == "allow-overrides" {
-        input
-            .xecdh_algorithm
-            .unwrap_or_else(|| profile.xecdh_algorithm.to_string())
-    } else {
-        profile.xecdh_algorithm.to_string()
-    };
-    validation::validate_allowed_value("xecdh_algorithm", &xecdh_algorithm, &["X25519", "X448"])?;
-
-    let ml_dsa_variant = if config.crypto_policy == "allow-overrides" {
-        input
-            .ml_dsa_variant
-            .unwrap_or_else(|| profile.ml_dsa_variant.to_string())
-    } else {
-        profile.ml_dsa_variant.to_string()
-    };
-    validation::validate_allowed_value(
+    let eddsa_algorithm = resolve_algorithm_value(
+        "eddsa_algorithm",
+        &config.crypto_policy,
+        input.eddsa_algorithm,
+        profile.eddsa_algorithm,
+        &["Ed25519", "Ed448"],
+    )?;
+    let xecdh_algorithm = resolve_algorithm_value(
+        "xecdh_algorithm",
+        &config.crypto_policy,
+        input.xecdh_algorithm,
+        profile.xecdh_algorithm,
+        &["X25519", "X448"],
+    )?;
+    let ml_dsa_variant = resolve_algorithm_value(
         "ml_dsa_variant",
-        &ml_dsa_variant,
+        &config.crypto_policy,
+        input.ml_dsa_variant,
+        profile.ml_dsa_variant,
         &["ML-DSA-44", "ML-DSA-65", "ML-DSA-87"],
     )?;
-
-    let ml_kem_variant = if config.crypto_policy == "allow-overrides" {
-        input
-            .ml_kem_variant
-            .unwrap_or_else(|| profile.ml_kem_variant.to_string())
-    } else {
-        profile.ml_kem_variant.to_string()
-    };
-    validation::validate_allowed_value(
+    let ml_kem_variant = resolve_algorithm_value(
         "ml_kem_variant",
-        &ml_kem_variant,
+        &config.crypto_policy,
+        input.ml_kem_variant,
+        profile.ml_kem_variant,
         &["ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"],
     )?;
 
@@ -1014,6 +1057,23 @@ fn resolve_keys_input(
         ml_dsa_variant,
         ml_kem_variant,
     })
+}
+
+fn resolve_algorithm_value(
+    field: &str,
+    policy: &str,
+    requested: Option<String>,
+    profile_value: &str,
+    allowed: &[&str],
+) -> Result<String, DynError> {
+    let value = if policy == "allow-overrides" {
+        requested.unwrap_or_else(|| profile_value.to_string())
+    } else {
+        profile_value.to_string()
+    };
+    validation::validate_allowed_value(field, &value, allowed)?;
+
+    Ok(value)
 }
 
 fn validate_crypto_policy(
@@ -1173,6 +1233,234 @@ mod tests {
                 access: None,
             },
         }
+    }
+
+    fn loaded_key_with_id_and_lifecycle(id: &str, status: &str) -> LoadedOpsKey {
+        let mut loaded_key = loaded_key_with_lifecycle(status);
+        loaded_key.id = id.to_string();
+
+        loaded_key
+    }
+
+    fn empty_keys_state() -> KeysDbState {
+        KeysDbState::from_keys(Vec::new())
+    }
+
+    #[test]
+    fn get_loaded_key_returns_shared_reference_without_deep_clone() {
+        let mut state = empty_keys_state();
+        state.upsert(loaded_key_with_lifecycle("active"));
+
+        let loaded_key = get_loaded_key(&state, &"a".repeat(64)).expect("key must be loaded");
+
+        assert_eq!(Arc::strong_count(&loaded_key), 2);
+        assert_eq!(loaded_key.id(), "a".repeat(64));
+        assert!(state.contains_id(&"a".repeat(64)));
+    }
+
+    #[test]
+    fn upsert_replaces_key_and_keeps_lookup_by_id() {
+        let mut state = empty_keys_state();
+        state.upsert(loaded_key_with_lifecycle("active"));
+        state.upsert(loaded_key_with_lifecycle("retired"));
+
+        assert_eq!(state.len(), 1);
+        let loaded_key = get_loaded_key(&state, &"a".repeat(64)).expect("key must be loaded");
+        assert_eq!(loaded_key.lifecycle_status(), "retired");
+    }
+
+    #[test]
+    fn from_keys_builds_index_for_all_ids() {
+        let first_id = "a".repeat(64);
+        let second_id = "b".repeat(64);
+        let state = KeysDbState::from_keys(vec![
+            Arc::new(loaded_key_with_id_and_lifecycle(&first_id, "active")),
+            Arc::new(loaded_key_with_id_and_lifecycle(&second_id, "retired")),
+        ]);
+
+        assert!(state.contains_id(&first_id));
+        assert!(state.contains_id(&second_id));
+        assert_eq!(
+            state
+                .get(&first_id)
+                .expect("first key must exist")
+                .lifecycle_status(),
+            "active"
+        );
+        assert_eq!(
+            state
+                .get(&second_id)
+                .expect("second key must exist")
+                .lifecycle_status(),
+            "retired"
+        );
+    }
+
+    #[test]
+    fn contains_id_uses_index_after_upsert() {
+        let id = "c".repeat(64);
+        let mut state = empty_keys_state();
+
+        assert!(!state.contains_id(&id));
+        state.upsert(loaded_key_with_id_and_lifecycle(&id, "active"));
+
+        assert!(state.contains_id(&id));
+    }
+
+    #[test]
+    fn upsert_new_key_adds_index_entry() {
+        let first_id = "a".repeat(64);
+        let second_id = "d".repeat(64);
+        let mut state = empty_keys_state();
+
+        state.upsert(loaded_key_with_id_and_lifecycle(&first_id, "active"));
+        state.upsert(loaded_key_with_id_and_lifecycle(&second_id, "retired"));
+
+        assert_eq!(state.len(), 2);
+        assert_eq!(state.by_id.get(&first_id), Some(&0));
+        assert_eq!(state.by_id.get(&second_id), Some(&1));
+        assert!(state.get(&second_id).is_some());
+    }
+
+    #[test]
+    fn upsert_existing_key_replaces_value_without_duplicate() {
+        let id = "e".repeat(64);
+        let mut state = empty_keys_state();
+
+        state.upsert(loaded_key_with_id_and_lifecycle(&id, "active"));
+        state.upsert(loaded_key_with_id_and_lifecycle(&id, "compromised"));
+
+        assert_eq!(state.len(), 1);
+        assert_eq!(state.by_id.get(&id), Some(&0));
+        assert_eq!(
+            state
+                .get(&id)
+                .expect("replaced key must exist")
+                .lifecycle_status(),
+            "compromised"
+        );
+    }
+
+    #[test]
+    fn ids_matches_loaded_keys_after_replacement() {
+        let first_id = "a".repeat(64);
+        let second_id = "f".repeat(64);
+        let mut state = empty_keys_state();
+
+        state.upsert(loaded_key_with_id_and_lifecycle(&first_id, "active"));
+        state.upsert(loaded_key_with_id_and_lifecycle(&second_id, "active"));
+        state.upsert(loaded_key_with_id_and_lifecycle(&first_id, "retired"));
+
+        assert_eq!(state.ids(), vec![first_id, second_id]);
+    }
+
+    #[test]
+    fn resolve_algorithm_value_allow_overrides_uses_valid_override() {
+        let value = resolve_algorithm_value(
+            "eddsa_algorithm",
+            "allow-overrides",
+            Some(String::from("Ed448")),
+            "Ed25519",
+            &["Ed25519", "Ed448"],
+        )
+        .expect("valid override must resolve");
+
+        assert_eq!(value, "Ed448");
+    }
+
+    #[test]
+    fn resolve_algorithm_value_allow_overrides_falls_back_to_profile() {
+        let value = resolve_algorithm_value(
+            "eddsa_algorithm",
+            "allow-overrides",
+            None,
+            "Ed25519",
+            &["Ed25519", "Ed448"],
+        )
+        .expect("profile default must resolve");
+
+        assert_eq!(value, "Ed25519");
+    }
+
+    #[test]
+    fn resolve_algorithm_value_profile_only_ignores_override() {
+        let value = resolve_algorithm_value(
+            "eddsa_algorithm",
+            "profile-only",
+            Some(String::from("Ed448")),
+            "Ed25519",
+            &["Ed25519", "Ed448"],
+        )
+        .expect("profile-only must ignore override");
+
+        assert_eq!(value, "Ed25519");
+    }
+
+    #[test]
+    fn resolve_algorithm_value_rejects_disallowed_value() {
+        assert!(
+            resolve_algorithm_value(
+                "eddsa_algorithm",
+                "allow-overrides",
+                Some(String::from("Ed999")),
+                "Ed25519",
+                &["Ed25519", "Ed448"],
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn loaded_key_zeroize_clears_sensitive_tree() {
+        let mut loaded_key = loaded_key_with_lifecycle("active");
+
+        loaded_key.zeroize();
+
+        assert!(loaded_key.id.is_empty());
+        assert!(loaded_key.aad.is_empty());
+        assert!(loaded_key.properties_aad.is_empty());
+        assert!(loaded_key.key_material.hash_variant().is_empty());
+        assert!(
+            loaded_key
+                .key_material
+                .keys()
+                .symmetric()
+                .key_hex()
+                .is_empty()
+        );
+        assert!(
+            loaded_key
+                .key_material
+                .keys()
+                .eddsa()
+                .private_key_der_hex()
+                .is_empty()
+        );
+        assert!(
+            loaded_key
+                .key_material
+                .keys()
+                .xecdh()
+                .private_key_der_hex()
+                .is_empty()
+        );
+        assert!(
+            loaded_key
+                .key_material
+                .keys()
+                .ml_dsa()
+                .private_key_der_hex()
+                .is_empty()
+        );
+        assert!(
+            loaded_key
+                .key_material
+                .keys()
+                .ml_kem()
+                .private_key_der_hex()
+                .is_empty()
+        );
+        assert!(loaded_key.properties.lifecycle.status().is_empty());
     }
 
     proptest! {

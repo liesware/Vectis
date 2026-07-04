@@ -123,6 +123,7 @@ Important modules:
 - `core/storage/mod.rs`: storage abstraction.
 - `core/storage/sqlite.rs`: SQLite implementation.
 - `core/storage/postgres.rs`: PostgreSQL implementation.
+- `core/blocking.rs`: helper for isolating CPU-bound crypto from async workers.
 - `core/http_client.rs`: outbound HTTP client construction.
 - `core/logging.rs`: structured JSON logging and audit log setup.
 - `core/audit.rs`: security audit events.
@@ -742,7 +743,10 @@ Operational logs should show:
 Audit logs are separate from operational logs and intended for security-relevant
 events. They record stable security event names such as `auth.success`,
 `permission.denied`, `config.reload.failed`, `key.create.success`,
-`message.receive.denied`, and `verify.failed`.
+`message.receive.denied`, `message.internal.encrypt.success`, and
+`verify.failed`. Remote sends use `message.send.*`; local internal encryption
+and decryption use `message.internal.encrypt.*` and
+`message.internal.decrypt.*`.
 
 Audit records use logical identity and resource fields (`actor`, `actor_fp`,
 `root`, `admin`, `kid`, `remote_kid`, `action`, `outcome`, `reason`) and must not

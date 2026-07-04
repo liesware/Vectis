@@ -1,7 +1,7 @@
 use super::HttpState;
 use super::error::{ErrorResponse, error_response};
 use super::extract::JsonBody;
-use crate::core::{audit, metrics};
+use crate::core::{audit, blocking, metrics};
 use crate::ops;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -64,11 +64,25 @@ pub async fn sign_endpoint(
         "sign request accepted"
     );
 
-    let result = state
-        .with_keys_db_state(|keys_db_state| {
-            ops::sign::sign_timestamp_from_state(keys_db_state, &id, request)
-        })
-        .await;
+    let loaded_key = state
+        .with_keys_db_state(|keys_db_state| ops::keys::get_loaded_key(keys_db_state, &id))
+        .await
+        .map_err(|err| {
+            audit::operation_failed(
+                "sign.failed",
+                Some(&actor),
+                Some(&id),
+                None,
+                Some("sign"),
+                &err.to_string(),
+            );
+            metrics::record_crypto_operation("sign", "failed");
+            error_response(err.as_ref())
+        })?;
+    let result = blocking::spawn_blocking_crypto(move || {
+        ops::sign::sign_timestamp_with_loaded_key(&loaded_key, request)
+    })
+    .await;
 
     match result {
         Ok(response) => {
@@ -145,18 +159,29 @@ pub async fn sign_verification_endpoint(
         ml_dsa_sig_len = request.signatures.ml_dsa.sig.len(),
         "sign verification request accepted"
     );
-    // Resolve the signer key locally first; if the kid is not local, fall back
-    // to a trusted peer's public keys from the signed config (remote_routes).
+
     let result = match state.ensure_keys_db_entry(&kid).await {
         Ok(()) => {
-            state
-                .with_keys_db_state(|keys_db_state| {
-                    ops::sign::verify_timestamp_from_state(keys_db_state, &request)
-                })
-                .await
+            let loaded_key = state
+                .with_keys_db_state(|keys_db_state| ops::keys::get_loaded_key(keys_db_state, &kid))
+                .await;
+            match loaded_key {
+                Ok(loaded_key) => {
+                    blocking::spawn_blocking_crypto(move || {
+                        ops::sign::verify_timestamp_with_loaded_key(&loaded_key, &request)
+                    })
+                    .await
+                }
+                Err(err) => Err(err),
+            }
         }
         Err(local_err) => match state.remote_peer_public_keys(&kid).await {
-            Some(peer) => ops::sign::verify_timestamp_with_peer_keys(&request, &peer),
+            Some(peer) => {
+                blocking::spawn_blocking_crypto(move || {
+                    ops::sign::verify_timestamp_with_peer_keys(&request, &peer)
+                })
+                .await
+            }
             None => Err(local_err),
         },
     };

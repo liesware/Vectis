@@ -1,5 +1,5 @@
 use crate::core::{
-    canonical, config, crypto, http_client, protocol,
+    blocking, canonical, config, crypto, http_client, protocol,
     remote_routes::{PeerPublicKeys, RemoteRoute},
     routes::FinalAppRoute,
     validation,
@@ -13,6 +13,7 @@ use crate::ops::contracts::{
 use crate::ops::keys::{self, KeysDbState, LoadedOpsKey};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 use tracing::info;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -137,7 +138,7 @@ pub struct InternalMessageCipher {
 }
 
 pub struct PreparedDecryptMessage {
-    recipient_key: LoadedOpsKey,
+    recipient_key: Arc<LoadedOpsKey>,
     input: ValidatedDecryptMessageInput,
 }
 
@@ -146,7 +147,7 @@ struct ValidatedDecryptMessageInput {
 }
 
 pub struct PreparedInternalEncryptMessage {
-    key: LoadedOpsKey,
+    key: Arc<LoadedOpsKey>,
     input: ValidatedInternalEncryptMessageInput,
 }
 
@@ -155,7 +156,7 @@ struct ValidatedInternalEncryptMessageInput {
 }
 
 pub struct PreparedInternalDecryptMessage {
-    key: LoadedOpsKey,
+    key: Arc<LoadedOpsKey>,
     input: ValidatedInternalDecryptMessageInput,
 }
 
@@ -180,7 +181,7 @@ struct FinalAppMessage {
 }
 
 pub struct PreparedSendMessage {
-    sender_key: LoadedOpsKey,
+    sender_key: Arc<LoadedOpsKey>,
     input: ValidatedSendMessageInput,
 }
 
@@ -196,7 +197,7 @@ pub struct ValidatedSendMessageInput {
 }
 
 pub struct PreparedReceiveMessage {
-    recipient_key: LoadedOpsKey,
+    recipient_key: Arc<LoadedOpsKey>,
     envelope: ProtectedMessageToken,
 }
 
@@ -219,7 +220,7 @@ pub fn prepare_send_message(
     keys::KeyId::parse(sender_kid)?;
 
     let input = validate_send_message_input(input)?;
-    let sender_key = keys::get_loaded_key(keys_db_state, sender_kid)?.clone();
+    let sender_key = keys::get_loaded_key(keys_db_state, sender_kid)?;
     keys::require_lifecycle_for_new_use(&sender_key)?;
 
     Ok(PreparedSendMessage { sender_key, input })
@@ -264,7 +265,7 @@ pub fn prepare_decrypt_message(
     let input = validate_decrypt_message_input(input)?;
     let aad = parse_aad_fields(&input.input.message.aad)?;
     let recipient_kid = aad_field(&aad, "recipient_kid")?;
-    let recipient_key = keys::get_loaded_key(keys_db_state, recipient_kid)?.clone();
+    let recipient_key = keys::get_loaded_key(keys_db_state, recipient_kid)?;
     keys::require_lifecycle_for_decrypt_or_verify(&recipient_key)?;
 
     Ok(PreparedDecryptMessage {
@@ -281,7 +282,7 @@ pub fn prepare_internal_encrypt_message(
     keys::KeyId::parse(kid)?;
 
     let input = validate_internal_encrypt_message_input(input)?;
-    let key = keys::get_loaded_key(keys_db_state, kid)?.clone();
+    let key = keys::get_loaded_key(keys_db_state, kid)?;
     keys::require_lifecycle_for_new_use(&key)?;
 
     Ok(PreparedInternalEncryptMessage { key, input })
@@ -292,7 +293,7 @@ pub fn prepare_internal_decrypt_message(
     input: InternalMessageOutput,
 ) -> Result<PreparedInternalDecryptMessage, DynError> {
     let input = validate_internal_decrypt_message_input(input)?;
-    let key = keys::get_loaded_key(keys_db_state, &input.input.kid)?.clone();
+    let key = keys::get_loaded_key(keys_db_state, &input.input.kid)?;
     keys::require_lifecycle_for_decrypt_or_verify(&key)?;
 
     Ok(PreparedInternalDecryptMessage { key, input })
@@ -303,7 +304,7 @@ pub fn prepare_receive_message(
     envelope: ProtectedMessageToken,
 ) -> Result<PreparedReceiveMessage, DynError> {
     validate_message_envelope(&envelope)?;
-    let recipient_key = keys::get_loaded_key(keys_db_state, envelope.recipient_kid())?.clone();
+    let recipient_key = keys::get_loaded_key(keys_db_state, envelope.recipient_kid())?;
     keys::require_lifecycle_for_decrypt_or_verify(&recipient_key)?;
 
     Ok(PreparedReceiveMessage {
@@ -313,6 +314,7 @@ pub fn prepare_receive_message(
 }
 
 pub async fn send_message(
+    config: &config::AppConfig,
     prepared: PreparedSendMessage,
     remote_route: RemoteRoute,
 ) -> Result<SendMessageOutput, DynError> {
@@ -323,16 +325,15 @@ pub async fn send_message(
         recipient_name = %remote_route.name(),
         "message send started"
     );
+    let sender_key = prepared.sender_key;
+    let input = prepared.input;
     let Some(peer) = remote_route.public_keys() else {
         return Err(crate::error::forbidden(
             "recipient route has no registered public keys in the signed config",
         ));
     };
-    let recipient_public_keys = remote_public_keys_from_peer(
-        remote_route.remote_addr(),
-        &prepared.input.recipient_kid,
-        peer,
-    )?;
+    let recipient_public_keys =
+        remote_public_keys_from_peer(remote_route.remote_addr(), &input.recipient_kid, peer)?;
     validate_remote_public_keys(&recipient_public_keys)?;
     info!(
         recipient_host = %recipient_public_keys.host(),
@@ -341,11 +342,20 @@ pub async fn send_message(
         "recipient public key ready"
     );
 
-    let envelope = create_message_envelope(
-        &prepared.sender_key,
-        &recipient_public_keys,
-        &prepared.input,
-    )?;
+    let config = config.clone();
+    let envelope_sender_key = Arc::clone(&sender_key);
+    let envelope_recipient_public_keys = recipient_public_keys.clone();
+    let (envelope, input) = blocking::spawn_blocking_crypto(move || {
+        let envelope = create_message_envelope(
+            &config,
+            &envelope_sender_key,
+            &envelope_recipient_public_keys,
+            &input,
+        )?;
+
+        Ok((envelope, input))
+    })
+    .await?;
     let response = http_client::post_remote_json::<_, ReceiveMessageOutput>(
         remote_route.remote_addr(),
         "/message",
@@ -353,10 +363,10 @@ pub async fn send_message(
     )
     .await
     .map_err(|err| recipient_delivery_error(remote_route.remote_addr(), err))?;
-    let output = build_send_message_output(&prepared.sender_key, &prepared.input, &response);
+    let output = build_send_message_output(&sender_key, &input, &response);
     info!(
-        sender_kid = %prepared.sender_key.id(),
-        recipient_kid = %prepared.input.recipient_kid,
+        sender_kid = %sender_key.id(),
+        recipient_kid = %input.recipient_kid,
         delivered = output.message.valid,
         "message send completed"
     );
@@ -375,6 +385,33 @@ pub async fn receive_message(
     sender_public_keys: RemotePublicKeys,
     final_app_route: FinalAppRoute,
 ) -> Result<ReceiveMessageOutput, DynError> {
+    let (envelope, local_cipher) = blocking::spawn_blocking_crypto(move || {
+        process_received_message(prepared, sender_public_keys)
+    })
+    .await?;
+    deliver_message_to_final_app(&final_app_route, &envelope, &local_cipher).await?;
+    info!(
+        sender_kid = %envelope.sender_kid(),
+        recipient_kid = %envelope.recipient_kid(),
+        route_kid = %final_app_route.kid(),
+        final_app_name = %final_app_route.name(),
+        final_app_addr = %final_app_route.final_app_addr(),
+        final_app_path = %final_app_route.final_app_path(),
+        "message delivered to final app"
+    );
+
+    Ok(ReceiveMessageOutput {
+        status: String::from("ok"),
+        sender_kid: envelope.sender_kid().to_string(),
+        recipient_kid: envelope.recipient_kid().to_string(),
+        local_cipher,
+    })
+}
+
+fn process_received_message(
+    prepared: PreparedReceiveMessage,
+    sender_public_keys: RemotePublicKeys,
+) -> Result<(ProtectedMessageToken, LocalCipherOutput), DynError> {
     info!(
         sender_host = %prepared.envelope.sender_host(),
         sender_kid = %prepared.envelope.sender_kid(),
@@ -413,23 +450,8 @@ pub async fn receive_message(
         ctx_len = local_cipher.ct.len(),
         "message reencrypted for local delivery"
     );
-    deliver_message_to_final_app(&final_app_route, &prepared.envelope, &local_cipher).await?;
-    info!(
-        sender_kid = %prepared.envelope.sender_kid(),
-        recipient_kid = %prepared.envelope.recipient_kid(),
-        route_kid = %final_app_route.kid(),
-        final_app_name = %final_app_route.name(),
-        final_app_addr = %final_app_route.final_app_addr(),
-        final_app_path = %final_app_route.final_app_path(),
-        "message delivered to final app"
-    );
 
-    Ok(ReceiveMessageOutput {
-        status: String::from("ok"),
-        sender_kid: prepared.envelope.sender_kid().to_string(),
-        recipient_kid: prepared.envelope.recipient_kid().to_string(),
-        local_cipher,
-    })
+    Ok((prepared.envelope, local_cipher))
 }
 
 pub fn decrypt_message(prepared: PreparedDecryptMessage) -> Result<DecryptMessageOutput, DynError> {
@@ -495,8 +517,7 @@ pub fn decrypt_message(prepared: PreparedDecryptMessage) -> Result<DecryptMessag
         )
         .map_err(|_| crate::error::invalid_input("message authentication failed"))?,
     );
-    let plaintext = String::from_utf8((*plaintext_bytes).clone())
-        .map_err(|_| crate::error::invalid_input("decrypted message is not valid UTF-8"))?;
+    let plaintext = decrypted_message_string(plaintext_bytes)?;
     info!(
         sender_kid = %input.sender_kid,
         recipient_kid = %prepared.recipient_key.id(),
@@ -611,8 +632,7 @@ pub fn decrypt_internal_message(
         )
         .map_err(|_| crate::error::invalid_input("message authentication failed"))?,
     );
-    let plaintext = String::from_utf8((*plaintext_bytes).clone())
-        .map_err(|_| crate::error::invalid_input("decrypted message is not valid UTF-8"))?;
+    let plaintext = decrypted_message_string(plaintext_bytes)?;
     info!(
         kid = %prepared.key.id(),
         variant = %input.message.variant,
@@ -789,11 +809,11 @@ fn build_send_message_output(
 }
 
 fn create_message_envelope(
+    config: &config::AppConfig,
     sender_key: &LoadedOpsKey,
     recipient_public_keys: &RemotePublicKeys,
     input: &ValidatedSendMessageInput,
 ) -> Result<ProtectedMessageToken, DynError> {
-    let config = config::app_config()?;
     let created_at = validation::current_timestamp()?;
     let recipient_keys = recipient_public_keys.keys();
     let kem_alg = hybrid_kem_alg(
@@ -805,7 +825,7 @@ fn create_message_envelope(
             crate::error::invalid_input("sender symmetric algorithm is not supported")
         })?;
     let cipher_alg = cipher.algorithm.to_string();
-    let sender_host = config.public_addr;
+    let sender_host = config.public_addr.clone();
     let aad = build_message_aad(
         &config.protocol_version,
         &created_at,
@@ -951,10 +971,7 @@ fn open_message_cipher(
         )
         .map_err(|_| crate::error::invalid_input("message authentication failed"))?,
     );
-    let plaintext = Zeroizing::new(
-        String::from_utf8((*plaintext_bytes).clone())
-            .map_err(|_| crate::error::invalid_input("decrypted message is not valid UTF-8"))?,
-    );
+    let plaintext = Zeroizing::new(decrypted_message_string(plaintext_bytes)?);
 
     Ok(plaintext)
 }
@@ -992,6 +1009,14 @@ fn encrypt_local_message(
         nonce: hex::encode(&*nonce),
         aad,
         ct: hex::encode(ciphertext),
+    })
+}
+
+fn decrypted_message_string(mut plaintext_bytes: Zeroizing<Vec<u8>>) -> Result<String, DynError> {
+    String::from_utf8(std::mem::take(&mut *plaintext_bytes)).map_err(|err| {
+        let mut bytes = err.into_bytes();
+        bytes.zeroize();
+        crate::error::invalid_input("decrypted message is not valid UTF-8")
     })
 }
 

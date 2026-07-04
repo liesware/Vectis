@@ -11,7 +11,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from test_config import require_apikey
-from http_support import StatusClient as Client, parse_json
+from http_support import StatusClient as Client, parse_json, require_request_id
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:3000"
@@ -249,8 +249,9 @@ def main():
     print("HTTP negative:", flush=True)
 
     def keys_without_auth():
-        status, _ = client.post("/keys", VALID_KEY_REQUEST)
+        status, _, headers = client.post_with_headers("/keys", VALID_KEY_REQUEST)
         require_status("POST /keys without auth", status, 401)
+        require_request_id(headers)
 
     def keys_invalid_auth():
         status, _ = client.post(

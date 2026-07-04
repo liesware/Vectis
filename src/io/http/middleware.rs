@@ -1,4 +1,5 @@
 use axum::extract::{MatchedPath, Request};
+use axum::http::{HeaderName, HeaderValue};
 use axum::middleware::Next;
 use axum::response::Response;
 use tracing::{Instrument, info_span};
@@ -25,7 +26,14 @@ pub async fn request_context(request: Request, next: Next) -> Response {
     );
 
     let start = std::time::Instant::now();
-    let response = next.run(request).instrument(span).await;
+    let mut response = next.run(request).instrument(span).await;
+    if !request_id.is_empty()
+        && let Ok(value) = HeaderValue::from_str(&request_id)
+    {
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static("x-request-id"), value);
+    }
 
     metrics::record_http_request(
         method.as_str(),

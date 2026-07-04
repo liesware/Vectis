@@ -682,7 +682,7 @@ pub(super) fn print_response(payload: &str, output: OutputFormat) -> Result<(), 
     match serde_json::from_str::<Value>(payload) {
         Ok(value) => match output {
             OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&value)?),
-            OutputFormat::Yaml => print!("{}", serde_yaml::to_string(&value)?),
+            OutputFormat::Yaml => print!("{}", yaml_serde::to_string(&value)?),
         },
         Err(_) => println!("{payload}"),
     }

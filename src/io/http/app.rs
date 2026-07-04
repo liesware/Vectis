@@ -43,7 +43,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
             )
         },
         |kid| keys_db_state.contains_id(kid),
-    );
+    )?;
     let started_at = validation::current_timestamp()?;
     info!(
         http_bind_addr = %config.http_bind_addr,
@@ -152,7 +152,25 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
 }
 
 async fn shutdown_signal() {
-    if let Err(err) = tokio::signal::ctrl_c().await {
-        tracing::error!(error = %err, "failed to listen for ctrl+c shutdown signal");
+    let sigint = async {
+        if let Err(err) = tokio::signal::ctrl_c().await {
+            tracing::error!(error = %err, "failed to listen for ctrl+c shutdown signal");
+        }
+    };
+
+    let sigterm = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(err) => {
+                tracing::error!(error = %err, "failed to listen for SIGTERM shutdown signal");
+            }
+        }
+    };
+
+    tokio::select! {
+        _ = sigint => tracing::info!("shutdown signal received: SIGINT"),
+        _ = sigterm => tracing::info!("shutdown signal received: SIGTERM"),
     }
 }

@@ -1,4 +1,5 @@
 use serde_json::Value;
+use vectis::core::config;
 use vectis::core::crypto;
 use vectis::ops::key_material::{KeyMaterialOutput, KeyMaterialSpec, create_key_material};
 use vectis::ops::key_validation::validate_key_material;
@@ -75,12 +76,13 @@ fn profiles_create_valid_key_material() {
 
 #[test]
 fn generated_key_material_validates_end_to_end() {
+    let config = config::app_config().expect("test config must load");
     let aad = "version=v1;type=crypto-integration-test";
     let message = "Vectis crypto integration smoke test";
 
     for case in PROFILE_CASES {
         let material = create_profile_material(case);
-        let validation = validate_key_material(&material, aad, message).expect(case.name);
+        let validation = validate_key_material(&config, &material, aad, message).expect(case.name);
         let value = serde_json::to_value(validation).expect("validation output must serialize");
 
         assert_eq!(value["aad"], aad, "{}", case.name);

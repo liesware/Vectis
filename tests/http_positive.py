@@ -25,6 +25,7 @@ from http_support import (
     require,
     require_hex,
     require_kid,
+    require_request_id,
     restore_config_file,
     restore_config_sign_file,
     start_final_app,
@@ -93,7 +94,9 @@ def validate_health(client):
     require(startup.get("status") == "started", "health startup status must be started")
     require(startup.get("timestamp"), "health startup must include timestamp")
 
-    live = client.get("/healthz/live")
+    live_status, live, live_headers = client.get_with_headers("/healthz/live")
+    require(live_status == 200, "health live status code must be 200")
+    require_request_id(live_headers)
     require(live.get("status") == "ok", "health live status must be ok")
 
     ready = client.get("/healthz/ready")

@@ -83,6 +83,26 @@ impl StorageState {
         }
     }
 
+    pub async fn update_ops_key_properties_if_current(
+        &self,
+        id: &str,
+        current_properties: &str,
+        new_properties: &str,
+    ) -> Result<OpsKeyRow, DynError> {
+        match &self.backend {
+            StorageBackend::Sqlite(sqlite) => {
+                sqlite
+                    .update_ops_key_properties_if_current(id, current_properties, new_properties)
+                    .await
+            }
+            StorageBackend::Postgres(postgres) => {
+                postgres
+                    .update_ops_key_properties_if_current(id, current_properties, new_properties)
+                    .await
+            }
+        }
+    }
+
     pub async fn health_check(&self) -> Result<(), DynError> {
         match &self.backend {
             StorageBackend::Sqlite(sqlite) => sqlite.health_check().await,

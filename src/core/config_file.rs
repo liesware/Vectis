@@ -80,7 +80,7 @@ pub fn load_config_state(
     config: &config::AppConfig,
     verify_config: impl Fn(&Path, &str) -> Result<(), DynError>,
     is_loaded_kid: impl Fn(&str) -> bool,
-) -> ConfigState {
+) -> Result<ConfigState, DynError> {
     match load_config_file(&config.config_path, verify_config, config, &is_loaded_kid) {
         Ok(state) => {
             info!(
@@ -90,16 +90,17 @@ pub fn load_config_state(
                 clients_loaded = state.permissions.len(),
                 "signed config loaded"
             );
-            state
+            Ok(state)
         }
-        Err(err) => {
+        Err(err) if crate::error::is_not_found(err.as_ref()) => {
             warn!(
                 config_path = %config.config_path.display(),
                 error = %err,
                 "signed config unavailable, using empty defaults"
             );
-            empty_config_state(config)
+            Ok(empty_config_state(config))
         }
+        Err(err) => Err(err),
     }
 }
 
@@ -268,10 +269,61 @@ mod tests {
     #[test]
     fn load_config_state_is_lenient_when_missing() {
         let config = test_config(unique_path("load_missing"));
-        let state = load_config_state(&config, |_, _| Ok(()), |_| true);
+        let state = load_config_state(&config, |_, _| Ok(()), |_| true).unwrap();
         assert_eq!(state.routes.len(), 0);
         assert_eq!(state.remote_routes.len(), 0);
         assert_eq!(state.permissions.len(), 0);
+    }
+
+    #[test]
+    fn load_config_state_propagates_verify_error() {
+        let path = unique_path("load_verify_err");
+        fs::write(
+            &path,
+            r#"{"version":"v1","routes":[],"remote_routes":[],"permissions":[]}"#,
+        )
+        .unwrap();
+        let config = test_config(path.clone());
+        let result = load_config_state(
+            &config,
+            |_, _| Err(crate::error::invalid_signature("bad signature")),
+            |_| true,
+        );
+        let _ = fs::remove_file(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_config_state_rejects_invalid_json() {
+        let path = unique_path("load_invalid_json");
+        fs::write(&path, "{ not json").unwrap();
+        let config = test_config(path.clone());
+        let result = load_config_state(&config, |_, _| Ok(()), |_| true);
+        let _ = fs::remove_file(&path);
+        let err = match result {
+            Ok(_) => panic!("invalid config JSON must be rejected"),
+            Err(err) => err.to_string(),
+        };
+        assert!(err.contains("config file must be valid JSON"));
+    }
+
+    #[test]
+    fn load_config_state_rejects_oversized_config_file() {
+        let path = unique_path("load_oversized_config");
+        let file = fs::File::create(&path).unwrap();
+        file.set_len(config::CONFIG_FILE_MAX_SIZE_BYTES + 1)
+            .unwrap();
+        drop(file);
+
+        let config = test_config(path.clone());
+        let result = load_config_state(&config, |_, _| Ok(()), |_| true);
+
+        let _ = fs::remove_file(&path);
+        let err = match result {
+            Ok(_) => panic!("oversized config file must be rejected"),
+            Err(err) => err.to_string(),
+        };
+        assert!(err.contains("config file exceeds maximum allowed size"));
     }
 
     #[test]
