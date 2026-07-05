@@ -16,12 +16,15 @@ the system:
   routing, and final app delivery behavior.
 - Schemathesis validates that `doc/openapi.yaml` stays aligned with the running
   API through OpenAPI-based contract fuzzing.
+- k6 measures latency, throughput, and stability under load for a valid positive
+  runtime flow.
 - `cargo-fuzz` validates parser, validation, and canonicalization robustness
   against arbitrary byte input.
 
 The layers are complementary. A passing HTTP workflow does not prove the OpenAPI
 contract is accurate, and OpenAPI fuzzing does not replace cryptographically
-valid happy-path tests.
+valid happy-path tests. k6 does not prove correctness; it measures how a known
+valid flow behaves under load.
 
 ## Prerequisites
 
@@ -196,6 +199,57 @@ Schemathesis helps confirm that the OpenAPI schema and backend validation stay
 in sync. It does not replace `tests/http_positive.py`, which remains the source
 of cryptographically valid happy paths.
 
+## Performance Testing With k6
+
+`tests/performance/k6.js` is a manual performance smoke test. It is not part of
+`tests.sh`, and it does not replace `tests/http_positive.py`, Schemathesis, or
+fuzzing.
+
+Prerequisites:
+
+- `k6` must be installed.
+- Vectis must already be running.
+- The final app configured for message delivery must already be running.
+- `.env` must provide `VECTIS_API_URL` and `VECTIS_APIKEY`, or those values must
+  be passed as real environment variables.
+- `config.json` must exist, be signed, be loaded in Vectis, and contain a usable
+  active `remote_routes[]` entry.
+
+Run the default one-iteration smoke:
+
+```sh
+k6 run tests/performance/k6.js
+```
+
+Run a small load test:
+
+```sh
+k6 run --vus 20 --duration 2m tests/performance/k6.js
+```
+
+Override the target explicitly:
+
+```sh
+VECTIS_API_URL=http://127.0.0.1:3000 \
+VECTIS_APIKEY=<key> \
+k6 run tests/performance/k6.js
+```
+
+The script exercises:
+
+- health probes: `/healthz/startup`, `/healthz/live`, `/healthz/ready`;
+- `POST /keys`;
+- `GET /pub/{kid}`;
+- `GET /self-test/keys/{kid}`;
+- `POST /sign/{kid}` and `POST /sign/verification`;
+- internal encrypt/decrypt;
+- remote message send with `POST /message/{kid}`.
+
+k6 creates one key in `setup()` for crypto checks. Message sending uses a sender
+KID selected from `config.json` local routes, because message routing policy is
+config-based. The script prints only a small runtime summary with truncated KIDs
+and does not print API keys, ciphertexts, signatures, or sensitive plaintext.
+
 ## Native Fuzzing With cargo-fuzz
 
 Run all native fuzz targets with:
@@ -304,5 +358,6 @@ uses sanitizer builds, and is heavier than the normal HTTP test suite.
 - `tests/http_positive.py`: valid end-to-end runtime workflows.
 - `tests/http_schemathesis.py`: OpenAPI contract fuzzing via Schemathesis.
 - `tests/http_support.py`: shared Python helpers for HTTP workflows.
+- `tests/performance/k6.js`: manual k6 performance/load smoke test.
 - `tests/test_config.py`: test configuration and API key loading helpers.
 - `tests_cargo-fuzz.sh`: native fuzz runner for all cargo-fuzz targets.
