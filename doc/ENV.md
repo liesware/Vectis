@@ -78,6 +78,10 @@ The `routes`/`remote_routes`/`permissions` sections live in the unified signed `
 Vectis does not create it and `POST /keys` does not modify it.
 If `config.json` exists, `config_sign.json` must exist and verify before the config is loaded.
 Vectis rejects `config.json` above 8 MiB and `config_sign.json` above 1 MiB before parsing or verifying.
+The config signature is bound to the canonical JSON content, token type, and
+init keys. It is not bound to the local filesystem path, so `config.json` and
+`config_sign.json` can be moved together between host, container, and
+Kubernetes-mounted paths.
 
 Runtime route operations:
 

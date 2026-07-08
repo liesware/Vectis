@@ -1,3 +1,4 @@
+internal/
 /target
 .env
 init.json

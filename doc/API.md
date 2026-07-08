@@ -1235,7 +1235,7 @@ vectis config sign
     "version": "v1",
     "type": "vectis-config",
     "created_at": "1782058090",
-    "info": "version=v1;type=vectis-config;path=config.json",
+    "info": "version=v1;type=vectis-config",
     "kid": "init-keys",
     "serial": "INTERNAL_KEYS_HASH(created_at + random_bytes)",
     "message_hash": {
@@ -1260,8 +1260,11 @@ Validation rules:
 
 - `payload.type` must be `vectis-config`.
 - `payload.kid` must be `init-keys`.
+- `payload.info` must be `version=v1;type=vectis-config`.
 - `payload.message_hash` must match canonical `config.json` using `INTERNAL_KEYS_HASH`.
 - EdDSA and ML-DSA signatures must verify with init public keys.
+- The signature is not bound to the local filesystem path. Moving `config.json`
+  and `config_sign.json` together is supported.
 - Startup with missing `config.json` uses empty sections (default routing, only root authorized).
-- Startup with invalid config signature uses empty sections and logs the error.
+- Startup with invalid existing config or invalid config signature fails.
 - A reload endpoint rejects invalid signatures and keeps the previous in-memory config.

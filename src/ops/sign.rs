@@ -77,7 +77,7 @@ fn sign_timestamp(
 
 pub fn sign_config_file(
     init_state: &ValidatedInitState,
-    config_path: &Path,
+    _config_path: &Path,
     config_content: &str,
 ) -> Result<TimestampToken, DynError> {
     let canonical_config = config_file::canonical_config_json(config_content)?;
@@ -89,11 +89,7 @@ pub fn sign_config_file(
         )?),
     };
     let created_at = validation::current_timestamp()?;
-    let info = validation::build_aad(&[
-        ("version", protocol::PROTOCOL_VERSION_V1),
-        ("type", CONFIG_TOKEN_TYPE),
-        ("path", &config_path.display().to_string()),
-    ]);
+    let info = config_token_info();
     let payload = TimestampPayload {
         version: protocol::PROTOCOL_VERSION_V1.to_string(),
         token_type: String::from(CONFIG_TOKEN_TYPE),
@@ -118,7 +114,7 @@ pub fn sign_config_file(
 
 pub fn verify_config_file_signature(
     init_state: &ValidatedInitState,
-    config_path: &Path,
+    _config_path: &Path,
     config_content: &str,
     signature_content: &str,
 ) -> Result<(), DynError> {
@@ -126,14 +122,10 @@ pub fn verify_config_file_signature(
         crate::error::invalid_input(format!("config signature must be valid JSON: {err}"))
     })?)?;
     validate_signed_payload_token(&token, CONFIG_TOKEN_TYPE, INIT_KEYS_KID)?;
-    let expected_info = validation::build_aad(&[
-        ("version", protocol::PROTOCOL_VERSION_V1),
-        ("type", CONFIG_TOKEN_TYPE),
-        ("path", &config_path.display().to_string()),
-    ]);
+    let expected_info = config_token_info();
     if token.payload.info != expected_info {
         return Err(crate::error::invalid_input(
-            "config signature payload.info does not match config path",
+            "config signature payload.info does not match config token",
         ));
     }
 
@@ -163,6 +155,13 @@ pub fn verify_config_file_signature(
     }
 
     Ok(())
+}
+
+fn config_token_info() -> String {
+    validation::build_aad(&[
+        ("version", protocol::PROTOCOL_VERSION_V1),
+        ("type", CONFIG_TOKEN_TYPE),
+    ])
 }
 
 fn create_payload_serial(created_at: &str) -> Result<String, DynError> {
@@ -529,9 +528,21 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
     use serde_json::json;
+    use std::path::PathBuf;
 
     fn hex64(seed: char) -> String {
         String::from(seed).repeat(64)
+    }
+
+    fn init_state() -> ValidatedInitState {
+        let encrypted =
+            crate::ops::init::create_encrypted_init_output_json().expect("init must be created");
+        crate::ops::init::load_validated_init_state(&encrypted.json, &encrypted.encryption_key_hex)
+            .expect("init must validate")
+    }
+
+    fn empty_config() -> &'static str {
+        r#"{"version":"v1","routes":[],"remote_routes":[],"permissions":[]}"#
     }
 
     fn token(eddsa_alg: &str, ml_dsa_alg: &str, payload_version: &str) -> TimestampToken {
@@ -596,6 +607,92 @@ mod tests {
     fn verify_timestamp_with_peer_keys_rejects_ml_dsa_alg_mismatch() {
         let token = token("Ed25519", "ML-DSA-44", "v1");
         assert!(verify_timestamp_with_peer_keys(&token, &peer("Ed25519", "ML-DSA-65")).is_err());
+    }
+
+    #[test]
+    fn config_signature_is_portable_across_paths() {
+        let init_state = init_state();
+        let token = sign_config_file(
+            &init_state,
+            &PathBuf::from("/host/path/config.json"),
+            empty_config(),
+        )
+        .expect("config must sign");
+        assert_eq!(token.payload.info, "version=v1;type=vectis-config");
+        let signature_content = serde_json::to_string(&token).expect("token must serialize");
+
+        verify_config_file_signature(
+            &init_state,
+            &PathBuf::from("/opt/vectis/conf/config.json"),
+            empty_config(),
+            &signature_content,
+        )
+        .expect("config signature must verify from a different path");
+    }
+
+    #[test]
+    fn config_signature_rejects_wrong_info_token() {
+        let init_state = init_state();
+        let mut token =
+            sign_config_file(&init_state, &PathBuf::from("config.json"), empty_config())
+                .expect("config must sign");
+        token.payload.info = String::from("version=v1;type=vectis-config;path=config.json");
+        let signature_content = serde_json::to_string(&token).expect("token must serialize");
+
+        let err = verify_config_file_signature(
+            &init_state,
+            &PathBuf::from("/opt/vectis/conf/config.json"),
+            empty_config(),
+            &signature_content,
+        )
+        .expect_err("path-bound info must be rejected");
+
+        assert_eq!(
+            err.to_string(),
+            "config signature payload.info does not match config token"
+        );
+    }
+
+    #[test]
+    fn config_signature_rejects_tampered_config_content() {
+        let init_state = init_state();
+        let token = sign_config_file(&init_state, &PathBuf::from("config.json"), empty_config())
+            .expect("config must sign");
+        let signature_content = serde_json::to_string(&token).expect("token must serialize");
+        let tampered_config = r#"{"version":"v1","routes":[{"kid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"app","final_app_addr":"127.0.0.1:3999","final_app_path":"/message"}],"remote_routes":[],"permissions":[]}"#;
+
+        let err = verify_config_file_signature(
+            &init_state,
+            &PathBuf::from("config.json"),
+            tampered_config,
+            &signature_content,
+        )
+        .expect_err("tampered config content must fail");
+
+        assert_eq!(
+            err.to_string(),
+            "config signature message_hash does not match config content"
+        );
+    }
+
+    #[test]
+    fn config_signature_rejects_tampered_signature() {
+        let init_state = init_state();
+        let mut token =
+            sign_config_file(&init_state, &PathBuf::from("config.json"), empty_config())
+                .expect("config must sign");
+        token.signatures.eddsa.sig.replace_range(0..2, "00");
+        let signature_content = serde_json::to_string(&token).expect("token must serialize");
+
+        let err = verify_config_file_signature(
+            &init_state,
+            &PathBuf::from("config.json"),
+            empty_config(),
+            &signature_content,
+        )
+        .expect_err("tampered signature must fail");
+
+        assert_eq!(err.to_string(), "config signature verification failed");
     }
 
     proptest! {

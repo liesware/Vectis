@@ -262,7 +262,9 @@ The signed config contains:
 - API key permission clients.
 
 The signing flow uses canonical JSON. Vectis signs the canonical config hash
-inside a timestamp token using init keys.
+inside a timestamp token using init keys. The signature is not bound to the local
+filesystem path; a `config.json` and `config_sign.json` pair can be moved
+together between host, container, and Kubernetes-mounted paths.
 
 Startup behavior:
 
@@ -384,4 +386,3 @@ These invariants are part of the implementation contract:
 - Storage may be shared, but runtime state is local.
 - CPU-bound cryptographic work that can block Tokio workers should run through
   blocking-task isolation.
-

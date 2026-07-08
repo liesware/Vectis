@@ -182,6 +182,7 @@ The trimmed value must be one 64-character hex string.
 
 - `config.json` was edited but not signed.
 - `config_sign.json` does not match `config.json`.
+- `config.json` and `config_sign.json` were not moved together.
 - A route references a KID that is not loaded in memory.
 - A remote route has invalid public keys, invalid `allowed_local_kids`, or an
   invalid `remote_addr`.
