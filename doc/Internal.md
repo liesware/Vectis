@@ -317,6 +317,10 @@ Vectis separates three observability channels:
 - audit logs;
 - metrics.
 
+`VECTIS_LOG_TARGET=file` writes operational and audit logs to separate files.
+`VECTIS_LOG_TARGET=stdout` writes both streams to stdout as JSON lines. Audit
+events remain distinguishable by `target: "vectis::audit"`.
+
 Operational logs are for running and debugging the service. They can include
 request path, status, request ID, non-secret input summaries, and operational
 errors.

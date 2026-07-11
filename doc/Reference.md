@@ -729,7 +729,8 @@ Examples:
 
 ## Logging, Audit, And Metrics
 
-Vectis uses structured JSON logs with configurable level and daily rotation.
+Vectis uses structured JSON logs with configurable level. Logs can be written to
+daily rolling files or to stdout with `VECTIS_LOG_TARGET`.
 
 Operational logs should show:
 
@@ -742,7 +743,9 @@ Operational logs should show:
 - remote communication failures.
 
 Audit logs are separate from operational logs and intended for security-relevant
-events. They record stable security event names such as `auth.success`,
+events. In file mode this separation is physical. In stdout mode both streams go
+to stdout and audit is selected by `target: "vectis::audit"`. Audit records
+stable security event names such as `auth.success`,
 `permission.denied`, `config.reload.failed`, `key.create.success`,
 `message.receive.denied`, `message.internal.encrypt.success`, and
 `verify.failed`. Remote sends use `message.send.*`; local internal encryption

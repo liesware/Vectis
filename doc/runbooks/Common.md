@@ -518,6 +518,9 @@ grep '<request-id>' logs/vectis.log
 grep '<request-id>' logs/audit.log
 ```
 
+If `VECTIS_LOG_TARGET=stdout`, search the container logs or log collector for
+the same request ID. Audit events are JSON records with `target: "vectis::audit"`.
+
 ### Recovery
 
 - Confirm the sender route public keys were imported from the right remote KID.
@@ -599,6 +602,9 @@ Use `X-Request-Id` from the HTTP response:
 grep '<request-id>' logs/audit.log
 grep '<request-id>' logs/vectis.log
 ```
+
+If `VECTIS_LOG_TARGET=stdout`, query container logs or the central collector
+instead. Filter audit records with `target: "vectis::audit"`.
 
 Look for:
 

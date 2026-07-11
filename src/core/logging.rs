@@ -11,6 +11,7 @@ const DEFAULT_LOG_LEVEL: &str = "info";
 const DEFAULT_LOG_DIR: &str = "logs";
 const DEFAULT_LOG_FILE: &str = "vectis.log";
 const DEFAULT_AUDIT_LOG_FILE: &str = "audit.log";
+const DEFAULT_LOG_TARGET: &str = "file";
 
 pub const AUDIT_TARGET: &str = "vectis::audit";
 
@@ -19,6 +20,22 @@ pub struct LoggingConfig {
     pub dir: String,
     pub file: String,
     pub audit_file: String,
+    pub target: LogTarget,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LogTarget {
+    File,
+    Stdout,
+}
+
+impl std::fmt::Display for LogTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::File => f.write_str("file"),
+            Self::Stdout => f.write_str("stdout"),
+        }
+    }
 }
 
 pub struct LoggingGuards {
@@ -28,14 +45,38 @@ pub struct LoggingGuards {
 
 pub fn init_logging() -> LoggingGuards {
     let config = logging_config();
-    fs::create_dir_all(&config.dir).expect("failed to create log directory");
 
-    let operational_appender = tracing_appender::rolling::daily(&config.dir, &config.file);
-    let (operational_writer, operational_guard) =
-        tracing_appender::non_blocking(operational_appender);
+    let (operational_writer, operational_guard, audit_writer, audit_guard) = match config.target {
+        LogTarget::File => {
+            fs::create_dir_all(&config.dir).expect("failed to create log directory");
 
-    let audit_appender = tracing_appender::rolling::daily(&config.dir, &config.audit_file);
-    let (audit_writer, audit_guard) = tracing_appender::non_blocking(audit_appender);
+            let operational_appender = tracing_appender::rolling::daily(&config.dir, &config.file);
+            let (operational_writer, operational_guard) =
+                tracing_appender::non_blocking(operational_appender);
+
+            let audit_appender = tracing_appender::rolling::daily(&config.dir, &config.audit_file);
+            let (audit_writer, audit_guard) = tracing_appender::non_blocking(audit_appender);
+
+            (
+                operational_writer,
+                operational_guard,
+                audit_writer,
+                audit_guard,
+            )
+        }
+        LogTarget::Stdout => {
+            let (operational_writer, operational_guard) =
+                tracing_appender::non_blocking(std::io::stdout());
+            let (audit_writer, audit_guard) = tracing_appender::non_blocking(std::io::stdout());
+
+            (
+                operational_writer,
+                operational_guard,
+                audit_writer,
+                audit_guard,
+            )
+        }
+    };
 
     let level = config.level;
     let operational_layer = fmt::layer()
@@ -59,6 +100,7 @@ pub fn init_logging() -> LoggingGuards {
     tracing::subscriber::set_global_default(subscriber).expect("failed to set tracing subscriber");
     info!(
         log_level = %config.level,
+        log_target = %config.target,
         log_dir = %config.dir,
         log_file = %config.file,
         audit_file = %config.audit_file,
@@ -78,12 +120,18 @@ pub fn logging_config() -> LoggingConfig {
     let dir = config_value(&env_file, "VECTIS_LOG_DIR", DEFAULT_LOG_DIR);
     let file = config_value(&env_file, "VECTIS_LOG_FILE", DEFAULT_LOG_FILE);
     let audit_file = config_value(&env_file, "VECTIS_AUDIT_LOG_FILE", DEFAULT_AUDIT_LOG_FILE);
+    let target = parse_log_target(&config_value(
+        &env_file,
+        "VECTIS_LOG_TARGET",
+        DEFAULT_LOG_TARGET,
+    ));
 
     LoggingConfig {
         level,
         dir,
         file,
         audit_file,
+        target,
     }
 }
 
@@ -97,6 +145,17 @@ fn parse_log_level(value: &str) -> Level {
         _ => {
             warn!(value, "invalid VECTIS_LOG_LEVEL, falling back to info");
             Level::INFO
+        }
+    }
+}
+
+fn parse_log_target(value: &str) -> LogTarget {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "file" => LogTarget::File,
+        "stdout" => LogTarget::Stdout,
+        _ => {
+            warn!(value, "invalid VECTIS_LOG_TARGET, falling back to file");
+            LogTarget::File
         }
     }
 }
@@ -142,5 +201,30 @@ fn clean_env_value(value: &str) -> String {
         value[1..value.len() - 1].to_string()
     } else {
         value.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_target_defaults_to_file() {
+        assert_eq!(parse_log_target(DEFAULT_LOG_TARGET), LogTarget::File);
+    }
+
+    #[test]
+    fn log_target_accepts_file() {
+        assert_eq!(parse_log_target("file"), LogTarget::File);
+    }
+
+    #[test]
+    fn log_target_accepts_stdout() {
+        assert_eq!(parse_log_target("stdout"), LogTarget::Stdout);
+    }
+
+    #[test]
+    fn log_target_invalid_value_falls_back_to_file() {
+        assert_eq!(parse_log_target("journald"), LogTarget::File);
     }
 }

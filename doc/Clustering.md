@@ -143,6 +143,9 @@ Recovering a Vectis deployment needs matching copies of:
 - operational secrets such as API keys or client secret distribution material;
 - audit logs if they are part of the recovery requirement.
 
+When `VECTIS_LOG_TARGET=stdout`, operational and audit logs are collected by the
+container runtime. Audit records should be filtered by `target: "vectis::audit"`.
+
 > A PostgreSQL backup without the matching init material is not a Vectis recovery backup.
 
 If the database is restored without the matching init material, Vectis cannot
