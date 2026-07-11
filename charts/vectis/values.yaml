@@ -1,0 +1,37 @@
+replicaCount: 1
+
+image:
+  repository: vectis-image
+  tag: local
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 3000
+
+vectis:
+  mode: dev
+  publicAddr: ""
+  storage: postgres
+  tls:
+    enabled: false
+
+secrets:
+  existingSecret: ""
+  initJson: ""
+  unsealKey: ""
+  configJson: ""
+  configSignJson: ""
+  apiKeyHash: ""
+  postgresDsn: ""
+  tlsCert: ""
+  tlsKey: ""
+
+podAnnotations: {}
+podLabels: {}
+
+resources: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -264,6 +264,9 @@ The init symmetric key is a root key. Vectis derives separate internal keys from
 
 Logging is JSON by default. With `VECTIS_LOG_TARGET=file`, operational events go to `VECTIS_LOG_FILE`; security events go to a dedicated audit stream (`VECTIS_AUDIT_LOG_FILE`) under `VECTIS_LOG_DIR`. With `VECTIS_LOG_TARGET=stdout`, both streams are written to stdout as JSON lines. Audit events remain logically separate through `target: "vectis::audit"`, so collectors can filter that target for the audit trail.
 
+The Helm chart sets `VECTIS_LOG_TARGET=stdout` by default because Kubernetes
+expects containers to write logs to stdout/stderr.
+
 Audit events use stable event names such as `auth.success`, `permission.denied`, `config.reload.success`, `key.lifecycle.changed`, `message.send.failed`, `message.internal.encrypt.success`, `message.internal.decrypt.success`, and `sign.success`. `message.send.*` is reserved for remote message sends. `message.internal.encrypt.*` and `message.internal.decrypt.*` are reserved for local internal message encryption and decryption. Audit records include logical identity fields such as `actor`, `actor_fp`, `root`, `admin`, `kid`, `remote_kid`, `action`, `outcome`, and `reason`. They must not include plaintext, ciphertext, API keys, unseal keys, private keys, or full sensitive payloads.
 
 ## Observability

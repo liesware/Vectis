@@ -326,6 +326,7 @@ native `cargo-fuzz` targets.
 - [doc/Internal.md](doc/Internal.md): implementation flows and internal invariants.
 - [doc/Design.md](doc/Design.md): reusable design principles distilled from this project.
 - [demo/README.md](demo/README.md): clinical data exchange demo.
+- [charts/vectis/README.md](charts/vectis/README.md): Kubernetes Helm chart.
 
 ## What Vectis Is Not
 

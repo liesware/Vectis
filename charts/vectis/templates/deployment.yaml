@@ -1,0 +1,129 @@
+{{- include "vectis.validate" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vectis.fullname" . }}
+  labels:
+    {{- include "vectis.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "vectis.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "vectis.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: vectis
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          env:
+            - name: VECTIS_MODE
+              value: {{ .Values.vectis.mode | quote }}
+            - name: VECTIS_HTTP_BIND_ADDR
+              value: "0.0.0.0:3000"
+            - name: VECTIS_PUBLIC_ADDR
+              value: {{ default (printf "%s:%v" (include "vectis.fullname" .) .Values.service.port) .Values.vectis.publicAddr | quote }}
+            - name: VECTIS_STORAGE
+              value: "postgres"
+            - name: VECTIS_POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vectis.secretName" . }}
+                  key: VECTIS_POSTGRES_DSN
+            - name: VECTIS_APIKEY_HASH
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vectis.secretName" . }}
+                  key: VECTIS_APIKEY_HASH
+            - name: VECTIS_INIT_KEYS_FILE
+              value: /opt/vectis/conf/init.json
+            - name: VECTIS_UNSEAL_KEY_FILE
+              value: /opt/vectis/conf/.unseal_key
+            - name: VECTIS_CONFIG_PATH
+              value: /opt/vectis/conf/config.json
+            - name: VECTIS_CONFIG_SIGN_PATH
+              value: /opt/vectis/conf/config_sign.json
+            - name: VECTIS_LOG_TARGET
+              value: stdout
+            - name: TMPDIR
+              value: /opt/vectis/tmp
+            {{- if .Values.vectis.tls.enabled }}
+            - name: VECTIS_TLS_CERT_PATH
+              value: /opt/vectis/conf/tls.crt
+            - name: VECTIS_TLS_KEY_PATH
+              value: /opt/vectis/conf/tls.key
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /healthz/startup
+              port: http
+              scheme: {{ ternary "HTTPS" "HTTP" (eq .Values.vectis.mode "prod") }}
+            failureThreshold: 30
+            periodSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz/live
+              port: http
+              scheme: {{ ternary "HTTPS" "HTTP" (eq .Values.vectis.mode "prod") }}
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz/ready
+              port: http
+              scheme: {{ ternary "HTTPS" "HTTP" (eq .Values.vectis.mode "prod") }}
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: runtime-secret
+              mountPath: /opt/vectis/conf
+              readOnly: true
+            - name: tmp
+              mountPath: /opt/vectis/tmp
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: runtime-secret
+          secret:
+            secretName: {{ include "vectis.secretName" . }}
+            defaultMode: 416
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

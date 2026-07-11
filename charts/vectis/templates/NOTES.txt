@@ -1,0 +1,14 @@
+Vectis was installed.
+
+Storage:
+  Vectis Helm deployments use PostgreSQL only.
+  Apply src/db/postgres_schema.sql before starting production traffic.
+
+Runtime Secret:
+  {{ include "vectis.secretName" . }}
+
+Useful checks:
+  kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+  kubectl logs deploy/{{ include "vectis.fullname" . }}
+  kubectl port-forward svc/{{ include "vectis.fullname" . }} 3000:{{ .Values.service.port }}
+  curl -sS http://127.0.0.1:3000/healthz/ready

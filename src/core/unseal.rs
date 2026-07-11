@@ -9,6 +9,8 @@ use tracing::info;
 use zeroize::Zeroizing;
 
 const DEFAULT_UNSEAL_KEY_FILE: &str = ".unseal_key";
+const SENSITIVE_FILE_FORBIDDEN_MODE_BITS: u32 = 0o137;
+const UNSEAL_KEY_FILE_PERMISSION_ERROR: &str = "unseal key file permissions are too open; allowed modes must not grant group write, execute, or any access to others";
 
 pub fn read_unseal_key(prompt: &str) -> Result<Zeroizing<String>, DynError> {
     if let Some(key) = read_env_unseal_key()? {
@@ -113,9 +115,9 @@ fn validate_unseal_key_file_permissions(path: &Path) -> Result<(), DynError> {
     }
 
     let mode = metadata.permissions().mode() & 0o777;
-    if mode != 0o600 {
+    if mode & SENSITIVE_FILE_FORBIDDEN_MODE_BITS != 0 {
         return Err(crate::error::invalid_input(
-            "unseal key file must have 0600 permissions",
+            UNSEAL_KEY_FILE_PERMISSION_ERROR,
         ));
     }
 
@@ -277,11 +279,43 @@ mod tests {
             let err = read_file_unseal_key().expect_err("insecure file permissions must fail");
             assert!(
                 err.to_string()
-                    .contains("unseal key file must have 0600 permissions")
+                    .contains("unseal key file permissions are too open")
             );
 
             let _ = fs::remove_file(path);
         });
+    }
+
+    #[test]
+    fn explicit_file_key_allows_group_readable_permissions() {
+        with_isolated_env(|| {
+            let path = unique_path("file_group_readable");
+            fs::write(&path, VALID_KEY).expect("write unseal test file");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o640))
+                .expect("set group-readable unseal test file permissions");
+            unsafe { env::set_var("VECTIS_UNSEAL_KEY_FILE", &path) };
+
+            let key = read_file_unseal_key()
+                .expect("read explicit file")
+                .expect("explicit file key");
+            assert_eq!(&*key, VALID_KEY);
+
+            let _ = fs::remove_file(path);
+        });
+    }
+
+    #[test]
+    fn sensitive_file_modes_allow_owner_and_group_read() {
+        for mode in [0o600, 0o400, 0o640, 0o440] {
+            assert_eq!(mode & SENSITIVE_FILE_FORBIDDEN_MODE_BITS, 0);
+        }
+    }
+
+    #[test]
+    fn sensitive_file_modes_reject_group_write_others_or_execute() {
+        for mode in [0o644, 0o660, 0o700, 0o750, 0o604, 0o610] {
+            assert_ne!(mode & SENSITIVE_FILE_FORBIDDEN_MODE_BITS, 0);
+        }
     }
 
     #[test]

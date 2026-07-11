@@ -141,7 +141,7 @@ The cluster rule applies inside the process too:
 The normal protected endpoint flow is:
 
 1. Request enters Axum router.
-2. Middleware creates a random `request_id`.
+2. Middleware creates a `request_id` from a process nonce and atomic counter.
 3. Middleware records request context in tracing spans.
 4. Handler authorizes `X-API-Key`.
 5. Handler checks required permission.

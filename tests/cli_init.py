@@ -94,9 +94,9 @@ def test_init_file_permissions_are_validated_on_load(tmpdir):
     init_keys_file.chmod(0o644)
     result = run_apikey_create(init_keys_file, unseal_key)
 
-    require(result.returncode != 0, "loading init state must fail for non-0600 init keys file")
+    require(result.returncode != 0, "loading init state must fail for too-open init keys file")
     require(
-        "init keys file must have 0600 permissions" in result.stderr,
+        "init keys file permissions are too open" in result.stderr,
         "load error must explain that init keys file permissions are too open",
     )
 

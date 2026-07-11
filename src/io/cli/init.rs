@@ -7,6 +7,9 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use tracing::info;
 
+const SENSITIVE_FILE_FORBIDDEN_MODE_BITS: u32 = 0o137;
+const INIT_KEYS_FILE_PERMISSION_ERROR: &str = "init keys file permissions are too open; allowed modes must not grant group write, execute, or any access to others";
+
 pub fn run_init() -> Result<String, DynError> {
     let init_keys_path = config::init_keys_file_path()?;
     if init_keys_path.try_exists()? {
@@ -65,11 +68,28 @@ fn validate_init_keys_file_permissions(path: &Path) -> Result<(), DynError> {
     }
 
     let mode = metadata.permissions().mode() & 0o777;
-    if mode != 0o600 {
-        return Err(crate::error::invalid_input(
-            "init keys file must have 0600 permissions",
-        ));
+    if mode & SENSITIVE_FILE_FORBIDDEN_MODE_BITS != 0 {
+        return Err(crate::error::invalid_input(INIT_KEYS_FILE_PERMISSION_ERROR));
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sensitive_file_modes_allow_owner_and_group_read() {
+        for mode in [0o600, 0o400, 0o640, 0o440] {
+            assert_eq!(mode & SENSITIVE_FILE_FORBIDDEN_MODE_BITS, 0);
+        }
+    }
+
+    #[test]
+    fn sensitive_file_modes_reject_group_write_others_or_execute() {
+        for mode in [0o644, 0o660, 0o700, 0o750, 0o604, 0o610] {
+            assert_ne!(mode & SENSITIVE_FILE_FORBIDDEN_MODE_BITS, 0);
+        }
+    }
 }

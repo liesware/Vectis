@@ -6,11 +6,20 @@ use botan::{
 };
 use zeroize::Zeroizing;
 
-pub fn random_bytes(size: usize) -> Result<Vec<u8>, botan::Error> {
-    let mut rng = RandomNumberGenerator::new()?;
-    let random = rng.read(size)?;
+pub type CryptoRng = RandomNumberGenerator;
 
-    Ok(random)
+pub fn new_rng() -> Result<CryptoRng, botan::Error> {
+    RandomNumberGenerator::new()
+}
+
+pub fn random_bytes(size: usize) -> Result<Vec<u8>, botan::Error> {
+    let mut rng = new_rng()?;
+
+    random_bytes_with_rng(&mut rng, size)
+}
+
+pub fn random_bytes_with_rng(rng: &mut CryptoRng, size: usize) -> Result<Vec<u8>, botan::Error> {
+    rng.read(size)
 }
 
 pub const HASH_ALGORITHMS: &[&str] = &[
@@ -146,9 +155,16 @@ pub fn symmetric_cipher(algorithm: &str) -> Option<SymmetricCipherSpec> {
 const EDDSA_PADDING: &str = "Pure";
 
 pub fn create_eddsa_private_key(algorithm: &str) -> Result<Privkey, botan::Error> {
-    let mut rng = RandomNumberGenerator::new()?;
+    let mut rng = new_rng()?;
 
-    Privkey::create(algorithm, "", &mut rng)
+    create_eddsa_private_key_with_rng(&mut rng, algorithm)
+}
+
+pub fn create_eddsa_private_key_with_rng(
+    rng: &mut CryptoRng,
+    algorithm: &str,
+) -> Result<Privkey, botan::Error> {
+    Privkey::create(algorithm, "", rng)
 }
 
 pub fn public_key(private_key: &Privkey) -> Result<Pubkey, botan::Error> {
@@ -199,11 +215,20 @@ pub fn validate_der_public_key_hex(
 }
 
 pub fn sign_message(private_key: &Privkey, message: &str) -> Result<Vec<u8>, botan::Error> {
-    let mut rng = RandomNumberGenerator::new()?;
+    let mut rng = new_rng()?;
+
+    sign_message_with_rng(&mut rng, private_key, message)
+}
+
+pub fn sign_message_with_rng(
+    rng: &mut CryptoRng,
+    private_key: &Privkey,
+    message: &str,
+) -> Result<Vec<u8>, botan::Error> {
     let mut signer = Signer::new(private_key, EDDSA_PADDING)?;
 
     signer.update(message.as_bytes())?;
-    signer.finish(&mut rng)
+    signer.finish(rng)
 }
 
 pub fn verify_message(
@@ -220,9 +245,16 @@ pub fn verify_message(
 const X_KEY_AGREEMENT_KDF: &str = "Raw";
 
 pub fn create_x_key_agreement_private_key(algorithm: &str) -> Result<Privkey, botan::Error> {
-    let mut rng = RandomNumberGenerator::new()?;
+    let mut rng = new_rng()?;
 
-    Privkey::create(algorithm, "", &mut rng)
+    create_x_key_agreement_private_key_with_rng(&mut rng, algorithm)
+}
+
+pub fn create_x_key_agreement_private_key_with_rng(
+    rng: &mut CryptoRng,
+    algorithm: &str,
+) -> Result<Privkey, botan::Error> {
+    Privkey::create(algorithm, "", rng)
 }
 
 pub fn key_agreement_public_key(private_key: &Privkey) -> Result<Vec<u8>, botan::Error> {
@@ -297,17 +329,33 @@ impl MlDsaVariant {
 }
 
 pub fn create_ml_dsa_private_key(variant: &MlDsaVariant) -> Result<Privkey, botan::Error> {
-    let mut rng = RandomNumberGenerator::new()?;
+    let mut rng = new_rng()?;
 
-    Privkey::create("ML-DSA", variant.botan_mode(), &mut rng)
+    create_ml_dsa_private_key_with_rng(&mut rng, variant)
+}
+
+pub fn create_ml_dsa_private_key_with_rng(
+    rng: &mut CryptoRng,
+    variant: &MlDsaVariant,
+) -> Result<Privkey, botan::Error> {
+    Privkey::create("ML-DSA", variant.botan_mode(), rng)
 }
 
 pub fn sign_ml_dsa_message(private_key: &Privkey, message: &str) -> Result<Vec<u8>, botan::Error> {
-    let mut rng = RandomNumberGenerator::new()?;
+    let mut rng = new_rng()?;
+
+    sign_ml_dsa_message_with_rng(&mut rng, private_key, message)
+}
+
+pub fn sign_ml_dsa_message_with_rng(
+    rng: &mut CryptoRng,
+    private_key: &Privkey,
+    message: &str,
+) -> Result<Vec<u8>, botan::Error> {
     let mut signer = Signer::new(private_key, ML_DSA_SIGNING_MODE)?;
 
     signer.update(message.as_bytes())?;
-    signer.finish(&mut rng)
+    signer.finish(rng)
 }
 
 pub fn verify_ml_dsa_message(
@@ -367,9 +415,16 @@ pub struct KemEncapsulation {
 }
 
 pub fn create_ml_kem_private_key(variant: &MlKemVariant) -> Result<Privkey, botan::Error> {
-    let mut rng = RandomNumberGenerator::new()?;
+    let mut rng = new_rng()?;
 
-    Privkey::create("ML-KEM", variant.botan_mode(), &mut rng)
+    create_ml_kem_private_key_with_rng(&mut rng, variant)
+}
+
+pub fn create_ml_kem_private_key_with_rng(
+    rng: &mut CryptoRng,
+    variant: &MlKemVariant,
+) -> Result<Privkey, botan::Error> {
+    Privkey::create("ML-KEM", variant.botan_mode(), rng)
 }
 
 pub fn encapsulate_ml_kem_shared_key(
@@ -377,9 +432,19 @@ pub fn encapsulate_ml_kem_shared_key(
     salt: &[u8],
     shared_key_len: usize,
 ) -> Result<KemEncapsulation, botan::Error> {
-    let mut rng = RandomNumberGenerator::new()?;
+    let mut rng = new_rng()?;
+
+    encapsulate_ml_kem_shared_key_with_rng(&mut rng, public_key, salt, shared_key_len)
+}
+
+pub fn encapsulate_ml_kem_shared_key_with_rng(
+    rng: &mut CryptoRng,
+    public_key: &Pubkey,
+    salt: &[u8],
+    shared_key_len: usize,
+) -> Result<KemEncapsulation, botan::Error> {
     let kem = KeyEncapsulation::new(public_key, ML_KEM_KDF)?;
-    let (shared_key, encapsulated_key) = kem.create_shared_key(&mut rng, salt, shared_key_len)?;
+    let (shared_key, encapsulated_key) = kem.create_shared_key(rng, salt, shared_key_len)?;
 
     Ok(KemEncapsulation {
         shared_key,

@@ -34,10 +34,11 @@ fn sign_timestamp(
         "timestamp signing started"
     );
     let created_at = validation::current_timestamp()?;
+    let mut rng = crypto::new_rng()?;
     let payload = TimestampPayload {
         version: protocol::PROTOCOL_VERSION_V1.to_string(),
         token_type: String::from(TIMESTAMP_TOKEN_TYPE),
-        serial: create_payload_serial(&created_at)?,
+        serial: create_payload_serial(&mut rng, &created_at)?,
         created_at,
         info: loaded_key.aad().to_string(),
         kid: loaded_key.id().to_string(),
@@ -57,7 +58,7 @@ fn sign_timestamp(
         ml_dsa_alg = %ml_dsa.variant(),
         "timestamp signing keys selected"
     );
-    let signatures = sign_hybrid_payload(&payload, eddsa, ml_dsa)?;
+    let signatures = sign_hybrid_payload(&mut rng, &payload, eddsa, ml_dsa)?;
     info!(
         kid = %loaded_key.id(),
         hash_alg = %payload.message_hash.alg,
@@ -89,17 +90,19 @@ pub fn sign_config_file(
         )?),
     };
     let created_at = validation::current_timestamp()?;
+    let mut rng = crypto::new_rng()?;
     let info = config_token_info();
     let payload = TimestampPayload {
         version: protocol::PROTOCOL_VERSION_V1.to_string(),
         token_type: String::from(CONFIG_TOKEN_TYPE),
-        serial: create_payload_serial(&created_at)?,
+        serial: create_payload_serial(&mut rng, &created_at)?,
         created_at,
         info,
         kid: String::from(INIT_KEYS_KID),
         message_hash,
     };
     let signatures = sign_hybrid_payload(
+        &mut rng,
         &payload,
         init_state.init_keys.keys().eddsa(),
         init_state.init_keys.keys().ml_dsa(),
@@ -164,8 +167,11 @@ fn config_token_info() -> String {
     ])
 }
 
-fn create_payload_serial(created_at: &str) -> Result<String, DynError> {
-    let random = crypto::random_bytes(PAYLOAD_SERIAL_RANDOM_BYTES)?;
+fn create_payload_serial(
+    rng: &mut crypto::CryptoRng,
+    created_at: &str,
+) -> Result<String, DynError> {
+    let random = crypto::random_bytes_with_rng(rng, PAYLOAD_SERIAL_RANDOM_BYTES)?;
     let material = [created_at.as_bytes(), random.as_slice()].concat();
 
     Ok(hex::encode(crypto::hash_bytes(
@@ -175,6 +181,7 @@ fn create_payload_serial(created_at: &str) -> Result<String, DynError> {
 }
 
 fn sign_hybrid_payload(
+    rng: &mut crypto::CryptoRng,
     payload: &TimestampPayload,
     eddsa: &VariantDerKeyPair,
     ml_dsa: &VariantDerKeyPair,
@@ -183,8 +190,9 @@ fn sign_hybrid_payload(
     let payload_text = std::str::from_utf8(&payload_bytes)?;
     let eddsa_private_key = crypto::load_private_key_der_hex(eddsa.private_key_der_hex())?;
     let ml_dsa_private_key = crypto::load_private_key_der_hex(ml_dsa.private_key_der_hex())?;
-    let eddsa_signature = crypto::sign_message(&eddsa_private_key, payload_text)?;
-    let ml_dsa_signature = crypto::sign_ml_dsa_message(&ml_dsa_private_key, payload_text)?;
+    let eddsa_signature = crypto::sign_message_with_rng(rng, &eddsa_private_key, payload_text)?;
+    let ml_dsa_signature =
+        crypto::sign_ml_dsa_message_with_rng(rng, &ml_dsa_private_key, payload_text)?;
 
     Ok(TimestampSignatures {
         eddsa: SignatureBlock {

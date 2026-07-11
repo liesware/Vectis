@@ -826,6 +826,7 @@ fn create_message_envelope(
         })?;
     let cipher_alg = cipher.algorithm.to_string();
     let sender_host = config.public_addr.clone();
+    let mut rng = crypto::new_rng()?;
     let aad = build_message_aad(
         &config.protocol_version,
         &created_at,
@@ -836,8 +837,10 @@ fn create_message_envelope(
         &cipher_alg,
     );
 
-    let ephemeral_private_key =
-        crypto::create_x_key_agreement_private_key(&recipient_keys.keys.xecdh.alg)?;
+    let ephemeral_private_key = crypto::create_x_key_agreement_private_key_with_rng(
+        &mut rng,
+        &recipient_keys.keys.xecdh.alg,
+    )?;
     let ephemeral_public_key = crypto::key_agreement_public_key(&ephemeral_private_key)?;
     let recipient_xecdh_public_key = hex::decode(&recipient_keys.keys.xecdh.public_key_hex)?;
     let xecdh_shared_key = Zeroizing::new(crypto::agree_key(
@@ -847,15 +850,16 @@ fn create_message_envelope(
 
     let ml_kem_public_key =
         crypto::load_public_key_der_hex(&recipient_keys.keys.ml_kem.public_key_der_hex)?;
-    let ml_kem_salt = Zeroizing::new(crypto::random_bytes(32)?);
-    let ml_kem = crypto::encapsulate_ml_kem_shared_key(
+    let ml_kem_salt = Zeroizing::new(crypto::random_bytes_with_rng(&mut rng, 32)?);
+    let ml_kem = crypto::encapsulate_ml_kem_shared_key_with_rng(
+        &mut rng,
         &ml_kem_public_key,
         &ml_kem_salt,
         HYBRID_SECRET_SIZE_BYTES,
     )?;
     let ml_kem_shared_key = Zeroizing::new(ml_kem.shared_key);
     let ml_kem_ciphertext = ml_kem.encapsulated_key;
-    let hkdf_salt = Zeroizing::new(crypto::random_bytes(32)?);
+    let hkdf_salt = Zeroizing::new(crypto::random_bytes_with_rng(&mut rng, 32)?);
     let message_key = derive_message_key(
         &xecdh_shared_key,
         &ml_kem_shared_key,
@@ -863,7 +867,10 @@ fn create_message_envelope(
         aad.as_bytes(),
         cipher.key_size_bytes,
     )?;
-    let nonce = Zeroizing::new(crypto::random_bytes(cipher.nonce_size_bytes)?);
+    let nonce = Zeroizing::new(crypto::random_bytes_with_rng(
+        &mut rng,
+        cipher.nonce_size_bytes,
+    )?);
     let ciphertext = crypto::encrypt_symmetric(
         &cipher_alg,
         &input.message,
@@ -897,7 +904,7 @@ fn create_message_envelope(
             ct: hex::encode(ciphertext),
         },
     };
-    let signatures = sign_message_payload(sender_key, &payload)?;
+    let signatures = sign_message_payload(&mut rng, sender_key, &payload)?;
 
     Ok(ProtectedMessageToken {
         version: protocol::PROTOCOL_VERSION_V1.to_string(),
@@ -1055,6 +1062,7 @@ fn final_app_delivery_error(addr: &str, path: &str, err: DynError) -> DynError {
 }
 
 fn sign_message_payload(
+    rng: &mut crypto::CryptoRng,
     sender_key: &LoadedOpsKey,
     payload: &ProtectedMessagePayload,
 ) -> Result<TimestampSignatures, DynError> {
@@ -1064,8 +1072,9 @@ fn sign_message_payload(
     let ml_dsa = sender_key.keys().ml_dsa();
     let eddsa_private_key = crypto::load_private_key_der_hex(eddsa.private_key_der_hex())?;
     let ml_dsa_private_key = crypto::load_private_key_der_hex(ml_dsa.private_key_der_hex())?;
-    let eddsa_signature = crypto::sign_message(&eddsa_private_key, payload_text)?;
-    let ml_dsa_signature = crypto::sign_ml_dsa_message(&ml_dsa_private_key, payload_text)?;
+    let eddsa_signature = crypto::sign_message_with_rng(rng, &eddsa_private_key, payload_text)?;
+    let ml_dsa_signature =
+        crypto::sign_ml_dsa_message_with_rng(rng, &ml_dsa_private_key, payload_text)?;
 
     Ok(TimestampSignatures {
         eddsa: SignatureBlock {

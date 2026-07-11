@@ -129,6 +129,10 @@ storage should not receive normal traffic.
 Vectis does not elect leaders. Vectis does not replicate PostgreSQL. Vectis does
 not coordinate node membership.
 
+The Helm chart follows this model. It deploys Vectis nodes as a `Deployment`,
+uses PostgreSQL only, and does not support SQLite-backed Kubernetes deployments.
+It does not install PostgreSQL or apply database schema.
+
 ## Disaster Recovery
 
 Vectis disaster recovery is database-centered, but not database-only.

@@ -209,26 +209,32 @@ pub fn create_key_material(spec: &KeyMaterialSpec) -> Result<KeyMaterialOutput, 
                 spec.symmetric_algorithm
             ))
         })?;
-    let symmetric_key = Zeroizing::new(crypto::random_bytes(symmetric_cipher.key_size_bytes)?);
+    let mut rng = crypto::new_rng()?;
+    let symmetric_key = Zeroizing::new(crypto::random_bytes_with_rng(
+        &mut rng,
+        symmetric_cipher.key_size_bytes,
+    )?);
 
-    let eddsa_private_key = crypto::create_eddsa_private_key(&spec.eddsa_algorithm)?;
+    let eddsa_private_key =
+        crypto::create_eddsa_private_key_with_rng(&mut rng, &spec.eddsa_algorithm)?;
     let eddsa_public_key = crypto::public_key(&eddsa_private_key)?;
 
-    let xecdh_private_key = crypto::create_x_key_agreement_private_key(&spec.xecdh_algorithm)?;
+    let xecdh_private_key =
+        crypto::create_x_key_agreement_private_key_with_rng(&mut rng, &spec.xecdh_algorithm)?;
     let xecdh_public_key = crypto::key_agreement_public_key(&xecdh_private_key)?;
 
     let ml_dsa_variant =
         crypto::MlDsaVariant::from_name(&spec.ml_dsa_variant).ok_or_else(|| {
             crate::error::invalid_input(format!("invalid ml_dsa_variant: {}", spec.ml_dsa_variant))
         })?;
-    let ml_dsa_private_key = crypto::create_ml_dsa_private_key(&ml_dsa_variant)?;
+    let ml_dsa_private_key = crypto::create_ml_dsa_private_key_with_rng(&mut rng, &ml_dsa_variant)?;
     let ml_dsa_public_key = crypto::public_key(&ml_dsa_private_key)?;
 
     let ml_kem_variant =
         crypto::MlKemVariant::from_name(&spec.ml_kem_variant).ok_or_else(|| {
             crate::error::invalid_input(format!("invalid ml_kem_variant: {}", spec.ml_kem_variant))
         })?;
-    let ml_kem_private_key = crypto::create_ml_kem_private_key(&ml_kem_variant)?;
+    let ml_kem_private_key = crypto::create_ml_kem_private_key_with_rng(&mut rng, &ml_kem_variant)?;
     let ml_kem_public_key = crypto::public_key(&ml_kem_private_key)?;
 
     Ok(KeyMaterialOutput {

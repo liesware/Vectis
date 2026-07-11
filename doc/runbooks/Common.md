@@ -55,14 +55,14 @@ vectis serve
   recovery boundary.
 - Do not bypass config signature validation.
 
-## Init File Permissions Are Not 0600
+## Init File Permissions Are Too Open
 
 ### Problem
 
 Startup or a local command fails with:
 
 ```text
-init keys file must have 0600 permissions
+init keys file permissions are too open; allowed modes must not grant group write, execute, or any access to others
 ```
 
 ### Likely Causes
@@ -80,6 +80,8 @@ stat -f "%OLp %N" init.json
 
 ### Recovery
 
+For local files, prefer owner-only permissions:
+
 ```sh
 chmod 600 init.json
 ```
@@ -94,16 +96,16 @@ chmod 600 "$VECTIS_INIT_KEYS_FILE"
 
 - Do not run `vectis init` again unless you are intentionally creating a new
   deployment and have manually deleted the old init file.
-- Do not loosen permissions to make another process read the file.
+- Do not grant group write, execute bits, or any access to others.
 
-## Unseal Key File Permissions Are Not 0600
+## Unseal Key File Permissions Are Too Open
 
 ### Problem
 
 Startup or a local command fails with:
 
 ```text
-unseal key file must have 0600 permissions
+unseal key file permissions are too open; allowed modes must not grant group write, execute, or any access to others
 ```
 
 ### Likely Causes
@@ -120,6 +122,8 @@ stat -f "%OLp %N" .unseal_key
 ```
 
 ### Recovery
+
+For local files, prefer owner-only permissions:
 
 ```sh
 chmod 600 .unseal_key
