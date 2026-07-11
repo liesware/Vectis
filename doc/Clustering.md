@@ -113,50 +113,20 @@ This keeps behavior explicit. It avoids hidden cache invalidation rules.
 
 ## High Availability
 
-Vectis high availability is external and boring by design.
+High availability is covered in [doc/HA_DR.md](HA_DR.md).
 
-A highly available Vectis deployment needs:
-
-- more than one Vectis node;
-- the same init material available to each node;
-- a load balancer in front of the nodes;
-- PostgreSQL deployed with its own HA design;
-- readiness checks wired to remove unhealthy nodes.
-
-`/healthz/ready` must fail if storage is unavailable. A node that cannot reach
-storage should not receive normal traffic.
-
-Vectis does not elect leaders. Vectis does not replicate PostgreSQL. Vectis does
-not coordinate node membership.
-
-The Helm chart follows this model. It deploys Vectis nodes as a `Deployment`,
-uses PostgreSQL only, and does not support SQLite-backed Kubernetes deployments.
-It does not install PostgreSQL or apply database schema.
+The short version is: run more than one Vectis node behind a load balancer, use
+PostgreSQL with its own HA design, and rely on readiness checks to remove nodes
+that cannot reach storage. Vectis does not elect leaders, replicate PostgreSQL,
+or coordinate node membership.
 
 ## Disaster Recovery
 
-Vectis disaster recovery is database-centered, but not database-only.
+Disaster recovery is covered in [doc/HA_DR.md](HA_DR.md).
 
-Recovering a Vectis deployment needs matching copies of:
-
-- PostgreSQL data;
-- encrypted init key material;
-- the unseal key or unseal provider state;
-- signed config files;
-- TLS material when running in production mode;
-- operational secrets such as API keys or client secret distribution material;
-- audit logs if they are part of the recovery requirement.
-
-When `VECTIS_LOG_TARGET=stdout`, operational and audit logs are collected by the
-container runtime. Audit records should be filtered by `target: "vectis::audit"`.
-
-> A PostgreSQL backup without the matching init material is not a Vectis recovery backup.
-
-If the database is restored without the matching init material, Vectis cannot
-decrypt the stored operational keys. If init material is restored without the
-database, Vectis has no operational keys to load.
-
-Back up the database and the cryptographic root material as one recovery set.
+The short version is: back up PostgreSQL and the matching cryptographic root
+material together. A PostgreSQL backup without the matching init material cannot
+recover stored operational keys.
 
 ## Database Ownership
 

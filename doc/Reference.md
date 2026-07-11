@@ -17,7 +17,8 @@ This document complements:
 - [doc/API.md](API.md): HTTP API and CLI mapping.
 - [doc/CLI.md](CLI.md): CLI behavior, commands, output, and environment.
 - [doc/ENV.md](ENV.md): environment variables and expected values.
-- [doc/Clustering.md](Clustering.md): multi-node behavior, HA, and DR model.
+- [doc/Clustering.md](Clustering.md): multi-node behavior and shared storage model.
+- [doc/HA_DR.md](HA_DR.md): high availability, backups, restore, and recovery limits.
 - [doc/Internal.md](Internal.md): implementation flows and internal invariants.
 - [doc/openapi.yaml](openapi.yaml): OpenAPI contract.
 

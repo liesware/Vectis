@@ -319,7 +319,8 @@ native `cargo-fuzz` targets.
 - [doc/CLI.md](doc/CLI.md): CLI behavior, commands, output, and environment.
 - [doc/ENV.md](doc/ENV.md): environment variables and expected values.
 - [doc/Test.md](doc/Test.md): testing strategy and test commands.
-- [doc/Clustering.md](doc/Clustering.md): multi-node behavior, HA, and DR model.
+- [doc/Clustering.md](doc/Clustering.md): multi-node behavior and shared storage model.
+- [doc/HA_DR.md](doc/HA_DR.md): high availability, backups, restore, and recovery limits.
 - [doc/openapi.yaml](doc/openapi.yaml): OpenAPI specification.
 - [doc/ThreatModel.md](doc/ThreatModel.md): threat model, explicit assumptions, and limitations.
 - [doc/Reference.md](doc/Reference.md): architecture and design reference.
