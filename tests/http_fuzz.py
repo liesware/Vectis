@@ -25,6 +25,8 @@ REMOTE_UNREACHABLE_MARKER = "final app can't be reached"
 KID_HEX = "a" * 64
 RECIPIENT_HEX = "b" * 64
 INTERNAL_SEED_PLAINTEXT = "fuzz seed plaintext"
+FPE_PROFILE = "fuzz-patient-id-decimal-v1"
+FPE_PLAINTEXT = "1234567890"
 
 # Minimal, policy-safe key requests (one per crypto profile) used to CREATE seed
 # keys. Creating with only tag+profile works under both crypto policies, and the
@@ -364,6 +366,24 @@ def internal_semantic(sent_value, seed, status, body):
     return findings
 
 
+def internal_encrypt_semantic(sent_value, seed, status, body):
+    findings = []
+    if status != 200:
+        return findings
+    parsed = _parse(body)
+    message = parsed.get("message") if isinstance(parsed, dict) else None
+    if not isinstance(message, dict):
+        findings.append("SEMANTIC: internal encrypt 200 body is missing message")
+        return findings
+    if (
+        isinstance(sent_value, dict)
+        and sent_value == seed
+        and message.get("ctx") == seed.get("plaintext")
+    ):
+        findings.append("SEMANTIC: internal encrypt returned plaintext as ciphertext")
+    return findings
+
+
 def _crypto_fields_differ(sent_value, seed):
     sent_msg = sent_value.get("message")
     seed_msg = seed.get("message")
@@ -389,6 +409,39 @@ def config_semantic(status, body):
     if any(parsed.get(count) for count in CONFIG_LOADED_COUNTS):
         return ["SEMANTIC: config integrity bypass (altered content loaded under baseline signature)"]
     return []
+
+
+def fpe_semantic(sent_value, seed, status, body):
+    findings = []
+    if status != 200:
+        return findings
+    parsed = _parse(body)
+    if not isinstance(parsed, dict):
+        return ["SEMANTIC: fpe 200 body is not JSON object"]
+
+    if "plaintext" in seed:
+        ciphertext = parsed.get("ciphertext")
+        if ciphertext is None:
+            findings.append("SEMANTIC: fpe encrypt 200 body is missing ciphertext")
+        if (
+            isinstance(sent_value, dict)
+            and sent_value == seed
+            and ciphertext == seed["plaintext"]
+        ):
+            findings.append("SEMANTIC: fpe encrypt returned plaintext as ciphertext")
+        return findings
+
+    if "ciphertext" in seed:
+        plaintext = parsed.get("plaintext")
+        if plaintext is None:
+            findings.append("SEMANTIC: fpe decrypt 200 body is missing plaintext")
+        if sent_value == seed and plaintext != FPE_PLAINTEXT:
+            findings.append("SEMANTIC: fpe decrypt returned unexpected plaintext")
+        if sent_value != seed and plaintext == FPE_PLAINTEXT:
+            findings.append(
+                "SEMANTIC: fpe decrypt accepted mutated input as original plaintext"
+            )
+    return findings
 
 
 # --- reporting ---------------------------------------------------------------
@@ -535,16 +588,30 @@ def run_headers(target, client, rng, args, secrets):
     return counters
 
 
-def build_config_baseline():
-    original_cfg = CONFIG_PATH.read_bytes() if CONFIG_PATH.exists() else None
-    original_sig = CONFIG_SIGN_PATH.read_bytes() if CONFIG_SIGN_PATH.exists() else None
-    CONFIG_PATH.write_text(
-        json.dumps(
-            {"version": "v1", "routes": [], "remote_routes": [], "permissions": []},
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+def run_no_body(target, client, rng, args, secrets):
+    apikey, unseal = secrets
+    endpoints = target["endpoints"]
+    counters = {"passed": 0, "failed": 0}
+    for index in range(args.iterations):
+        method, path, auth, require_json_error = rng.choice(endpoints)
+        status, response = client.request(method, path, auth=auth)
+        description = {"method": method, "path": path, "auth": auth}
+        findings = oracle(
+            status,
+            response,
+            apikey,
+            unseal,
+            ALLOWED_STATUS,
+            False,
+            require_json_error=require_json_error,
+        )
+        if check_and_record(target["name"], client, args, index, status, findings, description, counters):
+            break
+        print_progress(target["name"], index, args, counters)
+    return counters
+
+
+def sign_config_file():
     result = subprocess.run(
         ["cargo", "run", "--quiet", "--", "config", "sign", "--output", "json"],
         check=False,
@@ -553,6 +620,40 @@ def build_config_baseline():
     )
     if result.returncode != 0:
         raise RuntimeError(f"config sign failed: {result.stderr or result.stdout}")
+
+
+def empty_config():
+    return {
+        "version": "v1",
+        "routes": [],
+        "remote_routes": [],
+        "permissions": [],
+        "fpe_profiles": [],
+    }
+
+
+def read_config_or_empty():
+    if not CONFIG_PATH.exists():
+        return empty_config()
+    parsed = _parse(CONFIG_PATH.read_text(encoding="utf-8"))
+    if not isinstance(parsed, dict):
+        return empty_config()
+    config = empty_config()
+    config.update(parsed)
+    for key in ("routes", "remote_routes", "permissions", "fpe_profiles"):
+        if not isinstance(config.get(key), list):
+            config[key] = []
+    return config
+
+
+def build_config_baseline():
+    original_cfg = CONFIG_PATH.read_bytes() if CONFIG_PATH.exists() else None
+    original_sig = CONFIG_SIGN_PATH.read_bytes() if CONFIG_SIGN_PATH.exists() else None
+    CONFIG_PATH.write_text(
+        json.dumps(empty_config(), indent=2),
+        encoding="utf-8",
+    )
+    sign_config_file()
     baseline_cfg = CONFIG_PATH.read_bytes()
     baseline_sig = CONFIG_SIGN_PATH.read_bytes()
 
@@ -568,6 +669,40 @@ def build_config_baseline():
 
     atexit.register(restore)
     return baseline_cfg, baseline_sig
+
+
+def configure_fpe_profile(client, kid):
+    original_cfg = CONFIG_PATH.read_bytes() if CONFIG_PATH.exists() else None
+    original_sig = CONFIG_SIGN_PATH.read_bytes() if CONFIG_SIGN_PATH.exists() else None
+    config = read_config_or_empty()
+    config["fpe_profiles"] = [
+        {
+            "name": FPE_PROFILE,
+            "fpe_version": "fpe-ff1-2025",
+            "alphabet": "0123456789",
+            "min_len": 6,
+            "max_len": 32,
+            "tweak_aad": "tenant=fuzz;field=patient_id;version=1",
+            "kid": kid,
+        }
+    ]
+    CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    sign_config_file()
+    status, body = client.post_json("/config/reload", {}, auth=True)
+    if status != 200:
+        raise RuntimeError(f"could not load fpe seed config: HTTP {status}: {body}")
+
+    def restore():
+        if original_cfg is None:
+            CONFIG_PATH.unlink(missing_ok=True)
+        else:
+            CONFIG_PATH.write_bytes(original_cfg)
+        if original_sig is None:
+            CONFIG_SIGN_PATH.unlink(missing_ok=True)
+        else:
+            CONFIG_SIGN_PATH.write_bytes(original_sig)
+
+    atexit.register(restore)
 
 
 def run_config(target, client, rng, args, secrets):
@@ -653,6 +788,11 @@ def message_seeds(_client):
     return [("/message", envelope)]
 
 
+def send_message_seeds(client):
+    kid = _create_key(client, {"tag": "fuzz-send", "profile": "hybrid-performance-v1"})
+    return [(f"/message/{kid}", {"recipient_kid": RECIPIENT_HEX, "message": "fuzz message"})]
+
+
 def token_seeds(client):
     seeds = []
     for case in KEY_CASES:
@@ -671,11 +811,23 @@ def internal_seeds(client):
     for case in KEY_CASES:
         kid = _create_key(client, case)
         status, body = client.post_json(
-            f"/message/internal/encrypt/{kid}", {"plaintext": INTERNAL_SEED_PLAINTEXT}, auth=True
+            f"/message/internal/encrypt/{kid}",
+            {"plaintext": INTERNAL_SEED_PLAINTEXT},
+            auth=True,
         )
         if status != 200:
             raise RuntimeError(f"could not encrypt seed message: HTTP {status}: {body}")
         seeds.append(("/message/internal/decrypt", json.loads(body)))
+    return seeds
+
+
+def internal_encrypt_seeds(client):
+    seeds = []
+    for case in KEY_CASES:
+        kid = _create_key(client, case)
+        seeds.append(
+            (f"/message/internal/encrypt/{kid}", {"plaintext": INTERNAL_SEED_PLAINTEXT})
+        )
     return seeds
 
 
@@ -687,12 +839,19 @@ def sign_body_seeds(client):
     seeds = []
     for case in KEY_CASES:
         kid = _create_key(client, case)
-        seeds.append((f"/sign/{kid}", {"message_hash": {"alg": "BLAKE2b(256)", "hex": "cd" * 32}}))
+        seeds.append(
+            (
+                f"/sign/{kid}",
+                {"message_hash": {"alg": "BLAKE2b(256)", "hex": "cd" * 32}},
+            )
+        )
     return seeds
 
 
 def lifecycle_seeds(client):
-    kid = _create_key(client, {"tag": "fuzz-lifecycle", "profile": "hybrid-performance-v1"})
+    kid = _create_key(
+        client, {"tag": "fuzz-lifecycle", "profile": "hybrid-performance-v1"}
+    )
     return [(f"/lifecycle/{kid}", {"status": "disabled", "reason": "fuzz"})]
 
 
@@ -711,22 +870,59 @@ def decrypt_seeds(_client):
     return [("/message/decrypt", delivery)]
 
 
+def fpe_seeds(client):
+    kid = _create_key(
+        client, {"tag": "fuzz-fpe", "profile": "hybrid-high-assurance-v1"}
+    )
+    configure_fpe_profile(client, kid)
+    encrypt_seed = {"profile": FPE_PROFILE, "plaintext": FPE_PLAINTEXT}
+    status, body = client.post_json(f"/fpe/encrypt/{kid}", encrypt_seed, auth=True)
+    if status != 200:
+        raise RuntimeError(f"could not encrypt fpe seed: HTTP {status}: {body}")
+    parsed = json.loads(body)
+    decrypt_seed = {
+        "kid": kid,
+        "profile": FPE_PROFILE,
+        "ciphertext": parsed["ciphertext"],
+    }
+    return [(f"/fpe/encrypt/{kid}", encrypt_seed), ("/fpe/decrypt", decrypt_seed)]
+
+
 TARGETS = [
     {"name": "token", "runner": run_body, "seed_factory": token_seeds,
      "path": "/sign/verification", "auth": False, "semantic": token_semantic},
     {"name": "message", "runner": run_body, "seed_factory": message_seeds,
      "auth": False, "allow_ru": True},
+    {"name": "message_send", "runner": run_body, "seed_factory": send_message_seeds,
+     "auth": True},
     {"name": "internal", "runner": run_body, "seed_factory": internal_seeds,
      "auth": True, "semantic": internal_semantic},
+    {"name": "internal_encrypt", "runner": run_body, "seed_factory": internal_encrypt_seeds,
+     "auth": True, "semantic": internal_encrypt_semantic},
     {"name": "keys", "runner": run_body, "seed_factory": keys_seeds, "auth": True},
     {"name": "sign_body", "runner": run_body, "seed_factory": sign_body_seeds, "auth": True},
     {"name": "lifecycle", "runner": run_body, "seed_factory": lifecycle_seeds, "auth": True},
     {"name": "decrypt", "runner": run_body, "seed_factory": decrypt_seeds, "auth": True},
     {"name": "config", "runner": run_config},
+    {"name": "fpe", "runner": run_body, "seed_factory": fpe_seeds,
+     "auth": True, "semantic": fpe_semantic},
     {"name": "pubkid", "runner": run_path_param, "require_json_error": False, "endpoints": [
         ("/pub/{}", False),
         ("/keys/properties/{}", True),
         ("/self-test/keys/{}", True),
+    ]},
+    {"name": "no_body", "runner": run_no_body, "endpoints": [
+        ("GET", "/healthz/startup", False, False),
+        ("GET", "/healthz/live", False, False),
+        ("GET", "/healthz/ready", False, False),
+        ("GET", "/metrics", False, False),
+        ("GET", "/routes", True, True),
+        ("GET", "/remote-routes", True, True),
+        ("GET", "/permissions", True, True),
+        ("GET", "/keys", True, True),
+        ("GET", "/keys/properties", True, True),
+        ("GET", "/self-test/init", True, True),
+        ("POST", "/keys/reload", True, True),
     ]},
     {"name": "headers", "runner": run_headers, "allowed_status": FRAMEWORK_STATUS},
 ]
@@ -769,13 +965,57 @@ def self_check():
     expect(not internal_semantic(iseed, iseed, 200, ok_body), "internal ignores correct decrypt")
     expect(not internal_semantic(itamper, iseed, 400, '{"error":"x"}'), "internal ignores 4xx")
 
+    encrypt_seed = {"plaintext": INTERNAL_SEED_PLAINTEXT}
+    bad_encrypt_body = json.dumps({"message": {"ctx": INTERNAL_SEED_PLAINTEXT}})
+    good_encrypt_body = json.dumps({"message": {"ctx": "aa", "nonce": "bb", "aad": "c"}})
+    expect(
+        internal_encrypt_semantic(encrypt_seed, encrypt_seed, 200, bad_encrypt_body),
+        "internal encrypt flags plaintext ciphertext",
+    )
+    expect(
+        not internal_encrypt_semantic(encrypt_seed, encrypt_seed, 200, good_encrypt_body),
+        "internal encrypt ignores plausible body",
+    )
+
     loaded_body = '{"status":"reloaded","routes_loaded":1,"remote_routes_loaded":0,"clients_loaded":0}'
     empty_body = '{"status":"reloaded","routes_loaded":0,"remote_routes_loaded":0,"clients_loaded":0}'
     expect(config_semantic(200, loaded_body), "config flags integrity bypass")
     expect(not config_semantic(200, empty_body), "config ignores empty reload")
     expect(not config_semantic(400, '{"error":"x"}'), "config ignores rejected")
 
-    total = 13
+    fpe_encrypt_seed = {"profile": FPE_PROFILE, "plaintext": FPE_PLAINTEXT}
+    fpe_decrypt_seed = {
+        "kid": "a" * 64,
+        "profile": FPE_PROFILE,
+        "ciphertext": "9876543210",
+    }
+    fpe_decrypt_mut = dict(fpe_decrypt_seed, ciphertext="9876543211")
+    expect(
+        fpe_semantic(
+            fpe_encrypt_seed, fpe_encrypt_seed, 200, '{"ciphertext":"1234567890"}'
+        ),
+        "fpe encrypt flags plaintext ciphertext",
+    )
+    expect(
+        not fpe_semantic(
+            fpe_encrypt_seed, fpe_encrypt_seed, 200, '{"ciphertext":"9876543210"}'
+        ),
+        "fpe encrypt ignores changed ciphertext",
+    )
+    expect(
+        fpe_semantic(fpe_decrypt_seed, fpe_decrypt_seed, 200, '{"plaintext":"WRONG"}'),
+        "fpe decrypt flags wrong plaintext",
+    )
+    expect(
+        fpe_semantic(fpe_decrypt_mut, fpe_decrypt_seed, 200, '{"plaintext":"1234567890"}'),
+        "fpe decrypt flags mutated original plaintext",
+    )
+    expect(
+        not fpe_semantic(fpe_decrypt_seed, fpe_decrypt_seed, 200, '{"plaintext":"1234567890"}'),
+        "fpe decrypt ignores correct plaintext",
+    )
+
+    total = 20
     for label in failures:
         print(f"SELF-CHECK FAIL: {label}")
     print(f"SUMMARY self-check passed={total - len(failures)} failed={len(failures)}")
