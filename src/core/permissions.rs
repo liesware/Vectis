@@ -13,6 +13,8 @@ pub const PERMISSION_ACTIONS: &[&str] = &[
     "self-test",
     "sign",
     "message",
+    "fpe-encrypt",
+    "fpe-decrypt",
     "metrics",
 ];
 const GLOBAL_PERMISSION_ACTIONS: &[&str] = &["metrics"];
@@ -471,6 +473,37 @@ mod tests {
             json!([{"kid": "*", "actions": ["message"]}]),
         )];
         assert!(validate_permission_clients(clients, |_| true).is_err());
+    }
+
+    #[test]
+    fn accepts_fpe_actions_only_for_explicit_kid() {
+        let clients = vec![client(
+            "fpe",
+            &hex64('8'),
+            "active",
+            json!([{"kid": hex64('a'), "actions": ["fpe-encrypt", "fpe-decrypt"]}]),
+        )];
+        let state = validate_permission_clients(clients, |_| true).unwrap();
+        let authed = state.authenticate_hash(&hex64('8')).unwrap();
+
+        assert!(
+            state
+                .require_permission(&authed, Some(&hex64('a')), "fpe-encrypt")
+                .is_ok()
+        );
+        assert!(
+            state
+                .require_permission(&authed, Some(&hex64('a')), "fpe-decrypt")
+                .is_ok()
+        );
+
+        let wildcard = vec![client(
+            "fpe-wildcard",
+            &hex64('9'),
+            "active",
+            json!([{"kid": "*", "actions": ["fpe-encrypt"]}]),
+        )];
+        assert!(validate_permission_clients(wildcard, |_| true).is_err());
     }
 
     #[test]

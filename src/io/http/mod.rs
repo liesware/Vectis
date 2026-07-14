@@ -11,6 +11,7 @@ mod auth;
 mod config;
 mod error;
 mod extract;
+mod fpe;
 mod health;
 mod keys;
 mod message;
@@ -25,6 +26,7 @@ mod test;
 
 use crate::core::config::AppConfig;
 use crate::core::config_file::ConfigState;
+use crate::core::fpe::FpeProfile;
 use crate::core::permissions::AuthenticatedClient;
 use crate::core::remote_routes::{PeerPublicKeys, RemoteRoute};
 use crate::core::routes::FinalAppRoute;
@@ -35,8 +37,22 @@ use crate::ops::init::{InitValidationOutput, ValidatedInitState};
 use crate::ops::internal_keys::InternalDerivedKeysState;
 use crate::ops::keys::{KeysDbState, LoadedOpsKey};
 use metrics_exporter_prometheus::PrometheusHandle;
+use zeroize::Zeroize;
 
 pub use app::run;
+
+#[derive(Clone)]
+struct FpeKeySource {
+    kid: String,
+    symmetric_key_hex: String,
+}
+
+impl Zeroize for FpeKeySource {
+    fn zeroize(&mut self) {
+        self.kid.zeroize();
+        self.symmetric_key_hex.zeroize();
+    }
+}
 
 #[derive(Clone)]
 pub struct HttpState {
@@ -207,14 +223,30 @@ impl HttpState {
         config_state.permissions.list()
     }
 
+    async fn fpe_profile(&self, name: &str) -> Option<FpeProfile> {
+        let config_state = self.config_state.read().await;
+
+        config_state.fpe_profiles.get(name).cloned()
+    }
+
     async fn reload_config_state(&self) -> Result<(), DynError> {
-        let loaded_key_ids = {
+        let fpe_key_sources = {
             let keys_db_state = self.keys_db_state.read().await;
-            keys_db_state.ids()
+            keys_db_state
+                .ids()
+                .into_iter()
+                .filter_map(|kid| {
+                    keys_db_state.get(&kid).map(|loaded_key| FpeKeySource {
+                        kid,
+                        symmetric_key_hex: loaded_key.keys().symmetric().key_hex().to_string(),
+                    })
+                })
+                .collect::<Vec<_>>()
         };
         let config = Arc::clone(&self.config);
         let init_state = (*self.init_state).clone();
         let reloaded = blocking::spawn_blocking_crypto(move || {
+            let fpe_key_sources = Zeroizing::new(fpe_key_sources);
             crate::core::config_file::reload_config_state(
                 &config,
                 |config_path, config_content| {
@@ -231,7 +263,23 @@ impl HttpState {
                         &signature_content,
                     )
                 },
-                |kid| loaded_key_ids.iter().any(|id| id == kid),
+                |kid| fpe_key_sources.iter().any(|source| source.kid == kid),
+                |kid, profile_name, fpe_version| {
+                    let source = fpe_key_sources
+                        .iter()
+                        .find(|source| source.kid == kid)
+                        .ok_or_else(|| {
+                            crate::error::invalid_input(format!(
+                                "fpe profile references kid not loaded in memory: {kid}"
+                            ))
+                        })?;
+                    crate::core::fpe::derive_fpe_key_for_profile(
+                        &source.symmetric_key_hex,
+                        profile_name,
+                        kid,
+                        fpe_version,
+                    )
+                },
             )
         })
         .await?;
@@ -320,6 +368,8 @@ fn record_operation_denied_metric(event_name: &str) {
         "message.decrypt.denied" => core_metrics::record_message("decrypt", "denied"),
         "message.internal.encrypt.denied" => core_metrics::record_message("send", "denied"),
         "message.internal.decrypt.denied" => core_metrics::record_message("decrypt", "denied"),
+        "fpe.encrypt.denied" => core_metrics::record_crypto_operation("fpe_encrypt", "failed"),
+        "fpe.decrypt.denied" => core_metrics::record_crypto_operation("fpe_decrypt", "failed"),
         "sign.denied" => core_metrics::record_crypto_operation("sign", "failed"),
         "self_test.denied" => {}
         _ => {}
@@ -350,6 +400,8 @@ pub fn router(state: HttpState) -> Router {
         )
         .route("/sign/verification", post(sign::sign_verification_endpoint))
         .route("/sign/{kid}", post(sign::sign_endpoint))
+        .route("/fpe/encrypt/{kid}", post(fpe::encrypt_endpoint))
+        .route("/fpe/decrypt", post(fpe::decrypt_endpoint))
         .route("/pub/{kid}", get(pubkey::pub_endpoint))
         .route(
             "/message/internal/encrypt/{kid}",

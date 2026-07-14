@@ -23,6 +23,7 @@ tags:
   - name: Public Keys
   - name: Signatures
   - name: Messages
+  - name: FPE
   - name: Observability
 security: []
 
@@ -504,6 +505,60 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
+  /fpe/encrypt/{kid}:
+    post:
+      tags: [FPE]
+      summary: Format-preserving encrypt a local field
+      description: >
+        Encrypts a field using an FPE profile loaded from signed config. The
+        request supplies only the profile name and plaintext; alphabet, length
+        bounds, tweak AAD, FPE version, and bound KID come from config.json.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FpeEncryptInput"
+      responses:
+        "200":
+          description: Format-preserving ciphertext
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FpeEncryptOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /fpe/decrypt:
+    post:
+      tags: [FPE]
+      summary: Format-preserving decrypt a local field
+      description: >
+        Decrypts a field using an FPE profile loaded from signed config. The
+        KID in the request must match the profile KID. FPE decrypt permits
+        active and retired keys.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FpeDecryptInput"
+      responses:
+        "200":
+          description: FPE plaintext
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FpeDecryptOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
 components:
   securitySchemes:
     ApiKeyAuth:
@@ -787,7 +842,7 @@ components:
           type: array
           items:
             type: string
-            enum: [admin, keys, lifecycle, self-test, sign, message, metrics]
+            enum: [admin, keys, lifecycle, self-test, sign, message, fpe-encrypt, fpe-decrypt, metrics]
           example:
             - message
 
@@ -1267,6 +1322,53 @@ components:
           example: version=v1;type=internal-message;kid=f55f...;timestamp=1782058090;cipher_alg=AES-256/GCM
         variant:
           $ref: "#/components/schemas/SymmetricAlgorithm"
+
+    FpeEncryptInput:
+      type: object
+      additionalProperties: false
+      required: [profile, plaintext]
+      properties:
+        profile:
+          $ref: "#/components/schemas/TextField"
+          example: patient-id-decimal-v1
+        plaintext:
+          $ref: "#/components/schemas/TextField"
+          example: "123456"
+
+    FpeEncryptOutput:
+      type: object
+      required: [kid, profile, ciphertext]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/TextField"
+          example: patient-id-decimal-v1
+        ciphertext:
+          $ref: "#/components/schemas/TextField"
+          example: "839201"
+
+    FpeDecryptInput:
+      type: object
+      additionalProperties: false
+      required: [kid, profile, ciphertext]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/TextField"
+          example: patient-id-decimal-v1
+        ciphertext:
+          $ref: "#/components/schemas/TextField"
+          example: "839201"
+
+    FpeDecryptOutput:
+      type: object
+      required: [plaintext]
+      properties:
+        plaintext:
+          $ref: "#/components/schemas/TextField"
+          example: "123456"
 
     MessageCipher:
       type: object

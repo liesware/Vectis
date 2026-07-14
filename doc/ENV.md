@@ -53,7 +53,7 @@ These variables are used by CLI commands that call the HTTP API. `serve` and `in
 | --- | --- | --- | --- |
 | `VECTIS_FINAL_APP_ADDR` | `localhost:3999` | Valid host:port | Default final app destination used when no manual route exists for a `kid`. |
 | `VECTIS_FINAL_APP_PATH` | `/message` | HTTP path beginning with `/`, no spaces | Default final app path. |
-| `VECTIS_CONFIG_PATH` | `config.json` | Non-empty file path | Unified signed config file with `routes`, `remote_routes`, and `permissions` sections. Startup falls back to empty sections (default final app delivery, only root authorized) if missing or invalid. Runtime reload keeps the previous config if the file exists but is invalid. |
+| `VECTIS_CONFIG_PATH` | `config.json` | Non-empty file path | Unified signed config file with `routes`, `remote_routes`, `permissions`, and optional `fpe_profiles` sections. Startup uses empty sections only when the config file is missing. If the file exists but is invalid, startup fails. Runtime reload keeps the previous config if the file exists but is invalid. |
 | `VECTIS_CONFIG_SIGN_PATH` | `config_sign.json` | Non-empty file path | Signature token for `VECTIS_CONFIG_PATH`, created by `vectis config sign`. |
 
 `routes` section shape inside `config.json`:
@@ -70,11 +70,12 @@ These variables are used by CLI commands that call the HTTP API. `serve` and `in
     }
   ],
   "remote_routes": [],
-  "permissions": []
+  "permissions": [],
+  "fpe_profiles": []
 }
 ```
 
-The `routes`/`remote_routes`/`permissions` sections live in the unified signed `config.json`.
+The `routes`/`remote_routes`/`permissions`/`fpe_profiles` sections live in the unified signed `config.json`.
 Vectis does not create it and `POST /keys` does not modify it.
 If `config.json` exists, `config_sign.json` must exist and verify before the config is loaded.
 Vectis rejects `config.json` above 8 MiB and `config_sign.json` above 1 MiB before parsing or verifying.
@@ -110,7 +111,8 @@ Runtime route operations:
       "status": "active"
     }
   ],
-  "permissions": []
+  "permissions": [],
+  "fpe_profiles": []
 }
 ```
 
@@ -119,6 +121,33 @@ The `remote_routes` config section is the only source of authorized outbound Vec
 Each entry may also include an optional `public_keys` object (the peer's full public key set, as returned by its `GET /pub/{kid}`). The signed config is the only source of peer public keys: `/message` send requires the recipient route to carry `public_keys`, `/message` receive requires the sender `kid` to match an active entry with `public_keys`, and `POST /sign/verification` can verify timestamp tokens signed by that remote `kid` (cross-instance verification). Entries without `public_keys` are routing metadata only and cannot be used to exchange messages; Vectis never fetches peer keys from a remote `/pub` endpoint at runtime.
 
 When `public_keys` is present, Vectis validates the key material before loading it: DER public keys must be loadable by Botan, X25519/X448 raw public keys must be exactly 32/56 bytes, and ML-KEM public keys must be loadable and usable for encapsulation. Invalid or non-operational public key material rejects config load/reload.
+
+`fpe_profiles` section shape inside `config.json`:
+
+```json
+{
+  "version": "v1",
+  "routes": [],
+  "remote_routes": [],
+  "permissions": [],
+  "fpe_profiles": [
+    {
+      "name": "patient-id-decimal-v1",
+      "fpe_version": "fpe-ff1-2025",
+      "alphabet": "0123456789",
+      "min_len": 6,
+      "max_len": 32,
+      "tweak_aad": "tenant=acme;field=patient_id;version=1",
+      "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed"
+    }
+  ]
+}
+```
+
+FPE profiles are local field profiles. They preserve format but do not
+authenticate data and do not replace AEAD message encryption. Requests may only
+select a profile by name; alphabet, length bounds, tweak AAD, FPE version, and
+the bound KID come from signed config.
 
 ## Authentication and Unsealing
 
@@ -163,7 +192,7 @@ Recommended admin permission:
 }
 ```
 
-If any permission entry contains `admin`, Vectis treats the whole client as admin and ignores `kid` plus any other actions for that client. Non-admin KID-scoped permissions must reference KIDs already loaded in memory. Global permissions such as `metrics` use `kid: "*"`.
+If any permission entry contains `admin`, Vectis treats the whole client as admin and ignores `kid` plus any other actions for that client. Non-admin KID-scoped permissions must reference KIDs already loaded in memory. Global permissions such as `metrics` use `kid: "*"`. `fpe-encrypt` and `fpe-decrypt` require explicit KIDs; `kid: "*"` is rejected for FPE.
 
 Allowed actions:
 
@@ -173,6 +202,8 @@ Allowed actions:
 - `self-test`
 - `sign`
 - `message`
+- `fpe-encrypt`
+- `fpe-decrypt`
 - `metrics`
 
 Permission mapping summary:
@@ -183,6 +214,8 @@ Permission mapping summary:
 - `self-test`: `GET /self-test/keys/{kid}`.
 - `sign`: `POST /sign/{kid}`.
 - `message`: protected message endpoints.
+- `fpe-encrypt`: `POST /fpe/encrypt/{kid}`.
+- `fpe-decrypt`: `POST /fpe/decrypt`.
 - `metrics`: `GET /metrics` with `kid: "*"`; this is a global permission and does not reference a loaded operational KID.
 
 Routes operations require root or `admin`; there is no granular `routes` action.
@@ -275,7 +308,7 @@ Audit events use stable event names such as `auth.success`, `permission.denied`,
 | --- | --- | --- | --- |
 | `VECTIS_METRICS_ENABLED` | `true` | `true` or `false` | Enable the Prometheus `/metrics` endpoint. The endpoint requires `X-API-Key` with root, `admin`, or `metrics` permission. When `false`, authorized requests return `404`. |
 
-Metrics include runtime gauges for unsealed state and loaded keys/routes/permissions, counters for auth and permission decisions, config/key reload results, message send/receive/decrypt results, and cryptographic sign/verify/encrypt/decrypt results. Labels are intentionally low cardinality and must not include KIDs, API keys, actors, remote addresses, plaintext, ciphertext, or free-form errors.
+Metrics include runtime gauges for unsealed state and loaded keys/routes/permissions, counters for auth and permission decisions, config/key reload results, message send/receive/decrypt results, and cryptographic sign/verify/encrypt/decrypt/FPE results. Labels are intentionally low cardinality and must not include KIDs, API keys, actors, remote addresses, plaintext, ciphertext, or free-form errors.
 
 ## Hostnames
 

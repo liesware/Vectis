@@ -25,7 +25,7 @@ The `vectis` CLI is an HTTP client for the runtime API, except for `vectis init`
 Only `v1` is supported. Any other version is rejected explicitly; there is no silent downgrade.
 
 The signed config file (`config.json`, with `routes`, `remote_routes`, and `permissions`
-sections) carries a single top-level `version` that is part of the signed content.
+and optional `fpe_profiles` sections) carries a single top-level `version` that is part of the signed content.
 
 Signed tokens and protected messages intentionally carry `version` at **two** levels:
 
@@ -73,6 +73,8 @@ Endpoints requiring auth:
 - `POST /message/decrypt`
 - `POST /message/internal/encrypt/{kid}`
 - `POST /message/internal/decrypt`
+- `POST /fpe/encrypt/{kid}`
+- `POST /fpe/decrypt`
 
 Endpoints without auth:
 
@@ -587,6 +589,8 @@ Allowed actions:
 - `self-test`
 - `sign`
 - `message`
+- `fpe-encrypt`
+- `fpe-decrypt`
 - `metrics`
 
 Permission mapping:
@@ -599,9 +603,11 @@ Permission mapping:
 | `self-test` | `GET /self-test/keys/{kid}` |
 | `sign` | `POST /sign/{kid}` |
 | `message` | `POST /message/{sender_kid}`, `POST /message/decrypt`, `POST /message/internal/encrypt/{kid}`, `POST /message/internal/decrypt` |
+| `fpe-encrypt` | `POST /fpe/encrypt/{kid}` |
+| `fpe-decrypt` | `POST /fpe/decrypt` |
 | `metrics` | `GET /metrics` with `kid: "*"` |
 
-Root always passes permission checks. Routes operations require root or `admin`; there is no granular `routes` action.
+Root always passes permission checks. Routes operations require root or `admin`; there is no granular `routes` action. `fpe-encrypt` and `fpe-decrypt` require explicit KID-scoped grants; `kid: "*"` is rejected for those actions.
 
 Permissions file shape:
 
@@ -995,6 +1001,70 @@ Response:
 }
 ```
 
+## Format-Preserving Encryption
+
+FPE is a local field operation. It preserves an alphabet and length range defined by a signed config profile. It is deterministic for the same key, profile, tweak AAD, and plaintext. It does not authenticate data and does not replace AEAD message encryption.
+
+FPE profiles live in `config.json` under `fpe_profiles`. Requests cannot provide `alphabet`, `tweak_aad`, `min_len`, `max_len`, or `fpe_version`; those values come only from signed config.
+
+The FPE key is derived from the operational key's symmetric key:
+
+```text
+HKDF-SHA256(
+  input_key_material = ops_symmetric_key,
+  salt = "vectis:fpe:ff1:v1",
+  info = "profile=<profile_name>;kid=<kid>;fpe_version=<fpe_version>",
+  length = 32
+)
+```
+
+### POST /fpe/encrypt/{kid}
+
+Requires auth and `fpe-encrypt` permission for the path `kid`. The key must be `active`.
+
+Request:
+
+```json
+{
+  "profile": "patient-id-decimal-v1",
+  "plaintext": "123456"
+}
+```
+
+Response:
+
+```json
+{
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "profile": "patient-id-decimal-v1",
+  "ciphertext": "839201"
+}
+```
+
+The response intentionally does not include `fpe_version`.
+
+### POST /fpe/decrypt
+
+Requires auth and `fpe-decrypt` permission for the request `kid`. The key may be `active` or `retired`.
+
+Request:
+
+```json
+{
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "profile": "patient-id-decimal-v1",
+  "ciphertext": "839201"
+}
+```
+
+Response:
+
+```json
+{
+  "plaintext": "123456"
+}
+```
+
 ## Final App Delivery
 
 When `POST /message` receives and validates a protected message, it delivers this JSON to the final app:
@@ -1017,7 +1087,7 @@ The final app can call `POST /message/decrypt` to recover the plaintext.
 
 ## Configuration File (`config.json`)
 
-Vectis loads a single signed config file (`config.json`) with three sections — `routes`, `remote_routes`, and `permissions` — plus a top-level `version`. It is loaded when `vectis serve` starts and can be reloaded at runtime with `POST /config/reload`. Create/update its signature with `vectis config sign`; inspect it with `vectis config list`.
+Vectis loads a single signed config file (`config.json`) with `routes`, `remote_routes`, `permissions`, and optional `fpe_profiles` sections plus a top-level `version`. It is loaded when `vectis serve` starts and can be reloaded at runtime with `POST /config/reload`. Create/update its signature with `vectis config sign`; inspect it with `vectis config list`.
 
 Default paths:
 
@@ -1068,6 +1138,17 @@ Expected file shape:
       "status": "active",
       "permissions": [{ "kid": "f55f086e...", "actions": ["message"] }]
     }
+  ],
+  "fpe_profiles": [
+    {
+      "name": "patient-id-decimal-v1",
+      "fpe_version": "fpe-ff1-2025",
+      "alphabet": "0123456789",
+      "min_len": 6,
+      "max_len": 32,
+      "tweak_aad": "tenant=acme;field=patient_id;version=1",
+      "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed"
+    }
   ]
 }
 ```
@@ -1080,6 +1161,7 @@ Top level:
 | `routes` | yes (may be `[]`) | array | Final app delivery routes per local `kid`. |
 | `remote_routes` | yes (may be `[]`) | array | Authorized remote Vectis peers. |
 | `permissions` | yes (may be `[]`) | array | Non-root API key clients and their allowed actions. |
+| `fpe_profiles` | no (defaults to `[]`) | array | Signed local FPE field profiles. |
 
 `routes[]` entries:
 
@@ -1110,7 +1192,19 @@ Top level:
 | `client` | yes | text, unique | Client label. |
 | `apikey_hash` | yes | 64 hex (32 bytes) | Server-side verifier for this client's `X-API-Key`. |
 | `status` | yes | `active` \| `disabled` \| `revoked` | Only `active` clients are authorized. |
-| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `metrics`. `kid: "*"` is allowed with global actions such as `admin` and `metrics`; an `admin` action grants all endpoints and ignores kid-scoped grants. |
+| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `fpe-encrypt`, `fpe-decrypt`, `metrics`. `kid: "*"` is allowed with global actions such as `admin` and `metrics`; `fpe-encrypt` and `fpe-decrypt` require explicit KIDs. An `admin` action grants all endpoints and ignores kid-scoped grants. |
+
+`fpe_profiles[]` entries:
+
+| Field | Required | Value | Meaning |
+| --- | --- | --- | --- |
+| `name` | yes | unique non-empty text | Profile selected by FPE requests. |
+| `fpe_version` | yes | `fpe-ff1-2025` | FF1 profile version and HKDF binding value. |
+| `alphabet` | yes | unique characters, no control chars | Domain alphabet for plaintext and ciphertext. |
+| `min_len` | yes | integer >= 1 | Minimum accepted field length. |
+| `max_len` | yes | integer >= `min_len` | Maximum accepted field length. |
+| `tweak_aad` | yes | non-empty text | Literal cryptographic tweak context from signed config. |
+| `kid` | yes | loaded local KID | Operational key whose symmetric key derives the FPE key. |
 
 Routing behavior:
 
@@ -1118,8 +1212,9 @@ Routing behavior:
 2. If a route exists, deliver to that route's `final_app_addr` and `final_app_path`.
 3. If no route exists for the `kid`, deliver to the default `VECTIS_FINAL_APP_ADDR` and `VECTIS_FINAL_APP_PATH`.
 4. A manual route is loaded only if its `kid` exists in the keys currently loaded in memory.
-5. During startup, a missing config, invalid config, or route with an unloaded `kid` starts with empty sections and uses the default final app fallback.
-6. During reload, a missing config reloads to empty sections; an invalid config, bad signature, or a section referencing an unloaded `kid` returns an error and keeps the previous in-memory config.
+5. During startup, a missing config starts with empty sections and uses the default final app fallback.
+6. During startup, an existing invalid config, bad signature, or section referencing an unloaded `kid` is fatal.
+7. During reload, a missing config reloads to empty sections; an invalid config, bad signature, or a section referencing an unloaded `kid` returns an error and keeps the previous in-memory config.
 
 The config file is operational configuration. Vectis does not create it automatically and `POST /keys` does not modify it.
 
@@ -1130,7 +1225,7 @@ Each `remote_routes` entry may carry an optional `public_keys` object — the fu
 - `POST /message/{sender_kid}` requires the recipient route to carry `public_keys`; a route without them is routing-only and sending returns `403`.
 - `POST /message` requires the sender `kid` to match an active `remote_routes` entry with `public_keys`; messages from unregistered senders return `403`.
 - `POST /sign/verification` can verify timestamp tokens whose signer `kid` is not local, resolving the signer's public keys from the matching active `remote_routes` entry.
-- Invalid or non-operational public key material rejects config load/reload. Startup falls back to empty config sections; runtime reload keeps the previous in-memory config.
+- Invalid or non-operational public key material rejects config load/reload. Startup fails if the config exists and is invalid; runtime reload keeps the previous in-memory config.
 
 ## Related Configuration
 

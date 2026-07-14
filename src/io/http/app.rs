@@ -43,6 +43,19 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
             )
         },
         |kid| keys_db_state.contains_id(kid),
+        |kid, profile_name, fpe_version| {
+            let loaded_key = keys_db_state.get(kid).ok_or_else(|| {
+                crate::error::invalid_input(format!(
+                    "fpe profile references kid not loaded in memory: {kid}"
+                ))
+            })?;
+            crate::core::fpe::derive_fpe_key_for_profile(
+                loaded_key.keys().symmetric().key_hex(),
+                profile_name,
+                kid,
+                fpe_version,
+            )
+        },
     )?;
     let started_at = validation::current_timestamp()?;
     info!(

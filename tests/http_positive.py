@@ -31,6 +31,7 @@ from http_support import (
     start_final_app,
     write_config,
     write_permissions,
+    write_fpe_profiles,
     write_test_remote_routes,
     write_test_routes,
 )
@@ -79,6 +80,18 @@ def print_internal_message(rows):
         print(f"  timestamp: {timestamp}")
         print(f"  variant: {variant}")
         print(f"  ctx_hex_len: {ctx_len}")
+        print(f"  plain_text: {plaintext}")
+    print()
+
+
+def print_fpe(rows):
+    print("fpe:")
+    for key_id, profile, ciphertext, plaintext in rows:
+        print(f"- kid: {key_id}")
+        print(f"  profile: {profile}")
+        print(f"  encrypt: OK")
+        print(f"  decrypt: OK")
+        print(f"  ciphertext: {ciphertext}")
         print(f"  plain_text: {plaintext}")
     print()
 
@@ -180,6 +193,14 @@ def validate_runtime_metrics(client):
     require(
         'vectis_crypto_operation_total{operation="decrypt",result="success"}' in metrics,
         "metrics must include successful decrypt count",
+    )
+    require(
+        'vectis_crypto_operation_total{operation="fpe_encrypt",result="success"}' in metrics,
+        "metrics must include successful fpe encrypt count",
+    )
+    require(
+        'vectis_crypto_operation_total{operation="fpe_decrypt",result="success"}' in metrics,
+        "metrics must include successful fpe decrypt count",
     )
 
 
@@ -540,6 +561,32 @@ def encrypt_internal_message(client, message_number, key_id, case):
     }
 
 
+def fpe_round_trip(client, key_id):
+    profile = "patient-id-decimal-v1"
+    plaintext = "123456789"
+    encrypted = client.post(
+        f"/fpe/encrypt/{key_id}",
+        {"profile": profile, "plaintext": plaintext},
+        auth=True,
+    )
+    require(encrypted.get("kid") == key_id, "fpe encrypt kid mismatch")
+    require(encrypted.get("profile") == profile, "fpe encrypt profile mismatch")
+    require("fpe_version" not in encrypted, "fpe encrypt response must not include fpe_version")
+    ciphertext = encrypted.get("ciphertext")
+    require(isinstance(ciphertext, str) and ciphertext, "fpe ciphertext must be a non-empty string")
+    require(ciphertext != plaintext, "fpe ciphertext should differ from plaintext")
+    require(ciphertext.isdigit(), "fpe ciphertext must preserve decimal alphabet")
+
+    decrypted = client.post(
+        "/fpe/decrypt",
+        {"kid": key_id, "profile": profile, "ciphertext": ciphertext},
+        auth=True,
+    )
+    require(decrypted.get("plaintext") == plaintext, "fpe decrypt plaintext mismatch")
+
+    return profile, ciphertext, plaintext
+
+
 def validate_permissions_flow(base_url, root_client, key_id, case):
     limited_key, limited_hash = create_api_key_pair()
     admin_key, admin_hash = create_api_key_pair()
@@ -790,6 +837,27 @@ def main():
     write_test_remote_routes(client, [key_id for key_id, _ in created], recipient_host)
     reload_config(client)
 
+    write_fpe_profiles(
+        [
+            {
+                "name": "patient-id-decimal-v1",
+                "fpe_version": "fpe-ff1-2025",
+                "alphabet": "0123456789",
+                "min_len": 6,
+                "max_len": 32,
+                "tweak_aad": "tenant=acme;field=patient_id;version=1",
+                "kid": created[0][0],
+            }
+        ]
+    )
+    reload_config(client)
+    fpe_rows = [
+        (
+            created[0][0],
+            *fpe_round_trip(client, created[0][0]),
+        )
+    ]
+
     permission_rows = validate_permissions_flow(args.base_url, client, created[0][0], created[0][1])
     print_section("permissions", permission_rows)
     passed_count += len(permission_rows)
@@ -870,6 +938,7 @@ def main():
 
     print_section("test key", test_rows)
     print_section("pub", pub_rows)
+    print_fpe(fpe_rows)
     print_message(message_rows)
     print_internal_message(internal_message_rows)
     print_section("sign", sign_rows)
@@ -879,6 +948,7 @@ def main():
     passed_count += len(create_rows)
     passed_count += len(test_rows)
     passed_count += len(pub_rows)
+    passed_count += len(fpe_rows)
     passed_count += len(message_rows)
     passed_count += len(internal_message_rows)
     passed_count += len(sign_rows)
@@ -888,6 +958,7 @@ def main():
     _CONFIG["routes"] = []
     _CONFIG["remote_routes"] = []
     _CONFIG["permissions"] = []
+    _CONFIG["fpe_profiles"] = []
     write_config()
     reload_config(client)
     restore_config_file(config_backup)

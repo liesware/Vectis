@@ -27,7 +27,13 @@ VALID_MESSAGE = b"Vectis negative workflow test"
 CONFIG_PATH = Path("config.json")
 CONFIG_SIGN_PATH = Path("config_sign.json")
 
-_CONFIG = {"version": "v1", "routes": [], "remote_routes": [], "permissions": []}
+_CONFIG = {
+    "version": "v1",
+    "routes": [],
+    "remote_routes": [],
+    "permissions": [],
+    "fpe_profiles": [],
+}
 
 
 class NegativeTestError(Exception):
@@ -143,6 +149,15 @@ def write_permissions(clients, sign=True):
     _CONFIG["routes"] = []
     _CONFIG["remote_routes"] = []
     _CONFIG["permissions"] = clients
+    _CONFIG["fpe_profiles"] = []
+    write_config(sign=sign)
+
+
+def write_fpe_profiles(profiles, sign=True):
+    _CONFIG["routes"] = []
+    _CONFIG["remote_routes"] = []
+    _CONFIG["permissions"] = []
+    _CONFIG["fpe_profiles"] = profiles
     write_config(sign=sign)
 
 
@@ -150,6 +165,7 @@ def write_remote_routes(routes, sign=True):
     _CONFIG["routes"] = []
     _CONFIG["permissions"] = []
     _CONFIG["remote_routes"] = routes
+    _CONFIG["fpe_profiles"] = []
     write_config(sign=sign)
 
 
@@ -157,6 +173,7 @@ def write_routes(routes, sign=True):
     _CONFIG["routes"] = routes
     _CONFIG["remote_routes"] = []
     _CONFIG["permissions"] = []
+    _CONFIG["fpe_profiles"] = []
     write_config(sign=sign)
 
 
@@ -209,6 +226,18 @@ def create_valid_internal_message(client, key_id):
     require(isinstance(response.get("message"), dict), "valid internal message must include message")
     require_hex(response["message"].get("ctx"), "valid internal message.ctx")
     return response
+
+
+def valid_fpe_profile(key_id):
+    return {
+        "name": "patient-id-decimal-v1",
+        "fpe_version": "fpe-ff1-2025",
+        "alphabet": "0123456789",
+        "min_len": 6,
+        "max_len": 32,
+        "tweak_aad": "tenant=acme;field=patient_id;version=1",
+        "kid": key_id,
+    }
 
 
 def valid_message_request(key_id):
@@ -372,6 +401,37 @@ def main():
         status, _ = client.get("/permissions", headers={"X-API-Key": "00" * 32})
         require_status("GET /permissions invalid auth", status, 401)
 
+    def fpe_encrypt_without_auth():
+        status, _, headers = client.post_with_headers(
+            f"/fpe/encrypt/{key_id}",
+            {"profile": "patient-id-decimal-v1", "plaintext": "123456"},
+        )
+        require_status("POST /fpe/encrypt/{kid} without auth", status, 401)
+        require_request_id(headers)
+
+    def fpe_decrypt_without_auth():
+        status, _ = client.post(
+            "/fpe/decrypt",
+            {"kid": key_id, "profile": "patient-id-decimal-v1", "ciphertext": "123456"},
+        )
+        require_status("POST /fpe/decrypt without auth", status, 401)
+
+    def fpe_encrypt_invalid_auth():
+        status, _ = client.post(
+            f"/fpe/encrypt/{key_id}",
+            {"profile": "patient-id-decimal-v1", "plaintext": "123456"},
+            headers={"X-API-Key": "00" * 32},
+        )
+        require_status("POST /fpe/encrypt/{kid} invalid auth", status, 401)
+
+    def fpe_decrypt_invalid_auth():
+        status, _ = client.post(
+            "/fpe/decrypt",
+            {"kid": key_id, "profile": "patient-id-decimal-v1", "ciphertext": "123456"},
+            headers={"X-API-Key": "00" * 32},
+        )
+        require_status("POST /fpe/decrypt invalid auth", status, 401)
+
     def keys_tag_not_string():
         request = dict(VALID_KEY_REQUEST)
         request["tag"] = 1
@@ -462,6 +522,8 @@ def main():
             },
         ]
     )
+    _CONFIG["fpe_profiles"] = [valid_fpe_profile(key_id)]
+    write_config()
     reload_config(client)
     limited_client = Client(args.base_url, limited_api_key)
     metrics_client = Client(args.base_url, metrics_api_key)
@@ -508,6 +570,22 @@ def main():
         status, _ = limited_client.get("/metrics", auth=True)
         require_status("limited client blocks metrics", status, 403)
 
+    def limited_blocks_fpe_encrypt():
+        status, _ = limited_client.post(
+            f"/fpe/encrypt/{key_id}",
+            {"profile": "patient-id-decimal-v1", "plaintext": "123456"},
+            auth=True,
+        )
+        require_status("limited client blocks fpe encrypt", status, 403)
+
+    def limited_blocks_fpe_decrypt():
+        status, _ = limited_client.post(
+            "/fpe/decrypt",
+            {"kid": key_id, "profile": "patient-id-decimal-v1", "ciphertext": "123456"},
+            auth=True,
+        )
+        require_status("limited client blocks fpe decrypt", status, 403)
+
     def metrics_client_allows_metrics():
         status, _ = metrics_client.get("/metrics", auth=True)
         require_status("metrics client allows metrics", status, 200)
@@ -535,6 +613,26 @@ def main():
         require(isinstance(response.get("clients"), list), "permissions.clients must be a list")
         require("apikey_hash" not in json.dumps(response), "permissions list must not expose apikey_hash")
 
+    def admin_allows_fpe_round_trip():
+        status, encrypted = admin_client.post(
+            f"/fpe/encrypt/{key_id}",
+            {"profile": "patient-id-decimal-v1", "plaintext": "123456"},
+            auth=True,
+        )
+        require_status("admin client allows fpe encrypt", status, 200)
+        require("fpe_version" not in encrypted, "fpe encrypt response must not include fpe_version")
+        status, decrypted = admin_client.post(
+            "/fpe/decrypt",
+            {
+                "kid": key_id,
+                "profile": "patient-id-decimal-v1",
+                "ciphertext": encrypted.get("ciphertext"),
+            },
+            auth=True,
+        )
+        require_status("admin client allows fpe decrypt", status, 200)
+        require(decrypted.get("plaintext") == "123456", "admin fpe decrypt plaintext mismatch")
+
     for name, func in (
         ("limited client can message", limited_can_message),
         ("limited client blocks keys reload", limited_blocks_keys_reload),
@@ -543,12 +641,15 @@ def main():
         ("limited client blocks sign", limited_blocks_sign),
         ("limited client blocks config reload", limited_blocks_config_reload),
         ("limited client blocks metrics", limited_blocks_metrics),
+        ("limited client blocks fpe encrypt", limited_blocks_fpe_encrypt),
+        ("limited client blocks fpe decrypt", limited_blocks_fpe_decrypt),
         ("metrics client allows metrics", metrics_client_allows_metrics),
         ("metrics client blocks admin", metrics_client_blocks_admin),
         ("limited client blocks permissions list", limited_blocks_permissions_list),
         ("metrics client blocks permissions list", metrics_client_blocks_permissions_list),
         ("admin client allows config reload", admin_allows_config_reload),
         ("admin client allows permissions list", admin_allows_permissions_list),
+        ("admin client allows fpe round trip", admin_allows_fpe_round_trip),
     ):
         run_case(rows, name, func)
 
@@ -576,6 +677,10 @@ def main():
         ("GET /remote-routes invalid auth", remote_routes_list_invalid_auth),
         ("GET /permissions without auth", permissions_list_without_auth),
         ("GET /permissions invalid auth", permissions_list_invalid_auth),
+        ("POST /fpe/encrypt/{kid} without auth", fpe_encrypt_without_auth),
+        ("POST /fpe/decrypt without auth", fpe_decrypt_without_auth),
+        ("POST /fpe/encrypt/{kid} invalid auth", fpe_encrypt_invalid_auth),
+        ("POST /fpe/decrypt invalid auth", fpe_decrypt_invalid_auth),
         ("POST /keys tag not string", keys_tag_not_string),
         ("POST /keys invalid algorithm", keys_invalid_algorithm),
         ("POST /keys invalid profile", keys_invalid_profile),
@@ -667,6 +772,61 @@ def main():
         )
         status, _ = client.post("/config/reload", {}, auth=True)
         require_status("permissions wildcard non-global action", status, 400)
+
+    def permissions_wildcard_fpe_encrypt():
+        write_permissions(
+            [
+                {
+                    "client": "bad-wildcard-fpe",
+                    "apikey_hash": limited_api_key_hash,
+                    "status": "active",
+                    "permissions": [{"kid": "*", "actions": ["fpe-encrypt"]}],
+                }
+            ]
+        )
+        status, _ = client.post("/config/reload", {}, auth=True)
+        require_status("permissions wildcard fpe encrypt", status, 400)
+
+    def fpe_profile_duplicate_name():
+        profile = valid_fpe_profile(key_id)
+        write_fpe_profiles([profile, dict(profile, kid=key_id)])
+        status, _ = client.post("/config/reload", {}, auth=True)
+        require_status("fpe profile duplicate name", status, 400)
+
+    def fpe_profile_invalid_version():
+        profile = valid_fpe_profile(key_id)
+        profile["fpe_version"] = "fpe-ff1-legacy"
+        write_fpe_profiles([profile])
+        status, _ = client.post("/config/reload", {}, auth=True)
+        require_status("fpe profile invalid version", status, 400)
+
+    def fpe_profile_duplicate_alphabet():
+        profile = valid_fpe_profile(key_id)
+        profile["alphabet"] = "00123456789"
+        write_fpe_profiles([profile])
+        status, _ = client.post("/config/reload", {}, auth=True)
+        require_status("fpe profile duplicate alphabet", status, 400)
+
+    def fpe_profile_invalid_lengths():
+        profile = valid_fpe_profile(key_id)
+        profile["min_len"] = 32
+        profile["max_len"] = 6
+        write_fpe_profiles([profile])
+        status, _ = client.post("/config/reload", {}, auth=True)
+        require_status("fpe profile invalid lengths", status, 400)
+
+    def fpe_profile_max_len_too_large():
+        profile = valid_fpe_profile(key_id)
+        profile["max_len"] = 1025
+        write_fpe_profiles([profile])
+        status, _ = client.post("/config/reload", {}, auth=True)
+        require_status("fpe profile max len too large", status, 400)
+
+    def fpe_profile_unloaded_kid():
+        profile = valid_fpe_profile("00" * 32)
+        write_fpe_profiles([profile])
+        status, _ = client.post("/config/reload", {}, auth=True)
+        require_status("fpe profile unloaded kid", status, 400)
 
     def routes_missing_name():
         write_routes(
@@ -943,6 +1103,13 @@ def main():
         ("permissions invalid action pub", permissions_invalid_action_pub),
         ("permissions invalid action routes", permissions_invalid_action_routes),
         ("permissions wildcard non-global action", permissions_wildcard_non_global_action),
+        ("permissions wildcard fpe encrypt", permissions_wildcard_fpe_encrypt),
+        ("fpe profile duplicate name", fpe_profile_duplicate_name),
+        ("fpe profile invalid version", fpe_profile_invalid_version),
+        ("fpe profile duplicate alphabet", fpe_profile_duplicate_alphabet),
+        ("fpe profile invalid lengths", fpe_profile_invalid_lengths),
+        ("fpe profile max len too large", fpe_profile_max_len_too_large),
+        ("fpe profile unloaded kid", fpe_profile_unloaded_kid),
         ("routes missing name", routes_missing_name),
         ("routes invalid name", routes_invalid_name),
         ("remote routes invalid kid", remote_routes_invalid_kid),
@@ -964,6 +1131,9 @@ def main():
         run_case(rows, name, func)
 
     restore_valid_permissions()
+    _CONFIG["fpe_profiles"] = [valid_fpe_profile(key_id)]
+    write_config()
+    reload_config(client)
 
     token = create_valid_token(client, key_id)
     internal_message = create_valid_internal_message(client, key_id)
@@ -1289,6 +1459,38 @@ def main():
             "tampered ciphertext must fail authentication cleanly",
         )
 
+    def fpe_encrypt_plaintext_outside_alphabet():
+        status, _ = client.post(
+            f"/fpe/encrypt/{key_id}",
+            {"profile": "patient-id-decimal-v1", "plaintext": "abc123"},
+            auth=True,
+        )
+        require_status("POST /fpe/encrypt/{id} plaintext outside alphabet", status, 400)
+
+    def fpe_encrypt_plaintext_too_short():
+        status, _ = client.post(
+            f"/fpe/encrypt/{key_id}",
+            {"profile": "patient-id-decimal-v1", "plaintext": "123"},
+            auth=True,
+        )
+        require_status("POST /fpe/encrypt/{id} plaintext too short", status, 400)
+
+    def fpe_encrypt_unknown_profile():
+        status, _ = client.post(
+            f"/fpe/encrypt/{key_id}",
+            {"profile": "missing-profile", "plaintext": "123456"},
+            auth=True,
+        )
+        require_status("POST /fpe/encrypt/{id} unknown profile", status, 400)
+
+    def fpe_decrypt_ciphertext_outside_alphabet():
+        status, _ = client.post(
+            "/fpe/decrypt",
+            {"kid": key_id, "profile": "patient-id-decimal-v1", "ciphertext": "abc123"},
+            auth=True,
+        )
+        require_status("POST /fpe/decrypt ciphertext outside alphabet", status, 400)
+
     for name, func in (
         ("POST /message/internal/encrypt/{id} without auth", internal_encrypt_without_auth),
         ("POST /message/internal/encrypt/{id} kid not hex", internal_encrypt_kid_not_hex),
@@ -1296,6 +1498,10 @@ def main():
         ("POST /message/internal/decrypt without auth", internal_decrypt_without_auth),
         ("POST /message/internal/decrypt tampered kid", internal_decrypt_tampered_kid),
         ("POST /message/internal/decrypt tampered ciphertext", internal_decrypt_tampered_ciphertext),
+        ("POST /fpe/encrypt/{id} plaintext outside alphabet", fpe_encrypt_plaintext_outside_alphabet),
+        ("POST /fpe/encrypt/{id} plaintext too short", fpe_encrypt_plaintext_too_short),
+        ("POST /fpe/encrypt/{id} unknown profile", fpe_encrypt_unknown_profile),
+        ("POST /fpe/decrypt ciphertext outside alphabet", fpe_decrypt_ciphertext_outside_alphabet),
     ):
         run_case(rows, name, func)
 
@@ -1458,6 +1664,7 @@ def main():
     _CONFIG["routes"] = []
     _CONFIG["remote_routes"] = []
     _CONFIG["permissions"] = []
+    _CONFIG["fpe_profiles"] = []
     write_config()
     status, _ = client.post("/config/reload", {}, auth=True)
     require_status("restore config reload", status, 200)

@@ -391,6 +391,21 @@ vectis message internal decrypt --file internal-message.json
 Small JSON inputs can be passed directly with `--json`, but files are easier to
 read and audit.
 
+### `vectis fpe`
+
+Calls local format-preserving encryption endpoints. FPE profiles are not
+defined in the request; they are loaded from signed `config.json`.
+
+```sh
+vectis fpe encrypt <kid> --json '{"profile":"patient-id-decimal-v1","plaintext":"123456"}'
+vectis fpe decrypt --json '{"kid":"<kid>","profile":"patient-id-decimal-v1","ciphertext":"839201"}'
+```
+
+`encrypt` requires `fpe-encrypt` permission for the KID and an `active` key.
+`decrypt` requires `fpe-decrypt` permission and allows `active` or `retired`
+keys. The CLI does not print or accept `fpe_version`; that value is part of the
+signed profile.
+
 ## Authentication
 
 Protected HTTP commands send:

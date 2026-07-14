@@ -4,6 +4,7 @@ pub mod canonical;
 pub mod config;
 pub mod config_file;
 pub mod crypto;
+pub mod fpe;
 pub mod http_client;
 pub mod logging;
 pub mod metrics;

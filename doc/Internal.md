@@ -38,7 +38,7 @@ Important `core` responsibilities:
 - cryptographic helper functions;
 - external input validators;
 - signed config loading;
-- routes, remote routes, and permissions;
+- routes, remote routes, permissions, and FPE profiles;
 - storage abstraction and SQLite/PostgreSQL backends;
 - HTTP client construction;
 - operational logs, audit logs, and metrics;
@@ -128,7 +128,7 @@ Reload boundaries are explicit:
 
 - `POST /keys/reload` refreshes loaded key state from storage.
 - `POST /config/reload` refreshes signed routes, remote routes, and
-  permissions.
+  permissions plus FPE profiles.
 - missing-key lazy-load loads one key from storage if a request references a
   valid `kid` not present in memory.
 
@@ -251,6 +251,23 @@ These are local operations. They use separate audit events:
 Remote message send uses `message.send.*`. The audit log must be able to tell
 local internal encryption from remote delivery.
 
+### FPE Flow
+
+`POST /fpe/encrypt/{kid}` and `POST /fpe/decrypt` are local field operations.
+The request selects a profile name, but the profile parameters come from signed
+config:
+
+- alphabet;
+- minimum and maximum length;
+- `tweak_aad`;
+- `fpe_version`;
+- bound local `kid`.
+
+The FPE key is derived from the loaded key's symmetric key with HKDF-SHA256,
+using the profile name, KID, and FPE version as AAD-style info. Encrypt requires
+an `active` key. Decrypt allows `active` and `retired`. FPE preserves format but
+does not authenticate data and is not part of the remote message protocol.
+
 ## Signed Config Flow
 
 Runtime policy is stored in `config.json` and signed in `config_sign.json`.
@@ -260,6 +277,7 @@ The signed config contains:
 - local final app routes;
 - remote Vectis routes and peer public keys;
 - API key permission clients.
+- FPE field profiles.
 
 The signing flow uses canonical JSON. Vectis signs the canonical config hash
 inside a timestamp token using init keys. The signature is not bound to the local

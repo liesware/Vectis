@@ -770,7 +770,17 @@ fn ensure_section_array(object: &mut Map<String, Value>, section: &str) -> Resul
 
 fn validate_local_config(local: &LocalConfig) -> Result<(), DynError> {
     let content = serde_json::to_string(&local.value)?;
-    config_file::validate_config_content(&content, &local.app, |_| true)?;
+    config_file::validate_config_content(
+        &content,
+        &local.app,
+        |_| true,
+        |_, _, _| {
+            Ok(zeroize::Zeroizing::new(vec![
+            0u8;
+            crate::core::fpe::FPE_KEY_SIZE_BYTES
+        ]))
+        },
+    )?;
     Ok(())
 }
 

@@ -78,12 +78,13 @@ protected data flows between Vectis instances.
 **Protocol and trust**
 
 - protected messages between Vectis instances, verified before decryption;
-- one operator-signed config file (routes, remote routes, permissions) as the
+- one operator-signed config file (routes, remote routes, permissions, FPE profiles) as the
   only source of peer public keys — no trust-on-first-use path;
 - local re-encryption before final app delivery: the receiving application
   never gets remote plaintext directly;
 - public key publication by `kid`;
 - internal encrypt/decrypt endpoints for local protected data.
+- local format-preserving encryption for signed field profiles.
 
 **Key management**
 
@@ -260,9 +261,9 @@ See the full API documentation in [doc/API.md](doc/API.md).
 
 ## Configuration
 
-Runtime routing, remote peers, and API-key permissions live in a single **signed
+Runtime routing, remote peers, API-key permissions, and FPE profiles live in a single **signed
 config file** (`config.json`, default path `VECTIS_CONFIG_PATH`) with `version`,
-`routes`, `remote_routes`, and `permissions` sections. Edit it, then sign it with
+`routes`, `remote_routes`, `permissions`, and optional `fpe_profiles` sections. Edit it, then sign it with
 `vectis config sign`. The full schema (every field, allowed values, and the
 optional peer `public_keys`) is documented under **Configuration File
 (`config.json`)** in [doc/API.md](doc/API.md).

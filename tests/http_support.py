@@ -16,7 +16,13 @@ MESSAGE = "The things you own end up owning you."
 CONFIG_PATH = Path("config.json")
 CONFIG_SIGN_PATH = Path("config_sign.json")
 
-_CONFIG = {"version": "v1", "routes": [], "remote_routes": [], "permissions": []}
+_CONFIG = {
+    "version": "v1",
+    "routes": [],
+    "remote_routes": [],
+    "permissions": [],
+    "fpe_profiles": [],
+}
 
 KEY_CASES = [
     {
@@ -382,6 +388,11 @@ def create_api_key_pair():
 
 def write_permissions(clients):
     _CONFIG["permissions"] = clients
+    write_config()
+
+
+def write_fpe_profiles(profiles):
+    _CONFIG["fpe_profiles"] = profiles
     write_config()
 
 

@@ -40,7 +40,8 @@ At the current stage, Vectis provides:
 - authenticated encryption for protected messages;
 - local re-encryption before final application delivery;
 - a hybrid timestamp/signature protocol;
-- signed runtime configuration for routes, remote routes, and permissions;
+- signed runtime configuration for routes, remote routes, permissions, and FPE profiles;
+- local format-preserving encryption for signed field profiles;
 - SQLite/PostgreSQL-backed storage behind a storage abstraction;
 - API key authentication using derived verification material;
 - startup, liveness, readiness, metrics, structured logs, and audit logs;
@@ -81,6 +82,7 @@ The signed config controls:
 - local final app routes;
 - authorized remote Vectis routes;
 - non-root API key permissions.
+- local FPE field profiles.
 
 ### Cryptographic Material Has Lifecycle
 
@@ -341,7 +343,8 @@ Runtime policy lives in one signed JSON file:
   "version": "v1",
   "routes": [],
   "remote_routes": [],
-  "permissions": []
+  "permissions": [],
+  "fpe_profiles": []
 }
 ```
 
@@ -357,15 +360,16 @@ protected against local tampering.
 
 ### Startup Behavior
 
-If the config is missing or invalid during startup, Vectis logs a warning and
-starts with empty config sections:
+If the config is missing during startup, Vectis logs a warning and starts with
+empty config sections:
 
 - no manual final app routes;
 - no remote routes;
-- no non-root permission clients.
+- no non-root permission clients;
+- no FPE profiles.
 
-This is intentionally resilient. The service can still start with root-only
-administration and default final app fallback.
+If the config file exists, it must be valid and its signature must verify.
+Invalid existing config is fatal at startup.
 
 ### Reload Behavior
 
@@ -515,6 +519,20 @@ These endpoints protect data using a local operational key rather than sending
 to a remote Vectis peer. They are useful for local application integration where
 an app wants Vectis-managed encryption without cross-instance transport.
 
+## Format-Preserving Encryption
+
+Vectis exposes local FF1 FPE endpoints for fields that must stay inside a
+signed alphabet and length range:
+
+- `POST /fpe/encrypt/{kid}`;
+- `POST /fpe/decrypt`.
+
+FPE profiles live in signed config under `fpe_profiles`. Requests select a
+profile by name; alphabet, length bounds, tweak AAD, FPE version, and bound KID
+come from signed config. FPE is deterministic for the same key/profile/tweak and
+plaintext. It preserves format, but it does not authenticate data and does not
+replace AEAD message encryption.
+
 ## Hybrid Timestamp And Signing Protocol
 
 `POST /sign/{kid}` signs a supplied message hash. The caller supplies:
@@ -657,6 +675,7 @@ Vectis exposes these major endpoint groups:
 - messaging: `/message/{sender_kid}`, `/message`, `/message/decrypt`;
 - internal messaging: `/message/internal/encrypt/{kid}`,
   `/message/internal/decrypt`;
+- FPE: `/fpe/encrypt/{kid}`, `/fpe/decrypt`;
 - self-test: `/self-test/init`, `/self-test/keys/{kid}`.
 
 Public endpoints are intentionally limited. Protected endpoints require
@@ -762,7 +781,7 @@ Metrics are exposed in Prometheus text format and should avoid sensitive labels.
 Labels should remain low cardinality. Runtime metrics cover unsealed state,
 loaded keys/routes/permissions, auth and permission decisions, config/key
 reload results, message send/receive/decrypt results, and cryptographic
-sign/verify/encrypt/decrypt results.
+sign/verify/encrypt/decrypt/FPE results.
 
 ## Security Boundaries And Invariants
 

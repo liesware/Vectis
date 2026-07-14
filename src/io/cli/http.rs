@@ -31,6 +31,7 @@ pub async fn run(command: &str, args: Vec<String>) -> Result<(), DynError> {
         "config" => run_config(args, output).await,
         "pub" => run_pub(args, output).await,
         "sign" => run_sign(args, output).await,
+        "fpe" => run_fpe(args, output).await,
         "message" => run_message(args, output).await,
         _ => Err(invalid_input(format!("unknown command: {command}"))),
     }
@@ -48,6 +49,7 @@ pub fn print_help(command: &str) {
         "config" => print_config_help(),
         "pub" => print_pub_help(),
         "sign" => print_sign_help(),
+        "fpe" => print_fpe_help(),
         "message" => print_message_help(),
         _ => print_http_help(),
     }
@@ -300,6 +302,35 @@ async fn run_sign(args: Vec<String>, output: OutputFormat) -> Result<(), DynErro
             output,
         )
         .await
+}
+
+async fn run_fpe(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+    let (subcommand, rest) = split_subcommand(args, "fpe command")?;
+    let client = CliHttpClient::from_env()?;
+
+    match subcommand.as_str() {
+        "encrypt" => {
+            let (kid, rest) = split_subcommand(rest, "kid")?;
+            validate_kid("kid", &kid)?;
+            let body = parse_json_source(rest)?;
+            client
+                .send(
+                    Method::POST,
+                    &format!("/fpe/encrypt/{kid}"),
+                    true,
+                    Some(body),
+                    output,
+                )
+                .await
+        }
+        "decrypt" => {
+            let body = parse_json_source(rest)?;
+            client
+                .send(Method::POST, "/fpe/decrypt", true, Some(body), output)
+                .await
+        }
+        _ => Err(invalid_input(format!("unknown fpe command: {subcommand}"))),
+    }
 }
 
 async fn run_message(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
@@ -723,6 +754,8 @@ fn print_http_help() {
     println!("  {PROGRAM_NAME} pub <kid>");
     println!("  {PROGRAM_NAME} sign <kid> (--json <json>|--file <path>)");
     println!("  {PROGRAM_NAME} sign verify (--json <json>|--file <path>)");
+    println!("  {PROGRAM_NAME} fpe encrypt <kid> (--json <json>|--file <path>)");
+    println!("  {PROGRAM_NAME} fpe decrypt (--json <json>|--file <path>)");
     println!("  {PROGRAM_NAME} message send <sender_kid> (--json <json>|--file <path>)");
     println!("  {PROGRAM_NAME} message receive (--json <json>|--file <path>)");
     println!("  {PROGRAM_NAME} message decrypt (--json <json>|--file <path>)");
@@ -984,6 +1017,31 @@ fn print_sign_help() {
     println!("Endpoints:");
     println!("  sign <kid>            POST /sign/{{kid}}, requires VECTIS_APIKEY");
     println!("  sign verify           POST /sign/verification, public");
+    println!();
+    println!("Input options:");
+    println!("  --json <json>         JSON object as a shell argument");
+    println!("  --file <path>         Path to a JSON file");
+    print_output_help();
+}
+
+fn print_fpe_help() {
+    println!("Usage:");
+    println!("  {PROGRAM_NAME} fpe encrypt <kid> --json '<json>'");
+    println!("  {PROGRAM_NAME} fpe encrypt <kid> --file fpe-encrypt.json");
+    println!("  {PROGRAM_NAME} fpe decrypt --json '<json>'");
+    println!("  {PROGRAM_NAME} fpe decrypt --file fpe-decrypt.json");
+    println!();
+    println!("Encrypts or decrypts field values with signed-config FPE profiles.");
+    println!();
+    println!("Encrypt request JSON:");
+    println!(r#"  {{"profile":"patient-id-decimal-v1","plaintext":"123456"}}"#);
+    println!();
+    println!("Decrypt request JSON:");
+    println!(r#"  {{"kid":"<kid>","profile":"patient-id-decimal-v1","ciphertext":"<value>"}}"#);
+    println!();
+    println!("Endpoints:");
+    println!("  encrypt <kid>         POST /fpe/encrypt/{{kid}}, requires VECTIS_APIKEY");
+    println!("  decrypt               POST /fpe/decrypt, requires VECTIS_APIKEY");
     println!();
     println!("Input options:");
     println!("  --json <json>         JSON object as a shell argument");

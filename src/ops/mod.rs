@@ -1,5 +1,6 @@
 pub mod apikey;
 pub mod contracts;
+pub mod fpe;
 pub mod init;
 pub mod internal_keys;
 pub mod key_material;

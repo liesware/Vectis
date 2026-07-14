@@ -1,11 +1,11 @@
-use crate::core::{canonical, config, permissions, protocol, remote_routes, routes};
+use crate::core::{canonical, config, fpe, permissions, protocol, remote_routes, routes};
 use crate::error::DynError;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Deserialize, Serialize)]
 pub struct ConfigFile {
@@ -16,17 +16,21 @@ pub struct ConfigFile {
     remote_routes: Vec<remote_routes::RemoteRouteInput>,
     #[serde(default)]
     permissions: Vec<permissions::PermissionClientInput>,
+    #[serde(default)]
+    fpe_profiles: Vec<fpe::FpeProfileInput>,
 }
 
 pub struct ConfigState {
     pub routes: routes::RoutesState,
     pub remote_routes: remote_routes::RemoteRoutesState,
     pub permissions: permissions::PermissionsState,
+    pub fpe_profiles: fpe::FpeProfilesState,
 }
 
 impl Zeroize for ConfigState {
     fn zeroize(&mut self) {
         self.permissions.zeroize();
+        self.fpe_profiles.zeroize();
     }
 }
 
@@ -57,11 +61,12 @@ pub fn validate_config_content(
     content: &str,
     config: &config::AppConfig,
     is_loaded_kid: impl Fn(&str) -> bool,
+    derive_fpe_key: impl Fn(&str, &str, &str) -> Result<Zeroizing<Vec<u8>>, DynError>,
 ) -> Result<ConfigState, DynError> {
     let config_file: ConfigFile = serde_json::from_str(content).map_err(|err| {
         crate::error::invalid_input(format!("config file must be valid JSON: {err}"))
     })?;
-    validate_config_file(config_file, config, &is_loaded_kid)
+    validate_config_file(config_file, config, &is_loaded_kid, &derive_fpe_key)
 }
 
 pub fn read_config_file(path: &Path) -> Result<String, DynError> {
@@ -80,8 +85,15 @@ pub fn load_config_state(
     config: &config::AppConfig,
     verify_config: impl Fn(&Path, &str) -> Result<(), DynError>,
     is_loaded_kid: impl Fn(&str) -> bool,
+    derive_fpe_key: impl Fn(&str, &str, &str) -> Result<Zeroizing<Vec<u8>>, DynError>,
 ) -> Result<ConfigState, DynError> {
-    match load_config_file(&config.config_path, verify_config, config, &is_loaded_kid) {
+    match load_config_file(
+        &config.config_path,
+        verify_config,
+        config,
+        &is_loaded_kid,
+        &derive_fpe_key,
+    ) {
         Ok(state) => {
             info!(
                 config_path = %config.config_path.display(),
@@ -108,8 +120,15 @@ pub fn reload_config_state(
     config: &config::AppConfig,
     verify_config: impl Fn(&Path, &str) -> Result<(), DynError>,
     is_loaded_kid: impl Fn(&str) -> bool,
+    derive_fpe_key: impl Fn(&str, &str, &str) -> Result<Zeroizing<Vec<u8>>, DynError>,
 ) -> Result<ConfigState, DynError> {
-    match load_config_file(&config.config_path, verify_config, config, &is_loaded_kid) {
+    match load_config_file(
+        &config.config_path,
+        verify_config,
+        config,
+        &is_loaded_kid,
+        &derive_fpe_key,
+    ) {
         Ok(state) => Ok(state),
         Err(err) if crate::error::is_not_found(err.as_ref()) => Ok(empty_config_state(config)),
         Err(err) => Err(err),
@@ -121,19 +140,21 @@ fn load_config_file(
     verify_config: impl Fn(&Path, &str) -> Result<(), DynError>,
     config: &config::AppConfig,
     is_loaded_kid: &impl Fn(&str) -> bool,
+    derive_fpe_key: &impl Fn(&str, &str, &str) -> Result<Zeroizing<Vec<u8>>, DynError>,
 ) -> Result<ConfigState, DynError> {
     let content = read_config_file(path)?;
     verify_config(path, &content)?;
     let config_file: ConfigFile = serde_json::from_str(&content).map_err(|err| {
         crate::error::invalid_input(format!("config file must be valid JSON: {err}"))
     })?;
-    validate_config_file(config_file, config, is_loaded_kid)
+    validate_config_file(config_file, config, is_loaded_kid, derive_fpe_key)
 }
 
 fn validate_config_file(
     config_file: ConfigFile,
     config: &config::AppConfig,
     is_loaded_kid: &impl Fn(&str) -> bool,
+    derive_fpe_key: &impl Fn(&str, &str, &str) -> Result<Zeroizing<Vec<u8>>, DynError>,
 ) -> Result<ConfigState, DynError> {
     protocol::validate_protocol_version("config.version", &config_file.version)?;
 
@@ -142,6 +163,8 @@ fn validate_config_file(
         remote_routes::validate_remote_routes(config_file.remote_routes, is_loaded_kid)?;
     let validated_permissions =
         permissions::validate_permission_clients(config_file.permissions, is_loaded_kid)?;
+    let validated_fpe_profiles =
+        fpe::validate_fpe_profiles(config_file.fpe_profiles, is_loaded_kid, derive_fpe_key)?;
 
     Ok(ConfigState {
         routes: routes::RoutesState::from_parts(
@@ -151,6 +174,7 @@ fn validate_config_file(
         ),
         remote_routes: remote_routes::RemoteRoutesState::from_routes(validated_remote_routes),
         permissions: validated_permissions,
+        fpe_profiles: validated_fpe_profiles,
     })
 }
 
@@ -163,6 +187,7 @@ fn empty_config_state(config: &config::AppConfig) -> ConfigState {
         ),
         remote_routes: remote_routes::RemoteRoutesState::default(),
         permissions: permissions::PermissionsState::default(),
+        fpe_profiles: fpe::FpeProfilesState::default(),
     }
 }
 
@@ -214,6 +239,10 @@ mod tests {
             "vectis_cfgtest_{}_{tag}_{seq}.json",
             std::process::id()
         ))
+    }
+
+    fn dummy_fpe_key() -> Zeroizing<Vec<u8>> {
+        Zeroizing::new(vec![0u8; fpe::FPE_KEY_SIZE_BYTES])
     }
 
     fn test_config(config_path: PathBuf) -> config::AppConfig {
@@ -269,7 +298,13 @@ mod tests {
     #[test]
     fn load_config_state_is_lenient_when_missing() {
         let config = test_config(unique_path("load_missing"));
-        let state = load_config_state(&config, |_, _| Ok(()), |_| true).unwrap();
+        let state = load_config_state(
+            &config,
+            |_, _| Ok(()),
+            |_| true,
+            |_, _, _| Ok(dummy_fpe_key()),
+        )
+        .unwrap();
         assert_eq!(state.routes.len(), 0);
         assert_eq!(state.remote_routes.len(), 0);
         assert_eq!(state.permissions.len(), 0);
@@ -288,6 +323,7 @@ mod tests {
             &config,
             |_, _| Err(crate::error::invalid_signature("bad signature")),
             |_| true,
+            |_, _, _| Ok(dummy_fpe_key()),
         );
         let _ = fs::remove_file(&path);
         assert!(result.is_err());
@@ -298,7 +334,12 @@ mod tests {
         let path = unique_path("load_invalid_json");
         fs::write(&path, "{ not json").unwrap();
         let config = test_config(path.clone());
-        let result = load_config_state(&config, |_, _| Ok(()), |_| true);
+        let result = load_config_state(
+            &config,
+            |_, _| Ok(()),
+            |_| true,
+            |_, _, _| Ok(dummy_fpe_key()),
+        );
         let _ = fs::remove_file(&path);
         let err = match result {
             Ok(_) => panic!("invalid config JSON must be rejected"),
@@ -316,7 +357,12 @@ mod tests {
         drop(file);
 
         let config = test_config(path.clone());
-        let result = load_config_state(&config, |_, _| Ok(()), |_| true);
+        let result = load_config_state(
+            &config,
+            |_, _| Ok(()),
+            |_| true,
+            |_, _, _| Ok(dummy_fpe_key()),
+        );
 
         let _ = fs::remove_file(&path);
         let err = match result {
@@ -329,7 +375,13 @@ mod tests {
     #[test]
     fn reload_config_state_returns_empty_when_missing() {
         let config = test_config(unique_path("reload_missing"));
-        let state = reload_config_state(&config, |_, _| Ok(()), |_| true).unwrap();
+        let state = reload_config_state(
+            &config,
+            |_, _| Ok(()),
+            |_| true,
+            |_, _, _| Ok(dummy_fpe_key()),
+        )
+        .unwrap();
         assert_eq!(state.routes.len(), 0);
     }
 
@@ -346,6 +398,7 @@ mod tests {
             &config,
             |_, _| Err(crate::error::invalid_signature("bad signature")),
             |_| true,
+            |_, _, _| Ok(dummy_fpe_key()),
         );
         let _ = fs::remove_file(&path);
         assert!(result.is_err());
@@ -360,7 +413,12 @@ mod tests {
         drop(file);
 
         let config = test_config(path.clone());
-        let result = reload_config_state(&config, |_, _| Ok(()), |_| true);
+        let result = reload_config_state(
+            &config,
+            |_, _| Ok(()),
+            |_| true,
+            |_, _, _| Ok(dummy_fpe_key()),
+        );
 
         let _ = fs::remove_file(&path);
         let err = match result {
@@ -446,7 +504,13 @@ mod tests {
     #[test]
     fn validate_config_content_accepts_minimal_empty_config() {
         let config = test_config(PathBuf::from("config.json"));
-        let state = validate_config_content(r#"{"version":"v1"}"#, &config, |_| true).unwrap();
+        let state = validate_config_content(
+            r#"{"version":"v1"}"#,
+            &config,
+            |_| true,
+            |_, _, _| Ok(dummy_fpe_key()),
+        )
+        .unwrap();
 
         assert!(state.routes.is_empty());
         assert!(state.remote_routes.is_empty());
@@ -457,17 +521,41 @@ mod tests {
     fn validate_config_content_rejects_malformed_sections() {
         let config = test_config(PathBuf::from("config.json"));
 
-        assert!(validate_config_content(r#"{"version":"v2"}"#, &config, |_| true).is_err());
         assert!(
-            validate_config_content(r#"{"version":"v1","routes":{}}"#, &config, |_| true).is_err()
+            validate_config_content(
+                r#"{"version":"v2"}"#,
+                &config,
+                |_| true,
+                |_, _, _| { Ok(dummy_fpe_key()) }
+            )
+            .is_err()
         );
         assert!(
-            validate_config_content(r#"{"version":"v1","remote_routes":{}}"#, &config, |_| true)
-                .is_err()
+            validate_config_content(
+                r#"{"version":"v1","routes":{}}"#,
+                &config,
+                |_| true,
+                |_, _, _| Ok(dummy_fpe_key())
+            )
+            .is_err()
         );
         assert!(
-            validate_config_content(r#"{"version":"v1","permissions":{}}"#, &config, |_| true)
-                .is_err()
+            validate_config_content(
+                r#"{"version":"v1","remote_routes":{}}"#,
+                &config,
+                |_| true,
+                |_, _, _| Ok(dummy_fpe_key())
+            )
+            .is_err()
+        );
+        assert!(
+            validate_config_content(
+                r#"{"version":"v1","permissions":{}}"#,
+                &config,
+                |_| true,
+                |_, _, _| Ok(dummy_fpe_key())
+            )
+            .is_err()
         );
     }
 }
