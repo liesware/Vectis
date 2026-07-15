@@ -64,8 +64,8 @@ Vectis explores a different question:
 
 ## What Vectis Does Today
 
-Vectis currently provides a small HTTP service and CLI for experimenting with
-protected data flows between Vectis instances.
+Vectis currently provides an HTTP service and CLI for experimenting with
+object-level sensitive-data protection.
 
 **Cryptography**
 
@@ -79,14 +79,14 @@ protected data flows between Vectis instances.
 
 - protected messages between Vectis instances, verified before decryption;
 - one operator-signed config file (routes, remote routes, permissions, FPE profiles,
-  and tokenization profiles) as the
-  only source of peer public keys — no trust-on-first-use path;
+  and tokenization profiles) as the only source of peer public keys — no
+  trust-on-first-use path;
 - local re-encryption before final app delivery: the receiving application
   never gets remote plaintext directly;
 - public key publication by `kid`;
 - internal encrypt/decrypt endpoints for local protected data;
-- local format-preserving encryption for signed field profiles;
-- local reversible tokenization for signed token profiles.
+- local FF1 format-preserving encryption for signed field profiles;
+- local reversible random tokenization for signed token profiles.
 
 **Key management**
 
@@ -94,14 +94,15 @@ protected data flows between Vectis instances.
 - HKDF-derived internal keys for storage encryption and API key verification;
 - operational key creation and validation;
 - encrypted key lifecycle metadata and runtime lifecycle enforcement;
-- SQLite/PostgreSQL-backed operational key storage behind a storage abstraction.
+- SQLite/PostgreSQL-backed storage for encrypted operational keys and encrypted
+  tokenization payloads behind a storage abstraction.
 
 **Operations and observability**
 
 - startup, liveness, and readiness health probes;
 - a dedicated security audit log stream with per-request correlation ids;
 - a Prometheus `/metrics` endpoint for operational observability;
-- CLI commands that act as an HTTP API client;
+- local CLI commands plus CLI commands that act as an HTTP API client;
 - OpenAPI and environment variable documentation.
 
 ## High-Level Flow
@@ -171,7 +172,7 @@ Vectis follows a simple three-layer structure:
 - `core`: infrastructure and reusable primitives such as configuration,
   validation, crypto helpers, logging, storage, routes, and database access.
 - `ops`: application operations and business flows such as init, key creation,
-  signing, validation, protected messaging, and tests.
+  signing, validation, protected messaging, FPE, tokenization, and tests.
 - `io`: input/output adapters such as HTTP endpoints and CLI commands.
 
 The intent is to keep protocol and business logic out of HTTP handlers, and to
@@ -214,7 +215,7 @@ Create a SQLite database file and schema:
 
 ```sh
 mkdir -p src/db
-sqlite3 src/db/data.db < src/db/data_schema.sql
+sqlite3 src/db/data.db < src/db/sqlite_schema.sql
 ```
 
 Start the HTTP service:
@@ -248,11 +249,14 @@ The CLI is primarily an HTTP client for the local Vectis service.
 Examples:
 
 ```sh
+vectis version
 vectis health ready
 vectis apikey create
 vectis keys create --tag payments --profile hybrid-high-assurance-v1
 vectis keys list
 vectis pub <kid>
+vectis fpe encrypt <kid> --file fpe-encrypt.json
+vectis token encode <kid> --file token-encode.json
 vectis message send <sender_kid> --file send-message.json
 vectis message decrypt --file encrypted-message.json
 vectis config sign
@@ -263,12 +267,13 @@ See the full API documentation in [doc/API.md](doc/API.md).
 
 ## Configuration
 
-Runtime routing, remote peers, API-key permissions, and FPE profiles live in a single **signed
-config file** (`config.json`, default path `VECTIS_CONFIG_PATH`) with `version`,
-`routes`, `remote_routes`, `permissions`, and optional `fpe_profiles` sections. Edit it, then sign it with
-`vectis config sign`. The full schema (every field, allowed values, and the
-optional peer `public_keys`) is documented under **Configuration File
-(`config.json`)** in [doc/API.md](doc/API.md).
+Runtime routing, remote peers, API-key permissions, FPE profiles, and
+tokenization profiles live in a single **signed config file** (`config.json`,
+default path `VECTIS_CONFIG_PATH`) with `version`, `routes`, `remote_routes`,
+`permissions`, optional `fpe_profiles`, and optional `tokenization_profiles`
+sections. Edit it, then sign it with `vectis config sign`. The full schema
+(every field, allowed values, and the optional peer `public_keys`) is documented
+under **Configuration File (`config.json`)** in [doc/API.md](doc/API.md).
 
 Vectis reads process/environment settings from process environment variables
 first, then from `.env`, then from built-in defaults.
@@ -308,6 +313,32 @@ In development and tests, individual algorithm overrides can be enabled with:
 
 ```text
 VECTIS_CRYPTO_POLICY=allow-overrides
+```
+
+## FPE And Tokenization
+
+FPE and tokenization are profile-driven. Profiles are loaded only from signed
+config, and requests select a profile by name.
+
+FPE currently supports:
+
+```text
+fpe-ff1-2025
+```
+
+Tokenization currently supports:
+
+```text
+token-random-v1
+```
+
+The CLI can edit both profile sections locally:
+
+```sh
+vectis config fpe add --name patient-id-decimal-v1 --kid <kid> --alphabet 0123456789 --min-len 6 --max-len 32 --tweak-aad 'tenant=acme;field=patient_id;version=1'
+vectis config token add --name patient-id-token-v1 --kid <kid> --token-prefix tok_patient --token-len 32 --max-plaintext-len 1024
+vectis config sign
+vectis config reload
 ```
 
 ## Testing
