@@ -168,7 +168,7 @@ paths:
                   symmetric_algorithm: AES-256/GCM
       responses:
         "200":
-          description: Created key id
+          description: Created key KID
           content:
             application/json:
               schema:
@@ -197,7 +197,7 @@ paths:
     get:
       tags: [Keys]
       summary: List keys loaded in local memory with properties
-      description: Administrative endpoint. Lists keys and decrypted lifecycle properties currently loaded in this node's in-memory state. The info field is AAD for enc_keys; properties_info is AAD for properties.
+      description: Administrative endpoint. Lists keys and decrypted lifecycle properties currently loaded in this node's in-memory state. The info field is AAD for keys; properties_info is AAD for properties.
       security:
         - ApiKeyAuth: []
       responses:
@@ -280,7 +280,7 @@ paths:
     post:
       tags: [Config]
       summary: Reload the unified signed config
-      description: Administrative endpoint requiring root or an admin client. Reloads the unified config (routes, remote_routes, permissions) only after VECTIS_CONFIG_PATH and VECTIS_CONFIG_SIGN_PATH are successfully read, verified, and validated. Every route kid must exist in the keys currently loaded in memory. A missing config reloads to empty sections; an invalid signature, invalid file, or unloaded kid returns an error and keeps the previous in-memory config.
+      description: Administrative endpoint requiring root or an admin client. Reloads the unified config (routes, remote_routes, permissions, fpe_profiles) only after VECTIS_CONFIG_PATH and VECTIS_CONFIG_SIGN_PATH are successfully read, verified, and validated. Every route kid and FPE profile kid must exist in the keys currently loaded in memory. A missing config reloads to empty sections; an invalid signature, invalid file, or unloaded kid returns an error and keeps the previous in-memory config.
       security:
         - ApiKeyAuth: []
       responses:
@@ -677,9 +677,9 @@ components:
 
     CreateKeysResponse:
       type: object
-      required: [id]
+      required: [kid]
       properties:
-        id:
+        kid:
           $ref: "#/components/schemas/Kid"
 
     ListKeysOutput:
@@ -848,7 +848,7 @@ components:
 
     ReloadConfigResponse:
       type: object
-      required: [status, routes_loaded, remote_routes_loaded, clients_loaded]
+      required: [status, routes_loaded, remote_routes_loaded, clients_loaded, fpe_profiles_loaded]
       properties:
         status:
           const: reloaded
@@ -859,6 +859,9 @@ components:
           type: integer
           minimum: 0
         clients_loaded:
+          type: integer
+          minimum: 0
+        fpe_profiles_loaded:
           type: integer
           minimum: 0
 

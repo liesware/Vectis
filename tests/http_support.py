@@ -411,6 +411,10 @@ def reload_config(client):
         isinstance(response.get("clients_loaded"), int),
         "config reload clients_loaded must be an integer",
     )
+    require(
+        isinstance(response.get("fpe_profiles_loaded"), int),
+        "config reload fpe_profiles_loaded must be an integer",
+    )
     return response
 
 
@@ -509,6 +513,7 @@ def parse_host_port(addr):
 
 def create_key(client, case):
     response = client.post("/keys", case, auth=True)
-    key_id = response.get("id")
-    require_kid(key_id, "keys.id")
+    key_id = response.get("kid")
+    require_kid(key_id, "keys.kid")
+    require("id" not in response, "keys create response must not include id")
     return key_id

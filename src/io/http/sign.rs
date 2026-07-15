@@ -57,7 +57,7 @@ pub async fn sign_endpoint(
         error_response(err.as_ref())
     })?;
     info!(
-        endpoint = "/sign/{id}",
+        endpoint = "/sign/{kid}",
         kid = %id,
         hash_alg = %request.message_hash.alg,
         hash_hex_len = request.message_hash.hex.len(),
@@ -87,7 +87,7 @@ pub async fn sign_endpoint(
     match result {
         Ok(response) => {
             info!(
-                endpoint = "/sign/{id}",
+                endpoint = "/sign/{kid}",
                 kid = %response.kid(),
                 created_at = %response.payload.created_at,
                 info = %response.payload.info,

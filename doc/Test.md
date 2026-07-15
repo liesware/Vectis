@@ -156,11 +156,14 @@ uv run tests/http_fuzz.py --base-url http://127.0.0.1:3000 --apikey <VECTIS_APIK
 Schemathesis and is useful for project-specific negative cases. It mutates
 seeds across crypto profiles (ChaCha20 and AES-256/GCM) with domain-aware
 mutations, and drives a table of targets (`--target`): `token`, `message`,
-`internal`, `keys`, `sign_body`, `lifecycle`, `decrypt`, `config`, `pubkid`
-(fuzzes the `{kid}` path segment) and `headers` (fuzzes `X-API-Key` and the HTTP
-method). Beyond crash/status hygiene it runs semantic oracles that flag
-verification, AEAD, and config-integrity bypasses; `--self-check` tests those
-oracles offline.
+`message_send`, `internal`, `internal_encrypt`, `keys`, `sign_body`,
+`lifecycle`, `decrypt`, `config`, `fpe`, `pubkid` (fuzzes the `{kid}` path
+segment), `no_body`, and `headers` (fuzzes `X-API-Key` and the HTTP method).
+The `fpe` target covers `/fpe/encrypt/{kid}` and `/fpe/decrypt` with semantic
+oracles. The `no_body` target checks endpoints called without a body where that
+shape is useful. Beyond crash/status hygiene it runs semantic oracles that flag
+verification, AEAD, FPE, and config-integrity bypasses; `--self-check` tests
+those oracles offline.
 
 ## Schemathesis OpenAPI Tests
 
@@ -244,7 +247,7 @@ The script exercises:
 - `GET /self-test/keys/{kid}`;
 - `POST /sign/{kid}` and `POST /sign/verification`;
 - internal encrypt/decrypt;
-- remote message send with `POST /message/{kid}`.
+- remote message send with `POST /message/{sender_kid}`.
 
 k6 creates one key in `setup()` for crypto checks. Message sending uses a sender
 KID selected from `config.json` local routes, because message routing policy is

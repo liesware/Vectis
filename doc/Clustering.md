@@ -45,7 +45,7 @@ It is not a cluster-wide cache and it is not automatically synchronized.
 ## Shared Storage
 
 PostgreSQL is the shared durable backend for clustered deployments. It stores
-encrypted operational key material in `ops_keys`.
+encrypted operational key material in `opskeys`.
 
 PostgreSQL is durable storage. It is not automatic live state.
 
@@ -56,14 +56,14 @@ missing-key lazy-load.
 The current PostgreSQL schema is:
 
 ```sql
-CREATE TABLE ops_keys (
-    id VARCHAR(128) PRIMARY KEY,
-    enc_keys TEXT NOT NULL,
+CREATE TABLE opskeys (
+    kid VARCHAR(128) PRIMARY KEY,
+    keys TEXT NOT NULL,
     properties TEXT NOT NULL
 );
 ```
 
-`enc_keys` and `properties` are encrypted by Vectis before storage. PostgreSQL
+`keys` and `properties` are encrypted by Vectis before storage. PostgreSQL
 does not need to understand their contents.
 
 ## Key Loading
@@ -152,7 +152,7 @@ Vectis owns:
 - reporting storage readiness.
 
 For runtime access, Vectis needs `SELECT`, `INSERT`, and `UPDATE` on
-`public.ops_keys`. It does not need schema creation privileges.
+`public.opskeys`. It does not need schema creation privileges.
 
 ## Failure Modes
 
@@ -190,7 +190,7 @@ Runtime PostgreSQL grants should be limited to:
 
 ```sql
 GRANT USAGE ON SCHEMA public TO vectis_usr;
-GRANT SELECT, INSERT, UPDATE ON TABLE public.ops_keys TO vectis_usr;
+GRANT SELECT, INSERT, UPDATE ON TABLE public.opskeys TO vectis_usr;
 ```
 
 ## Future Work

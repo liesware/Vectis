@@ -205,6 +205,12 @@ impl HttpState {
         config_state.permissions.len()
     }
 
+    async fn fpe_profiles_loaded(&self) -> usize {
+        let config_state = self.config_state.read().await;
+
+        config_state.fpe_profiles.len()
+    }
+
     async fn routes_output(&self) -> crate::core::routes::ListRoutesOutput {
         let config_state = self.config_state.read().await;
 
@@ -295,6 +301,7 @@ impl HttpState {
             self.routes_loaded().await,
             self.remote_routes_loaded().await,
             self.permissions_loaded().await,
+            self.fpe_profiles_loaded().await,
         );
     }
 

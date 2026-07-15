@@ -283,15 +283,15 @@ function createKey() {
   );
 
   check(response, {
-    "POST /keys: id present": (body) =>
-      typeof body.id === "string" && body.id.length > 0,
+    "POST /keys: kid present": (body) =>
+      typeof body.kid === "string" && body.kid.length > 0,
   });
 
-  if (typeof response.id !== "string" || response.id.length === 0) {
-    fail("POST /keys did not return id");
+  if (typeof response.kid !== "string" || response.kid.length === 0) {
+    fail("POST /keys did not return kid");
   }
 
-  return response.id;
+  return response.kid;
 }
 
 export function setup() {
@@ -417,10 +417,10 @@ export default function (data) {
       recipient_kid: data.recipientKid,
       message: "k6 performance message",
     },
-    "POST /message/{kid}",
+    "POST /message/{sender_kid}",
   );
   check(message, {
-    "POST /message/{kid}: message valid": (body) =>
+    "POST /message/{sender_kid}: message valid": (body) =>
       body.message && body.message.valid === true,
   });
 }

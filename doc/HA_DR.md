@@ -22,7 +22,7 @@ A useful Vectis recovery set includes:
 - the unseal key or unseal provider state;
 - `config.json`;
 - `config_sign.json`;
-- PostgreSQL `ops_keys`;
+- PostgreSQL `opskeys`;
 - API key distribution material;
 - TLS certificate and key material when running in `prod`;
 - audit logs if they are required for investigation or compliance.
@@ -80,7 +80,7 @@ set of data and cryptographic state.
 
 Recommended restore order:
 
-1. Restore PostgreSQL and verify the `ops_keys` table exists.
+1. Restore PostgreSQL and verify the `opskeys` table exists.
 2. Restore `init.json` and the matching unseal method.
 3. Restore `config.json` and `config_sign.json`.
 4. Restore TLS material and runtime secrets if used.

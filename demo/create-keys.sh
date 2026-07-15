@@ -134,7 +134,7 @@ create_key() {
   local site="$1"
   local tag="$2"
   local site_dir="${SCRIPT_DIR}/${site}"
-  (cd "${site_dir}" && ../bin/vectis keys create --tag "${tag}" --profile hybrid-performance-v1 --output json) | json_field "id"
+  (cd "${site_dir}" && ../bin/vectis keys create --tag "${tag}" --profile hybrid-performance-v1 --output json) | json_field "kid"
 }
 
 create_site_key() {

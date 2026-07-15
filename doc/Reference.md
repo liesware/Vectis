@@ -252,8 +252,8 @@ derived.
 
 `ops/internal_keys.rs` derives separate internal keys using HKDF-SHA256:
 
-- `db_key`: encrypts and decrypts `ops_keys.enc_keys`;
-- `properties_key`: encrypts and decrypts `ops_keys.properties`;
+- `db_key`: encrypts and decrypts `opskeys.keys`;
+- `properties_key`: encrypts and decrypts `opskeys.properties`;
 - `api_auth_key`: verifies API keys without storing them in plaintext.
 
 The derivation uses a fixed internal salt and distinct `info` strings. This
@@ -271,8 +271,8 @@ used for application-level operations:
 - public key publication;
 - local encryption/decryption.
 
-Operational key material is stored encrypted in `ops_keys.enc_keys`.
-Lifecycle/properties metadata is stored encrypted in `ops_keys.properties`.
+Operational key material is stored encrypted in `opskeys.keys`.
+Lifecycle/properties metadata is stored encrypted in `opskeys.properties`.
 
 ## Operational Key Creation
 
@@ -607,9 +607,9 @@ Current logical storage operations:
 Current SQLite table:
 
 ```sql
-CREATE TABLE IF NOT EXISTS ops_keys (
-    id VARCHAR(128) PRIMARY KEY,
-    enc_keys VARCHAR(10240) NOT NULL,
+CREATE TABLE IF NOT EXISTS opskeys (
+    kid VARCHAR(128) PRIMARY KEY,
+    keys VARCHAR(10240) NOT NULL,
     properties VARCHAR(10240) NOT NULL
 );
 ```
@@ -617,9 +617,9 @@ CREATE TABLE IF NOT EXISTS ops_keys (
 Current PostgreSQL table:
 
 ```sql
-CREATE TABLE ops_keys (
-    id VARCHAR(128) PRIMARY KEY,
-    enc_keys TEXT NOT NULL,
+CREATE TABLE opskeys (
+    kid VARCHAR(128) PRIMARY KEY,
+    keys TEXT NOT NULL,
     properties TEXT NOT NULL
 );
 ```
@@ -631,7 +631,7 @@ the schema when it connects.
 
 Important invariant:
 
-- `id`, encrypted key payload, and encrypted properties must stay bound together.
+- `kid`, encrypted key payload, and encrypted properties must stay bound together.
 
 The `kid` is derived from canonical encrypted key payload material using
 `INTERNAL_KEYS_HASH`. Properties are encrypted separately with their own

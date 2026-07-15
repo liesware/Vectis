@@ -170,15 +170,15 @@ The flow is:
 2. Parse and validate the request.
 3. Resolve crypto profile and policy.
 4. Generate key material.
-5. Build encrypted `enc_keys`.
+5. Build encrypted `keys`.
 6. Build encrypted `properties`.
-7. Store both encrypted blobs in `ops_keys`.
+7. Store both encrypted blobs in `opskeys`.
 8. Load the created key into local `KeysDbState`.
 9. Return the new `kid`.
 
 Storage has two encrypted fields:
 
-- `enc_keys`: encrypted operational key material;
+- `keys`: encrypted operational key material;
 - `properties`: encrypted key properties and lifecycle metadata.
 
 Both are bound to context through AAD. The `kid` is tied to the encrypted key

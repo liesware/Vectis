@@ -18,57 +18,57 @@ impl SqliteStorage {
         })?;
         info!(path = %path.display(), "connected to ops sqlite");
 
-        validate_ops_keys_schema(&pool).await?;
-        info!("validated ops_keys sqlite schema");
+        validate_opskeys_schema(&pool).await?;
+        info!("validated opskeys sqlite schema");
 
         Ok(Self { pool })
     }
 
     pub async fn save_ops_keys(
         &self,
-        id: &str,
-        enc_keys: &str,
+        kid: &str,
+        keys: &str,
         properties: &str,
     ) -> Result<OpsKeyRow, DynError> {
         sqlx::query(
             "
-            INSERT INTO ops_keys (id, enc_keys, properties)
+            INSERT INTO opskeys (kid, keys, properties)
             VALUES (?, ?, ?)
             ",
         )
-        .bind(id)
-        .bind(enc_keys)
+        .bind(kid)
+        .bind(keys)
         .bind(properties)
         .execute(&self.pool)
         .await?;
-        info!(id, "inserted ops keys");
+        info!(kid, "inserted ops keys");
 
         Ok(OpsKeyRow {
-            id: id.to_string(),
-            enc_keys: enc_keys.to_string(),
+            kid: kid.to_string(),
+            keys: keys.to_string(),
             properties: properties.to_string(),
         })
     }
 
-    pub async fn get_ops_keys(&self, id: &str) -> Result<OpsKeyRow, DynError> {
+    pub async fn get_ops_keys(&self, kid: &str) -> Result<OpsKeyRow, DynError> {
         let row = sqlx::query(
             "
-            SELECT id, enc_keys, properties
-            FROM ops_keys
-            WHERE id = ?
+            SELECT kid, keys, properties
+            FROM opskeys
+            WHERE kid = ?
             ",
         )
-        .bind(id)
+        .bind(kid)
         .fetch_optional(&self.pool)
         .await?;
 
         let Some(row) = row else {
-            return Err(crate::error::not_found(format!("ops key not found: {id}")));
+            return Err(crate::error::not_found(format!("ops key not found: {kid}")));
         };
 
         Ok(OpsKeyRow {
-            id: row.get("id"),
-            enc_keys: row.get("enc_keys"),
+            kid: row.get("kid"),
+            keys: row.get("keys"),
             properties: row.get("properties"),
         })
     }
@@ -76,9 +76,9 @@ impl SqliteStorage {
     pub async fn list_ops_keys(&self) -> Result<Vec<OpsKeyRow>, DynError> {
         let rows = sqlx::query(
             "
-            SELECT id, enc_keys, properties
-            FROM ops_keys
-            ORDER BY id
+            SELECT kid, keys, properties
+            FROM opskeys
+            ORDER BY kid
             ",
         )
         .fetch_all(&self.pool)
@@ -87,8 +87,8 @@ impl SqliteStorage {
         let mut keys = Vec::new();
         for row in rows {
             keys.push(OpsKeyRow {
-                id: row.get("id"),
-                enc_keys: row.get("enc_keys"),
+                kid: row.get("kid"),
+                keys: row.get("keys"),
                 properties: row.get("properties"),
             });
         }
@@ -98,58 +98,58 @@ impl SqliteStorage {
 
     pub async fn update_ops_key_properties(
         &self,
-        id: &str,
+        kid: &str,
         properties: &str,
     ) -> Result<OpsKeyRow, DynError> {
         let result = sqlx::query(
             "
-            UPDATE ops_keys
+            UPDATE opskeys
             SET properties = ?
-            WHERE id = ?
+            WHERE kid = ?
             ",
         )
         .bind(properties)
-        .bind(id)
+        .bind(kid)
         .execute(&self.pool)
         .await?;
 
         if result.rows_affected() == 0 {
-            return Err(crate::error::not_found(format!("ops key not found: {id}")));
+            return Err(crate::error::not_found(format!("ops key not found: {kid}")));
         }
 
-        info!(id, "updated ops key properties");
-        self.get_ops_keys(id).await
+        info!(kid, "updated ops key properties");
+        self.get_ops_keys(kid).await
     }
 
     pub async fn update_ops_key_properties_if_current(
         &self,
-        id: &str,
+        kid: &str,
         current_properties: &str,
         new_properties: &str,
     ) -> Result<OpsKeyRow, DynError> {
         let result = sqlx::query(
             "
-            UPDATE ops_keys
+            UPDATE opskeys
             SET properties = ?
-            WHERE id = ?
+            WHERE kid = ?
               AND properties = ?
             ",
         )
         .bind(new_properties)
-        .bind(id)
+        .bind(kid)
         .bind(current_properties)
         .execute(&self.pool)
         .await?;
 
         if result.rows_affected() == 0 {
-            self.get_ops_keys(id).await?;
+            self.get_ops_keys(kid).await?;
             return Err(crate::error::invalid_input(
                 "ops key properties changed concurrently; retry lifecycle update",
             ));
         }
 
-        info!(id, "updated ops key properties with compare-and-swap");
-        self.get_ops_keys(id).await
+        info!(kid, "updated ops key properties with compare-and-swap");
+        self.get_ops_keys(kid).await
     }
 
     pub async fn health_check(&self) -> Result<(), DynError> {
@@ -159,28 +159,27 @@ impl SqliteStorage {
     }
 }
 
-async fn validate_ops_keys_schema(db: &SqlitePool) -> Result<(), DynError> {
-    let rows = sqlx::query("PRAGMA table_info(ops_keys)")
+async fn validate_opskeys_schema(db: &SqlitePool) -> Result<(), DynError> {
+    let rows = sqlx::query("PRAGMA table_info(opskeys)")
         .fetch_all(db)
         .await?;
 
     if rows.is_empty() {
         return Err(crate::error::storage(
-            "sqlite schema is missing ops_keys table",
+            "sqlite schema is missing opskeys table",
         ));
     }
 
-    let id = find_column(&rows, "id")
-        .ok_or_else(|| crate::error::storage("sqlite schema is missing ops_keys.id column"))?;
-    let enc_keys = find_column(&rows, "enc_keys").ok_or_else(|| {
-        crate::error::storage("sqlite schema is missing ops_keys.enc_keys column")
-    })?;
+    let kid = find_column(&rows, "kid")
+        .ok_or_else(|| crate::error::storage("sqlite schema is missing opskeys.kid column"))?;
+    let keys = find_column(&rows, "keys")
+        .ok_or_else(|| crate::error::storage("sqlite schema is missing opskeys.keys column"))?;
     let properties = find_column(&rows, "properties").ok_or_else(|| {
-        crate::error::storage("sqlite schema is missing ops_keys.properties column")
+        crate::error::storage("sqlite schema is missing opskeys.properties column")
     })?;
 
-    validate_column(&id, "id", "VARCHAR(128)", false, true)?;
-    validate_column(&enc_keys, "enc_keys", "VARCHAR(10240)", true, false)?;
+    validate_column(&kid, "kid", "VARCHAR(128)", false, true)?;
+    validate_column(&keys, "keys", "VARCHAR(10240)", true, false)?;
     validate_column(&properties, "properties", "VARCHAR(10240)", true, false)?;
 
     Ok(())
@@ -226,7 +225,7 @@ fn validate_column(
         || column.primary_key != expected_primary_key
     {
         return Err(crate::error::storage(format!(
-            "sqlite schema mismatch for ops_keys.{expected_name}: expected type={expected_type}, notnull={expected_notnull}, primary_key={expected_primary_key}",
+            "sqlite schema mismatch for opskeys.{expected_name}: expected type={expected_type}, notnull={expected_notnull}, primary_key={expected_primary_key}",
         )));
     }
 
@@ -258,9 +257,9 @@ mod tests {
             .expect("test sqlite must connect");
         sqlx::query(
             "
-            CREATE TABLE ops_keys (
-                id VARCHAR(128) PRIMARY KEY,
-                enc_keys VARCHAR(10240) NOT NULL,
+            CREATE TABLE opskeys (
+                kid VARCHAR(128) PRIMARY KEY,
+                keys VARCHAR(10240) NOT NULL,
                 properties VARCHAR(10240) NOT NULL
             )
             ",

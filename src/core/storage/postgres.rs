@@ -19,52 +19,52 @@ impl PostgresStorage {
             })?;
         info!("connected to ops postgres");
 
-        validate_ops_keys_schema(&pool).await?;
-        info!("validated ops_keys postgres schema");
+        validate_opskeys_schema(&pool).await?;
+        info!("validated opskeys postgres schema");
 
         Ok(Self { pool })
     }
 
     pub async fn save_ops_keys(
         &self,
-        id: &str,
-        enc_keys: &str,
+        kid: &str,
+        keys: &str,
         properties: &str,
     ) -> Result<OpsKeyRow, DynError> {
         let mut tx = self.pool.begin().await?;
         sqlx::query(
             "
-            INSERT INTO ops_keys (id, enc_keys, properties)
+            INSERT INTO opskeys (kid, keys, properties)
             VALUES ($1, $2, $3)
             ",
         )
-        .bind(id)
-        .bind(enc_keys)
+        .bind(kid)
+        .bind(keys)
         .bind(properties)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
-        info!(id, "inserted ops keys");
+        info!(kid, "inserted ops keys");
 
         Ok(OpsKeyRow {
-            id: id.to_string(),
-            enc_keys: enc_keys.to_string(),
+            kid: kid.to_string(),
+            keys: keys.to_string(),
             properties: properties.to_string(),
         })
     }
 
-    pub async fn get_ops_keys(&self, id: &str) -> Result<OpsKeyRow, DynError> {
-        let row = fetch_ops_keys(&self.pool, id).await?;
+    pub async fn get_ops_keys(&self, kid: &str) -> Result<OpsKeyRow, DynError> {
+        let row = fetch_ops_keys(&self.pool, kid).await?;
 
-        row.ok_or_else(|| crate::error::not_found(format!("ops key not found: {id}")))
+        row.ok_or_else(|| crate::error::not_found(format!("ops key not found: {kid}")))
     }
 
     pub async fn list_ops_keys(&self) -> Result<Vec<OpsKeyRow>, DynError> {
         let rows = sqlx::query(
             "
-            SELECT id, enc_keys, properties
-            FROM ops_keys
-            ORDER BY id
+            SELECT kid, keys, properties
+            FROM opskeys
+            ORDER BY kid
             ",
         )
         .fetch_all(&self.pool)
@@ -73,8 +73,8 @@ impl PostgresStorage {
         let mut keys = Vec::new();
         for row in rows {
             keys.push(OpsKeyRow {
-                id: row.get("id"),
-                enc_keys: row.get("enc_keys"),
+                kid: row.get("kid"),
+                keys: row.get("keys"),
                 properties: row.get("properties"),
             });
         }
@@ -84,60 +84,60 @@ impl PostgresStorage {
 
     pub async fn update_ops_key_properties(
         &self,
-        id: &str,
+        kid: &str,
         properties: &str,
     ) -> Result<OpsKeyRow, DynError> {
         let mut tx = self.pool.begin().await?;
         let result = sqlx::query(
             "
-            UPDATE ops_keys
+            UPDATE opskeys
             SET properties = $1
-            WHERE id = $2
+            WHERE kid = $2
             ",
         )
         .bind(properties)
-        .bind(id)
+        .bind(kid)
         .execute(&mut *tx)
         .await?;
 
         if result.rows_affected() == 0 {
-            return Err(crate::error::not_found(format!("ops key not found: {id}")));
+            return Err(crate::error::not_found(format!("ops key not found: {kid}")));
         }
 
-        let row = fetch_ops_keys_tx(&mut tx, id).await?;
+        let row = fetch_ops_keys_tx(&mut tx, kid).await?;
         tx.commit().await?;
-        info!(id, "updated ops key properties");
+        info!(kid, "updated ops key properties");
 
-        row.ok_or_else(|| crate::error::not_found(format!("ops key not found: {id}")))
+        row.ok_or_else(|| crate::error::not_found(format!("ops key not found: {kid}")))
     }
 
     pub async fn update_ops_key_properties_if_current(
         &self,
-        id: &str,
+        kid: &str,
         current_properties: &str,
         new_properties: &str,
     ) -> Result<OpsKeyRow, DynError> {
         let mut tx = self.pool.begin().await?;
         let result = sqlx::query(
             "
-            UPDATE ops_keys
+            UPDATE opskeys
             SET properties = $1
-            WHERE id = $2
+            WHERE kid = $2
               AND properties = $3
             ",
         )
         .bind(new_properties)
-        .bind(id)
+        .bind(kid)
         .bind(current_properties)
         .execute(&mut *tx)
         .await?;
 
         if result.rows_affected() == 0 {
-            let row = fetch_ops_keys_tx(&mut tx, id).await?;
+            let row = fetch_ops_keys_tx(&mut tx, kid).await?;
             tx.commit().await?;
 
             if row.is_none() {
-                return Err(crate::error::not_found(format!("ops key not found: {id}")));
+                return Err(crate::error::not_found(format!("ops key not found: {kid}")));
             }
 
             return Err(crate::error::invalid_input(
@@ -145,11 +145,11 @@ impl PostgresStorage {
             ));
         }
 
-        let row = fetch_ops_keys_tx(&mut tx, id).await?;
+        let row = fetch_ops_keys_tx(&mut tx, kid).await?;
         tx.commit().await?;
-        info!(id, "updated ops key properties with compare-and-swap");
+        info!(kid, "updated ops key properties with compare-and-swap");
 
-        row.ok_or_else(|| crate::error::not_found(format!("ops key not found: {id}")))
+        row.ok_or_else(|| crate::error::not_found(format!("ops key not found: {kid}")))
     }
 
     pub async fn health_check(&self) -> Result<(), DynError> {
@@ -159,54 +159,54 @@ impl PostgresStorage {
     }
 }
 
-async fn fetch_ops_keys(pool: &PgPool, id: &str) -> Result<Option<OpsKeyRow>, DynError> {
+async fn fetch_ops_keys(pool: &PgPool, kid: &str) -> Result<Option<OpsKeyRow>, DynError> {
     let row = sqlx::query(
         "
-        SELECT id, enc_keys, properties
-        FROM ops_keys
-        WHERE id = $1
+        SELECT kid, keys, properties
+        FROM opskeys
+        WHERE kid = $1
         ",
     )
-    .bind(id)
+    .bind(kid)
     .fetch_optional(pool)
     .await?;
 
     Ok(row.map(|row| OpsKeyRow {
-        id: row.get("id"),
-        enc_keys: row.get("enc_keys"),
+        kid: row.get("kid"),
+        keys: row.get("keys"),
         properties: row.get("properties"),
     }))
 }
 
 async fn fetch_ops_keys_tx(
     tx: &mut Transaction<'_, Postgres>,
-    id: &str,
+    kid: &str,
 ) -> Result<Option<OpsKeyRow>, DynError> {
     let row = sqlx::query(
         "
-        SELECT id, enc_keys, properties
-        FROM ops_keys
-        WHERE id = $1
+        SELECT kid, keys, properties
+        FROM opskeys
+        WHERE kid = $1
         ",
     )
-    .bind(id)
+    .bind(kid)
     .fetch_optional(&mut **tx)
     .await?;
 
     Ok(row.map(|row| OpsKeyRow {
-        id: row.get("id"),
-        enc_keys: row.get("enc_keys"),
+        kid: row.get("kid"),
+        keys: row.get("keys"),
         properties: row.get("properties"),
     }))
 }
 
-async fn validate_ops_keys_schema(pool: &PgPool) -> Result<(), DynError> {
+async fn validate_opskeys_schema(pool: &PgPool) -> Result<(), DynError> {
     let columns = sqlx::query(
         "
         SELECT column_name, data_type, character_maximum_length, is_nullable
         FROM information_schema.columns
         WHERE table_schema = 'public'
-          AND table_name = 'ops_keys'
+          AND table_name = 'opskeys'
         ",
     )
     .fetch_all(pool)
@@ -214,21 +214,20 @@ async fn validate_ops_keys_schema(pool: &PgPool) -> Result<(), DynError> {
 
     if columns.is_empty() {
         return Err(crate::error::storage(
-            "postgres schema is missing ops_keys table",
+            "postgres schema is missing opskeys table",
         ));
     }
 
-    let id = find_column(&columns, "id")
-        .ok_or_else(|| crate::error::storage("postgres schema is missing ops_keys.id column"))?;
-    let enc_keys = find_column(&columns, "enc_keys").ok_or_else(|| {
-        crate::error::storage("postgres schema is missing ops_keys.enc_keys column")
-    })?;
+    let kid = find_column(&columns, "kid")
+        .ok_or_else(|| crate::error::storage("postgres schema is missing opskeys.kid column"))?;
+    let keys = find_column(&columns, "keys")
+        .ok_or_else(|| crate::error::storage("postgres schema is missing opskeys.keys column"))?;
     let properties = find_column(&columns, "properties").ok_or_else(|| {
-        crate::error::storage("postgres schema is missing ops_keys.properties column")
+        crate::error::storage("postgres schema is missing opskeys.properties column")
     })?;
 
-    validate_varchar_column(&id, "id", 128, false)?;
-    validate_text_column(&enc_keys, "enc_keys", false)?;
+    validate_varchar_column(&kid, "kid", 128, false)?;
+    validate_text_column(&keys, "keys", false)?;
     validate_text_column(&properties, "properties", false)?;
     validate_primary_key(pool).await?;
 
@@ -274,7 +273,7 @@ fn validate_varchar_column(
         || column.nullable != expected_nullable
     {
         return Err(crate::error::storage(format!(
-            "postgres schema mismatch for ops_keys.{expected_name}: expected type=VARCHAR({expected_max_length}), nullable={expected_nullable}",
+            "postgres schema mismatch for opskeys.{expected_name}: expected type=VARCHAR({expected_max_length}), nullable={expected_nullable}",
         )));
     }
 
@@ -292,7 +291,7 @@ fn validate_text_column(
         || column.nullable != expected_nullable
     {
         return Err(crate::error::storage(format!(
-            "postgres schema mismatch for ops_keys.{expected_name}: expected type=TEXT, nullable={expected_nullable}",
+            "postgres schema mismatch for opskeys.{expected_name}: expected type=TEXT, nullable={expected_nullable}",
         )));
     }
 
@@ -308,7 +307,7 @@ async fn validate_primary_key(pool: &PgPool) -> Result<(), DynError> {
         JOIN pg_namespace n ON n.oid = t.relnamespace
         JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(i.indkey)
         WHERE n.nspname = 'public'
-          AND t.relname = 'ops_keys'
+          AND t.relname = 'opskeys'
           AND i.indisprimary
         ORDER BY a.attnum
         ",
@@ -317,9 +316,9 @@ async fn validate_primary_key(pool: &PgPool) -> Result<(), DynError> {
     .await?;
 
     let primary_key_columns: Vec<String> = rows.iter().map(|row| row.get("attname")).collect();
-    if primary_key_columns != ["id"] {
+    if primary_key_columns != ["kid"] {
         return Err(crate::error::storage(
-            "postgres schema mismatch for ops_keys primary key: expected id",
+            "postgres schema mismatch for opskeys primary key: expected kid",
         ));
     }
 

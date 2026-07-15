@@ -87,6 +87,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         loaded_routes = config_state.routes.len(),
         loaded_remote_routes = config_state.remote_routes.len(),
         loaded_permission_clients = config_state.permissions.len(),
+        loaded_fpe_profiles = config_state.fpe_profiles.len(),
         "signed config loaded into http state"
     );
     if metrics_handle.is_some() {
@@ -96,6 +97,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
             config_state.routes.len(),
             config_state.remote_routes.len(),
             config_state.permissions.len(),
+            config_state.fpe_profiles.len(),
         );
     }
     let app = super::router(super::HttpState::new(super::HttpStateInput {

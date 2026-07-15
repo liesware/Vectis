@@ -9,8 +9,8 @@ pub const STORAGE_TYPES: &[&str] = &["sqlite", "postgres"];
 
 #[derive(Serialize)]
 pub struct OpsKeyRow {
-    pub id: String,
-    pub enc_keys: String,
+    pub kid: String,
+    pub keys: String,
     pub properties: String,
 }
 
@@ -42,22 +42,22 @@ impl StorageState {
 
     pub async fn save_ops_keys(
         &self,
-        id: &str,
-        enc_keys: &str,
+        kid: &str,
+        keys: &str,
         properties: &str,
     ) -> Result<OpsKeyRow, DynError> {
         match &self.backend {
-            StorageBackend::Sqlite(sqlite) => sqlite.save_ops_keys(id, enc_keys, properties).await,
+            StorageBackend::Sqlite(sqlite) => sqlite.save_ops_keys(kid, keys, properties).await,
             StorageBackend::Postgres(postgres) => {
-                postgres.save_ops_keys(id, enc_keys, properties).await
+                postgres.save_ops_keys(kid, keys, properties).await
             }
         }
     }
 
-    pub async fn get_ops_keys(&self, id: &str) -> Result<OpsKeyRow, DynError> {
+    pub async fn get_ops_keys(&self, kid: &str) -> Result<OpsKeyRow, DynError> {
         match &self.backend {
-            StorageBackend::Sqlite(sqlite) => sqlite.get_ops_keys(id).await,
-            StorageBackend::Postgres(postgres) => postgres.get_ops_keys(id).await,
+            StorageBackend::Sqlite(sqlite) => sqlite.get_ops_keys(kid).await,
+            StorageBackend::Postgres(postgres) => postgres.get_ops_keys(kid).await,
         }
     }
 
@@ -70,34 +70,34 @@ impl StorageState {
 
     pub async fn update_ops_key_properties(
         &self,
-        id: &str,
+        kid: &str,
         properties: &str,
     ) -> Result<OpsKeyRow, DynError> {
         match &self.backend {
             StorageBackend::Sqlite(sqlite) => {
-                sqlite.update_ops_key_properties(id, properties).await
+                sqlite.update_ops_key_properties(kid, properties).await
             }
             StorageBackend::Postgres(postgres) => {
-                postgres.update_ops_key_properties(id, properties).await
+                postgres.update_ops_key_properties(kid, properties).await
             }
         }
     }
 
     pub async fn update_ops_key_properties_if_current(
         &self,
-        id: &str,
+        kid: &str,
         current_properties: &str,
         new_properties: &str,
     ) -> Result<OpsKeyRow, DynError> {
         match &self.backend {
             StorageBackend::Sqlite(sqlite) => {
                 sqlite
-                    .update_ops_key_properties_if_current(id, current_properties, new_properties)
+                    .update_ops_key_properties_if_current(kid, current_properties, new_properties)
                     .await
             }
             StorageBackend::Postgres(postgres) => {
                 postgres
-                    .update_ops_key_properties_if_current(id, current_properties, new_properties)
+                    .update_ops_key_properties_if_current(kid, current_properties, new_properties)
                     .await
             }
         }

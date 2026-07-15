@@ -187,14 +187,19 @@ def reload_config(client):
         "config remote_routes_loaded must be int",
     )
     require(isinstance(response.get("clients_loaded"), int), "config clients_loaded must be int")
+    require(
+        isinstance(response.get("fpe_profiles_loaded"), int),
+        "config fpe_profiles_loaded must be int",
+    )
     return response
 
 
 def create_valid_key(client):
     status, response = client.post("/keys", VALID_KEY_REQUEST, auth=True)
     require_status("create valid key", status, 200)
-    key_id = response.get("id")
-    require_hex(key_id, "keys.id")
+    key_id = response.get("kid")
+    require_hex(key_id, "keys.kid")
+    require("id" not in response, "keys create response must not include id")
     return key_id
 
 
@@ -320,18 +325,18 @@ def main():
 
     def key_properties_without_auth():
         status, _ = client.get(f"/keys/properties/{key_id}")
-        require_status("GET /keys/properties/{id} without auth", status, 401)
+        require_status("GET /keys/properties/{kid} without auth", status, 401)
 
     def key_properties_invalid_kid():
         status, _ = client.get("/keys/properties/not-hex", auth=True)
-        require_status("GET /keys/properties/{id} invalid kid", status, 400)
+        require_status("GET /keys/properties/{kid} invalid kid", status, 400)
 
     def lifecycle_without_auth():
         status, _ = client.post(
             f"/lifecycle/{key_id}",
             {"status": "disabled", "reason": "maintenance"},
         )
-        require_status("POST /lifecycle/{id} without auth", status, 401)
+        require_status("POST /lifecycle/{kid} without auth", status, 401)
 
     def lifecycle_invalid_kid():
         status, _ = client.post(
@@ -339,7 +344,7 @@ def main():
             {"status": "disabled", "reason": "maintenance"},
             auth=True,
         )
-        require_status("POST /lifecycle/{id} invalid kid", status, 400)
+        require_status("POST /lifecycle/{kid} invalid kid", status, 400)
 
     def lifecycle_status_not_string():
         status, _ = client.post(
@@ -347,7 +352,7 @@ def main():
             {"status": 1, "reason": "maintenance"},
             auth=True,
         )
-        require_status("POST /lifecycle/{id} status not string", status, 400)
+        require_status("POST /lifecycle/{kid} status not string", status, 400)
 
     def lifecycle_invalid_status():
         status, _ = client.post(
@@ -355,7 +360,7 @@ def main():
             {"status": "paused", "reason": "maintenance"},
             auth=True,
         )
-        require_status("POST /lifecycle/{id} invalid status", status, 400)
+        require_status("POST /lifecycle/{kid} invalid status", status, 400)
 
     def lifecycle_reason_not_string():
         status, _ = client.post(
@@ -363,7 +368,7 @@ def main():
             {"status": "disabled", "reason": 1},
             auth=True,
         )
-        require_status("POST /lifecycle/{id} reason not string", status, 400)
+        require_status("POST /lifecycle/{kid} reason not string", status, 400)
 
     def routes_list_without_auth():
         status, _ = client.get("/routes")
@@ -662,13 +667,13 @@ def main():
         ("GET /keys/properties invalid auth", keys_properties_invalid_auth),
         ("GET /metrics without auth", metrics_without_auth),
         ("GET /metrics invalid auth", metrics_invalid_auth),
-        ("GET /keys/properties/{id} without auth", key_properties_without_auth),
-        ("GET /keys/properties/{id} invalid kid", key_properties_invalid_kid),
-        ("POST /lifecycle/{id} without auth", lifecycle_without_auth),
-        ("POST /lifecycle/{id} invalid kid", lifecycle_invalid_kid),
-        ("POST /lifecycle/{id} status not string", lifecycle_status_not_string),
-        ("POST /lifecycle/{id} invalid status", lifecycle_invalid_status),
-        ("POST /lifecycle/{id} reason not string", lifecycle_reason_not_string),
+        ("GET /keys/properties/{kid} without auth", key_properties_without_auth),
+        ("GET /keys/properties/{kid} invalid kid", key_properties_invalid_kid),
+        ("POST /lifecycle/{kid} without auth", lifecycle_without_auth),
+        ("POST /lifecycle/{kid} invalid kid", lifecycle_invalid_kid),
+        ("POST /lifecycle/{kid} status not string", lifecycle_status_not_string),
+        ("POST /lifecycle/{kid} invalid status", lifecycle_invalid_status),
+        ("POST /lifecycle/{kid} reason not string", lifecycle_reason_not_string),
         ("GET /routes without auth", routes_list_without_auth),
         ("GET /routes invalid auth", routes_list_invalid_auth),
         ("POST /config/reload without auth", config_reload_without_auth),
@@ -1246,7 +1251,7 @@ def main():
             {"status": "active", "reason": "same state"},
             auth=True,
         )
-        require_status("POST /lifecycle/{id} active to active", status, 400)
+        require_status("POST /lifecycle/{kid} active to active", status, 400)
 
     def lifecycle_rejects_terminal_transition():
         terminal_key_id = create_valid_key(client)
@@ -1256,7 +1261,7 @@ def main():
             {"status": "active", "reason": "restore retired"},
             auth=True,
         )
-        require_status("POST /lifecycle/{id} retired to active", status, 400)
+        require_status("POST /lifecycle/{kid} retired to active", status, 400)
 
     def lifecycle_rejects_compromised_to_active():
         terminal_key_id = create_valid_key(client)
@@ -1266,7 +1271,7 @@ def main():
             {"status": "active", "reason": "restore compromised"},
             auth=True,
         )
-        require_status("POST /lifecycle/{id} compromised to active", status, 400)
+        require_status("POST /lifecycle/{kid} compromised to active", status, 400)
 
     def lifecycle_rejects_destroyed_to_active():
         terminal_key_id = create_valid_key(client)
@@ -1276,7 +1281,7 @@ def main():
             {"status": "active", "reason": "restore destroyed"},
             auth=True,
         )
-        require_status("POST /lifecycle/{id} destroyed to active", status, 400)
+        require_status("POST /lifecycle/{kid} destroyed to active", status, 400)
 
     for name, func in (
         ("disabled key blocks sign", disabled_blocks_sign),
@@ -1288,10 +1293,10 @@ def main():
         ("retired key allows internal decrypt", retired_allows_internal_decrypt),
         ("compromised key blocks crypto", compromised_blocks_crypto),
         ("destroyed key blocks crypto", destroyed_blocks_crypto),
-        ("POST /lifecycle/{id} active to active", lifecycle_rejects_same_state),
-        ("POST /lifecycle/{id} retired to active", lifecycle_rejects_terminal_transition),
-        ("POST /lifecycle/{id} compromised to active", lifecycle_rejects_compromised_to_active),
-        ("POST /lifecycle/{id} destroyed to active", lifecycle_rejects_destroyed_to_active),
+        ("POST /lifecycle/{kid} active to active", lifecycle_rejects_same_state),
+        ("POST /lifecycle/{kid} retired to active", lifecycle_rejects_terminal_transition),
+        ("POST /lifecycle/{kid} compromised to active", lifecycle_rejects_compromised_to_active),
+        ("POST /lifecycle/{kid} destroyed to active", lifecycle_rejects_destroyed_to_active),
     ):
         run_case(rows, name, func)
 
@@ -1300,7 +1305,7 @@ def main():
             f"/message/{key_id}",
             valid_message_request(key_id),
         )
-        require_status("POST /message/{id} without auth", status, 401)
+        require_status("POST /message/{sender_kid} without auth", status, 401)
 
     def message_sender_id_not_hex():
         status, _ = client.post(
@@ -1308,7 +1313,7 @@ def main():
             valid_message_request(key_id),
             auth=True,
         )
-        require_status("POST /message/{id} sender not hex", status, 400)
+        require_status("POST /message/{sender_kid} sender not hex", status, 400)
 
     def message_recipient_route_not_found():
         write_remote_routes([])
@@ -1319,7 +1324,7 @@ def main():
             valid_message_request(key_id),
             auth=True,
         )
-        require_status("POST /message/{id} recipient route not found", status, 404)
+        require_status("POST /message/{sender_kid} recipient route not found", status, 404)
 
     def message_recipient_route_disabled():
         write_remote_routes(
@@ -1340,7 +1345,7 @@ def main():
             valid_message_request(key_id),
             auth=True,
         )
-        require_status("POST /message/{id} recipient route disabled", status, 403)
+        require_status("POST /message/{sender_kid} recipient route disabled", status, 403)
 
     def message_sender_not_allowed_for_route():
         write_remote_routes(
@@ -1361,7 +1366,7 @@ def main():
             valid_message_request(key_id),
             auth=True,
         )
-        require_status("POST /message/{id} sender not allowed for route", status, 403)
+        require_status("POST /message/{sender_kid} sender not allowed for route", status, 403)
 
     def message_route_without_public_keys():
         write_remote_routes(
@@ -1382,7 +1387,7 @@ def main():
             valid_message_request(key_id),
             auth=True,
         )
-        require_status("POST /message/{id} route without public keys", status, 403)
+        require_status("POST /message/{sender_kid} route without public keys", status, 403)
 
     def message_invalid_recipient_kid():
         request = valid_message_request(key_id)
@@ -1392,7 +1397,7 @@ def main():
             request,
             auth=True,
         )
-        require_status("POST /message/{id} invalid recipient kid", status, 400)
+        require_status("POST /message/{sender_kid} invalid recipient kid", status, 400)
 
     def message_empty_message():
         request = valid_message_request(key_id)
@@ -1402,17 +1407,17 @@ def main():
             request,
             auth=True,
         )
-        require_status("POST /message/{id} empty message", status, 400)
+        require_status("POST /message/{sender_kid} empty message", status, 400)
 
     for name, func in (
-        ("POST /message/{id} without auth", message_without_auth),
-        ("POST /message/{id} sender not hex", message_sender_id_not_hex),
-        ("POST /message/{id} recipient route not found", message_recipient_route_not_found),
-        ("POST /message/{id} recipient route disabled", message_recipient_route_disabled),
-        ("POST /message/{id} sender not allowed for route", message_sender_not_allowed_for_route),
-        ("POST /message/{id} route without public keys", message_route_without_public_keys),
-        ("POST /message/{id} invalid recipient kid", message_invalid_recipient_kid),
-        ("POST /message/{id} empty message", message_empty_message),
+        ("POST /message/{sender_kid} without auth", message_without_auth),
+        ("POST /message/{sender_kid} sender not hex", message_sender_id_not_hex),
+        ("POST /message/{sender_kid} recipient route not found", message_recipient_route_not_found),
+        ("POST /message/{sender_kid} recipient route disabled", message_recipient_route_disabled),
+        ("POST /message/{sender_kid} sender not allowed for route", message_sender_not_allowed_for_route),
+        ("POST /message/{sender_kid} route without public keys", message_route_without_public_keys),
+        ("POST /message/{sender_kid} invalid recipient kid", message_invalid_recipient_kid),
+        ("POST /message/{sender_kid} empty message", message_empty_message),
     ):
         run_case(rows, name, func)
 
@@ -1421,7 +1426,7 @@ def main():
             f"/message/internal/encrypt/{key_id}",
             {"plaintext": "hello vectis"},
         )
-        require_status("POST /message/internal/encrypt/{id} without auth", status, 401)
+        require_status("POST /message/internal/encrypt/{kid} without auth", status, 401)
 
     def internal_encrypt_kid_not_hex():
         status, _ = client.post(
@@ -1429,7 +1434,7 @@ def main():
             {"plaintext": "hello vectis"},
             auth=True,
         )
-        require_status("POST /message/internal/encrypt/{id} kid not hex", status, 400)
+        require_status("POST /message/internal/encrypt/{kid} kid not hex", status, 400)
 
     def internal_encrypt_empty_plaintext():
         status, _ = client.post(
@@ -1437,7 +1442,7 @@ def main():
             {"plaintext": ""},
             auth=True,
         )
-        require_status("POST /message/internal/encrypt/{id} empty plaintext", status, 400)
+        require_status("POST /message/internal/encrypt/{kid} empty plaintext", status, 400)
 
     def internal_decrypt_without_auth():
         status, _ = client.post("/message/internal/decrypt", internal_message)
@@ -1460,47 +1465,66 @@ def main():
         )
 
     def fpe_encrypt_plaintext_outside_alphabet():
-        status, _ = client.post(
+        status, body = client.post(
             f"/fpe/encrypt/{key_id}",
             {"profile": "patient-id-decimal-v1", "plaintext": "abc123"},
             auth=True,
         )
-        require_status("POST /fpe/encrypt/{id} plaintext outside alphabet", status, 400)
+        require_status("POST /fpe/encrypt/{kid} plaintext outside alphabet", status, 400)
+        require(
+            body.get("error") == "plaintext contains character outside fpe profile alphabet",
+            "FPE plaintext outside alphabet must fail by alphabet validation",
+        )
 
     def fpe_encrypt_plaintext_too_short():
-        status, _ = client.post(
+        status, body = client.post(
             f"/fpe/encrypt/{key_id}",
             {"profile": "patient-id-decimal-v1", "plaintext": "123"},
             auth=True,
         )
-        require_status("POST /fpe/encrypt/{id} plaintext too short", status, 400)
+        require_status("POST /fpe/encrypt/{kid} plaintext too short", status, 400)
+        require(
+            body.get("error") == "plaintext length is outside fpe profile bounds",
+            "FPE plaintext too short must fail by profile bounds validation",
+        )
 
     def fpe_encrypt_unknown_profile():
-        status, _ = client.post(
+        status, body = client.post(
             f"/fpe/encrypt/{key_id}",
             {"profile": "missing-profile", "plaintext": "123456"},
             auth=True,
         )
-        require_status("POST /fpe/encrypt/{id} unknown profile", status, 400)
+        require_status("POST /fpe/encrypt/{kid} unknown profile", status, 400)
+        require(
+            body.get("error") == "fpe profile not found",
+            "FPE unknown profile must fail by profile lookup",
+        )
 
     def fpe_decrypt_ciphertext_outside_alphabet():
-        status, _ = client.post(
+        status, body = client.post(
             "/fpe/decrypt",
             {"kid": key_id, "profile": "patient-id-decimal-v1", "ciphertext": "abc123"},
             auth=True,
         )
         require_status("POST /fpe/decrypt ciphertext outside alphabet", status, 400)
+        require(
+            body.get("error") == "ciphertext contains character outside fpe profile alphabet",
+            "FPE ciphertext outside alphabet must fail by alphabet validation",
+        )
+
+    write_fpe_profiles([valid_fpe_profile(key_id)])
+    reload_config(client)
 
     for name, func in (
-        ("POST /message/internal/encrypt/{id} without auth", internal_encrypt_without_auth),
-        ("POST /message/internal/encrypt/{id} kid not hex", internal_encrypt_kid_not_hex),
-        ("POST /message/internal/encrypt/{id} empty plaintext", internal_encrypt_empty_plaintext),
+        ("POST /message/internal/encrypt/{kid} without auth", internal_encrypt_without_auth),
+        ("POST /message/internal/encrypt/{kid} kid not hex", internal_encrypt_kid_not_hex),
+        ("POST /message/internal/encrypt/{kid} empty plaintext", internal_encrypt_empty_plaintext),
         ("POST /message/internal/decrypt without auth", internal_decrypt_without_auth),
         ("POST /message/internal/decrypt tampered kid", internal_decrypt_tampered_kid),
         ("POST /message/internal/decrypt tampered ciphertext", internal_decrypt_tampered_ciphertext),
-        ("POST /fpe/encrypt/{id} plaintext outside alphabet", fpe_encrypt_plaintext_outside_alphabet),
-        ("POST /fpe/encrypt/{id} plaintext too short", fpe_encrypt_plaintext_too_short),
-        ("POST /fpe/encrypt/{id} unknown profile", fpe_encrypt_unknown_profile),
+        ("POST /fpe/encrypt/{kid} plaintext outside alphabet", fpe_encrypt_plaintext_outside_alphabet),
+        ("POST /fpe/encrypt/{kid} plaintext too short", fpe_encrypt_plaintext_too_short),
+        ("POST /fpe/encrypt/{kid} unknown profile", fpe_encrypt_unknown_profile),
         ("POST /fpe/decrypt ciphertext outside alphabet", fpe_decrypt_ciphertext_outside_alphabet),
     ):
         run_case(rows, name, func)
@@ -1511,33 +1535,33 @@ def main():
 
     def test_id_without_auth():
         status, _ = client.get(f"/self-test/keys/{key_id}")
-        require_status("GET /self-test/keys/{id} without auth", status, 401)
+        require_status("GET /self-test/keys/{kid} without auth", status, 401)
 
     def test_id_not_hex():
         status, _ = client.get("/self-test/keys/not-hex", auth=True)
-        require_status("GET /self-test/keys/{id} not hex", status, 400)
+        require_status("GET /self-test/keys/{kid} not hex", status, 400)
 
     def test_id_wrong_length():
         status, _ = client.get("/self-test/keys/abcd", auth=True)
-        require_status("GET /self-test/keys/{id} wrong length", status, 400)
+        require_status("GET /self-test/keys/{kid} wrong length", status, 400)
 
     def pub_id_not_hex():
         status, _ = client.get("/pub/not-hex")
-        require_status("GET /pub/{id} not hex", status, 400)
+        require_status("GET /pub/{kid} not hex", status, 400)
 
     def pub_no_private_keys():
         status, response = client.get(f"/pub/{key_id}")
-        require_status("GET /pub/{id}", status, 200)
+        require_status("GET /pub/{kid}", status, 200)
         body = json.dumps(response)
-        require("private_key" not in body, "GET /pub/{id} must not expose private keys")
-        require("kid" not in response, "GET /pub/{id} must not include kid")
+        require("private_key" not in body, "GET /pub/{kid} must not expose private keys")
+        require("kid" not in response, "GET /pub/{kid} must not include kid")
 
     def sign_without_auth():
         status, _ = client.post(
             f"/sign/{key_id}",
             {"message_hash": {"alg": "SHA-256", "hex": hashlib.sha256(VALID_MESSAGE).hexdigest()}},
         )
-        require_status("POST /sign/{id} without auth", status, 401)
+        require_status("POST /sign/{kid} without auth", status, 401)
 
     def sign_id_not_hex():
         status, _ = client.post(
@@ -1545,7 +1569,7 @@ def main():
             {"message_hash": {"alg": "SHA-256", "hex": hashlib.sha256(VALID_MESSAGE).hexdigest()}},
             auth=True,
         )
-        require_status("POST /sign/{id} not hex", status, 400)
+        require_status("POST /sign/{kid} not hex", status, 400)
 
     def sign_id_not_found():
         missing_id = "00" * 32
@@ -1554,7 +1578,7 @@ def main():
             {"message_hash": {"alg": "SHA-256", "hex": hashlib.sha256(VALID_MESSAGE).hexdigest()}},
             auth=True,
         )
-        require_status("POST /sign/{id} not found", status, 404)
+        require_status("POST /sign/{kid} not found", status, 404)
 
     def sign_invalid_hash_algorithm():
         status, _ = client.post(
@@ -1562,7 +1586,7 @@ def main():
             {"message_hash": {"alg": "SHA-999", "hex": hashlib.sha256(VALID_MESSAGE).hexdigest()}},
             auth=True,
         )
-        require_status("POST /sign/{id} invalid hash algorithm", status, 400)
+        require_status("POST /sign/{kid} invalid hash algorithm", status, 400)
 
     def sign_hash_wrong_length():
         status, _ = client.post(
@@ -1570,7 +1594,7 @@ def main():
             {"message_hash": {"alg": "SHA-256", "hex": "00"}},
             auth=True,
         )
-        require_status("POST /sign/{id} hash wrong length", status, 400)
+        require_status("POST /sign/{kid} hash wrong length", status, 400)
 
     def sign_hash_not_hex():
         status, _ = client.post(
@@ -1578,21 +1602,21 @@ def main():
             {"message_hash": {"alg": "SHA-256", "hex": "zz" * 32}},
             auth=True,
         )
-        require_status("POST /sign/{id} hash not hex", status, 400)
+        require_status("POST /sign/{kid} hash not hex", status, 400)
 
     for name, func in (
         ("GET /self-test/init without auth", test_init_without_auth),
-        ("GET /self-test/keys/{id} without auth", test_id_without_auth),
-        ("GET /self-test/keys/{id} not hex", test_id_not_hex),
-        ("GET /self-test/keys/{id} wrong length", test_id_wrong_length),
-        ("GET /pub/{id} not hex", pub_id_not_hex),
-        ("GET /pub/{id} no private keys", pub_no_private_keys),
-        ("POST /sign/{id} without auth", sign_without_auth),
-        ("POST /sign/{id} not hex", sign_id_not_hex),
-        ("POST /sign/{id} not found", sign_id_not_found),
-        ("POST /sign/{id} invalid hash algorithm", sign_invalid_hash_algorithm),
-        ("POST /sign/{id} hash wrong length", sign_hash_wrong_length),
-        ("POST /sign/{id} hash not hex", sign_hash_not_hex),
+        ("GET /self-test/keys/{kid} without auth", test_id_without_auth),
+        ("GET /self-test/keys/{kid} not hex", test_id_not_hex),
+        ("GET /self-test/keys/{kid} wrong length", test_id_wrong_length),
+        ("GET /pub/{kid} not hex", pub_id_not_hex),
+        ("GET /pub/{kid} no private keys", pub_no_private_keys),
+        ("POST /sign/{kid} without auth", sign_without_auth),
+        ("POST /sign/{kid} not hex", sign_id_not_hex),
+        ("POST /sign/{kid} not found", sign_id_not_found),
+        ("POST /sign/{kid} invalid hash algorithm", sign_invalid_hash_algorithm),
+        ("POST /sign/{kid} hash wrong length", sign_hash_wrong_length),
+        ("POST /sign/{kid} hash not hex", sign_hash_not_hex),
     ):
         run_case(rows, name, func)
 

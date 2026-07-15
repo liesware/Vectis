@@ -262,7 +262,7 @@ impl Drop for LoadedOpsKey {
 
 #[derive(Serialize)]
 pub struct CreateKeysOutput {
-    pub id: String,
+    pub kid: String,
 }
 
 #[derive(Serialize)]
@@ -394,8 +394,8 @@ struct CryptoProfile {
 }
 
 struct CreatedOpsKeyRecord {
-    id: String,
-    enc_keys: String,
+    kid: String,
+    keys: String,
     properties: String,
 }
 
@@ -415,10 +415,10 @@ pub async fn create_keys(
     .await?;
 
     storage
-        .save_ops_keys(&record.id, &record.enc_keys, &record.properties)
+        .save_ops_keys(&record.kid, &record.keys, &record.properties)
         .await?;
 
-    Ok(CreateKeysOutput { id: record.id })
+    Ok(CreateKeysOutput { kid: record.kid })
 }
 
 fn create_ops_key_record(
@@ -445,8 +445,8 @@ fn create_ops_key_record(
     let keys_b64 = encrypt_internal_payload(&plaintext, &db_key, &nonce, &aad)?;
     let nonce_b64 = general_purpose::STANDARD.encode(&*nonce);
     let aad_b64 = general_purpose::STANDARD.encode(aad.as_bytes());
-    let id = create_key_id(&keys_b64)?;
-    let enc_keys = format!("{keys_b64}.{nonce_b64}.{aad_b64}");
+    let kid = create_key_id(&keys_b64)?;
+    let keys = format!("{keys_b64}.{nonce_b64}.{aad_b64}");
 
     let properties = Zeroizing::new(create_ops_key_properties(&input));
     let properties_plaintext = Zeroizing::new(serde_json::to_string_pretty(&*properties)?);
@@ -458,7 +458,7 @@ fn create_ops_key_record(
         ("hostname", &config.sender_hostname),
         ("type", "ops-key-properties"),
         ("cipher", config::INTERNAL_KEYS_CIPHER),
-        ("kid", &id),
+        ("kid", &kid),
         ("tag", &input.tag),
         ("profile", &input.properties_profile),
         ("timestamp", &input.timestamp),
@@ -474,8 +474,8 @@ fn create_ops_key_record(
     let properties = format!("{properties_b64}.{properties_nonce_b64}.{properties_aad_b64}");
 
     Ok(CreatedOpsKeyRecord {
-        id,
-        enc_keys,
+        kid,
+        keys,
         properties,
     })
 }
@@ -493,14 +493,14 @@ fn create_key_id(keys_b64: &str) -> Result<String, DynError> {
     )?))
 }
 
-fn validate_key_id_matches_enc_keys(id: &str, enc_keys: &str) -> Result<(), DynError> {
-    KeyId::parse(id)?;
-    let parts = split_internal_payload("enc_keys", enc_keys)?;
-    let expected_id = create_key_id(parts[0])?;
+fn validate_kid_matches_keys(kid: &str, keys: &str) -> Result<(), DynError> {
+    KeyId::parse(kid)?;
+    let parts = split_internal_payload("keys", keys)?;
+    let expected_kid = create_key_id(parts[0])?;
 
-    if id != expected_id {
+    if kid != expected_kid {
         return Err(crate::error::invalid_input(
-            "id does not match INTERNAL_KEYS_HASH(enc_keys payload)",
+            "kid does not match INTERNAL_KEYS_HASH(keys payload)",
         ));
     }
 
@@ -573,14 +573,14 @@ pub async fn load_keys_db_state(
     let mut keys_db = Vec::new();
 
     for row in rows {
-        let id = row.id.clone();
+        let kid = row.kid.clone();
         match load_ops_key_from_row(internal_keys, row) {
             Ok(loaded_key) => {
-                info!(id = %loaded_key.id, "decrypted ops key loaded from db");
+                info!(kid = %loaded_key.id, "decrypted ops key loaded from db");
                 keys_db.push(Arc::new(loaded_key));
             }
             Err(err) => {
-                error!(id = %id, error = %err, "failed to decrypt ops key from db");
+                error!(kid = %kid, error = %err, "failed to decrypt ops key from db");
             }
         }
     }
@@ -610,12 +610,12 @@ pub async fn update_key_lifecycle(
 ) -> Result<UpdateLifecycleOutput, DynError> {
     let id = KeyId::parse(id)?;
     let row = storage.get_ops_keys(id.as_str()).await?;
-    validate_key_id_matches_enc_keys(&row.id, &row.enc_keys)?;
+    validate_kid_matches_keys(&row.kid, &row.keys)?;
 
-    let decrypted = decrypt_ops_keys_payload(internal_keys, &row.enc_keys)?;
+    let decrypted = decrypt_ops_keys_payload(internal_keys, &row.keys)?;
     let mut properties = decrypt_ops_key_properties_payload(internal_keys, &row.properties)?;
     validate_ops_key_properties(&properties.output)?;
-    validate_loaded_ops_key_binding(&row.id, &decrypted, &properties)?;
+    validate_loaded_ops_key_binding(&row.kid, &decrypted, &properties)?;
 
     validate_lifecycle_transition(&properties.output.lifecycle.status, &input.status)?;
     let changed_at = validation::current_timestamp()?;
@@ -642,14 +642,14 @@ fn load_ops_key_from_row(
     internal_keys: &InternalDerivedKeysState,
     row: crate::core::storage::OpsKeyRow,
 ) -> Result<LoadedOpsKey, DynError> {
-    validate_key_id_matches_enc_keys(&row.id, &row.enc_keys)?;
-    let decrypted = decrypt_ops_keys_payload(internal_keys, &row.enc_keys)?;
+    validate_kid_matches_keys(&row.kid, &row.keys)?;
+    let decrypted = decrypt_ops_keys_payload(internal_keys, &row.keys)?;
     let properties = decrypt_ops_key_properties_payload(internal_keys, &row.properties)?;
     validate_ops_key_properties(&properties.output)?;
-    validate_loaded_ops_key_binding(&row.id, &decrypted, &properties)?;
+    validate_loaded_ops_key_binding(&row.kid, &decrypted, &properties)?;
 
     Ok(LoadedOpsKey {
-        id: row.id,
+        id: row.kid,
         aad: decrypted.aad,
         properties_aad: properties.aad,
         key_material: decrypted.output,
@@ -703,20 +703,20 @@ fn encrypt_ops_key_properties_payload(
 
 fn decrypt_ops_keys_payload(
     internal_keys: &InternalDerivedKeysState,
-    enc_keys: &str,
+    keys: &str,
 ) -> Result<DecryptedOpsKeys, DynError> {
-    let parts = split_internal_payload("enc_keys", enc_keys)?;
+    let parts = split_internal_payload("keys", keys)?;
 
     let ciphertext = general_purpose::STANDARD.decode(parts[0])?;
     let nonce = Zeroizing::new(general_purpose::STANDARD.decode(parts[1])?);
     let aad = general_purpose::STANDARD.decode(parts[2])?;
     let aad_text = String::from_utf8(aad.clone())?;
     validation::validate_encrypted_payload(
-        "enc_keys ciphertext",
+        "keys ciphertext",
         &hex::encode(&ciphertext),
-        "enc_keys nonce",
+        "keys nonce",
         &hex::encode(&*nonce),
-        "enc_keys aad",
+        "keys aad",
         &aad_text,
         config::INTERNAL_KEYS_NONCE_SIZE_BYTES,
     )?;
@@ -803,13 +803,9 @@ fn validate_loaded_ops_key_binding(
     let keys_aad = parse_aad_fields(&keys.aad)?;
     let properties_aad = parse_aad_fields(&properties.aad)?;
 
+    validate_aad_field("keys.aad.type", aad_field(&keys_aad, "type")?, "ops-keys")?;
     validate_aad_field(
-        "enc_keys.aad.type",
-        aad_field(&keys_aad, "type")?,
-        "ops-keys",
-    )?;
-    validate_aad_field(
-        "enc_keys.aad.cipher",
+        "keys.aad.cipher",
         aad_field(&keys_aad, "cipher")?,
         config::INTERNAL_KEYS_CIPHER,
     )?;
@@ -842,22 +838,22 @@ fn validate_loaded_ops_key_binding(
     )?;
 
     validate_aad_field(
-        "enc_keys.aad.tag",
+        "keys.aad.tag",
         aad_field(&keys_aad, "tag")?,
         aad_field(&properties_aad, "tag")?,
     )?;
     validate_aad_field(
-        "enc_keys.aad.timestamp",
+        "keys.aad.timestamp",
         aad_field(&keys_aad, "timestamp")?,
         aad_field(&properties_aad, "timestamp")?,
     )?;
     validate_aad_field(
-        "enc_keys.aad.version",
+        "keys.aad.version",
         aad_field(&keys_aad, "version")?,
         aad_field(&properties_aad, "version")?,
     )?;
     validate_aad_field(
-        "enc_keys.aad.hostname",
+        "keys.aad.hostname",
         aad_field(&keys_aad, "hostname")?,
         aad_field(&properties_aad, "hostname")?,
     )?;
@@ -1659,17 +1655,17 @@ mod tests {
         }
 
         #[test]
-        fn key_id_must_match_enc_keys_payload(payload in "[A-Za-z0-9_-]{1,64}") {
+        fn kid_must_match_keys_payload(payload in "[A-Za-z0-9_-]{1,64}") {
             let payload_b64 = general_purpose::STANDARD.encode(payload.as_bytes());
             let nonce_b64 = general_purpose::STANDARD.encode(b"nonce");
             let aad_b64 = general_purpose::STANDARD.encode(b"aad");
-            let enc_keys = format!("{payload_b64}.{nonce_b64}.{aad_b64}");
-            let id = create_key_id(&payload_b64).expect("generated key id must hash");
-            let wrong_id = "f".repeat(64);
+            let keys = format!("{payload_b64}.{nonce_b64}.{aad_b64}");
+            let kid = create_key_id(&payload_b64).expect("generated key id must hash");
+            let wrong_kid = "f".repeat(64);
 
-            prop_assert!(validate_key_id_matches_enc_keys(&id, &enc_keys).is_ok());
-            if wrong_id != id {
-                prop_assert!(validate_key_id_matches_enc_keys(&wrong_id, &enc_keys).is_err());
+            prop_assert!(validate_kid_matches_keys(&kid, &keys).is_ok());
+            if wrong_kid != kid {
+                prop_assert!(validate_kid_matches_keys(&wrong_kid, &keys).is_err());
             }
         }
     }

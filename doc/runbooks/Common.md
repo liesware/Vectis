@@ -250,7 +250,7 @@ curl -sS http://127.0.0.1:3000/healthz/ready
 For PostgreSQL:
 
 ```sh
-psql "$VECTIS_POSTGRES_DSN" -c '\d ops_keys'
+psql "$VECTIS_POSTGRES_DSN" -c '\d opskeys'
 ```
 
 ### Recovery
@@ -282,7 +282,7 @@ Vectis reports PostgreSQL connection or schema errors.
 
 - Database is unreachable.
 - User lacks privileges.
-- `ops_keys` table does not exist.
+- `opskeys` table does not exist.
 - Column types or nullability do not match the expected schema.
 - The DSN points to the wrong database.
 
@@ -290,15 +290,15 @@ Vectis reports PostgreSQL connection or schema errors.
 
 ```sh
 psql "$VECTIS_POSTGRES_DSN" -c 'select 1'
-psql "$VECTIS_POSTGRES_DSN" -c '\d ops_keys'
+psql "$VECTIS_POSTGRES_DSN" -c '\d opskeys'
 ```
 
 Expected table:
 
 ```sql
-CREATE TABLE ops_keys (
-    id TEXT PRIMARY KEY,
-    enc_keys TEXT NOT NULL,
+CREATE TABLE opskeys (
+    kid VARCHAR(128) PRIMARY KEY,
+    keys TEXT NOT NULL,
     properties TEXT NOT NULL
 );
 ```
@@ -563,6 +563,7 @@ vectis_keys_loaded
 vectis_routes_loaded
 vectis_remote_routes_loaded
 vectis_permission_clients
+vectis_fpe_profiles_loaded
 vectis_config_reload_total
 vectis_message_total
 ```

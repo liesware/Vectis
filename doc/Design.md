@@ -260,7 +260,7 @@ comparison; structured logging with an explicit field allowlist mindset.
 
 **In Vectis**: 180+ `Zeroizing` uses; `PermissionsState` keeps an index for
 permission lookup while `authenticate_hash` still compares credential hashes
-with `constant_time_eq`; kid-binding via `validate_key_id_matches_enc_keys`;
+with `constant_time_eq`; kid-binding via `validate_key_id_matches_keys`;
 dedicated audit stream with request ids and no payload contents.
 
 ### Rule 16 — Model resource lifecycle explicitly

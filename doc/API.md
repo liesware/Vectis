@@ -181,6 +181,7 @@ Exposed metrics:
 - `vectis_routes_loaded`
 - `vectis_remote_routes_loaded`
 - `vectis_permission_clients`
+- `vectis_fpe_profiles_loaded`
 - `vectis_permission_total{result}` (`allow` or `deny`)
 - `vectis_config_reload_total{result}` (`success` or `failed`)
 - `vectis_config_last_reload_timestamp_seconds{result}` (`success` or `failed`)
@@ -314,7 +315,7 @@ Response:
 
 ```json
 {
-  "id": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed"
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed"
 }
 ```
 
@@ -510,7 +511,8 @@ Response:
   "status": "reloaded",
   "routes_loaded": 1,
   "remote_routes_loaded": 1,
-  "clients_loaded": 1
+  "clients_loaded": 1,
+  "fpe_profiles_loaded": 1
 }
 ```
 

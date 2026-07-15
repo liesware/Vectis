@@ -11,7 +11,7 @@ use tracing::{error, info};
 
 #[derive(Serialize)]
 pub struct CreateKeysResponse {
-    id: String,
+    kid: String,
 }
 
 pub async fn create_endpoint(
@@ -67,7 +67,7 @@ pub async fn create_endpoint(
             let loaded_key = match ops::keys::load_keys_db_entry(
                 state.storage(),
                 state.internal_keys(),
-                &output.id,
+                &output.kid,
             )
             .await
             {
@@ -76,12 +76,12 @@ pub async fn create_endpoint(
                     audit::operation_failed(
                         "key.create.failed",
                         Some(&actor),
-                        Some(&output.id),
+                        Some(&output.kid),
                         None,
                         Some("admin"),
                         &err.to_string(),
                     );
-                    error!(error = %err, id = %output.id, "failed to load created key into http state");
+                    error!(error = %err, kid = %output.kid, "failed to load created key into http state");
                     return Err((
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(ErrorResponse::new(public_error_message(
@@ -93,7 +93,7 @@ pub async fn create_endpoint(
 
             info!(
                 endpoint = "POST /keys",
-                kid = %output.id,
+                kid = %output.kid,
                 info = %loaded_key.aad(),
                 hash_algorithm = %loaded_key.key_material().hash_variant(),
                 symmetric_algorithm = %loaded_key.keys().symmetric().variant(),
@@ -109,12 +109,12 @@ pub async fn create_endpoint(
             audit::operation_success(
                 "key.create.success",
                 Some(&actor),
-                Some(&output.id),
+                Some(&output.kid),
                 None,
                 Some("admin"),
             );
 
-            Ok(Json(CreateKeysResponse { id: output.id }))
+            Ok(Json(CreateKeysResponse { kid: output.kid }))
         }
         Err(err) => {
             audit::operation_failed(

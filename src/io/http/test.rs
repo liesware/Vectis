@@ -88,7 +88,7 @@ pub async fn test_endpoint(
         error_response(err.as_ref())
     })?;
     info!(
-        endpoint = "GET /self-test/keys/{id}",
+        endpoint = "GET /self-test/keys/{kid}",
         kid = %id,
         "self-test key request accepted"
     );
@@ -108,7 +108,7 @@ pub async fn test_endpoint(
     match result {
         Ok(response) => {
             info!(
-                endpoint = "GET /self-test/keys/{id}",
+                endpoint = "GET /self-test/keys/{kid}",
                 kid = %id,
                 "self-test key response ready"
             );

@@ -139,6 +139,10 @@ def validate_metrics(client):
         "vectis_permission_clients" in metrics,
         "metrics must include vectis_permission_clients",
     )
+    require(
+        "vectis_fpe_profiles_loaded" in metrics,
+        "metrics must include vectis_fpe_profiles_loaded",
+    )
 
 
 def validate_runtime_metrics(client):
@@ -850,7 +854,11 @@ def main():
             }
         ]
     )
-    reload_config(client)
+    fpe_reload = reload_config(client)
+    require(
+        fpe_reload.get("fpe_profiles_loaded") == 1,
+        "config reload must report loaded fpe profile",
+    )
     fpe_rows = [
         (
             created[0][0],

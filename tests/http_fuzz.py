@@ -392,7 +392,12 @@ def _crypto_fields_differ(sent_value, seed):
     return any(sent_msg.get(field) != seed_msg.get(field) for field in CRYPTO_MESSAGE_FIELDS)
 
 
-CONFIG_LOADED_COUNTS = ("routes_loaded", "remote_routes_loaded", "clients_loaded")
+CONFIG_LOADED_COUNTS = (
+    "routes_loaded",
+    "remote_routes_loaded",
+    "clients_loaded",
+    "fpe_profiles_loaded",
+)
 
 
 def config_semantic(status, body):
@@ -754,7 +759,7 @@ def _create_key(client, case):
     status, body = client.post_json("/keys", case, auth=True)
     if status != 200:
         raise RuntimeError(f"could not create seed key ({case}): HTTP {status}: {body}")
-    return json.loads(body)["id"]
+    return json.loads(body)["kid"]
 
 
 def message_seeds(_client):
@@ -977,8 +982,8 @@ def self_check():
         "internal encrypt ignores plausible body",
     )
 
-    loaded_body = '{"status":"reloaded","routes_loaded":1,"remote_routes_loaded":0,"clients_loaded":0}'
-    empty_body = '{"status":"reloaded","routes_loaded":0,"remote_routes_loaded":0,"clients_loaded":0}'
+    loaded_body = '{"status":"reloaded","routes_loaded":1,"remote_routes_loaded":0,"clients_loaded":0,"fpe_profiles_loaded":0}'
+    empty_body = '{"status":"reloaded","routes_loaded":0,"remote_routes_loaded":0,"clients_loaded":0,"fpe_profiles_loaded":0}'
     expect(config_semantic(200, loaded_body), "config flags integrity bypass")
     expect(not config_semantic(200, empty_body), "config ignores empty reload")
     expect(not config_semantic(400, '{"error":"x"}'), "config ignores rejected")

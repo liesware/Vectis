@@ -13,6 +13,7 @@ pub struct ReloadConfigResponse {
     routes_loaded: usize,
     remote_routes_loaded: usize,
     clients_loaded: usize,
+    fpe_profiles_loaded: usize,
 }
 
 pub async fn reload_endpoint(
@@ -47,12 +48,17 @@ pub async fn reload_endpoint(
     let routes_loaded = state.routes_loaded().await;
     let remote_routes_loaded = state.remote_routes_loaded().await;
     let clients_loaded = state.permissions_loaded().await;
+    let fpe_profiles_loaded = state.fpe_profiles_loaded().await;
     state.refresh_loaded_gauges().await;
     metrics::record_config_reload("success");
     record_config_reload_timestamp("success");
     info!(
         endpoint = "POST /config/reload",
-        routes_loaded, remote_routes_loaded, clients_loaded, "config reload response ready"
+        routes_loaded,
+        remote_routes_loaded,
+        clients_loaded,
+        fpe_profiles_loaded,
+        "config reload response ready"
     );
     audit::operation_success(
         "config.reload.success",
@@ -67,6 +73,7 @@ pub async fn reload_endpoint(
         routes_loaded,
         remote_routes_loaded,
         clients_loaded,
+        fpe_profiles_loaded,
     }))
 }
 

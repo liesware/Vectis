@@ -254,9 +254,9 @@ Clients with `status` other than `active` are ignored. Invalid JSON, invalid act
 Current SQLite schema:
 
 ```sql
-CREATE TABLE IF NOT EXISTS ops_keys (
-    id VARCHAR(128) PRIMARY KEY,
-    enc_keys VARCHAR(10240) NOT NULL,
+CREATE TABLE IF NOT EXISTS opskeys (
+    kid VARCHAR(128) PRIMARY KEY,
+    keys VARCHAR(10240) NOT NULL,
     properties VARCHAR(10240) NOT NULL
 );
 ```
@@ -270,20 +270,20 @@ only validates that the expected schema exists when it starts.
 Current PostgreSQL schema:
 
 ```sql
-CREATE TABLE ops_keys (
-    id VARCHAR(128) PRIMARY KEY,
-    enc_keys TEXT NOT NULL,
+CREATE TABLE opskeys (
+    kid VARCHAR(128) PRIMARY KEY,
+    keys TEXT NOT NULL,
     properties TEXT NOT NULL
 );
 ```
 
 The init symmetric key is a root key. Vectis derives separate internal keys from it with HKDF-SHA256:
 
-- `db_key` encrypts and decrypts `ops_keys.enc_keys`;
-- `properties_key` encrypts and decrypts `ops_keys.properties`;
+- `db_key` encrypts and decrypts `opskeys.keys`;
+- `properties_key` encrypts and decrypts `opskeys.properties`;
 - `api_auth_key` verifies `X-API-Key` against `VECTIS_APIKEY_HASH`.
 
-`enc_keys` stores operational key material; `properties` stores lifecycle metadata.
+`keys` stores operational key material; `properties` stores lifecycle metadata.
 
 ## Logging
 

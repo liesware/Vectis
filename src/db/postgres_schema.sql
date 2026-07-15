@@ -1,5 +1,5 @@
-CREATE TABLE ops_keys (
-    id VARCHAR(128) PRIMARY KEY,
-    enc_keys TEXT NOT NULL,
+CREATE TABLE opskeys (
+    kid VARCHAR(128) PRIMARY KEY,
+    keys TEXT NOT NULL,
     properties TEXT NOT NULL
 );
