@@ -1,56 +1,86 @@
 use std::env;
+use std::process;
 use tracing::{error, info};
 use vectis::error::DynError;
 use vectis::{core, io};
 
-const PROGRAM_NAME: &str = "vectis";
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RootCommandKind {
+    Serve,
+    Init,
+    Apikey,
+    Version,
+    Http,
+}
+
+struct RootCommand {
+    name: &'static str,
+    kind: RootCommandKind,
+}
+
+const ROOT_COMMANDS: &[RootCommand] = &[
+    RootCommand::new("serve", RootCommandKind::Serve),
+    RootCommand::new("init", RootCommandKind::Init),
+    RootCommand::new("apikey", RootCommandKind::Apikey),
+    RootCommand::new("version", RootCommandKind::Version),
+    RootCommand::new("health", RootCommandKind::Http),
+    RootCommand::new("test", RootCommandKind::Http),
+    RootCommand::new("keys", RootCommandKind::Http),
+    RootCommand::new("lifecycle", RootCommandKind::Http),
+    RootCommand::new("routes", RootCommandKind::Http),
+    RootCommand::new("remote-routes", RootCommandKind::Http),
+    RootCommand::new("permissions", RootCommandKind::Http),
+    RootCommand::new("config", RootCommandKind::Http),
+    RootCommand::new("pub", RootCommandKind::Http),
+    RootCommand::new("sign", RootCommandKind::Http),
+    RootCommand::new("fpe", RootCommandKind::Http),
+    RootCommand::new("token", RootCommandKind::Http),
+    RootCommand::new("message", RootCommandKind::Http),
+];
+
+impl RootCommand {
+    const fn new(name: &'static str, kind: RootCommandKind) -> Self {
+        Self { name, kind }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CliErrorFormat {
+    Human,
+    Json,
+}
 
 #[tokio::main]
-async fn main() -> Result<(), DynError> {
+async fn main() {
+    let args: Vec<String> = env::args().collect();
+    let error_format = detect_error_format(&args);
+    if let Err(err) = real_main(args).await {
+        print_cli_error(err.as_ref(), error_format);
+        process::exit(1);
+    }
+}
+
+async fn real_main(args: Vec<String>) -> Result<(), DynError> {
     let _guard = core::logging::init_logging();
 
-    let mut args = env::args();
+    let mut args = args.into_iter();
     let _program = args.next();
 
     match args.next().as_deref() {
-        Some("serve") => {
-            info!("validating encrypted init file before starting http service");
-            let init_state = io::cli::init::load_init_state()?;
-            println!("Key status: Validated");
-            info!("starting http service");
-
-            if let Err(err) = io::http::run(init_state).await {
-                error!(error = %err, "application failed");
-                return Err(err);
-            }
-
-            info!("application finished successfully");
+        Some(command) if command != "help" && command != "-h" && command != "--help" => {
+            let Some(root_command) = find_root_command(command) else {
+                eprintln!("unknown command: {command}\n");
+                print_help();
+                return Ok(());
+            };
+            run_root_command(root_command, command, args.collect()).await?;
         }
-        Some("init") => match args.next().as_deref() {
-            Some("help" | "-h" | "--help") => print_init_help(),
+        Some("help") => match args.next() {
             Some(command) => {
-                eprintln!("unknown init command: {command}\n");
-                print_init_help();
+                let mut help_args = vec![command];
+                help_args.extend(args);
+                print_command_help(help_args);
             }
-            None => {
-                info!("initializing local key material");
-                let path = io::cli::init::run_init()?;
-
-                println!("created {path}");
-                info!(path, "init completed successfully");
-            }
-        },
-        Some("apikey") => {
-            io::cli::apikey::run(args.collect())?;
-        }
-        Some(
-            command @ ("health" | "test" | "keys" | "lifecycle" | "routes" | "remote-routes"
-            | "permissions" | "config" | "pub" | "sign" | "message"),
-        ) => {
-            io::cli::http::run(command, args.collect()).await?;
-        }
-        Some("help") => match args.next().as_deref() {
-            Some(command) => print_command_help(command),
             None => print_help(),
         },
         Some("-h" | "--help") | None => print_help(),
@@ -63,68 +93,116 @@ async fn main() -> Result<(), DynError> {
     Ok(())
 }
 
-fn print_help() {
-    println!("Usage:");
-    println!("  {PROGRAM_NAME} <command> [options]");
-    println!("  {PROGRAM_NAME} help [command]");
-    println!();
-    println!("Commands:");
-    println!("  serve                 Start the HTTP service");
-    println!("  init                  Generate local key material in VECTIS_INIT_KEYS_FILE");
-    println!("  apikey                Create additional local API keys");
-    println!("  health                Call the health probe endpoints");
-    println!("  test                  Call protected test endpoints through HTTP");
-    println!("  keys                  Create, list, or reload operational keys through HTTP");
-    println!("  lifecycle             Update operational key lifecycle metadata");
-    println!("  routes                List final app routes");
-    println!("  remote-routes         List remote Vectis routes");
-    println!("  permissions           List loaded API key permissions");
-    println!("  config                Sign, list, or reload the unified signed config");
-    println!("  pub                   Fetch public keys through HTTP");
-    println!("  sign                  Create or verify timestamp signatures through HTTP");
-    println!("  message               Send, receive, encrypt, or decrypt messages through HTTP");
-    println!();
-    println!("Examples:");
-    println!("  {PROGRAM_NAME} init");
-    println!("  {PROGRAM_NAME} apikey create");
-    println!("  {PROGRAM_NAME} serve");
-    println!("  {PROGRAM_NAME} health ready");
-    println!("  {PROGRAM_NAME} keys create --tag payments --profile hybrid-high-assurance-v1");
-    println!("  {PROGRAM_NAME} lifecycle <kid> --status disabled --reason maintenance");
-    println!("  {PROGRAM_NAME} routes list");
-    println!("  {PROGRAM_NAME} config sign");
-    println!("  {PROGRAM_NAME} sign <kid> --file sign-request.json");
-    println!();
-    println!("Help:");
-    println!("  {PROGRAM_NAME} help init");
-    println!("  {PROGRAM_NAME} help apikey");
-    println!("  {PROGRAM_NAME} help health");
-    println!("  {PROGRAM_NAME} help test");
-    println!("  {PROGRAM_NAME} help keys");
-    println!("  {PROGRAM_NAME} help lifecycle");
-    println!("  {PROGRAM_NAME} help routes");
-    println!("  {PROGRAM_NAME} help remote-routes");
-    println!("  {PROGRAM_NAME} help permissions");
-    println!("  {PROGRAM_NAME} help config");
-    println!("  {PROGRAM_NAME} help pub");
-    println!("  {PROGRAM_NAME} help sign");
-    println!("  {PROGRAM_NAME} help message");
-    println!();
-    println!("Environment:");
-    println!("  VECTIS_API_URL        API base URL, default http://127.0.0.1:3000");
-    println!("  VECTIS_APIKEY         Client secret for protected API commands");
-    println!("  VECTIS_TIMEOUT_SECONDS Request timeout, default 30");
-    println!("  VECTIS_TLS_SKIP_VERIFY Disable outbound TLS verification for HTTPS clients");
+fn detect_error_format(args: &[String]) -> CliErrorFormat {
+    if args
+        .windows(2)
+        .any(|window| window[0] == "--output" && window[1] == "json")
+    {
+        CliErrorFormat::Json
+    } else {
+        CliErrorFormat::Human
+    }
 }
 
-fn print_command_help(command: &str) {
+fn print_cli_error(err: &(dyn std::error::Error + 'static), format: CliErrorFormat) {
+    eprintln!("{}", render_cli_error(err, format));
+}
+
+fn render_cli_error(err: &(dyn std::error::Error + 'static), format: CliErrorFormat) -> String {
+    match format {
+        CliErrorFormat::Human => format!("Error: {err}"),
+        CliErrorFormat::Json => {
+            let payload = serde_json::json!({ "error": err.to_string() });
+            payload.to_string()
+        }
+    }
+}
+
+fn find_root_command(name: &str) -> Option<&'static RootCommand> {
+    debug_assert_eq!(
+        ROOT_COMMANDS.len(),
+        io::cli::http::root_help_command_names().len(),
+        "root dispatch table and help catalog command counts must match"
+    );
+    ROOT_COMMANDS.iter().find(|command| command.name == name)
+}
+
+async fn run_root_command(
+    command: &RootCommand,
+    name: &str,
+    args: Vec<String>,
+) -> Result<(), DynError> {
+    match command.kind {
+        RootCommandKind::Serve => run_serve_command(args).await,
+        RootCommandKind::Init => run_init(args),
+        RootCommandKind::Apikey => io::cli::apikey::run(args),
+        RootCommandKind::Version => io::cli::version::run(args),
+        RootCommandKind::Http => io::cli::http::run(name, args).await,
+    }
+}
+
+async fn run_serve_command(args: Vec<String>) -> Result<(), DynError> {
+    if matches!(
+        args.first().map(String::as_str),
+        Some("help" | "-h" | "--help")
+    ) {
+        io::cli::http::print_help("serve");
+        return Ok(());
+    }
+
+    run_serve().await
+}
+
+async fn run_serve() -> Result<(), DynError> {
+    info!("validating encrypted init file before starting http service");
+    let init_state = io::cli::init::load_init_state()?;
+    println!("Key status: Validated");
+    info!("starting http service");
+
+    if let Err(err) = io::http::run(init_state).await {
+        error!(error = %err, "application failed");
+        return Err(err);
+    }
+
+    info!("application finished successfully");
+    Ok(())
+}
+
+fn run_init(args: Vec<String>) -> Result<(), DynError> {
+    match args.first().map(String::as_str) {
+        Some("help" | "-h" | "--help") => io::cli::http::print_help("init"),
+        Some(command) => {
+            eprintln!("unknown init command: {command}\n");
+            io::cli::http::print_help("init");
+        }
+        None => {
+            info!("initializing local key material");
+            let path = io::cli::init::run_init()?;
+
+            println!("created {path}");
+            info!(path, "init completed successfully");
+        }
+    }
+
+    Ok(())
+}
+
+fn print_help() {
+    io::cli::http::print_help_path(&[]);
+}
+
+fn print_command_help(args: Vec<String>) {
+    let Some(command) = args.first().map(String::as_str) else {
+        print_help();
+        return;
+    };
+
     match command {
-        "serve" => print_serve_help(),
-        "init" => print_init_help(),
-        "apikey" => io::cli::apikey::print_help(),
-        "health" | "test" | "keys" | "lifecycle" | "routes" | "remote-routes" | "permissions"
-        | "config" | "pub" | "sign" | "message" => io::cli::http::print_help(command),
         "-h" | "--help" | "help" => print_help(),
+        command if find_root_command(command).is_some() => {
+            let path: Vec<&str> = args.iter().map(String::as_str).collect();
+            io::cli::http::print_help_path(&path);
+        }
         command => {
             eprintln!("unknown help command: {command}\n");
             print_help();
@@ -132,45 +210,102 @@ fn print_command_help(command: &str) {
     }
 }
 
-fn print_serve_help() {
-    println!("Usage:");
-    println!("  {PROGRAM_NAME} serve");
-    println!();
-    println!("Starts the Vectis HTTP service.");
-    println!();
-    println!("Before the server starts, Vectis decrypts and validates VECTIS_INIT_KEYS_FILE.");
-    println!("Provide VECTIS_UNSEAL_KEY, VECTIS_UNSEAL_KEY_FILE, or type it at the hidden prompt.");
-    println!();
-    println!("Required files:");
-    println!("  VECTIS_INIT_KEYS_FILE Encrypted local init key material, default init.json");
-    println!("  src/db/data.db        Default SQLite database in debug builds");
-    println!();
-    println!("Common environment:");
-    println!("  VECTIS_UNSEAL_KEY     64 hex characters, not read from .env");
-    println!("  VECTIS_UNSEAL_KEY_FILE Path to unseal key file, default .unseal_key");
-    println!("  VECTIS_HTTP_BIND_ADDR Listen address, default 127.0.0.1:3000");
-    println!("  VECTIS_MODE           dev uses http, prod uses https, default dev");
-    println!("  VECTIS_TLS_CERT_PATH  PEM certificate path when VECTIS_MODE=prod");
-    println!("  VECTIS_TLS_KEY_PATH   PEM private key path when VECTIS_MODE=prod");
-    println!("  VECTIS_APIKEY_HASH    Required by protected endpoints");
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
 
-fn print_init_help() {
-    println!("Usage:");
-    println!("  {PROGRAM_NAME} init");
-    println!();
-    println!("Generates local bootstrap key material and writes encrypted VECTIS_INIT_KEYS_FILE.");
-    println!("If the file already exists, init refuses to overwrite it.");
-    println!();
-    println!("Output:");
-    println!("  VECTIS_INIT_KEYS_FILE Encrypted key file, default init.json");
-    println!(
-        "  VECTIS_UNSEAL_KEY=... Key used later by serve to decrypt the configured init keys file"
-    );
-    println!("  VECTIS_APIKEY=...     Client API key for protected HTTP endpoints");
-    println!("  VECTIS_APIKEY_HASH=... Server-side API key hash for protected HTTP endpoints");
-    println!();
-    println!("Security:");
-    println!("  Delete the configured init keys file manually before reinitializing.");
-    println!("  Do not store VECTIS_UNSEAL_KEY in .env for production.");
+    fn root_dispatch_names() -> Vec<&'static str> {
+        ROOT_COMMANDS.iter().map(|command| command.name).collect()
+    }
+
+    #[test]
+    fn root_dispatch_table_has_no_duplicate_names() {
+        let mut seen = HashSet::new();
+        for name in root_dispatch_names() {
+            assert!(seen.insert(name), "duplicate root command dispatch: {name}");
+        }
+    }
+
+    #[test]
+    fn root_dispatch_table_matches_help_catalog() {
+        let dispatch = root_dispatch_names();
+
+        for name in io::cli::http::root_help_command_names() {
+            assert!(
+                dispatch.contains(name),
+                "{name} is listed in root help catalog but missing from dispatch"
+            );
+        }
+
+        for name in dispatch {
+            assert!(
+                io::cli::http::root_help_command_names().contains(&name),
+                "{name} is dispatched but missing from root help catalog"
+            );
+        }
+    }
+
+    #[test]
+    fn every_root_command_has_catalog_help() {
+        for name in root_dispatch_names() {
+            assert!(
+                io::cli::http::has_help_path(&[name]),
+                "{name} root command must have catalog help"
+            );
+        }
+    }
+
+    #[test]
+    fn http_root_commands_delegate_to_http() {
+        for name in io::cli::http::http_help_command_names() {
+            let command = find_root_command(name).expect("HTTP root command must be dispatched");
+            assert_eq!(
+                command.kind,
+                RootCommandKind::Http,
+                "{name} must delegate to HTTP CLI dispatch"
+            );
+        }
+    }
+
+    #[test]
+    fn version_root_command_is_local() {
+        let command =
+            find_root_command("version").expect("version root command must be dispatched");
+        assert_eq!(command.kind, RootCommandKind::Version);
+    }
+
+    #[test]
+    fn detects_json_error_format_from_output_flag() {
+        let args = vec![
+            String::from("vectis"),
+            String::from("config"),
+            String::from("routes"),
+            String::from("add"),
+            String::from("--output"),
+            String::from("json"),
+        ];
+        assert_eq!(detect_error_format(&args), CliErrorFormat::Json);
+
+        let args = vec![
+            String::from("vectis"),
+            String::from("config"),
+            String::from("--output"),
+            String::from("yaml"),
+        ];
+        assert_eq!(detect_error_format(&args), CliErrorFormat::Human);
+    }
+
+    #[test]
+    fn renders_json_cli_errors() {
+        let err = crate::core::validation::validate_text_field("field", "")
+            .expect_err("empty text must fail");
+        let rendered = render_cli_error(err.as_ref(), CliErrorFormat::Json);
+        let value: serde_json::Value =
+            serde_json::from_str(&rendered).expect("error must render JSON");
+        assert_eq!(value["error"], "field must not be empty");
+
+        let human = render_cli_error(err.as_ref(), CliErrorFormat::Human);
+        assert_eq!(human, "Error: field must not be empty");
+    }
 }

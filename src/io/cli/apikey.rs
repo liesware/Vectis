@@ -1,6 +1,7 @@
 use crate::core::validation;
 use crate::error::DynError;
-use crate::{io::cli::init, ops};
+use crate::io::cli::{help_catalog, init, sensitive};
+use crate::ops;
 
 const PROGRAM_NAME: &str = "vectis";
 
@@ -25,28 +26,7 @@ pub fn run(args: Vec<String>) -> Result<(), DynError> {
 }
 
 pub fn print_help() {
-    println!("Usage:");
-    println!("  {PROGRAM_NAME} apikey create [--output <yaml|json>]");
-    println!();
-    println!("Creates a new client API key and its server-side verifier.");
-    println!();
-    println!(
-        "This is a local command. It decrypts VECTIS_INIT_KEYS_FILE, derives the internal API auth key,"
-    );
-    println!("prints the new values, and does not write files or call the HTTP API.");
-    println!();
-    println!("Output:");
-    println!("  VECTIS_APIKEY         Client secret sent as X-API-Key");
-    println!("  VECTIS_APIKEY_HASH    Server-side HMAC verifier for protected endpoints");
-    println!();
-    println!("Options:");
-    println!("  --output yaml         YAML output, default");
-    println!("  --output json         Pretty JSON output");
-    println!();
-    println!("Required local material:");
-    println!("  VECTIS_INIT_KEYS_FILE Encrypted local init key material, default init.json");
-    println!("  VECTIS_UNSEAL_KEY     64 hex characters, or");
-    println!("  VECTIS_UNSEAL_KEY_FILE Path to unseal key file, default .unseal_key");
+    print!("{}", help_catalog::render_help_path(&["apikey"]));
 }
 
 fn run_create(args: Vec<String>) -> Result<(), DynError> {
@@ -56,6 +36,7 @@ fn run_create(args: Vec<String>) -> Result<(), DynError> {
     let init_state = init::load_init_state()?;
     let output_value = ops::apikey::create_api_key(&init_state)?;
 
+    sensitive::warn_if_stdout_is_terminal();
     match output {
         OutputFormat::Json => {
             println!("{{");

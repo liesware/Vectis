@@ -1,5 +1,6 @@
 use crate::core::{config, unseal};
 use crate::error::DynError;
+use crate::io::cli::sensitive;
 use crate::ops;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -36,6 +37,7 @@ pub fn run_init() -> Result<String, DynError> {
         })?;
     init_keys_file.write_all(output.json.as_bytes())?;
     info!(path = %init_keys_path.display(), "init keys written");
+    sensitive::warn_if_stdout_is_terminal();
     println!("VECTIS_UNSEAL_KEY={}", &*output.encryption_key_hex);
     println!("VECTIS_APIKEY={}", &*output.api_key);
     println!("VECTIS_APIKEY_HASH={}", &*output.api_key_hash);

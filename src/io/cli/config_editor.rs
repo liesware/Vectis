@@ -16,6 +16,372 @@ struct LocalConfig {
     value: Value,
 }
 
+#[derive(Clone, Copy)]
+struct SectionSpec {
+    cli_name: &'static str,
+    json_section: &'static str,
+    key_field: &'static str,
+    item_name: &'static str,
+    command_context: &'static str,
+    fields: &'static [FieldSpec],
+    add_defaults: &'static [DefaultField],
+}
+
+#[derive(Clone, Copy)]
+struct FieldSpec {
+    flag: &'static str,
+    json_field: &'static str,
+    kind: FieldKind,
+    cardinality: FieldCardinality,
+    required_on_add: bool,
+    mutable_on_update: bool,
+    default_on_add: Option<DefaultValue>,
+}
+
+#[derive(Clone, Copy)]
+struct DefaultField {
+    json_field: &'static str,
+    value: DefaultValue,
+}
+
+#[derive(Clone, Copy)]
+enum DefaultValue {
+    String(&'static str),
+    EmptyArray,
+}
+
+#[derive(Clone, Copy)]
+enum FieldKind {
+    Text,
+    Kid,
+    RemoteKid,
+    HostPort,
+    FinalAppPath,
+    ApiKeyHash,
+    PermissionStatus,
+    RemoteRouteStatus,
+    PermissionKid,
+    PermissionAction,
+    Usize,
+    FpeVersion,
+    FpeAlphabet,
+    FpeTweakAad,
+    TokenizationVersion,
+    TokenPrefix,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FieldCardinality {
+    One,
+    Many,
+}
+
+const ROUTES_SECTION: SectionSpec = SectionSpec {
+    cli_name: "routes",
+    json_section: "routes",
+    key_field: "name",
+    item_name: "route name",
+    command_context: "routes",
+    fields: &[
+        FieldSpec {
+            flag: "--name",
+            json_field: "name",
+            kind: FieldKind::Text,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: false,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--kid",
+            json_field: "kid",
+            kind: FieldKind::Kid,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--final-app-addr",
+            json_field: "final_app_addr",
+            kind: FieldKind::HostPort,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--final-app-path",
+            json_field: "final_app_path",
+            kind: FieldKind::FinalAppPath,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+    ],
+    add_defaults: &[],
+};
+
+const REMOTE_ROUTES_SECTION: SectionSpec = SectionSpec {
+    cli_name: "remote-routes",
+    json_section: "remote_routes",
+    key_field: "name",
+    item_name: "remote route name",
+    command_context: "remote-routes",
+    fields: &[
+        FieldSpec {
+            flag: "--name",
+            json_field: "name",
+            kind: FieldKind::Text,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: false,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--remote-kid",
+            json_field: "remote_kid",
+            kind: FieldKind::RemoteKid,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--remote-addr",
+            json_field: "remote_addr",
+            kind: FieldKind::HostPort,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--allowed-local-kid",
+            json_field: "allowed_local_kids",
+            kind: FieldKind::PermissionKid,
+            cardinality: FieldCardinality::Many,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--status",
+            json_field: "status",
+            kind: FieldKind::RemoteRouteStatus,
+            cardinality: FieldCardinality::One,
+            required_on_add: false,
+            mutable_on_update: true,
+            default_on_add: Some(DefaultValue::String(DEFAULT_REMOTE_ROUTE_STATUS)),
+        },
+    ],
+    add_defaults: &[],
+};
+
+const PERMISSION_GRANT_FIELDS: &[FieldSpec] = &[
+    FieldSpec {
+        flag: "--kid",
+        json_field: "kid",
+        kind: FieldKind::PermissionKid,
+        cardinality: FieldCardinality::One,
+        required_on_add: true,
+        mutable_on_update: true,
+        default_on_add: None,
+    },
+    FieldSpec {
+        flag: "--action",
+        json_field: "action",
+        kind: FieldKind::PermissionAction,
+        cardinality: FieldCardinality::One,
+        required_on_add: true,
+        mutable_on_update: true,
+        default_on_add: None,
+    },
+];
+
+const PERMISSIONS_SECTION: SectionSpec = SectionSpec {
+    cli_name: "permissions",
+    json_section: "permissions",
+    key_field: "client",
+    item_name: "client",
+    command_context: "permissions",
+    fields: &[
+        FieldSpec {
+            flag: "--client",
+            json_field: "client",
+            kind: FieldKind::Text,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: false,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--apikey-hash",
+            json_field: "apikey_hash",
+            kind: FieldKind::ApiKeyHash,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--status",
+            json_field: "status",
+            kind: FieldKind::PermissionStatus,
+            cardinality: FieldCardinality::One,
+            required_on_add: false,
+            mutable_on_update: true,
+            default_on_add: Some(DefaultValue::String(DEFAULT_PERMISSION_STATUS)),
+        },
+    ],
+    add_defaults: &[DefaultField {
+        json_field: "permissions",
+        value: DefaultValue::EmptyArray,
+    }],
+};
+
+const FPE_PROFILES_SECTION: SectionSpec = SectionSpec {
+    cli_name: "fpe",
+    json_section: "fpe_profiles",
+    key_field: "name",
+    item_name: "fpe profile name",
+    command_context: "config fpe",
+    fields: &[
+        FieldSpec {
+            flag: "--name",
+            json_field: "name",
+            kind: FieldKind::Text,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: false,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--kid",
+            json_field: "kid",
+            kind: FieldKind::Kid,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--fpe-version",
+            json_field: "fpe_version",
+            kind: FieldKind::FpeVersion,
+            cardinality: FieldCardinality::One,
+            required_on_add: false,
+            mutable_on_update: true,
+            default_on_add: Some(DefaultValue::String(fpe::FPE_VERSION_FF1_2025)),
+        },
+        FieldSpec {
+            flag: "--alphabet",
+            json_field: "alphabet",
+            kind: FieldKind::FpeAlphabet,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--min-len",
+            json_field: "min_len",
+            kind: FieldKind::Usize,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--max-len",
+            json_field: "max_len",
+            kind: FieldKind::Usize,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--tweak-aad",
+            json_field: "tweak_aad",
+            kind: FieldKind::FpeTweakAad,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+    ],
+    add_defaults: &[],
+};
+
+const TOKENIZATION_PROFILES_SECTION: SectionSpec = SectionSpec {
+    cli_name: "token",
+    json_section: "tokenization_profiles",
+    key_field: "name",
+    item_name: "tokenization profile name",
+    command_context: "config token",
+    fields: &[
+        FieldSpec {
+            flag: "--name",
+            json_field: "name",
+            kind: FieldKind::Text,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: false,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--kid",
+            json_field: "kid",
+            kind: FieldKind::Kid,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--tokenization-version",
+            json_field: "tokenization_version",
+            kind: FieldKind::TokenizationVersion,
+            cardinality: FieldCardinality::One,
+            required_on_add: false,
+            mutable_on_update: true,
+            default_on_add: Some(DefaultValue::String(
+                tokenization::TOKENIZATION_VERSION_RANDOM_V1,
+            )),
+        },
+        FieldSpec {
+            flag: "--token-prefix",
+            json_field: "token_prefix",
+            kind: FieldKind::TokenPrefix,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--token-len",
+            json_field: "token_len",
+            kind: FieldKind::Usize,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--max-plaintext-len",
+            json_field: "max_plaintext_len",
+            kind: FieldKind::Usize,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+    ],
+    add_defaults: &[],
+};
+
 pub fn init_config(output: OutputFormat) -> Result<(), DynError> {
     let app = config::app_config()?;
     match fs::metadata(&app.config_path) {
@@ -45,32 +411,17 @@ pub fn init_config(output: OutputFormat) -> Result<(), DynError> {
 
 pub async fn run_routes(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let (command, rest) = split_command(args, "config routes command")?;
-    match command.as_str() {
-        "list" => {
-            expect_no_args(rest, "config routes list")?;
-            read_config(output, |local| list_section(local, "routes")).await
-        }
-        "add" => mutate_config(output, |local| route_add(local, rest)).await,
-        "get" => read_config(output, |local| route_get(local, rest)).await,
-        "update" => mutate_config(output, |local| route_update(local, rest)).await,
-        "delete" => mutate_config(output, |local| route_delete(local, rest)).await,
-        _ => Err(invalid_input(format!(
-            "unknown config routes command: {command}"
-        ))),
-    }
+    run_basic_section_command(&ROUTES_SECTION, &command, rest, output).await
 }
 
 pub async fn run_remote_routes(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let (command, rest) = split_command(args, "config remote-routes command")?;
     match command.as_str() {
-        "list" => {
-            expect_no_args(rest, "config remote-routes list")?;
-            read_config(output, |local| list_section(local, "remote_routes")).await
-        }
+        "list" => section_list_command(&REMOTE_ROUTES_SECTION, rest, output).await,
         "add" => remote_route_add(rest, output).await,
-        "get" => read_config(output, |local| remote_route_get(local, rest)).await,
+        "get" => section_get_command(&REMOTE_ROUTES_SECTION, rest, output).await,
         "update" => remote_route_update(rest, output).await,
-        "delete" => mutate_config(output, |local| remote_route_delete(local, rest)).await,
+        "delete" => section_delete_command(&REMOTE_ROUTES_SECTION, rest, output).await,
         _ => Err(invalid_input(format!(
             "unknown config remote-routes command: {command}"
         ))),
@@ -80,54 +431,20 @@ pub async fn run_remote_routes(args: Vec<String>, output: OutputFormat) -> Resul
 pub async fn run_permissions(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let (command, rest) = split_command(args, "config permissions command")?;
     match command.as_str() {
-        "list" => {
-            expect_no_args(rest, "config permissions list")?;
-            read_config(output, |local| list_section(local, "permissions")).await
-        }
-        "add" => mutate_config(output, |local| permission_add(local, rest)).await,
-        "get" => read_config(output, |local| permission_get(local, rest)).await,
-        "update" => mutate_config(output, |local| permission_update(local, rest)).await,
-        "delete" => mutate_config(output, |local| permission_delete(local, rest)).await,
         "grant" => mutate_config(output, |local| permission_grant(local, rest)).await,
         "revoke" => mutate_config(output, |local| permission_revoke(local, rest)).await,
-        _ => Err(invalid_input(format!(
-            "unknown config permissions command: {command}"
-        ))),
+        _ => run_basic_section_command(&PERMISSIONS_SECTION, &command, rest, output).await,
     }
 }
 
 pub async fn run_config_fpe(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let (command, rest) = split_command(args, "config fpe command")?;
-    match command.as_str() {
-        "list" => {
-            expect_no_args(rest, "config fpe list")?;
-            read_config(output, |local| list_section(local, "fpe_profiles")).await
-        }
-        "add" => mutate_config(output, |local| fpe_profile_add(local, rest)).await,
-        "get" => read_config(output, |local| fpe_profile_get(local, rest)).await,
-        "update" => mutate_config(output, |local| fpe_profile_update(local, rest)).await,
-        "delete" => mutate_config(output, |local| fpe_profile_delete(local, rest)).await,
-        _ => Err(invalid_input(format!(
-            "unknown config fpe command: {command}"
-        ))),
-    }
+    run_basic_section_command(&FPE_PROFILES_SECTION, &command, rest, output).await
 }
 
 pub async fn run_config_token(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let (command, rest) = split_command(args, "config token command")?;
-    match command.as_str() {
-        "list" => {
-            expect_no_args(rest, "config token list")?;
-            read_config(output, |local| list_section(local, "tokenization_profiles")).await
-        }
-        "add" => mutate_config(output, |local| token_profile_add(local, rest)).await,
-        "get" => read_config(output, |local| token_profile_get(local, rest)).await,
-        "update" => mutate_config(output, |local| token_profile_update(local, rest)).await,
-        "delete" => mutate_config(output, |local| token_profile_delete(local, rest)).await,
-        _ => Err(invalid_input(format!(
-            "unknown config token command: {command}"
-        ))),
-    }
+    run_basic_section_command(&TOKENIZATION_PROFILES_SECTION, &command, rest, output).await
 }
 
 async fn read_config(
@@ -150,25 +467,339 @@ async fn mutate_config(
     print_json_value(&response_with_reminder(response), output)
 }
 
-async fn remote_route_add(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
-    let mut local = load_local_config()?;
-    let route = parse_remote_route_add(args)?;
+async fn run_basic_section_command(
+    spec: &'static SectionSpec,
+    command: &str,
+    rest: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
+    match command {
+        "list" => section_list_command(spec, rest, output).await,
+        "add" => section_add_command(spec, rest, output).await,
+        "get" => section_get_command(spec, rest, output).await,
+        "update" => section_update_command(spec, rest, output).await,
+        "delete" => section_delete_command(spec, rest, output).await,
+        _ => Err(invalid_input(format!(
+            "unknown config {} command: {command}",
+            spec.cli_name
+        ))),
+    }
+}
 
+async fn section_list_command(
+    spec: &'static SectionSpec,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
+    expect_no_args(args, &format!("config {} list", spec.cli_name))?;
+    read_config(output, |local| section_list(local, spec)).await
+}
+
+async fn section_add_command(
+    spec: &'static SectionSpec,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
+    mutate_config(output, |local| {
+        let value = parse_section_add(spec, args)?;
+        section_add_value(local, spec, value)
+    })
+    .await
+}
+
+async fn section_get_command(
+    spec: &'static SectionSpec,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
+    read_config(output, |local| section_get(local, spec, args)).await
+}
+
+async fn section_update_command(
+    spec: &'static SectionSpec,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
+    mutate_config(output, |local| section_update(local, spec, args)).await
+}
+
+async fn section_delete_command(
+    spec: &'static SectionSpec,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
+    mutate_config(output, |local| section_delete(local, spec, args)).await
+}
+
+fn section_list(local: &LocalConfig, spec: &SectionSpec) -> Result<Value, DynError> {
+    Ok(Value::Array(
+        array_ref(&local.value, spec.json_section)?.to_vec(),
+    ))
+}
+
+fn section_add_value(
+    local: &mut LocalConfig,
+    spec: &SectionSpec,
+    value: Value,
+) -> Result<Value, DynError> {
+    let key = required_string(&value, spec.key_field)?.to_string();
     ensure_unique_field(
-        array_mut(&mut local.value, "remote_routes")?,
-        "name",
-        &route.name,
+        array_mut(&mut local.value, spec.json_section)?,
+        spec.key_field,
+        &key,
+    )?;
+    array_mut(&mut local.value, spec.json_section)?.push(value.clone());
+
+    Ok(section_response("added", spec, value))
+}
+
+fn section_get(
+    local: &LocalConfig,
+    spec: &SectionSpec,
+    args: Vec<String>,
+) -> Result<Value, DynError> {
+    let key = expect_one(args, spec.item_name)?;
+    validate_text(spec.key_field, &key)?;
+    Ok(find_by_field(
+        array_ref(&local.value, spec.json_section)?,
+        spec.key_field,
+        &key,
+    )?
+    .clone())
+}
+
+fn section_update(
+    local: &mut LocalConfig,
+    spec: &SectionSpec,
+    args: Vec<String>,
+) -> Result<Value, DynError> {
+    let (key, rest) = split_name_and_rest(args, spec.item_name)?;
+    validate_text(spec.key_field, &key)?;
+    let update = parse_section_update(spec, rest)?;
+    let item = find_by_field_mut(
+        array_mut(&mut local.value, spec.json_section)?,
+        spec.key_field,
+        &key,
+    )?;
+    object_mut(item)?.extend(update);
+
+    Ok(section_response("updated", spec, item.clone()))
+}
+
+fn section_delete(
+    local: &mut LocalConfig,
+    spec: &SectionSpec,
+    args: Vec<String>,
+) -> Result<Value, DynError> {
+    let key = expect_one(args, spec.item_name)?;
+    validate_text(spec.key_field, &key)?;
+    let removed = remove_by_field(
+        array_mut(&mut local.value, spec.json_section)?,
+        spec.key_field,
+        &key,
     )?;
 
-    let public_keys = fetch_public_keys(&route.remote_addr, &route.remote_kid).await?;
-    let value = json!({
-        "remote_kid": route.remote_kid,
-        "name": route.name,
-        "remote_addr": route.remote_addr,
-        "allowed_local_kids": route.allowed_local_kids,
-        "status": route.status,
-        "public_keys": public_keys,
-    });
+    Ok(section_response("deleted", spec, removed))
+}
+
+fn section_response(status: &str, spec: &SectionSpec, item: Value) -> Value {
+    json!({
+        "status": status,
+        "section": spec.json_section,
+        "item": item,
+    })
+}
+
+fn parse_section_add(spec: &SectionSpec, args: Vec<String>) -> Result<Value, DynError> {
+    let mut parsed = parse_section_fields(spec, "add", args, false)?;
+    for field in spec.fields {
+        if parsed.contains_key(field.json_field) {
+            continue;
+        }
+        if let Some(default) = field.default_on_add {
+            parsed.insert(field.json_field.to_string(), default.to_value());
+        } else if field.required_on_add {
+            return Err(invalid_input(format!("{} is required", field.flag)));
+        }
+    }
+    for default in spec.add_defaults {
+        parsed
+            .entry(default.json_field.to_string())
+            .or_insert_with(|| default.value.to_value());
+    }
+    validate_parsed_field_combinations(&parsed)?;
+    Ok(Value::Object(parsed))
+}
+
+fn parse_section_update(
+    spec: &SectionSpec,
+    args: Vec<String>,
+) -> Result<Map<String, Value>, DynError> {
+    let parsed = parse_section_fields(spec, "update", args, true)?;
+    if parsed.is_empty() {
+        return Err(invalid_input(format!(
+            "{} update requires at least one field",
+            spec.command_context
+        )));
+    }
+    validate_parsed_field_combinations(&parsed)?;
+    Ok(parsed)
+}
+
+fn validate_parsed_field_combinations(parsed: &Map<String, Value>) -> Result<(), DynError> {
+    if let Some(kids) = parsed.get("allowed_local_kids") {
+        let kids = kids
+            .as_array()
+            .ok_or_else(|| invalid_input("allowed_local_kids must be an array"))?
+            .iter()
+            .map(|kid| {
+                kid.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| invalid_input("allowed_local_kids must contain strings"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        validate_allowed_local_kids(&kids)?;
+    }
+    Ok(())
+}
+
+fn parse_section_fields(
+    spec: &SectionSpec,
+    operation: &str,
+    args: Vec<String>,
+    update: bool,
+) -> Result<Map<String, Value>, DynError> {
+    parse_fields(spec.fields, spec.command_context, operation, args, update)
+}
+
+fn parse_fields(
+    fields: &[FieldSpec],
+    command_context: &str,
+    operation: &str,
+    args: Vec<String>,
+    update: bool,
+) -> Result<Map<String, Value>, DynError> {
+    let mut parsed = Map::new();
+    let mut seen = HashSet::new();
+    let mut index = 0;
+
+    while index < args.len() {
+        let flag = args[index].as_str();
+        let field = fields
+            .iter()
+            .find(|field| field.flag == flag && (!update || field.mutable_on_update))
+            .ok_or_else(|| {
+                invalid_input(format!(
+                    "unknown {} {} option: {flag}",
+                    command_context, operation
+                ))
+            })?;
+        let raw = match field.cardinality {
+            FieldCardinality::One => flag_once(&args, &mut seen, &mut index, field.flag)?,
+            FieldCardinality::Many => flag_value(&args, &mut index, field.flag)?,
+        };
+        let value = parse_field_value(field, &raw)?;
+        match field.cardinality {
+            FieldCardinality::One => {
+                parsed.insert(field.json_field.to_string(), value);
+            }
+            FieldCardinality::Many => {
+                parsed
+                    .entry(field.json_field.to_string())
+                    .or_insert_with(|| Value::Array(Vec::new()))
+                    .as_array_mut()
+                    .ok_or_else(|| invalid_input(format!("{} must be an array", field.json_field)))?
+                    .push(value);
+            }
+        }
+    }
+
+    Ok(parsed)
+}
+
+fn parse_field_value(field: &FieldSpec, raw: &str) -> Result<Value, DynError> {
+    match field.kind {
+        FieldKind::Text => {
+            validate_text(field.json_field, raw)?;
+            Ok(Value::String(raw.to_string()))
+        }
+        FieldKind::Kid => Ok(Value::String(validate_kid_value(field.json_field, raw)?)),
+        FieldKind::RemoteKid => Ok(Value::String(validate_kid_value("remote_kid", raw)?)),
+        FieldKind::HostPort => Ok(Value::String(validation::validate_host_port(
+            field.json_field,
+            raw,
+        )?)),
+        FieldKind::FinalAppPath => Ok(Value::String(config::validate_http_path_field(
+            field.json_field,
+            raw,
+        )?)),
+        FieldKind::ApiKeyHash => {
+            validate_apikey_hash(raw)?;
+            Ok(Value::String(raw.to_string()))
+        }
+        FieldKind::PermissionStatus => {
+            validate_permission_status(raw)?;
+            Ok(Value::String(raw.to_string()))
+        }
+        FieldKind::RemoteRouteStatus => {
+            validate_remote_route_status(raw)?;
+            Ok(Value::String(raw.to_string()))
+        }
+        FieldKind::PermissionKid => {
+            validate_permission_kid(raw)?;
+            Ok(Value::String(raw.to_string()))
+        }
+        FieldKind::PermissionAction => {
+            validation::validate_allowed_value("action", raw, permissions::PERMISSION_ACTIONS)?;
+            Ok(Value::String(raw.to_string()))
+        }
+        FieldKind::Usize => Ok(Value::Number(parse_usize_flag(field.flag, raw)?.into())),
+        FieldKind::FpeVersion => {
+            fpe::validate_fpe_version(raw)?;
+            Ok(Value::String(raw.to_string()))
+        }
+        FieldKind::FpeAlphabet => {
+            fpe::validate_fpe_alphabet(raw)?;
+            Ok(Value::String(raw.to_string()))
+        }
+        FieldKind::FpeTweakAad => {
+            validate_text(field.json_field, raw)?;
+            Ok(Value::String(raw.to_string()))
+        }
+        FieldKind::TokenizationVersion => {
+            tokenization::validate_tokenization_version(raw)?;
+            Ok(Value::String(raw.to_string()))
+        }
+        FieldKind::TokenPrefix => {
+            tokenization::validate_token_prefix(raw)?;
+            Ok(Value::String(raw.to_string()))
+        }
+    }
+}
+
+impl DefaultValue {
+    fn to_value(self) -> Value {
+        match self {
+            DefaultValue::String(value) => Value::String(value.to_string()),
+            DefaultValue::EmptyArray => Value::Array(Vec::new()),
+        }
+    }
+}
+
+async fn remote_route_add(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+    let mut local = load_local_config()?;
+    let mut value = parse_section_add(&REMOTE_ROUTES_SECTION, args)?;
+    let route = value
+        .as_object_mut()
+        .ok_or_else(|| invalid_input("remote route must be an object"))?;
+    let name = required_map_string(route, "name")?.to_string();
+    let remote_addr = required_map_string(route, "remote_addr")?.to_string();
+    let remote_kid = required_map_string(route, "remote_kid")?.to_string();
+
+    ensure_unique_field(array_mut(&mut local.value, "remote_routes")?, "name", &name)?;
+
+    let public_keys = fetch_public_keys(&remote_addr, &remote_kid).await?;
+    route.insert(String::from("public_keys"), public_keys);
     array_mut(&mut local.value, "remote_routes")?.push(value.clone());
 
     validate_local_config(&local)?;
@@ -187,23 +818,12 @@ async fn remote_route_update(args: Vec<String>, output: OutputFormat) -> Result<
     let (name, rest) = split_name_and_rest(args, "remote route name")?;
     validate_text("name", &name)?;
 
-    let mut update = parse_remote_route_update(rest)?;
+    let update = parse_section_update(&REMOTE_ROUTES_SECTION, rest)?;
     let mut local = load_local_config()?;
     let route = find_by_field_mut(array_mut(&mut local.value, "remote_routes")?, "name", &name)?;
-    let needs_key_import = update.remote_kid.is_some() || update.remote_addr.is_some();
+    let needs_key_import = update.contains_key("remote_kid") || update.contains_key("remote_addr");
 
-    if let Some(remote_kid) = update.remote_kid.take() {
-        set_string(route, "remote_kid", remote_kid)?;
-    }
-    if let Some(remote_addr) = update.remote_addr.take() {
-        set_string(route, "remote_addr", remote_addr)?;
-    }
-    if let Some(allowed_local_kids) = update.allowed_local_kids.take() {
-        set_array(route, "allowed_local_kids", allowed_local_kids)?;
-    }
-    if let Some(status) = update.status.take() {
-        set_string(route, "status", status)?;
-    }
+    object_mut(route)?.extend(update);
 
     if needs_key_import {
         let remote_addr = required_string(route, "remote_addr")?.to_string();
@@ -225,162 +845,12 @@ async fn remote_route_update(args: Vec<String>, output: OutputFormat) -> Result<
     )
 }
 
-fn route_add(local: &mut LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
-    let route = parse_route_add(args)?;
-    ensure_unique_field(array_mut(&mut local.value, "routes")?, "name", &route.name)?;
-    let value = json!({
-        "kid": route.kid,
-        "name": route.name,
-        "final_app_addr": route.final_app_addr,
-        "final_app_path": route.final_app_path,
-    });
-    array_mut(&mut local.value, "routes")?.push(value.clone());
-
-    Ok(json!({
-        "status": "added",
-        "section": "routes",
-        "item": value,
-    }))
-}
-
-fn list_section(local: &LocalConfig, section: &str) -> Result<Value, DynError> {
-    Ok(Value::Array(array_ref(&local.value, section)?.to_vec()))
-}
-
-fn route_get(local: &LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
-    let name = expect_one(args, "route name")?;
-    validate_text("name", &name)?;
-    let route = find_by_field(array_ref(&local.value, "routes")?, "name", &name)?;
-    Ok(route.clone())
-}
-
-fn route_update(local: &mut LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
-    let (name, rest) = split_name_and_rest(args, "route name")?;
-    validate_text("name", &name)?;
-    let mut update = parse_route_update(rest)?;
-    let route = find_by_field_mut(array_mut(&mut local.value, "routes")?, "name", &name)?;
-
-    if let Some(kid) = update.kid.take() {
-        set_string(route, "kid", kid)?;
-    }
-    if let Some(final_app_addr) = update.final_app_addr.take() {
-        set_string(route, "final_app_addr", final_app_addr)?;
-    }
-    if let Some(final_app_path) = update.final_app_path.take() {
-        set_string(route, "final_app_path", final_app_path)?;
-    }
-
-    Ok(json!({
-        "status": "updated",
-        "section": "routes",
-        "item": route,
-    }))
-}
-
-fn route_delete(local: &mut LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
-    let name = expect_one(args, "route name")?;
-    validate_text("name", &name)?;
-    let removed = remove_by_field(array_mut(&mut local.value, "routes")?, "name", &name)?;
-
-    Ok(json!({
-        "status": "deleted",
-        "section": "routes",
-        "item": removed,
-    }))
-}
-
-fn remote_route_get(local: &LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
-    let name = expect_one(args, "remote route name")?;
-    validate_text("name", &name)?;
-    let route = find_by_field(array_ref(&local.value, "remote_routes")?, "name", &name)?;
-    Ok(route.clone())
-}
-
-fn remote_route_delete(local: &mut LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
-    let name = expect_one(args, "remote route name")?;
-    validate_text("name", &name)?;
-    let removed = remove_by_field(array_mut(&mut local.value, "remote_routes")?, "name", &name)?;
-
-    Ok(json!({
-        "status": "deleted",
-        "section": "remote_routes",
-        "item": removed,
-    }))
-}
-
-fn permission_add(local: &mut LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
-    let permission = parse_permission_add(args)?;
-    ensure_unique_field(
-        array_mut(&mut local.value, "permissions")?,
-        "client",
-        &permission.client,
-    )?;
-    let value = json!({
-        "client": permission.client,
-        "apikey_hash": permission.apikey_hash,
-        "status": permission.status,
-        "permissions": [],
-    });
-    array_mut(&mut local.value, "permissions")?.push(value.clone());
-
-    Ok(json!({
-        "status": "added",
-        "section": "permissions",
-        "item": value,
-    }))
-}
-
-fn permission_get(local: &LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
-    let client = expect_one(args, "client")?;
-    validate_text("client", &client)?;
-    let permission = find_by_field(array_ref(&local.value, "permissions")?, "client", &client)?;
-    Ok(permission.clone())
-}
-
-fn permission_update(local: &mut LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
-    let (client, rest) = split_name_and_rest(args, "client")?;
-    validate_text("client", &client)?;
-    let mut update = parse_permission_update(rest)?;
-    let permission = find_by_field_mut(
-        array_mut(&mut local.value, "permissions")?,
-        "client",
-        &client,
-    )?;
-
-    if let Some(apikey_hash) = update.apikey_hash.take() {
-        set_string(permission, "apikey_hash", apikey_hash)?;
-    }
-    if let Some(status) = update.status.take() {
-        set_string(permission, "status", status)?;
-    }
-
-    Ok(json!({
-        "status": "updated",
-        "section": "permissions",
-        "item": permission,
-    }))
-}
-
-fn permission_delete(local: &mut LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
-    let client = expect_one(args, "client")?;
-    validate_text("client", &client)?;
-    let removed = remove_by_field(
-        array_mut(&mut local.value, "permissions")?,
-        "client",
-        &client,
-    )?;
-
-    Ok(json!({
-        "status": "deleted",
-        "section": "permissions",
-        "item": removed,
-    }))
-}
-
 fn permission_grant(local: &mut LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
     let (client, rest) = split_name_and_rest(args, "client")?;
     validate_text("client", &client)?;
-    let grant = parse_permission_grant(rest)?;
+    let grant = parse_permission_action_fields(rest)?;
+    let kid = required_map_string(&grant, "kid")?.to_string();
+    let action = required_map_string(&grant, "action")?.to_string();
     let permission = find_by_field_mut(
         array_mut(&mut local.value, "permissions")?,
         "client",
@@ -394,11 +864,11 @@ fn permission_grant(local: &mut LocalConfig, args: Vec<String>) -> Result<Value,
 
     let entry = match permissions
         .iter_mut()
-        .find(|entry| entry.get("kid").and_then(Value::as_str) == Some(grant.kid.as_str()))
+        .find(|entry| entry.get("kid").and_then(Value::as_str) == Some(kid.as_str()))
     {
         Some(entry) => entry,
         None => {
-            permissions.push(json!({"kid": grant.kid, "actions": []}));
+            permissions.push(json!({"kid": kid, "actions": []}));
             permissions
                 .last_mut()
                 .ok_or_else(|| invalid_input("permission could not be created"))?
@@ -412,9 +882,9 @@ fn permission_grant(local: &mut LocalConfig, args: Vec<String>) -> Result<Value,
         .ok_or_else(|| invalid_input("permissions.actions must be an array"))?;
     if !actions
         .iter()
-        .any(|action| action.as_str() == Some(grant.action.as_str()))
+        .any(|current| current.as_str() == Some(action.as_str()))
     {
-        actions.push(Value::String(grant.action));
+        actions.push(Value::String(action));
     }
 
     Ok(json!({
@@ -427,7 +897,9 @@ fn permission_grant(local: &mut LocalConfig, args: Vec<String>) -> Result<Value,
 fn permission_revoke(local: &mut LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
     let (client, rest) = split_name_and_rest(args, "client")?;
     validate_text("client", &client)?;
-    let grant = parse_permission_grant(rest)?;
+    let grant = parse_permission_action_fields(rest)?;
+    let kid = required_map_string(&grant, "kid")?.to_string();
+    let action = required_map_string(&grant, "action")?.to_string();
     let permission = find_by_field_mut(
         array_mut(&mut local.value, "permissions")?,
         "client",
@@ -437,13 +909,13 @@ fn permission_revoke(local: &mut LocalConfig, args: Vec<String>) -> Result<Value
         .get_mut("permissions")
         .and_then(Value::as_array_mut)
         .ok_or_else(|| invalid_input("permissions.permissions must be an array"))?;
-    let entry = find_by_field_mut(permissions, "kid", &grant.kid)?;
+    let entry = find_by_field_mut(permissions, "kid", &kid)?;
     let actions = object_mut(entry)?
         .get_mut("actions")
         .and_then(Value::as_array_mut)
         .ok_or_else(|| invalid_input("permissions.actions must be an array"))?;
     let before = actions.len();
-    actions.retain(|action| action.as_str() != Some(grant.action.as_str()));
+    actions.retain(|current| current.as_str() != Some(action.as_str()));
     if actions.len() == before {
         return Err(invalid_input("permission action not found"));
     }
@@ -461,734 +933,19 @@ fn permission_revoke(local: &mut LocalConfig, args: Vec<String>) -> Result<Value
     }))
 }
 
-fn fpe_profile_add(local: &mut LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
-    let profile = parse_fpe_profile_add(args)?;
-    ensure_unique_field(
-        array_mut(&mut local.value, "fpe_profiles")?,
-        "name",
-        &profile.name,
+fn parse_permission_action_fields(args: Vec<String>) -> Result<Map<String, Value>, DynError> {
+    let parsed = parse_fields(
+        PERMISSION_GRANT_FIELDS,
+        "permissions grant/revoke",
+        "option",
+        args,
+        false,
     )?;
-    let value = json!({
-        "name": profile.name,
-        "fpe_version": profile.fpe_version,
-        "alphabet": profile.alphabet,
-        "min_len": profile.min_len,
-        "max_len": profile.max_len,
-        "tweak_aad": profile.tweak_aad,
-        "kid": profile.kid,
-    });
-    array_mut(&mut local.value, "fpe_profiles")?.push(value.clone());
-
-    Ok(json!({
-        "status": "added",
-        "section": "fpe_profiles",
-        "item": value,
-    }))
-}
-
-fn fpe_profile_get(local: &LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
-    let name = expect_one(args, "fpe profile name")?;
-    validate_text("name", &name)?;
-    let profile = find_by_field(array_ref(&local.value, "fpe_profiles")?, "name", &name)?;
-    Ok(profile.clone())
-}
-
-fn fpe_profile_update(local: &mut LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
-    let (name, rest) = split_name_and_rest(args, "fpe profile name")?;
-    validate_text("name", &name)?;
-    let mut update = parse_fpe_profile_update(rest)?;
-    let profile = find_by_field_mut(array_mut(&mut local.value, "fpe_profiles")?, "name", &name)?;
-
-    if let Some(kid) = update.kid.take() {
-        set_string(profile, "kid", kid)?;
-    }
-    if let Some(fpe_version) = update.fpe_version.take() {
-        set_string(profile, "fpe_version", fpe_version)?;
-    }
-    if let Some(alphabet) = update.alphabet.take() {
-        set_string(profile, "alphabet", alphabet)?;
-    }
-    if let Some(min_len) = update.min_len.take() {
-        set_usize(profile, "min_len", min_len)?;
-    }
-    if let Some(max_len) = update.max_len.take() {
-        set_usize(profile, "max_len", max_len)?;
-    }
-    if let Some(tweak_aad) = update.tweak_aad.take() {
-        set_string(profile, "tweak_aad", tweak_aad)?;
-    }
-
-    Ok(json!({
-        "status": "updated",
-        "section": "fpe_profiles",
-        "item": profile,
-    }))
-}
-
-fn fpe_profile_delete(local: &mut LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
-    let name = expect_one(args, "fpe profile name")?;
-    validate_text("name", &name)?;
-    let removed = remove_by_field(array_mut(&mut local.value, "fpe_profiles")?, "name", &name)?;
-
-    Ok(json!({
-        "status": "deleted",
-        "section": "fpe_profiles",
-        "item": removed,
-    }))
-}
-
-fn token_profile_add(local: &mut LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
-    let profile = parse_token_profile_add(args)?;
-    ensure_unique_field(
-        array_mut(&mut local.value, "tokenization_profiles")?,
-        "name",
-        &profile.name,
-    )?;
-    let value = json!({
-        "name": profile.name,
-        "tokenization_version": profile.tokenization_version,
-        "kid": profile.kid,
-        "token_prefix": profile.token_prefix,
-        "token_len": profile.token_len,
-        "max_plaintext_len": profile.max_plaintext_len,
-    });
-    array_mut(&mut local.value, "tokenization_profiles")?.push(value.clone());
-
-    Ok(json!({
-        "status": "added",
-        "section": "tokenization_profiles",
-        "item": value,
-    }))
-}
-
-fn token_profile_get(local: &LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
-    let name = expect_one(args, "tokenization profile name")?;
-    validate_text("name", &name)?;
-    let profile = find_by_field(
-        array_ref(&local.value, "tokenization_profiles")?,
-        "name",
-        &name,
-    )?;
-    Ok(profile.clone())
-}
-
-fn token_profile_update(local: &mut LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
-    let (name, rest) = split_name_and_rest(args, "tokenization profile name")?;
-    validate_text("name", &name)?;
-    let mut update = parse_token_profile_update(rest)?;
-    let profile = find_by_field_mut(
-        array_mut(&mut local.value, "tokenization_profiles")?,
-        "name",
-        &name,
-    )?;
-
-    if let Some(kid) = update.kid.take() {
-        set_string(profile, "kid", kid)?;
-    }
-    if let Some(tokenization_version) = update.tokenization_version.take() {
-        set_string(profile, "tokenization_version", tokenization_version)?;
-    }
-    if let Some(token_prefix) = update.token_prefix.take() {
-        set_string(profile, "token_prefix", token_prefix)?;
-    }
-    if let Some(token_len) = update.token_len.take() {
-        set_usize(profile, "token_len", token_len)?;
-    }
-    if let Some(max_plaintext_len) = update.max_plaintext_len.take() {
-        set_usize(profile, "max_plaintext_len", max_plaintext_len)?;
-    }
-
-    Ok(json!({
-        "status": "updated",
-        "section": "tokenization_profiles",
-        "item": profile,
-    }))
-}
-
-fn token_profile_delete(local: &mut LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
-    let name = expect_one(args, "tokenization profile name")?;
-    validate_text("name", &name)?;
-    let removed = remove_by_field(
-        array_mut(&mut local.value, "tokenization_profiles")?,
-        "name",
-        &name,
-    )?;
-
-    Ok(json!({
-        "status": "deleted",
-        "section": "tokenization_profiles",
-        "item": removed,
-    }))
-}
-
-#[derive(Default)]
-struct RouteAdd {
-    name: String,
-    kid: String,
-    final_app_addr: String,
-    final_app_path: String,
-}
-
-#[derive(Default)]
-struct RouteUpdate {
-    kid: Option<String>,
-    final_app_addr: Option<String>,
-    final_app_path: Option<String>,
-}
-
-#[derive(Default)]
-struct RemoteRouteAdd {
-    name: String,
-    remote_kid: String,
-    remote_addr: String,
-    allowed_local_kids: Vec<String>,
-    status: String,
-}
-
-#[derive(Default)]
-struct RemoteRouteUpdate {
-    remote_kid: Option<String>,
-    remote_addr: Option<String>,
-    allowed_local_kids: Option<Vec<String>>,
-    status: Option<String>,
-}
-
-#[derive(Default)]
-struct PermissionAdd {
-    client: String,
-    apikey_hash: String,
-    status: String,
-}
-
-#[derive(Default)]
-struct PermissionUpdate {
-    apikey_hash: Option<String>,
-    status: Option<String>,
-}
-
-struct PermissionGrant {
-    kid: String,
-    action: String,
-}
-
-struct FpeProfileAdd {
-    name: String,
-    fpe_version: String,
-    alphabet: String,
-    min_len: usize,
-    max_len: usize,
-    tweak_aad: String,
-    kid: String,
-}
-
-#[derive(Default)]
-struct FpeProfileUpdate {
-    kid: Option<String>,
-    fpe_version: Option<String>,
-    alphabet: Option<String>,
-    min_len: Option<usize>,
-    max_len: Option<usize>,
-    tweak_aad: Option<String>,
-}
-
-struct TokenProfileAdd {
-    name: String,
-    tokenization_version: String,
-    kid: String,
-    token_prefix: String,
-    token_len: usize,
-    max_plaintext_len: usize,
-}
-
-#[derive(Default)]
-struct TokenProfileUpdate {
-    kid: Option<String>,
-    tokenization_version: Option<String>,
-    token_prefix: Option<String>,
-    token_len: Option<usize>,
-    max_plaintext_len: Option<usize>,
-}
-
-fn parse_route_add(args: Vec<String>) -> Result<RouteAdd, DynError> {
-    let mut parsed = RouteAdd::default();
-    let mut seen = HashSet::new();
-    let mut index = 0;
-
-    while index < args.len() {
-        match args[index].as_str() {
-            "--name" => parsed.name = flag_once(&args, &mut seen, &mut index, "--name")?,
-            "--kid" => parsed.kid = flag_once(&args, &mut seen, &mut index, "--kid")?,
-            "--final-app-addr" => {
-                parsed.final_app_addr = flag_once(&args, &mut seen, &mut index, "--final-app-addr")?
-            }
-            "--final-app-path" => {
-                parsed.final_app_path = flag_once(&args, &mut seen, &mut index, "--final-app-path")?
-            }
-            value => return Err(invalid_input(format!("unknown routes add option: {value}"))),
+    for field in PERMISSION_GRANT_FIELDS {
+        if field.required_on_add && !parsed.contains_key(field.json_field) {
+            return Err(invalid_input(format!("{} is required", field.flag)));
         }
     }
-
-    validate_text("name", &parsed.name)?;
-    validate_kid("kid", &parsed.kid)?;
-    parsed.final_app_addr =
-        validation::validate_host_port("final_app_addr", &parsed.final_app_addr)?;
-    parsed.final_app_path =
-        config::validate_http_path_field("final_app_path", &parsed.final_app_path)?;
-    require_non_empty(&parsed.name, "--name")?;
-    require_non_empty(&parsed.kid, "--kid")?;
-    require_non_empty(&parsed.final_app_addr, "--final-app-addr")?;
-    require_non_empty(&parsed.final_app_path, "--final-app-path")?;
-
-    Ok(parsed)
-}
-
-fn parse_route_update(args: Vec<String>) -> Result<RouteUpdate, DynError> {
-    let mut parsed = RouteUpdate::default();
-    let mut seen = HashSet::new();
-    let mut index = 0;
-
-    while index < args.len() {
-        match args[index].as_str() {
-            "--kid" => {
-                parsed.kid = Some(validate_kid_value(
-                    "kid",
-                    &flag_once(&args, &mut seen, &mut index, "--kid")?,
-                )?)
-            }
-            "--final-app-addr" => {
-                let value = flag_once(&args, &mut seen, &mut index, "--final-app-addr")?;
-                parsed.final_app_addr =
-                    Some(validation::validate_host_port("final_app_addr", &value)?);
-            }
-            "--final-app-path" => {
-                let value = flag_once(&args, &mut seen, &mut index, "--final-app-path")?;
-                parsed.final_app_path =
-                    Some(config::validate_http_path_field("final_app_path", &value)?);
-            }
-            value => {
-                return Err(invalid_input(format!(
-                    "unknown routes update option: {value}"
-                )));
-            }
-        }
-    }
-
-    if parsed.kid.is_none() && parsed.final_app_addr.is_none() && parsed.final_app_path.is_none() {
-        return Err(invalid_input("routes update requires at least one field"));
-    }
-
-    Ok(parsed)
-}
-
-fn parse_remote_route_add(args: Vec<String>) -> Result<RemoteRouteAdd, DynError> {
-    let mut parsed = RemoteRouteAdd {
-        status: String::from(DEFAULT_REMOTE_ROUTE_STATUS),
-        ..RemoteRouteAdd::default()
-    };
-    let mut seen = HashSet::new();
-    let mut index = 0;
-
-    while index < args.len() {
-        match args[index].as_str() {
-            "--name" => parsed.name = flag_once(&args, &mut seen, &mut index, "--name")?,
-            "--remote-kid" => {
-                parsed.remote_kid = flag_once(&args, &mut seen, &mut index, "--remote-kid")?
-            }
-            "--remote-addr" => {
-                parsed.remote_addr = flag_once(&args, &mut seen, &mut index, "--remote-addr")?
-            }
-            "--allowed-local-kid" => {
-                parsed.allowed_local_kids.push(flag_value(
-                    &args,
-                    &mut index,
-                    "--allowed-local-kid",
-                )?);
-            }
-            "--status" => parsed.status = flag_once(&args, &mut seen, &mut index, "--status")?,
-            value => {
-                return Err(invalid_input(format!(
-                    "unknown remote-routes add option: {value}"
-                )));
-            }
-        }
-    }
-
-    validate_remote_route_parts(
-        &parsed.name,
-        &parsed.remote_kid,
-        &parsed.remote_addr,
-        &parsed.allowed_local_kids,
-        &parsed.status,
-    )?;
-
-    Ok(parsed)
-}
-
-fn parse_remote_route_update(args: Vec<String>) -> Result<RemoteRouteUpdate, DynError> {
-    let mut parsed = RemoteRouteUpdate::default();
-    let mut seen = HashSet::new();
-    let mut allowed = Vec::new();
-    let mut index = 0;
-
-    while index < args.len() {
-        match args[index].as_str() {
-            "--remote-kid" => {
-                let value = flag_once(&args, &mut seen, &mut index, "--remote-kid")?;
-                parsed.remote_kid = Some(validate_kid_value("remote_kid", &value)?);
-            }
-            "--remote-addr" => {
-                let value = flag_once(&args, &mut seen, &mut index, "--remote-addr")?;
-                parsed.remote_addr = Some(validation::validate_host_port("remote_addr", &value)?);
-            }
-            "--allowed-local-kid" => {
-                allowed.push(flag_value(&args, &mut index, "--allowed-local-kid")?);
-            }
-            "--status" => {
-                let value = flag_once(&args, &mut seen, &mut index, "--status")?;
-                validate_remote_route_status(&value)?;
-                parsed.status = Some(value);
-            }
-            value => {
-                return Err(invalid_input(format!(
-                    "unknown remote-routes update option: {value}"
-                )));
-            }
-        }
-    }
-
-    if !allowed.is_empty() {
-        validate_allowed_local_kids(&allowed)?;
-        parsed.allowed_local_kids = Some(allowed);
-    }
-
-    if parsed.remote_kid.is_none()
-        && parsed.remote_addr.is_none()
-        && parsed.allowed_local_kids.is_none()
-        && parsed.status.is_none()
-    {
-        return Err(invalid_input(
-            "remote-routes update requires at least one field",
-        ));
-    }
-
-    Ok(parsed)
-}
-
-fn parse_permission_add(args: Vec<String>) -> Result<PermissionAdd, DynError> {
-    let mut parsed = PermissionAdd {
-        status: String::from(DEFAULT_PERMISSION_STATUS),
-        ..PermissionAdd::default()
-    };
-    let mut seen = HashSet::new();
-    let mut index = 0;
-
-    while index < args.len() {
-        match args[index].as_str() {
-            "--client" => parsed.client = flag_once(&args, &mut seen, &mut index, "--client")?,
-            "--apikey-hash" => {
-                parsed.apikey_hash = flag_once(&args, &mut seen, &mut index, "--apikey-hash")?
-            }
-            "--status" => parsed.status = flag_once(&args, &mut seen, &mut index, "--status")?,
-            value => {
-                return Err(invalid_input(format!(
-                    "unknown permissions add option: {value}"
-                )));
-            }
-        }
-    }
-
-    validate_text("client", &parsed.client)?;
-    validate_apikey_hash(&parsed.apikey_hash)?;
-    validate_permission_status(&parsed.status)?;
-    require_non_empty(&parsed.client, "--client")?;
-    require_non_empty(&parsed.apikey_hash, "--apikey-hash")?;
-
-    Ok(parsed)
-}
-
-fn parse_permission_update(args: Vec<String>) -> Result<PermissionUpdate, DynError> {
-    let mut parsed = PermissionUpdate::default();
-    let mut seen = HashSet::new();
-    let mut index = 0;
-
-    while index < args.len() {
-        match args[index].as_str() {
-            "--apikey-hash" => {
-                let value = flag_once(&args, &mut seen, &mut index, "--apikey-hash")?;
-                validate_apikey_hash(&value)?;
-                parsed.apikey_hash = Some(value);
-            }
-            "--status" => {
-                let value = flag_once(&args, &mut seen, &mut index, "--status")?;
-                validate_permission_status(&value)?;
-                parsed.status = Some(value);
-            }
-            value => {
-                return Err(invalid_input(format!(
-                    "unknown permissions update option: {value}"
-                )));
-            }
-        }
-    }
-
-    if parsed.apikey_hash.is_none() && parsed.status.is_none() {
-        return Err(invalid_input(
-            "permissions update requires at least one field",
-        ));
-    }
-
-    Ok(parsed)
-}
-
-fn parse_permission_grant(args: Vec<String>) -> Result<PermissionGrant, DynError> {
-    let mut kid = None;
-    let mut action = None;
-    let mut seen = HashSet::new();
-    let mut index = 0;
-
-    while index < args.len() {
-        match args[index].as_str() {
-            "--kid" => kid = Some(flag_once(&args, &mut seen, &mut index, "--kid")?),
-            "--action" => action = Some(flag_once(&args, &mut seen, &mut index, "--action")?),
-            value => {
-                return Err(invalid_input(format!(
-                    "unknown permissions grant/revoke option: {value}"
-                )));
-            }
-        }
-    }
-
-    let kid = kid.ok_or_else(|| invalid_input("--kid is required"))?;
-    let action = action.ok_or_else(|| invalid_input("--action is required"))?;
-    validate_permission_kid(&kid)?;
-    validation::validate_allowed_value("action", &action, permissions::PERMISSION_ACTIONS)?;
-
-    Ok(PermissionGrant { kid, action })
-}
-
-fn parse_fpe_profile_add(args: Vec<String>) -> Result<FpeProfileAdd, DynError> {
-    let mut name = String::new();
-    let mut kid = String::new();
-    let mut fpe_version = String::from(fpe::FPE_VERSION_FF1_2025);
-    let mut alphabet = String::new();
-    let mut min_len = None;
-    let mut max_len = None;
-    let mut tweak_aad = String::new();
-    let mut seen = HashSet::new();
-    let mut index = 0;
-
-    while index < args.len() {
-        match args[index].as_str() {
-            "--name" => name = flag_once(&args, &mut seen, &mut index, "--name")?,
-            "--kid" => kid = flag_once(&args, &mut seen, &mut index, "--kid")?,
-            "--fpe-version" => {
-                fpe_version = flag_once(&args, &mut seen, &mut index, "--fpe-version")?
-            }
-            "--alphabet" => alphabet = flag_once(&args, &mut seen, &mut index, "--alphabet")?,
-            "--min-len" => {
-                let value = flag_once(&args, &mut seen, &mut index, "--min-len")?;
-                min_len = Some(parse_usize_flag("--min-len", &value)?);
-            }
-            "--max-len" => {
-                let value = flag_once(&args, &mut seen, &mut index, "--max-len")?;
-                max_len = Some(parse_usize_flag("--max-len", &value)?);
-            }
-            "--tweak-aad" => tweak_aad = flag_once(&args, &mut seen, &mut index, "--tweak-aad")?,
-            value => {
-                return Err(invalid_input(format!(
-                    "unknown config fpe add option: {value}"
-                )));
-            }
-        }
-    }
-
-    let min_len = min_len.ok_or_else(|| invalid_input("--min-len is required"))?;
-    let max_len = max_len.ok_or_else(|| invalid_input("--max-len is required"))?;
-    validate_fpe_profile_parts(
-        &name,
-        &kid,
-        &fpe_version,
-        &alphabet,
-        min_len,
-        max_len,
-        &tweak_aad,
-    )?;
-
-    Ok(FpeProfileAdd {
-        name,
-        fpe_version,
-        alphabet,
-        min_len,
-        max_len,
-        tweak_aad,
-        kid,
-    })
-}
-
-fn parse_fpe_profile_update(args: Vec<String>) -> Result<FpeProfileUpdate, DynError> {
-    let mut parsed = FpeProfileUpdate::default();
-    let mut seen = HashSet::new();
-    let mut index = 0;
-
-    while index < args.len() {
-        match args[index].as_str() {
-            "--kid" => {
-                let value = flag_once(&args, &mut seen, &mut index, "--kid")?;
-                parsed.kid = Some(validate_kid_value("kid", &value)?);
-            }
-            "--fpe-version" => {
-                let value = flag_once(&args, &mut seen, &mut index, "--fpe-version")?;
-                fpe::validate_fpe_version(&value)?;
-                parsed.fpe_version = Some(value);
-            }
-            "--alphabet" => {
-                let value = flag_once(&args, &mut seen, &mut index, "--alphabet")?;
-                fpe::validate_fpe_alphabet(&value)?;
-                parsed.alphabet = Some(value);
-            }
-            "--min-len" => {
-                let value = flag_once(&args, &mut seen, &mut index, "--min-len")?;
-                parsed.min_len = Some(parse_usize_flag("--min-len", &value)?);
-            }
-            "--max-len" => {
-                let value = flag_once(&args, &mut seen, &mut index, "--max-len")?;
-                parsed.max_len = Some(parse_usize_flag("--max-len", &value)?);
-            }
-            "--tweak-aad" => {
-                let value = flag_once(&args, &mut seen, &mut index, "--tweak-aad")?;
-                validate_text("tweak_aad", &value)?;
-                parsed.tweak_aad = Some(value);
-            }
-            value => {
-                return Err(invalid_input(format!(
-                    "unknown config fpe update option: {value}"
-                )));
-            }
-        }
-    }
-
-    if parsed.kid.is_none()
-        && parsed.fpe_version.is_none()
-        && parsed.alphabet.is_none()
-        && parsed.min_len.is_none()
-        && parsed.max_len.is_none()
-        && parsed.tweak_aad.is_none()
-    {
-        return Err(invalid_input(
-            "config fpe update requires at least one field",
-        ));
-    }
-
-    Ok(parsed)
-}
-
-fn parse_token_profile_add(args: Vec<String>) -> Result<TokenProfileAdd, DynError> {
-    let mut name = String::new();
-    let mut tokenization_version = String::from(tokenization::TOKENIZATION_VERSION_RANDOM_V1);
-    let mut kid = String::new();
-    let mut token_prefix = String::new();
-    let mut token_len = None;
-    let mut max_plaintext_len = None;
-    let mut seen = HashSet::new();
-    let mut index = 0;
-
-    while index < args.len() {
-        match args[index].as_str() {
-            "--name" => name = flag_once(&args, &mut seen, &mut index, "--name")?,
-            "--kid" => kid = flag_once(&args, &mut seen, &mut index, "--kid")?,
-            "--tokenization-version" => {
-                tokenization_version =
-                    flag_once(&args, &mut seen, &mut index, "--tokenization-version")?
-            }
-            "--token-prefix" => {
-                token_prefix = flag_once(&args, &mut seen, &mut index, "--token-prefix")?
-            }
-            "--token-len" => {
-                let value = flag_once(&args, &mut seen, &mut index, "--token-len")?;
-                token_len = Some(parse_usize_flag("--token-len", &value)?);
-            }
-            "--max-plaintext-len" => {
-                let value = flag_once(&args, &mut seen, &mut index, "--max-plaintext-len")?;
-                max_plaintext_len = Some(parse_usize_flag("--max-plaintext-len", &value)?);
-            }
-            value => {
-                return Err(invalid_input(format!(
-                    "unknown config token add option: {value}"
-                )));
-            }
-        }
-    }
-
-    let token_len = token_len.ok_or_else(|| invalid_input("--token-len is required"))?;
-    let max_plaintext_len =
-        max_plaintext_len.ok_or_else(|| invalid_input("--max-plaintext-len is required"))?;
-    validate_token_profile_parts(
-        &name,
-        &kid,
-        &tokenization_version,
-        &token_prefix,
-        token_len,
-        max_plaintext_len,
-    )?;
-
-    Ok(TokenProfileAdd {
-        name,
-        tokenization_version,
-        kid,
-        token_prefix,
-        token_len,
-        max_plaintext_len,
-    })
-}
-
-fn parse_token_profile_update(args: Vec<String>) -> Result<TokenProfileUpdate, DynError> {
-    let mut parsed = TokenProfileUpdate::default();
-    let mut seen = HashSet::new();
-    let mut index = 0;
-
-    while index < args.len() {
-        match args[index].as_str() {
-            "--kid" => {
-                let value = flag_once(&args, &mut seen, &mut index, "--kid")?;
-                parsed.kid = Some(validate_kid_value("kid", &value)?);
-            }
-            "--tokenization-version" => {
-                let value = flag_once(&args, &mut seen, &mut index, "--tokenization-version")?;
-                tokenization::validate_tokenization_version(&value)?;
-                parsed.tokenization_version = Some(value);
-            }
-            "--token-prefix" => {
-                let value = flag_once(&args, &mut seen, &mut index, "--token-prefix")?;
-                tokenization::validate_token_prefix(&value)?;
-                parsed.token_prefix = Some(value);
-            }
-            "--token-len" => {
-                let value = flag_once(&args, &mut seen, &mut index, "--token-len")?;
-                parsed.token_len = Some(parse_usize_flag("--token-len", &value)?);
-            }
-            "--max-plaintext-len" => {
-                let value = flag_once(&args, &mut seen, &mut index, "--max-plaintext-len")?;
-                parsed.max_plaintext_len = Some(parse_usize_flag("--max-plaintext-len", &value)?);
-            }
-            value => {
-                return Err(invalid_input(format!(
-                    "unknown config token update option: {value}"
-                )));
-            }
-        }
-    }
-
-    if parsed.kid.is_none()
-        && parsed.tokenization_version.is_none()
-        && parsed.token_prefix.is_none()
-        && parsed.token_len.is_none()
-        && parsed.max_plaintext_len.is_none()
-    {
-        return Err(invalid_input(
-            "config token update requires at least one field",
-        ));
-    }
-
     Ok(parsed)
 }
 
@@ -1314,24 +1071,6 @@ async fn fetch_public_keys(remote_addr: &str, remote_kid: &str) -> Result<Value,
         .ok_or_else(|| invalid_input("remote /pub response must include keys object"))
 }
 
-fn validate_remote_route_parts(
-    name: &str,
-    remote_kid: &str,
-    remote_addr: &str,
-    allowed_local_kids: &[String],
-    status: &str,
-) -> Result<(), DynError> {
-    validate_text("name", name)?;
-    validate_kid("remote_kid", remote_kid)?;
-    validation::validate_host_port("remote_addr", remote_addr)?;
-    validate_allowed_local_kids(allowed_local_kids)?;
-    validate_remote_route_status(status)?;
-    require_non_empty(name, "--name")?;
-    require_non_empty(remote_kid, "--remote-kid")?;
-    require_non_empty(remote_addr, "--remote-addr")?;
-    Ok(())
-}
-
 fn validate_allowed_local_kids(kids: &[String]) -> Result<(), DynError> {
     if kids.is_empty() {
         return Err(invalid_input("--allowed-local-kid is required"));
@@ -1364,41 +1103,6 @@ fn validate_permission_status(status: &str) -> Result<(), DynError> {
     validation::validate_allowed_value("status", status, &["active", "disabled", "revoked"])
 }
 
-fn validate_fpe_profile_parts(
-    name: &str,
-    kid: &str,
-    fpe_version: &str,
-    alphabet: &str,
-    min_len: usize,
-    max_len: usize,
-    tweak_aad: &str,
-) -> Result<(), DynError> {
-    validate_text("name", name)?;
-    validate_kid("kid", kid)?;
-    fpe::validate_fpe_profile_fields(name, fpe_version, alphabet, min_len, max_len, tweak_aad)?;
-    Ok(())
-}
-
-fn validate_token_profile_parts(
-    name: &str,
-    kid: &str,
-    tokenization_version: &str,
-    token_prefix: &str,
-    token_len: usize,
-    max_plaintext_len: usize,
-) -> Result<(), DynError> {
-    validate_text("name", name)?;
-    validate_kid("kid", kid)?;
-    tokenization::validate_tokenization_profile_fields(
-        name,
-        tokenization_version,
-        token_prefix,
-        token_len,
-        max_plaintext_len,
-    )?;
-    Ok(())
-}
-
 fn validate_permission_kid(kid: &str) -> Result<(), DynError> {
     if kid == "*" {
         return Ok(());
@@ -1421,13 +1125,6 @@ fn validate_apikey_hash(value: &str) -> Result<(), DynError> {
 
 fn validate_text(field: &str, value: &str) -> Result<(), DynError> {
     validation::validate_text_field(field, value)
-}
-
-fn require_non_empty(value: &str, flag: &str) -> Result<(), DynError> {
-    if value.is_empty() {
-        return Err(invalid_input(format!("{flag} is required")));
-    }
-    Ok(())
 }
 
 fn array_ref<'a>(value: &'a Value, section: &str) -> Result<&'a Vec<Value>, DynError> {
@@ -1528,26 +1225,18 @@ fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, DynErro
         .ok_or_else(|| invalid_input(format!("{field} must be a string")))
 }
 
-fn set_string(value: &mut Value, field: &str, item: String) -> Result<(), DynError> {
-    object_mut(value)?.insert(field.to_string(), Value::String(item));
-    Ok(())
-}
-
-fn set_array(value: &mut Value, field: &str, items: Vec<String>) -> Result<(), DynError> {
-    object_mut(value)?.insert(
-        field.to_string(),
-        Value::Array(items.into_iter().map(Value::String).collect()),
-    );
-    Ok(())
+fn required_map_string<'a>(
+    value: &'a Map<String, Value>,
+    field: &str,
+) -> Result<&'a str, DynError> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid_input(format!("{field} must be a string")))
 }
 
 fn set_value(value: &mut Value, field: &str, item: Value) -> Result<(), DynError> {
     object_mut(value)?.insert(field.to_string(), item);
-    Ok(())
-}
-
-fn set_usize(value: &mut Value, field: &str, item: usize) -> Result<(), DynError> {
-    object_mut(value)?.insert(field.to_string(), Value::Number(item.into()));
     Ok(())
 }
 
@@ -1685,11 +1374,168 @@ mod tests {
     }
 
     #[test]
+    fn field_parser_rejects_missing_duplicate_unknown_and_immutable_flags() {
+        let missing = parse_section_add(
+            &ROUTES_SECTION,
+            vec![
+                String::from("--name"),
+                String::from("app-a"),
+                String::from("--kid"),
+                "a".repeat(64),
+                String::from("--final-app-addr"),
+                String::from("localhost:3999"),
+            ],
+        )
+        .expect_err("missing required path must fail");
+        assert_eq!(missing.to_string(), "--final-app-path is required");
+
+        let duplicate = parse_section_add(
+            &ROUTES_SECTION,
+            vec![
+                String::from("--name"),
+                String::from("app-a"),
+                String::from("--name"),
+                String::from("app-b"),
+            ],
+        )
+        .expect_err("duplicate flag must fail");
+        assert_eq!(duplicate.to_string(), "--name can only be provided once");
+
+        let unknown = parse_section_add(
+            &ROUTES_SECTION,
+            vec![String::from("--unknown"), String::from("value")],
+        )
+        .expect_err("unknown flag must fail");
+        assert_eq!(unknown.to_string(), "unknown routes add option: --unknown");
+
+        let immutable = parse_section_update(
+            &ROUTES_SECTION,
+            vec![String::from("--name"), String::from("app-b")],
+        )
+        .expect_err("immutable field must fail on update");
+        assert_eq!(
+            immutable.to_string(),
+            "unknown routes update option: --name"
+        );
+    }
+
+    #[test]
+    fn field_parser_applies_defaults_and_rejects_empty_update() {
+        let permission = parse_section_add(
+            &PERMISSIONS_SECTION,
+            vec![
+                String::from("--client"),
+                String::from("app-a"),
+                String::from("--apikey-hash"),
+                "b".repeat(64),
+            ],
+        )
+        .expect("permission must parse");
+        assert_eq!(permission["status"], DEFAULT_PERMISSION_STATUS);
+        assert_eq!(permission["permissions"].as_array().unwrap().len(), 0);
+
+        let err = parse_section_update(&PERMISSIONS_SECTION, Vec::new())
+            .expect_err("empty update must fail");
+        assert_eq!(
+            err.to_string(),
+            "permissions update requires at least one field"
+        );
+    }
+
+    #[test]
+    fn special_parser_accepts_repeated_allowed_local_kids() {
+        let parsed = parse_section_add(
+            &REMOTE_ROUTES_SECTION,
+            vec![
+                String::from("--name"),
+                String::from("clinic-b"),
+                String::from("--remote-kid"),
+                "b".repeat(64),
+                String::from("--remote-addr"),
+                String::from("localhost:3001"),
+                String::from("--allowed-local-kid"),
+                "a".repeat(64),
+                String::from("--allowed-local-kid"),
+                "c".repeat(64),
+            ],
+        )
+        .expect("remote route must parse");
+        assert_eq!(parsed["status"], DEFAULT_REMOTE_ROUTE_STATUS);
+        assert_eq!(parsed["allowed_local_kids"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn special_parser_rejects_bad_allowed_local_kid_combinations() {
+        let err = parse_section_add(
+            &REMOTE_ROUTES_SECTION,
+            vec![
+                String::from("--name"),
+                String::from("clinic-b"),
+                String::from("--remote-kid"),
+                "b".repeat(64),
+                String::from("--remote-addr"),
+                String::from("localhost:3001"),
+            ],
+        )
+        .expect_err("missing allowed local kid must fail");
+        assert_eq!(err.to_string(), "--allowed-local-kid is required");
+
+        let err = parse_section_add(
+            &REMOTE_ROUTES_SECTION,
+            vec![
+                String::from("--name"),
+                String::from("clinic-b"),
+                String::from("--remote-kid"),
+                "b".repeat(64),
+                String::from("--remote-addr"),
+                String::from("localhost:3001"),
+                String::from("--allowed-local-kid"),
+                String::from("*"),
+                String::from("--allowed-local-kid"),
+                "a".repeat(64),
+            ],
+        )
+        .expect_err("wildcard mixed with explicit kid must fail");
+        assert_eq!(
+            err.to_string(),
+            "--allowed-local-kid * cannot be mixed with explicit kids"
+        );
+    }
+
+    #[test]
+    fn special_parser_update_accepts_only_allowed_local_kids() {
+        let parsed = parse_section_update(
+            &REMOTE_ROUTES_SECTION,
+            vec![
+                String::from("--allowed-local-kid"),
+                "a".repeat(64),
+                String::from("--allowed-local-kid"),
+                "b".repeat(64),
+            ],
+        )
+        .expect("allowed local kid only update must parse");
+        assert_eq!(parsed["allowed_local_kids"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn permission_grant_parser_rejects_missing_required_fields() {
+        let missing_kid =
+            parse_permission_action_fields(vec![String::from("--action"), String::from("message")])
+                .expect_err("missing kid must fail");
+        assert_eq!(missing_kid.to_string(), "--kid is required");
+
+        let missing_action =
+            parse_permission_action_fields(vec![String::from("--kid"), "a".repeat(64)])
+                .expect_err("missing action must fail");
+        assert_eq!(missing_action.to_string(), "--action is required");
+    }
+
+    #[test]
     fn route_add_and_get_use_name() {
         let mut local = local_config();
         let kid = "a".repeat(64);
-        route_add(
-            &mut local,
+        let value = parse_section_add(
+            &ROUTES_SECTION,
             vec![
                 String::from("--name"),
                 String::from("app-a"),
@@ -1702,16 +1548,56 @@ mod tests {
             ],
         )
         .unwrap();
+        section_add_value(&mut local, &ROUTES_SECTION, value).unwrap();
 
-        let route = route_get(&local, vec![String::from("app-a")]).unwrap();
+        let route = section_get(&local, &ROUTES_SECTION, vec![String::from("app-a")]).unwrap();
         assert_eq!(route["name"], "app-a");
+    }
+
+    #[test]
+    fn generic_section_update_delete_and_missing_target_work() {
+        let mut local = local_config();
+        let value = parse_section_add(
+            &ROUTES_SECTION,
+            vec![
+                String::from("--name"),
+                String::from("app-a"),
+                String::from("--kid"),
+                "a".repeat(64),
+                String::from("--final-app-addr"),
+                String::from("localhost:3999"),
+                String::from("--final-app-path"),
+                String::from("/message"),
+            ],
+        )
+        .unwrap();
+        section_add_value(&mut local, &ROUTES_SECTION, value).unwrap();
+
+        section_update(
+            &mut local,
+            &ROUTES_SECTION,
+            vec![
+                String::from("app-a"),
+                String::from("--final-app-addr"),
+                String::from("localhost:4999"),
+            ],
+        )
+        .unwrap();
+        let route = section_get(&local, &ROUTES_SECTION, vec![String::from("app-a")]).unwrap();
+        assert_eq!(route["final_app_addr"], "localhost:4999");
+
+        assert!(section_get(&local, &ROUTES_SECTION, vec![String::from("missing")]).is_err());
+        let deleted = section_delete(&mut local, &ROUTES_SECTION, vec![String::from("app-a")])
+            .expect("route should delete");
+        assert_eq!(deleted["status"], "deleted");
+        assert!(array_ref(&local.value, "routes").unwrap().is_empty());
     }
 
     #[test]
     fn permission_grant_and_revoke_updates_actions() {
         let mut local = local_config();
-        permission_add(
-            &mut local,
+        let value = parse_section_add(
+            &PERMISSIONS_SECTION,
             vec![
                 String::from("--client"),
                 String::from("app-a"),
@@ -1720,6 +1606,7 @@ mod tests {
             ],
         )
         .unwrap();
+        section_add_value(&mut local, &PERMISSIONS_SECTION, value).unwrap();
         permission_grant(
             &mut local,
             vec![
@@ -1743,15 +1630,15 @@ mod tests {
         )
         .unwrap();
 
-        let item = permission_get(&local, vec![String::from("app-a")]).unwrap();
+        let item = section_get(&local, &PERMISSIONS_SECTION, vec![String::from("app-a")]).unwrap();
         assert_eq!(item["permissions"].as_array().unwrap().len(), 0);
     }
 
     #[test]
     fn fpe_profile_add_get_update_and_delete_use_name() {
         let mut local = local_config();
-        fpe_profile_add(
-            &mut local,
+        let value = parse_section_add(
+            &FPE_PROFILES_SECTION,
             vec![
                 String::from("--name"),
                 String::from("patient-id"),
@@ -1768,12 +1655,19 @@ mod tests {
             ],
         )
         .unwrap();
+        section_add_value(&mut local, &FPE_PROFILES_SECTION, value).unwrap();
 
-        let profile = fpe_profile_get(&local, vec![String::from("patient-id")]).unwrap();
+        let profile = section_get(
+            &local,
+            &FPE_PROFILES_SECTION,
+            vec![String::from("patient-id")],
+        )
+        .unwrap();
         assert_eq!(profile["kid"], "a".repeat(64));
 
-        fpe_profile_update(
+        section_update(
             &mut local,
+            &FPE_PROFILES_SECTION,
             vec![
                 String::from("patient-id"),
                 String::from("--max-len"),
@@ -1781,18 +1675,28 @@ mod tests {
             ],
         )
         .unwrap();
-        let profile = fpe_profile_get(&local, vec![String::from("patient-id")]).unwrap();
+        let profile = section_get(
+            &local,
+            &FPE_PROFILES_SECTION,
+            vec![String::from("patient-id")],
+        )
+        .unwrap();
         assert_eq!(profile["max_len"], 40);
 
-        fpe_profile_delete(&mut local, vec![String::from("patient-id")]).unwrap();
+        section_delete(
+            &mut local,
+            &FPE_PROFILES_SECTION,
+            vec![String::from("patient-id")],
+        )
+        .unwrap();
         assert!(array_ref(&local.value, "fpe_profiles").unwrap().is_empty());
     }
 
     #[test]
     fn token_profile_add_get_update_and_delete_use_name() {
         let mut local = local_config();
-        token_profile_add(
-            &mut local,
+        let value = parse_section_add(
+            &TOKENIZATION_PROFILES_SECTION,
             vec![
                 String::from("--name"),
                 String::from("patient-token"),
@@ -1807,12 +1711,19 @@ mod tests {
             ],
         )
         .unwrap();
+        section_add_value(&mut local, &TOKENIZATION_PROFILES_SECTION, value).unwrap();
 
-        let profile = token_profile_get(&local, vec![String::from("patient-token")]).unwrap();
+        let profile = section_get(
+            &local,
+            &TOKENIZATION_PROFILES_SECTION,
+            vec![String::from("patient-token")],
+        )
+        .unwrap();
         assert_eq!(profile["kid"], "a".repeat(64));
 
-        token_profile_update(
+        section_update(
             &mut local,
+            &TOKENIZATION_PROFILES_SECTION,
             vec![
                 String::from("patient-token"),
                 String::from("--max-plaintext-len"),
@@ -1820,10 +1731,20 @@ mod tests {
             ],
         )
         .unwrap();
-        let profile = token_profile_get(&local, vec![String::from("patient-token")]).unwrap();
+        let profile = section_get(
+            &local,
+            &TOKENIZATION_PROFILES_SECTION,
+            vec![String::from("patient-token")],
+        )
+        .unwrap();
         assert_eq!(profile["max_plaintext_len"], 512);
 
-        token_profile_delete(&mut local, vec![String::from("patient-token")]).unwrap();
+        section_delete(
+            &mut local,
+            &TOKENIZATION_PROFILES_SECTION,
+            vec![String::from("patient-token")],
+        )
+        .unwrap();
         assert!(
             array_ref(&local.value, "tokenization_profiles")
                 .unwrap()
@@ -1834,41 +1755,53 @@ mod tests {
     #[test]
     fn fpe_profile_rejects_invalid_fields() {
         assert!(
-            parse_fpe_profile_add(vec![
-                String::from("--name"),
-                String::from("patient-id"),
-                String::from("--kid"),
-                String::from("bad"),
-                String::from("--alphabet"),
-                String::from("0123456789"),
-                String::from("--min-len"),
-                String::from("6"),
-                String::from("--max-len"),
-                String::from("32"),
-                String::from("--tweak-aad"),
-                String::from("tenant=acme"),
-            ])
+            parse_section_add(
+                &FPE_PROFILES_SECTION,
+                vec![
+                    String::from("--name"),
+                    String::from("patient-id"),
+                    String::from("--kid"),
+                    String::from("bad"),
+                    String::from("--alphabet"),
+                    String::from("0123456789"),
+                    String::from("--min-len"),
+                    String::from("6"),
+                    String::from("--max-len"),
+                    String::from("32"),
+                    String::from("--tweak-aad"),
+                    String::from("tenant=acme"),
+                ]
+            )
             .is_err()
         );
         assert!(
-            parse_fpe_profile_add(vec![
-                String::from("--name"),
-                String::from("patient-id"),
-                String::from("--kid"),
-                "a".repeat(64),
-                String::from("--alphabet"),
-                String::from("001234"),
-                String::from("--min-len"),
-                String::from("6"),
-                String::from("--max-len"),
-                String::from("32"),
-                String::from("--tweak-aad"),
-                String::from("tenant=acme"),
-            ])
+            parse_section_add(
+                &FPE_PROFILES_SECTION,
+                vec![
+                    String::from("--name"),
+                    String::from("patient-id"),
+                    String::from("--kid"),
+                    "a".repeat(64),
+                    String::from("--alphabet"),
+                    String::from("001234"),
+                    String::from("--min-len"),
+                    String::from("6"),
+                    String::from("--max-len"),
+                    String::from("32"),
+                    String::from("--tweak-aad"),
+                    String::from("tenant=acme"),
+                ]
+            )
             .is_err()
         );
-        assert!(
-            parse_fpe_profile_add(vec![
+    }
+
+    #[test]
+    fn fpe_profile_cross_field_rules_stay_in_full_config_validation() {
+        let mut short_local = local_config();
+        let short = parse_section_add(
+            &FPE_PROFILES_SECTION,
+            vec![
                 String::from("--name"),
                 String::from("patient-id"),
                 String::from("--kid"),
@@ -1881,13 +1814,21 @@ mod tests {
                 String::from("32"),
                 String::from("--tweak-aad"),
                 String::from("tenant=acme"),
-            ])
-            .is_err()
+            ],
+        )
+        .expect("field parser only validates field-local values");
+        section_add_value(&mut short_local, &FPE_PROFILES_SECTION, short).unwrap();
+        assert_eq!(
+            validate_local_config(&short_local).unwrap_err().to_string(),
+            "fpe_profiles.min_len must be at least 6"
         );
-        assert!(
-            parse_fpe_profile_add(vec![
+
+        let mut domain_local = local_config();
+        let small_domain = parse_section_add(
+            &FPE_PROFILES_SECTION,
+            vec![
                 String::from("--name"),
-                String::from("patient-id"),
+                String::from("small-domain"),
                 String::from("--kid"),
                 "a".repeat(64),
                 String::from("--alphabet"),
@@ -1898,16 +1839,23 @@ mod tests {
                 String::from("32"),
                 String::from("--tweak-aad"),
                 String::from("tenant=acme"),
-            ])
-            .is_err()
+            ],
+        )
+        .expect("field parser only validates field-local values");
+        section_add_value(&mut domain_local, &FPE_PROFILES_SECTION, small_domain).unwrap();
+        assert_eq!(
+            validate_local_config(&domain_local)
+                .unwrap_err()
+                .to_string(),
+            "fpe profile domain is too small for FF1"
         );
     }
 
     #[test]
     fn fpe_profile_update_uses_full_config_validation_for_domain() {
         let mut local = local_config();
-        fpe_profile_add(
-            &mut local,
+        let value = parse_section_add(
+            &FPE_PROFILES_SECTION,
             vec![
                 String::from("--name"),
                 String::from("binary-id"),
@@ -1924,10 +1872,12 @@ mod tests {
             ],
         )
         .unwrap();
+        section_add_value(&mut local, &FPE_PROFILES_SECTION, value).unwrap();
         validate_local_config(&local).expect("seed profile must validate");
 
-        fpe_profile_update(
+        section_update(
             &mut local,
+            &FPE_PROFILES_SECTION,
             vec![
                 String::from("binary-id"),
                 String::from("--min-len"),

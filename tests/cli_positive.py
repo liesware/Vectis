@@ -38,6 +38,35 @@ def config_init_case(env):
     )
 
 
+def version_case(env):
+    response = run_cli_json(["version"], env)
+    require(isinstance(response["version"], str), "version must include crate version")
+    require(response["protocol_version"] == "v1", "version must include protocol v1")
+    require(
+        "hybrid-performance-v1" in response["crypto_profiles"],
+        "version must include supported crypto profiles",
+    )
+    require(
+        "profile-only" in response["crypto_policies"],
+        "version must include supported crypto policies",
+    )
+    algorithms = response["algorithms"]
+    require("SHA-256" in algorithms["hash"], "version must include supported hashes")
+    require(
+        "AES-256/GCM" in algorithms["symmetric"],
+        "version must include supported symmetric ciphers",
+    )
+    require("Ed448" in algorithms["eddsa"], "version must include supported EdDSA algorithms")
+    require("X448" in algorithms["xecdh"], "version must include supported XECDH algorithms")
+    require("ML-DSA-87" in algorithms["ml_dsa"], "version must include supported ML-DSA variants")
+    require("ML-KEM-1024" in algorithms["ml_kem"], "version must include supported ML-KEM variants")
+    require("fpe-ff1-2025" in algorithms["fpe"], "version must include supported FPE versions")
+    require(
+        "token-random-v1" in algorithms["tokenization"],
+        "version must include supported tokenization versions",
+    )
+
+
 def route_cases(env):
     response = run_cli_json(
         [
@@ -374,6 +403,7 @@ def main():
     with tempfile.TemporaryDirectory() as tmpdir:
         env = isolated_env(tmpdir)
 
+        run_case(counters, "version prints local compatibility info", lambda: version_case(env))
         run_case(counters, "config init creates skeleton", lambda: config_init_case(env))
         run_case(counters, "config routes add/get/update/delete", lambda: route_cases(env))
         run_case(

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import tempfile
 
 from cli_support import (
@@ -14,6 +15,7 @@ from cli_support import (
     run_case,
     run_cli,
     run_cli_json,
+    require,
     require_summary,
     write_config,
 )
@@ -23,6 +25,18 @@ def expect_unchanged_failure(env, args):
     before = config_bytes(env)
     run_cli(args, env, expect_success=False)
     assert_config_unchanged(env, before)
+
+
+def expect_json_error(env, args):
+    result = run_cli([*args, "--output", "json"], env, expect_success=False)
+    require(result.stdout == "", "JSON error command must not write stdout")
+    try:
+        payload = json.loads(result.stderr)
+    except json.JSONDecodeError as err:
+        raise AssertionError(f"stderr must be JSON: {result.stderr}") from err
+    require(isinstance(payload.get("error"), str), "JSON error must include error string")
+    require(payload["error"], "JSON error string must not be empty")
+    return payload
 
 
 def seed_route(env):
@@ -248,6 +262,16 @@ def main():
         def token_profile_list_missing_config():
             run_cli(["config", "token", "list"], env, expect_success=False)
 
+        def config_json_error_goes_to_stderr():
+            payload = expect_json_error(env, ["config", "routes", "add"])
+            require(
+                "VECTIS_CONFIG_PATH" in payload["error"],
+                "JSON error must describe config failure",
+            )
+
+        def apikey_json_error_goes_to_stderr():
+            expect_json_error(env, ["apikey", "create"])
+
         def config_init_existing_file():
             init_config(env)
             before = config_bytes(env)
@@ -387,6 +411,8 @@ def main():
             ),
             ("config fpe list fails when config is missing", fpe_profile_list_missing_config),
             ("config token list fails when config is missing", token_profile_list_missing_config),
+            ("config --output json errors are machine readable", config_json_error_goes_to_stderr),
+            ("apikey --output json errors are machine readable", apikey_json_error_goes_to_stderr),
             (
                 "config remote-routes import-keys is not a command",
                 lambda: run_cli(

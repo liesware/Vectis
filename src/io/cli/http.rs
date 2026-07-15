@@ -1,16 +1,72 @@
 use crate::core::{config, validation};
 use crate::error::DynError;
-use crate::io::cli::{config_editor, init};
+use crate::io::cli::{config_editor, help_catalog, init};
 use crate::ops;
 use reqwest::{Method, Url};
 use serde_json::{Map, Value, json};
 use std::fs;
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::time::Duration;
 
 const DEFAULT_API_URL: &str = "http://127.0.0.1:3000";
 const DEFAULT_TIMEOUT_SECONDS: u64 = 30;
 const PROGRAM_NAME: &str = "vectis";
+
+type CommandFuture = Pin<Box<dyn Future<Output = Result<(), DynError>>>>;
+type CommandHandler = fn(Vec<String>, OutputFormat) -> CommandFuture;
+type ConfigCommandHandler = fn(Vec<String>, OutputFormat) -> CommandFuture;
+
+struct HttpCommand {
+    name: &'static str,
+    handler: CommandHandler,
+}
+
+struct ConfigCommand {
+    name: &'static str,
+    handler: ConfigCommandHandler,
+}
+
+const HTTP_COMMANDS: &[HttpCommand] = &[
+    HttpCommand::new("health", command_health),
+    HttpCommand::new("test", command_test),
+    HttpCommand::new("keys", command_keys),
+    HttpCommand::new("lifecycle", command_lifecycle),
+    HttpCommand::new("routes", command_routes),
+    HttpCommand::new("remote-routes", command_remote_routes),
+    HttpCommand::new("permissions", command_permissions),
+    HttpCommand::new("config", command_config),
+    HttpCommand::new("pub", command_pub),
+    HttpCommand::new("sign", command_sign),
+    HttpCommand::new("fpe", command_fpe),
+    HttpCommand::new("token", command_token),
+    HttpCommand::new("message", command_message),
+];
+
+const CONFIG_COMMANDS: &[ConfigCommand] = &[
+    ConfigCommand::new("init", config_command_init),
+    ConfigCommand::new("sign", config_command_sign),
+    ConfigCommand::new("list", config_command_list),
+    ConfigCommand::new("reload", config_command_reload),
+    ConfigCommand::new("routes", config_command_routes),
+    ConfigCommand::new("remote-routes", config_command_remote_routes),
+    ConfigCommand::new("permissions", config_command_permissions),
+    ConfigCommand::new("fpe", config_command_fpe),
+    ConfigCommand::new("token", config_command_token),
+];
+
+impl HttpCommand {
+    const fn new(name: &'static str, handler: CommandHandler) -> Self {
+        Self { name, handler }
+    }
+}
+
+impl ConfigCommand {
+    const fn new(name: &'static str, handler: ConfigCommandHandler) -> Self {
+        Self { name, handler }
+    }
+}
 
 pub async fn run(command: &str, args: Vec<String>) -> Result<(), DynError> {
     if is_help_request(&args) {
@@ -20,47 +76,156 @@ pub async fn run(command: &str, args: Vec<String>) -> Result<(), DynError> {
 
     let (output, args) = parse_output_option(args)?;
 
-    match command {
-        "health" => run_health(args, output).await,
-        "test" => run_test(args, output).await,
-        "keys" => run_keys(args, output).await,
-        "lifecycle" => run_lifecycle(args, output).await,
-        "routes" => run_routes(args, output).await,
-        "remote-routes" => run_remote_routes(args, output).await,
-        "permissions" => run_permissions(args, output).await,
-        "config" => run_config(args, output).await,
-        "pub" => run_pub(args, output).await,
-        "sign" => run_sign(args, output).await,
-        "fpe" => run_fpe(args, output).await,
-        "token" => run_token(args, output).await,
-        "message" => run_message(args, output).await,
-        _ => Err(invalid_input(format!("unknown command: {command}"))),
-    }
+    let command = find_http_command(command)
+        .ok_or_else(|| invalid_input(format!("unknown command: {command}")))?;
+    (command.handler)(args, output).await
 }
 
 pub fn print_help(command: &str) {
-    match command {
-        "health" => print_health_help(),
-        "test" => print_test_help(),
-        "keys" => print_keys_help(),
-        "lifecycle" => print_lifecycle_help(),
-        "routes" => print_routes_help(),
-        "remote-routes" => print_remote_routes_help(),
-        "permissions" => print_permissions_help(),
-        "config" => print_config_help(),
-        "pub" => print_pub_help(),
-        "sign" => print_sign_help(),
-        "fpe" => print_fpe_help(),
-        "token" => print_token_help(),
-        "message" => print_message_help(),
-        _ => print_http_help(),
-    }
+    print_help_path(&[command]);
+}
+
+pub fn print_help_path(path: &[&str]) {
+    print!("{}", help_catalog::render_help_path(path));
+}
+
+pub fn root_help_command_names() -> &'static [&'static str] {
+    help_catalog::EXECUTABLE_COMMANDS
+}
+
+pub fn http_help_command_names() -> &'static [&'static str] {
+    help_catalog::HTTP_COMMANDS
+}
+
+pub fn has_help_path(path: &[&str]) -> bool {
+    help_catalog::command_help_path(path).is_some()
 }
 
 #[derive(Clone, Copy)]
 pub(super) enum OutputFormat {
     Json,
     Yaml,
+}
+
+fn find_http_command(name: &str) -> Option<&'static HttpCommand> {
+    debug_assert_eq!(
+        HTTP_COMMANDS.len(),
+        help_catalog::HTTP_COMMANDS.len(),
+        "HTTP dispatch table and help catalog command counts must match"
+    );
+    HTTP_COMMANDS.iter().find(|command| command.name == name)
+}
+
+fn find_config_command(name: &str) -> Option<&'static ConfigCommand> {
+    debug_assert_eq!(
+        CONFIG_COMMANDS.len(),
+        help_catalog::CONFIG_COMMANDS.len(),
+        "config dispatch table and help catalog command counts must match"
+    );
+    CONFIG_COMMANDS.iter().find(|command| command.name == name)
+}
+
+fn command_health(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+    Box::pin(run_health(args, output))
+}
+
+fn command_test(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+    Box::pin(run_test(args, output))
+}
+
+fn command_keys(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+    Box::pin(run_keys(args, output))
+}
+
+fn command_lifecycle(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+    Box::pin(run_lifecycle(args, output))
+}
+
+fn command_routes(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+    Box::pin(run_routes(args, output))
+}
+
+fn command_remote_routes(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+    Box::pin(run_remote_routes(args, output))
+}
+
+fn command_permissions(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+    Box::pin(run_permissions(args, output))
+}
+
+fn command_config(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+    Box::pin(run_config(args, output))
+}
+
+fn command_pub(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+    Box::pin(run_pub(args, output))
+}
+
+fn command_sign(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+    Box::pin(run_sign(args, output))
+}
+
+fn command_fpe(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+    Box::pin(run_fpe(args, output))
+}
+
+fn command_token(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+    Box::pin(run_token(args, output))
+}
+
+fn command_message(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+    Box::pin(run_message(args, output))
+}
+
+fn config_command_init(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+    Box::pin(async move {
+        expect_no_args(&args, "config init")?;
+        config_editor::init_config(output)
+    })
+}
+
+fn config_command_sign(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+    Box::pin(async move {
+        expect_no_args(&args, "config sign")?;
+        run_config_sign(output)
+    })
+}
+
+fn config_command_list(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+    Box::pin(async move {
+        expect_no_args(&args, "config list")?;
+        run_config_list(output)
+    })
+}
+
+fn config_command_reload(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+    Box::pin(async move {
+        expect_no_args(&args, "config reload")?;
+        let client = CliHttpClient::from_env()?;
+        client
+            .send(Method::POST, "/config/reload", true, None, output)
+            .await
+    })
+}
+
+fn config_command_routes(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+    Box::pin(config_editor::run_routes(args, output))
+}
+
+fn config_command_remote_routes(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+    Box::pin(config_editor::run_remote_routes(args, output))
+}
+
+fn config_command_permissions(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+    Box::pin(config_editor::run_permissions(args, output))
+}
+
+fn config_command_fpe(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+    Box::pin(config_editor::run_config_fpe(args, output))
+}
+
+fn config_command_token(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+    Box::pin(config_editor::run_config_token(args, output))
 }
 
 async fn run_health(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
@@ -194,35 +359,14 @@ async fn run_permissions(args: Vec<String>, output: OutputFormat) -> Result<(), 
 
 async fn run_config(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "config command")?;
-    match subcommand.as_str() {
-        "init" => {
-            expect_no_args(&rest, "config init")?;
-            config_editor::init_config(output)
-        }
-        "sign" => {
-            expect_no_args(&rest, "config sign")?;
-            run_config_sign(output)
-        }
-        "list" => {
-            expect_no_args(&rest, "config list")?;
-            run_config_list(output)
-        }
-        "reload" => {
-            expect_no_args(&rest, "config reload")?;
-            let client = CliHttpClient::from_env()?;
-            client
-                .send(Method::POST, "/config/reload", true, None, output)
-                .await
-        }
-        "routes" => config_editor::run_routes(rest, output).await,
-        "remote-routes" => config_editor::run_remote_routes(rest, output).await,
-        "permissions" => config_editor::run_permissions(rest, output).await,
-        "fpe" => config_editor::run_config_fpe(rest, output).await,
-        "token" => config_editor::run_config_token(rest, output).await,
-        _ => Err(invalid_input(format!(
-            "unknown config command: {subcommand}"
-        ))),
+    if is_help_request(&rest) {
+        print!("{}", help_catalog::render_config_section_help(&subcommand));
+        return Ok(());
     }
+
+    let command = find_config_command(&subcommand)
+        .ok_or_else(|| invalid_input(format!("unknown config command: {subcommand}")))?;
+    (command.handler)(rest, output).await
 }
 
 fn run_config_sign(output: OutputFormat) -> Result<(), DynError> {
@@ -767,426 +911,101 @@ fn is_help_request(args: &[String]) -> bool {
     )
 }
 
-fn print_http_help() {
-    println!("HTTP client commands:");
-    println!("  {PROGRAM_NAME} health <startup|live|ready> [--output <yaml|json>]");
-    println!("  {PROGRAM_NAME} test init");
-    println!("  {PROGRAM_NAME} test <kid>");
-    println!("  {PROGRAM_NAME} keys create [--tag <tag>] [--profile <profile>]");
-    println!("  {PROGRAM_NAME} keys list");
-    println!("  {PROGRAM_NAME} keys properties [kid]");
-    println!("  {PROGRAM_NAME} keys reload");
-    println!("  {PROGRAM_NAME} lifecycle <kid> --status <status> --reason <reason>");
-    println!("  {PROGRAM_NAME} routes list");
-    println!("  {PROGRAM_NAME} remote-routes list");
-    println!("  {PROGRAM_NAME} permissions list");
-    println!("  {PROGRAM_NAME} config sign");
-    println!("  {PROGRAM_NAME} config list");
-    println!("  {PROGRAM_NAME} config reload");
-    println!("  {PROGRAM_NAME} config routes <list|add|get|update|delete>");
-    println!("  {PROGRAM_NAME} config remote-routes <list|add|get|update|delete>");
-    println!("  {PROGRAM_NAME} config permissions <list|add|get|update|delete|grant|revoke>");
-    println!("  {PROGRAM_NAME} config fpe <list|add|get|update|delete>");
-    println!("  {PROGRAM_NAME} config token <list|add|get|update|delete>");
-    println!("  {PROGRAM_NAME} pub <kid>");
-    println!("  {PROGRAM_NAME} sign <kid> (--json <json>|--file <path>)");
-    println!("  {PROGRAM_NAME} sign verify (--json <json>|--file <path>)");
-    println!("  {PROGRAM_NAME} fpe encrypt <kid> (--json <json>|--file <path>)");
-    println!("  {PROGRAM_NAME} fpe decrypt (--json <json>|--file <path>)");
-    println!("  {PROGRAM_NAME} token encode <kid> (--json <json>|--file <path>)");
-    println!("  {PROGRAM_NAME} token decode (--json <json>|--file <path>)");
-    println!("  {PROGRAM_NAME} message send <sender_kid> (--json <json>|--file <path>)");
-    println!("  {PROGRAM_NAME} message receive (--json <json>|--file <path>)");
-    println!("  {PROGRAM_NAME} message decrypt (--json <json>|--file <path>)");
-    println!("  {PROGRAM_NAME} message internal encrypt <kid> (--json <json>|--file <path>)");
-    println!("  {PROGRAM_NAME} message internal decrypt (--json <json>|--file <path>)");
-    println!();
-    println!("Output:");
-    println!("  --output yaml         YAML output, default");
-    println!("  --output json         Pretty JSON output");
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
 
-fn print_health_help() {
-    println!("Usage:");
-    println!("  {PROGRAM_NAME} health startup");
-    println!("  {PROGRAM_NAME} health live");
-    println!("  {PROGRAM_NAME} health ready");
-    println!();
-    println!("Calls public health probe endpoints.");
-    println!();
-    println!("Endpoints:");
-    println!("  startup               GET /healthz/startup");
-    println!("  live                  GET /healthz/live");
-    println!("  ready                 GET /healthz/ready");
-    println!();
-    println!("Environment:");
-    println!("  VECTIS_API_URL        API base URL, default {DEFAULT_API_URL}");
-    println!("  VECTIS_TIMEOUT_SECONDS Request timeout, default {DEFAULT_TIMEOUT_SECONDS}");
-    print_output_help();
-}
+    fn dispatch_names() -> Vec<&'static str> {
+        HTTP_COMMANDS.iter().map(|command| command.name).collect()
+    }
 
-fn print_test_help() {
-    println!("Usage:");
-    println!("  {PROGRAM_NAME} test init");
-    println!("  {PROGRAM_NAME} test <kid>");
-    println!();
-    println!("Calls protected key validation endpoints.");
-    println!();
-    println!("Arguments:");
-    println!("  kid                   64-character hex key id");
-    println!();
-    println!("Endpoints:");
-    println!("  init                  GET /self-test/init");
-    println!("  <kid>                 GET /self-test/keys/{{kid}}");
-    println!();
-    println!("Required environment:");
-    println!("  VECTIS_APIKEY         64-character hex API key");
-    print_output_help();
-}
+    fn config_dispatch_names() -> Vec<&'static str> {
+        CONFIG_COMMANDS.iter().map(|command| command.name).collect()
+    }
 
-fn print_keys_help() {
-    println!("Usage:");
-    println!("  {PROGRAM_NAME} keys create [--tag <tag>] [--profile <profile>]");
-    println!("  {PROGRAM_NAME} keys list");
-    println!("  {PROGRAM_NAME} keys properties");
-    println!("  {PROGRAM_NAME} keys properties <kid>");
-    println!("  {PROGRAM_NAME} keys reload");
-    println!();
-    println!("Creates, lists, or reloads operational keys through the HTTP API.");
-    println!();
-    println!("Commands:");
-    println!("  create                POST /keys, requires VECTIS_APIKEY");
-    println!("  list                  GET /keys, public");
-    println!("  properties            GET /keys/properties, requires VECTIS_APIKEY");
-    println!("  properties <kid>      GET /keys/properties/{{kid}}, requires VECTIS_APIKEY");
-    println!("  reload                POST /keys/reload, requires VECTIS_APIKEY");
-    println!();
-    println!("Create options:");
-    println!("  --tag <tag>           Optional label for the key");
-    println!("  --profile <profile>   Optional crypto profile");
-    println!();
-    println!("Profiles:");
-    println!("  hybrid-performance-v1");
-    println!("  hybrid-high-assurance-v1");
-    println!("  hybrid-long-term-v1");
-    println!();
-    println!("Examples:");
-    println!("  {PROGRAM_NAME} keys create --tag payments --profile hybrid-high-assurance-v1");
-    println!("  {PROGRAM_NAME} keys list");
-    println!("  {PROGRAM_NAME} keys properties");
-    println!("  {PROGRAM_NAME} keys properties <kid>");
-    println!("  {PROGRAM_NAME} keys reload");
-    print_output_help();
-}
+    #[test]
+    fn http_dispatch_table_has_no_duplicate_names() {
+        let mut seen = HashSet::new();
+        for name in dispatch_names() {
+            assert!(seen.insert(name), "duplicate HTTP command dispatch: {name}");
+        }
+    }
 
-fn print_lifecycle_help() {
-    println!("Usage:");
-    println!("  {PROGRAM_NAME} lifecycle <kid> --status <status> --reason <reason>");
-    println!();
-    println!("Updates encrypted lifecycle metadata for an operational key.");
-    println!();
-    println!("Arguments:");
-    println!("  kid                   64-character hex key id");
-    println!();
-    println!("Options:");
-    println!("  --status <status>     active, disabled, retired, compromised, or destroyed");
-    println!("  --reason <reason>     Non-empty reason for the lifecycle change");
-    println!();
-    println!("Endpoint:");
-    println!("  POST /lifecycle/{{kid}}, requires VECTIS_APIKEY");
-    println!();
-    println!("Examples:");
-    println!("  {PROGRAM_NAME} lifecycle <kid> --status disabled --reason maintenance");
-    println!("  {PROGRAM_NAME} lifecycle <kid> --status active --reason restored");
-    print_output_help();
-}
+    #[test]
+    fn http_dispatch_table_matches_help_catalog() {
+        let dispatch = dispatch_names();
 
-fn print_routes_help() {
-    println!("Usage:");
-    println!("  {PROGRAM_NAME} routes list");
-    println!();
-    println!("Lists final app routes currently loaded in memory.");
-    println!();
-    println!("Commands:");
-    println!("  list                  GET /routes, requires VECTIS_APIKEY");
-    println!();
-    println!("Behavior:");
-    println!("  list                  Returns routes currently loaded in memory");
-    println!();
-    println!("Notes:");
-    println!("  Use `{PROGRAM_NAME} config reload` to reload the unified signed config.");
-    print_output_help();
-}
+        for name in help_catalog::HTTP_COMMANDS {
+            assert!(
+                dispatch.contains(name),
+                "{name} is listed in HTTP help catalog but missing from dispatch"
+            );
+        }
 
-fn print_remote_routes_help() {
-    println!("Usage:");
-    println!("  {PROGRAM_NAME} remote-routes list");
-    println!();
-    println!("Lists authorized remote Vectis routes currently loaded in memory.");
-    println!();
-    println!("Commands:");
-    println!("  list                  GET /remote-routes, requires VECTIS_APIKEY");
-    println!();
-    println!("Behavior:");
-    println!("  list                  Returns remote routes currently loaded in memory");
-    println!();
-    println!("Notes:");
-    println!("  Use `{PROGRAM_NAME} config reload` to reload the unified signed config.");
-    print_output_help();
-}
+        for name in dispatch {
+            assert!(
+                help_catalog::HTTP_COMMANDS.contains(&name),
+                "{name} is dispatched but missing from HTTP help catalog"
+            );
+        }
+    }
 
-fn print_permissions_help() {
-    println!("Usage:");
-    println!("  {PROGRAM_NAME} permissions list");
-    println!();
-    println!("Lists effective API key permissions currently loaded in memory.");
-    println!();
-    println!("Commands:");
-    println!("  list                  GET /permissions, requires admin VECTIS_APIKEY");
-    println!();
-    println!("Behavior:");
-    println!("  list                  Returns active permission clients without apikey_hash");
-    println!();
-    println!("Notes:");
-    println!("  Use `{PROGRAM_NAME} config reload` to reload the unified signed config.");
-    print_output_help();
-}
+    #[test]
+    fn key_catalog_commands_are_dispatched() {
+        for name in ["config", "fpe", "token"] {
+            assert!(
+                find_http_command(name).is_some(),
+                "{name} must remain in HTTP dispatch"
+            );
+            assert!(
+                help_catalog::HTTP_COMMANDS.contains(&name),
+                "{name} must remain in HTTP help catalog"
+            );
+        }
+    }
 
-fn print_config_help() {
-    println!("Usage:");
-    println!("  {PROGRAM_NAME} config init");
-    println!("  {PROGRAM_NAME} config sign");
-    println!("  {PROGRAM_NAME} config list");
-    println!("  {PROGRAM_NAME} config reload");
-    println!("  {PROGRAM_NAME} config routes list");
-    println!(
-        "  {PROGRAM_NAME} config routes add --name <name> --kid <kid> --final-app-addr <host:port> --final-app-path <path>"
-    );
-    println!("  {PROGRAM_NAME} config routes get <name>");
-    println!(
-        "  {PROGRAM_NAME} config routes update <name> [--kid <kid>] [--final-app-addr <host:port>] [--final-app-path <path>]"
-    );
-    println!("  {PROGRAM_NAME} config routes delete <name>");
-    println!("  {PROGRAM_NAME} config remote-routes list");
-    println!(
-        "  {PROGRAM_NAME} config remote-routes add --name <name> --remote-kid <kid> --remote-addr <host:port> --allowed-local-kid <kid|*> [--status active|disabled]"
-    );
-    println!("  {PROGRAM_NAME} config remote-routes get <name>");
-    println!(
-        "  {PROGRAM_NAME} config remote-routes update <name> [--remote-kid <kid>] [--remote-addr <host:port>] [--allowed-local-kid <kid|*>...] [--status active|disabled]"
-    );
-    println!("  {PROGRAM_NAME} config remote-routes delete <name>");
-    println!("  {PROGRAM_NAME} config permissions list");
-    println!(
-        "  {PROGRAM_NAME} config permissions add --client <client> --apikey-hash <hex> [--status active|disabled|revoked]"
-    );
-    println!("  {PROGRAM_NAME} config permissions get <client>");
-    println!(
-        "  {PROGRAM_NAME} config permissions update <client> [--apikey-hash <hex>] [--status active|disabled|revoked]"
-    );
-    println!("  {PROGRAM_NAME} config permissions delete <client>");
-    println!("  {PROGRAM_NAME} config permissions grant <client> --kid <kid|*> --action <action>");
-    println!("  {PROGRAM_NAME} config permissions revoke <client> --kid <kid|*> --action <action>");
-    println!("  {PROGRAM_NAME} config fpe list");
-    println!(
-        "  {PROGRAM_NAME} config fpe add --name <name> --kid <kid> --alphabet <chars> --min-len <n> --max-len <n> --tweak-aad <aad> [--fpe-version fpe-ff1-2025]"
-    );
-    println!("  {PROGRAM_NAME} config fpe get <name>");
-    println!(
-        "  {PROGRAM_NAME} config fpe update <name> [--kid <kid>] [--alphabet <chars>] [--min-len <n>] [--max-len <n>] [--tweak-aad <aad>] [--fpe-version fpe-ff1-2025]"
-    );
-    println!("  {PROGRAM_NAME} config fpe delete <name>");
-    println!("  {PROGRAM_NAME} config token list");
-    println!(
-        "  {PROGRAM_NAME} config token add --name <name> --kid <kid> --token-prefix <prefix> --token-len <n> --max-plaintext-len <n> [--tokenization-version token-random-v1]"
-    );
-    println!("  {PROGRAM_NAME} config token get <name>");
-    println!(
-        "  {PROGRAM_NAME} config token update <name> [--kid <kid>] [--token-prefix <prefix>] [--token-len <n>] [--max-plaintext-len <n>] [--tokenization-version token-random-v1]"
-    );
-    println!("  {PROGRAM_NAME} config token delete <name>");
-    println!();
-    println!("Signs, prints, reloads, or edits the unified signed config file.");
-    println!();
-    println!("Commands:");
-    println!("  init                  Creates an empty VECTIS_CONFIG_PATH skeleton (local)");
-    println!("  sign                  Signs VECTIS_CONFIG_PATH with init keys (local)");
-    println!("  list                  Prints VECTIS_CONFIG_PATH (local)");
-    println!("  reload                POST /config/reload, requires admin VECTIS_APIKEY");
-    println!("  routes                Edits local config routes by unique name");
-    println!("  remote-routes         Edits local config remote_routes by unique name");
-    println!("  permissions           Edits local config permissions by unique client");
-    println!("  fpe                   Edits local config FPE profiles by unique name");
-    println!("  token                 Edits local config tokenization profiles by unique name");
-    println!();
-    println!("Behavior:");
-    println!("  edit commands modify VECTIS_CONFIG_PATH only");
-    println!("  remote-routes add fetches public keys from remote /pub/{{kid}}");
-    println!("  remote-routes update re-fetches keys when remote_kid or remote_addr changes");
-    println!("  quote \"*\" for wildcard KIDs so the shell does not expand it");
-    println!("  permissions add/update manages clients and apikey_hash");
-    println!("  permissions grant/revoke only manages kid/action grants");
-    println!("  section list commands print one local config array only");
-    println!("  config fpe edits signed FPE field profiles; min_len must be at least 6");
-    println!("  config token edits signed reversible tokenization profiles");
-    println!("  edit commands do not sign or reload automatically");
-    println!();
-    println!("Environment:");
-    println!("  VECTIS_CONFIG_PATH      Config JSON path, default config.json");
-    println!("  VECTIS_CONFIG_SIGN_PATH Signature JSON path, default config_sign.json");
-    println!();
-    println!("Examples:");
-    println!("  {PROGRAM_NAME} config init");
-    println!("  {PROGRAM_NAME} config sign");
-    println!("  {PROGRAM_NAME} config reload");
-    println!("  {PROGRAM_NAME} config routes list");
-    println!(
-        "  {PROGRAM_NAME} config routes add --name app-a --kid <kid> --final-app-addr 127.0.0.1:3999 --final-app-path /message"
-    );
-    println!(
-        "  {PROGRAM_NAME} config remote-routes add --name clinic-b --remote-kid <kid> --remote-addr vectis-b.example.com:443 --allowed-local-kid \"*\" --status active"
-    );
-    println!(
-        "  {PROGRAM_NAME} config permissions add --client \"Acme App\" --apikey-hash <hex> --status active"
-    );
-    println!("  {PROGRAM_NAME} config permissions grant \"Acme App\" --kid \"*\" --action admin");
-    println!("  {PROGRAM_NAME} config permissions grant \"Acme App\" --kid <kid> --action message");
-    println!(
-        "  {PROGRAM_NAME} config fpe add --name patient-id-decimal-v1 --kid <kid> --alphabet 0123456789 --min-len 6 --max-len 32 --tweak-aad tenant=acme\\;field=patient_id\\;version=1"
-    );
-    println!(
-        "  {PROGRAM_NAME} config token add --name patient-id-token-v1 --kid <kid> --token-prefix tok_patient --token-len 32 --max-plaintext-len 1024"
-    );
-    print_output_help();
-}
+    #[test]
+    fn config_dispatch_table_has_no_duplicate_names() {
+        let mut seen = HashSet::new();
+        for name in config_dispatch_names() {
+            assert!(
+                seen.insert(name),
+                "duplicate config command dispatch: {name}"
+            );
+        }
+    }
 
-fn print_pub_help() {
-    println!("Usage:");
-    println!("  {PROGRAM_NAME} pub <kid>");
-    println!();
-    println!("Fetches public key material for a local operational key.");
-    println!();
-    println!("Arguments:");
-    println!("  kid                   64-character hex key id");
-    println!();
-    println!("Endpoint:");
-    println!("  GET /pub/{{kid}}");
-    print_output_help();
-}
+    #[test]
+    fn config_dispatch_table_matches_help_catalog() {
+        let dispatch = config_dispatch_names();
 
-fn print_sign_help() {
-    println!("Usage:");
-    println!("  {PROGRAM_NAME} sign <kid> --json '<json>'");
-    println!("  {PROGRAM_NAME} sign <kid> --file sign-request.json");
-    println!("  {PROGRAM_NAME} sign verify --json '<json>'");
-    println!("  {PROGRAM_NAME} sign verify --file token.json");
-    println!();
-    println!("Creates or verifies hybrid timestamp signatures.");
-    println!();
-    println!("Sign request JSON:");
-    println!(r#"  {{"message_hash":{{"alg":"SHA-256","hex":"<64 hex chars>"}}}}"#);
-    println!();
-    println!("Endpoints:");
-    println!("  sign <kid>            POST /sign/{{kid}}, requires VECTIS_APIKEY");
-    println!("  sign verify           POST /sign/verification, public");
-    println!();
-    println!("Input options:");
-    println!("  --json <json>         JSON object as a shell argument");
-    println!("  --file <path>         Path to a JSON file");
-    print_output_help();
-}
+        for name in help_catalog::CONFIG_COMMANDS {
+            assert!(
+                dispatch.contains(name),
+                "{name} is listed in config help catalog but missing from dispatch"
+            );
+        }
 
-fn print_fpe_help() {
-    println!("Usage:");
-    println!("  {PROGRAM_NAME} fpe encrypt <kid> --json '<json>'");
-    println!("  {PROGRAM_NAME} fpe encrypt <kid> --file fpe-encrypt.json");
-    println!("  {PROGRAM_NAME} fpe decrypt --json '<json>'");
-    println!("  {PROGRAM_NAME} fpe decrypt --file fpe-decrypt.json");
-    println!();
-    println!("Encrypts or decrypts field values with signed-config FPE profiles.");
-    println!();
-    println!("Encrypt request JSON:");
-    println!(r#"  {{"profile":"patient-id-decimal-v1","plaintext":"123456"}}"#);
-    println!();
-    println!("Decrypt request JSON:");
-    println!(r#"  {{"kid":"<kid>","profile":"patient-id-decimal-v1","ciphertext":"<value>"}}"#);
-    println!();
-    println!("Endpoints:");
-    println!("  encrypt <kid>         POST /fpe/encrypt/{{kid}}, requires VECTIS_APIKEY");
-    println!("  decrypt               POST /fpe/decrypt, requires VECTIS_APIKEY");
-    println!();
-    println!("Input options:");
-    println!("  --json <json>         JSON object as a shell argument");
-    println!("  --file <path>         Path to a JSON file");
-    print_output_help();
-}
+        for name in dispatch {
+            assert!(
+                help_catalog::CONFIG_COMMANDS.contains(&name),
+                "{name} is dispatched but missing from config help catalog"
+            );
+        }
+    }
 
-fn print_token_help() {
-    println!("Usage:");
-    println!("  {PROGRAM_NAME} token encode <kid> --json '<json>'");
-    println!("  {PROGRAM_NAME} token encode <kid> --file token-encode.json");
-    println!("  {PROGRAM_NAME} token decode --json '<json>'");
-    println!("  {PROGRAM_NAME} token decode --file token-decode.json");
-    println!();
-    println!(
-        "Encodes or decodes reversible random tokens with signed-config tokenization profiles."
-    );
-    println!();
-    println!("Encode request JSON:");
-    println!(r#"  {{"profile":"patient-id-token-v1","plaintext":"123456","metadata":{{}}}}"#);
-    println!();
-    println!("Decode request JSON:");
-    println!(r#"  {{"kid":"<kid>","profile":"patient-id-token-v1","token":"tok_patient_..."}}"#);
-    println!();
-    println!("Endpoints:");
-    println!("  encode <kid>          POST /token/encode/{{kid}}, requires VECTIS_APIKEY");
-    println!("  decode                POST /token/decode, requires VECTIS_APIKEY");
-    println!();
-    println!("Input options:");
-    println!("  --json <json>         JSON object as a shell argument");
-    println!("  --file <path>         Path to a JSON file");
-    print_output_help();
-}
-
-fn print_message_help() {
-    println!("Usage:");
-    println!("  {PROGRAM_NAME} message send <sender_kid> --json '<json>'");
-    println!("  {PROGRAM_NAME} message send <sender_kid> --file send-message.json");
-    println!("  {PROGRAM_NAME} message receive --json '<json>'");
-    println!("  {PROGRAM_NAME} message receive --file envelope.json");
-    println!("  {PROGRAM_NAME} message decrypt --json '<json>'");
-    println!("  {PROGRAM_NAME} message decrypt --file encrypted-message.json");
-    println!("  {PROGRAM_NAME} message internal encrypt <kid> --json '<json>'");
-    println!("  {PROGRAM_NAME} message internal encrypt <kid> --file plaintext.json");
-    println!("  {PROGRAM_NAME} message internal decrypt --json '<json>'");
-    println!("  {PROGRAM_NAME} message internal decrypt --file internal-message.json");
-    println!();
-    println!(
-        "Sends protected messages, receives envelopes, and encrypts/decrypts internal messages."
-    );
-    println!();
-    println!("Common JSON examples:");
-    println!(r#"  send:              {{"recipient_kid":"<kid>","message":"hello vectis"}}"#);
-    println!(r#"  internal encrypt:  {{"plaintext":"hello vectis"}}"#);
-    println!();
-    println!("Endpoints:");
-    println!("  send                  POST /message/{{sender_kid}}, requires VECTIS_APIKEY");
-    println!("  receive               POST /message, public");
-    println!("  decrypt               POST /message/decrypt, requires VECTIS_APIKEY");
-    println!(
-        "  internal encrypt      POST /message/internal/encrypt/{{kid}}, requires VECTIS_APIKEY"
-    );
-    println!("  internal decrypt      POST /message/internal/decrypt, requires VECTIS_APIKEY");
-    println!();
-    println!("Input options:");
-    println!("  --json <json>         JSON object as a shell argument");
-    println!("  --file <path>         Path to a JSON file");
-    print_output_help();
-}
-
-fn print_output_help() {
-    println!();
-    println!("Output:");
-    println!("  --output yaml         YAML output, default");
-    println!("  --output json         Pretty JSON output");
+    #[test]
+    fn key_config_catalog_commands_are_dispatched() {
+        for name in ["routes", "remote-routes", "permissions", "fpe", "token"] {
+            assert!(
+                find_config_command(name).is_some(),
+                "{name} must remain in config dispatch"
+            );
+            assert!(
+                help_catalog::CONFIG_COMMANDS.contains(&name),
+                "{name} must remain in config help catalog"
+            );
+        }
+    }
 }
