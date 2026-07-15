@@ -50,6 +50,11 @@ def version_case(env):
         "profile-only" in response["crypto_policies"],
         "version must include supported crypto policies",
     )
+    primitives = response["internal_primitives"]
+    require(primitives["hash"] == "BLAKE2b(256)", "version must include internal hash")
+    require(primitives["hkdf"] == "HKDF(BLAKE2b(256))", "version must include internal HKDF")
+    require(primitives["hmac"] == "HMAC(BLAKE2b(256))", "version must include internal HMAC")
+    require(primitives["cipher"] == "AES-256/GCM", "version must include internal cipher")
     algorithms = response["algorithms"]
     require("SHA-256" in algorithms["hash"], "version must include supported hashes")
     require(

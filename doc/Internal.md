@@ -84,7 +84,7 @@ the same logical storage contract.
 3. Validate the encrypted init key file path and file permissions.
 4. Resolve the unseal key from environment, unseal key file, or hidden prompt.
 5. Decrypt and validate init key material.
-6. Derive internal keys with HKDF-SHA256.
+6. Derive internal keys with `INTERNAL_KEYS_HKDF`.
 7. Initialize logging, audit logging, and metrics.
 8. Initialize the configured storage backend.
 9. Load operational keys from storage into local memory.
@@ -264,7 +264,7 @@ config:
 - `fpe_version`;
 - bound local `kid`.
 
-The FPE key is derived from the loaded key's symmetric key with HKDF-SHA256,
+The FPE key is derived from the loaded key's symmetric key with `INTERNAL_KEYS_HKDF`,
 using the profile name, KID, and FPE version as AAD-style info. Encrypt requires
 an `active` key. Decrypt allows `active` and `retired`. FPE preserves format but
 does not authenticate data and is not part of the remote message protocol.

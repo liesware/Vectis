@@ -144,7 +144,7 @@ fn hybrid_kem_and_symmetric_encryption_compose() {
         let cipher = crypto::symmetric_cipher(keys.symmetric().variant()).expect(case.name);
         let hkdf_salt = crypto::random_bytes(32).expect(case.name);
         let hkdf_info = format!("crypto-integration:{}", case.name);
-        let message_key = crypto::hkdf_sha256(
+        let message_key = crypto::create_hkdf(
             &hybrid_secret,
             &hkdf_salt,
             hkdf_info.as_bytes(),

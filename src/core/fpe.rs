@@ -357,7 +357,7 @@ pub(crate) fn derive_fpe_key_for_profile(
         ("kid", kid),
         ("fpe_version", fpe_version),
     ]);
-    let fpe_key = crate::core::crypto::hkdf_sha256(
+    let fpe_key = crate::core::crypto::create_hkdf(
         &ops_symmetric_key,
         FPE_KEY_SALT,
         info.as_bytes(),

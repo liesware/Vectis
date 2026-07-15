@@ -308,13 +308,13 @@ pub(crate) fn derive_tokenization_keys(
         kid,
         tokenization_version,
     );
-    let hash_key = crypto::hkdf_sha256(
+    let hash_key = crypto::create_hkdf(
         &ops_symmetric_key,
         TOKENIZATION_HKDF_SALT,
         hash_info.as_bytes(),
         TOKEN_KEY_SIZE_BYTES,
     )?;
-    let data_key = crypto::hkdf_sha256(
+    let data_key = crypto::create_hkdf(
         &ops_symmetric_key,
         TOKENIZATION_HKDF_SALT,
         data_info.as_bytes(),
@@ -360,7 +360,7 @@ pub fn hash_token(profile: &TokenizationProfile, token: &str) -> Result<String, 
         ));
     }
     let message = validation::build_aad(&[("profile", profile.name()), ("token", token)]);
-    Ok(hex::encode(crypto::hmac_sha256(
+    Ok(hex::encode(crypto::create_hmac(
         profile.hash_key(),
         message.as_bytes(),
     )?))

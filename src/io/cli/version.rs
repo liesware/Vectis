@@ -24,6 +24,12 @@ pub fn version_payload() -> Value {
     json!({
         "version": env!("CARGO_PKG_VERSION"),
         "protocol_version": protocol::PROTOCOL_VERSION_V1,
+        "internal_primitives": {
+            "cipher": config::INTERNAL_KEYS_CIPHER,
+            "hash": config::INTERNAL_KEYS_HASH,
+            "hkdf": config::INTERNAL_KEYS_HKDF,
+            "hmac": config::INTERNAL_KEYS_HMAC,
+        },
         "crypto_profiles": config::CRYPTO_PROFILES,
         "crypto_policies": config::CRYPTO_POLICIES,
         "algorithms": {
@@ -88,6 +94,14 @@ mod tests {
         let payload = version_payload();
         assert_eq!(payload["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(payload["protocol_version"], protocol::PROTOCOL_VERSION_V1);
+        assert_eq!(
+            payload["internal_primitives"]["hkdf"],
+            config::INTERNAL_KEYS_HKDF
+        );
+        assert_eq!(
+            payload["internal_primitives"]["hmac"],
+            config::INTERNAL_KEYS_HMAC
+        );
     }
 
     #[test]

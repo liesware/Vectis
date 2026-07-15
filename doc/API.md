@@ -1020,7 +1020,7 @@ FPE profiles live in `config.json` under `fpe_profiles`. Requests cannot provide
 The FPE key is derived from the operational key's symmetric key:
 
 ```text
-HKDF-SHA256(
+INTERNAL_KEYS_HKDF(
   input_key_material = ops_symmetric_key,
   salt = "vectis:fpe:ff1:v1",
   info = "profile=<profile_name>;kid=<kid>;fpe_version=<fpe_version>",
@@ -1081,7 +1081,7 @@ Tokenization is a local reversible random-token operation. It returns a visible 
 
 Tokenization profiles live in `config.json` under `tokenization_profiles`. Requests cannot provide `token_prefix`, `token_len`, `max_plaintext_len`, or `tokenization_version`; those values come only from signed config.
 
-`hash_key` and `data_key` are derived from the operational key's symmetric key with HKDF-SHA256 and are prepared when config is loaded. The derivation binds the profile name, KID, and `tokenization_version`. `tokens.data` AAD also binds `tokenization_version`. Tokens are random and are not deterministic for the same plaintext.
+`hash_key` and `data_key` are derived from the operational key's symmetric key with `INTERNAL_KEYS_HKDF` and are prepared when config is loaded. The derivation binds the profile name, KID, and `tokenization_version`. `tokens.data` AAD also binds `tokenization_version`. Tokens are random and are not deterministic for the same plaintext.
 
 Encode `metadata` is optional, must be a JSON object when present, and its compact serialized JSON representation must be at most 128 characters.
 
@@ -1342,6 +1342,8 @@ Main variables:
 Internal defaults for `init` key material:
 
 - `INTERNAL_KEYS_HASH`: `BLAKE2b(256)`
+- `INTERNAL_KEYS_HKDF`: `HKDF(BLAKE2b(256))`
+- `INTERNAL_KEYS_HMAC`: `HMAC(BLAKE2b(256))`
 - `INTERNAL_KEYS_EDDSA_ALGORITHM`: `Ed25519`
 - `INTERNAL_KEYS_XECDH_ALGORITHM`: `X25519`
 - `INTERNAL_KEYS_ML_DSA_VARIANT`: `ML-DSA-44`

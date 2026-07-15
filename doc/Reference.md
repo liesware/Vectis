@@ -254,7 +254,7 @@ derived.
 
 ### Internal Derived Keys
 
-`ops/internal_keys.rs` derives separate internal keys using HKDF-SHA256:
+`ops/internal_keys.rs` derives separate internal keys using `INTERNAL_KEYS_HKDF`:
 
 - `db_key`: encrypts and decrypts `opskeys.keys`;
 - `properties_key`: encrypts and decrypts `opskeys.properties`;
@@ -951,8 +951,8 @@ Use these helpers everywhere external data enters the system.
 Implement reusable functions only:
 
 - hash;
-- HKDF-SHA256;
-- HMAC-SHA256;
+- `INTERNAL_KEYS_HKDF`;
+- `INTERNAL_KEYS_HMAC`;
 - symmetric encryption/decryption;
 - EdDSA key creation/sign/verify/public/private DER export;
 - XECDH key creation/shared secret;
@@ -975,7 +975,7 @@ Rules:
 
 ### 6. Implement Internal Key Derivation
 
-Use HKDF-SHA256 from the init symmetric key to derive:
+Use `INTERNAL_KEYS_HKDF` from the init symmetric key to derive:
 
 - database encryption key;
 - properties encryption key;

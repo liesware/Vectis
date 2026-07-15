@@ -1312,7 +1312,7 @@ fn derive_message_key(
     input_key_material.extend_from_slice(ml_kem_shared_key);
     let info = [b"Vectis protected-message v1:".as_slice(), aad].concat();
 
-    Ok(Zeroizing::new(crypto::hkdf_sha256(
+    Ok(Zeroizing::new(crypto::create_hkdf(
         &input_key_material,
         salt,
         &info,

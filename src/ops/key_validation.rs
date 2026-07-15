@@ -221,13 +221,13 @@ fn validate_ml_kem(keys: &VariantDerKeyPair) -> Result<bool, DynError> {
     )?);
     let hkdf_salt = Zeroizing::new(crypto::random_bytes(32)?);
     let hkdf_info = format!("key-material-validation:ml-kem:{}", keys.variant());
-    let sender_key = Zeroizing::new(crypto::hkdf_sha256(
+    let sender_key = Zeroizing::new(crypto::create_hkdf(
         encapsulated_shared_key.as_slice(),
         hkdf_salt.as_slice(),
         hkdf_info.as_bytes(),
         32,
     )?);
-    let receiver_key = Zeroizing::new(crypto::hkdf_sha256(
+    let receiver_key = Zeroizing::new(crypto::create_hkdf(
         decapsulated_shared_key.as_slice(),
         hkdf_salt.as_slice(),
         hkdf_info.as_bytes(),

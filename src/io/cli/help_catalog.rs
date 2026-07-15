@@ -408,6 +408,7 @@ const VERSION_HELP: CommandHelp = CommandHelp {
             lines: &[
                 "  version               Cargo package version",
                 "  protocol_version      Supported Vectis protocol version",
+                "  internal_primitives   Internal hash, HKDF, HMAC, and cipher constants",
                 "  crypto_profiles       Supported key generation profiles",
                 "  crypto_policies       Supported crypto policy modes",
                 "  algorithms            Supported hash, cipher, signature, KEM, FPE, and token versions",

@@ -52,7 +52,7 @@ impl Zeroize for InternalDerivedKeysState {
 }
 
 fn derive_internal_key(root_key: &[u8], info: &[u8]) -> Result<Zeroizing<Vec<u8>>, DynError> {
-    Ok(Zeroizing::new(crypto::hkdf_sha256(
+    Ok(Zeroizing::new(crypto::create_hkdf(
         root_key,
         INTERNAL_HKDF_SALT,
         info,
@@ -78,7 +78,7 @@ pub fn api_key_hash_from_root_key_hex(
 fn api_key_hash_with_key(api_auth_key: &[u8], api_key: &str) -> Result<String, DynError> {
     validation::validate_hash_hex_field("VECTIS_APIKEY", api_key, config::INTERNAL_KEYS_HASH)?;
 
-    Ok(hex::encode(crypto::hmac_sha256(
+    Ok(hex::encode(crypto::create_hmac(
         api_auth_key,
         api_key.as_bytes(),
     )?))

@@ -1,3 +1,4 @@
+use crate::core::config;
 use crate::error::DynError;
 use botan::{Cipher, CipherDirection, MsgAuthCode};
 use botan::{
@@ -51,17 +52,23 @@ pub fn hash_bytes(algorithm: &str, message: &[u8]) -> Result<Vec<u8>, botan::Err
     hash.finish()
 }
 
-pub fn hkdf_sha256(
+pub fn create_hkdf(
     input_key_material: &[u8],
     salt: &[u8],
     info: &[u8],
     output_len: usize,
 ) -> Result<Vec<u8>, botan::Error> {
-    botan::kdf("HKDF(SHA-256)", output_len, input_key_material, salt, info)
+    botan::kdf(
+        config::INTERNAL_KEYS_HKDF,
+        output_len,
+        input_key_material,
+        salt,
+        info,
+    )
 }
 
-pub fn hmac_sha256(key: &[u8], message: &[u8]) -> Result<Vec<u8>, botan::Error> {
-    let mut mac = MsgAuthCode::new("HMAC(SHA-256)")?;
+pub fn create_hmac(key: &[u8], message: &[u8]) -> Result<Vec<u8>, botan::Error> {
+    let mut mac = MsgAuthCode::new(config::INTERNAL_KEYS_HMAC)?;
     mac.set_key(key)?;
     mac.update(message)?;
 
@@ -475,4 +482,36 @@ pub fn decapsulate_ml_kem_shared_key(
     let kem = KeyDecapsulation::new(private_key, ML_KEM_KDF)?;
 
     kem.decrypt_shared_key(encapsulated_key, salt, shared_key_len)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_hkdf_uses_internal_hkdf_constant() {
+        let input = b"input key material";
+        let salt = b"salt";
+        let info = b"info";
+        let actual = create_hkdf(input, salt, info, 32).expect("hkdf must derive");
+        let expected = botan::kdf(config::INTERNAL_KEYS_HKDF, 32, input, salt, info)
+            .expect("hkdf must derive");
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn create_hmac_uses_internal_hmac_constant() {
+        let key = b"0123456789abcdef0123456789abcdef";
+        let message = b"message";
+        let actual = create_hmac(key, message).expect("hmac must sign");
+        assert_eq!(actual.len(), 32);
+
+        let mut mac = MsgAuthCode::new(config::INTERNAL_KEYS_HMAC).expect("hmac must create");
+        mac.set_key(key).expect("hmac key must set");
+        mac.update(message).expect("hmac message must update");
+        let expected = mac.finish().expect("hmac must finish");
+
+        assert_eq!(actual, expected);
+    }
 }
