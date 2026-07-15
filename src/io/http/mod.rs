@@ -23,6 +23,7 @@ mod remote_routes;
 mod routes;
 mod sign;
 mod test;
+mod token;
 
 use crate::core::config::AppConfig;
 use crate::core::config_file::ConfigState;
@@ -31,6 +32,7 @@ use crate::core::permissions::AuthenticatedClient;
 use crate::core::remote_routes::{PeerPublicKeys, RemoteRoute};
 use crate::core::routes::FinalAppRoute;
 use crate::core::storage::StorageState;
+use crate::core::tokenization::TokenizationProfile;
 use crate::core::{audit, blocking, metrics as core_metrics};
 use crate::error::DynError;
 use crate::ops::init::{InitValidationOutput, ValidatedInitState};
@@ -42,15 +44,17 @@ use zeroize::Zeroize;
 pub use app::run;
 
 #[derive(Clone)]
-struct FpeKeySource {
+struct ConfigKeySource {
     kid: String,
     symmetric_key_hex: String,
+    symmetric_algorithm: String,
 }
 
-impl Zeroize for FpeKeySource {
+impl Zeroize for ConfigKeySource {
     fn zeroize(&mut self) {
         self.kid.zeroize();
         self.symmetric_key_hex.zeroize();
+        self.symmetric_algorithm.zeroize();
     }
 }
 
@@ -211,6 +215,12 @@ impl HttpState {
         config_state.fpe_profiles.len()
     }
 
+    async fn tokenization_profiles_loaded(&self) -> usize {
+        let config_state = self.config_state.read().await;
+
+        config_state.tokenization_profiles.len()
+    }
+
     async fn routes_output(&self) -> crate::core::routes::ListRoutesOutput {
         let config_state = self.config_state.read().await;
 
@@ -235,16 +245,23 @@ impl HttpState {
         config_state.fpe_profiles.get(name).cloned()
     }
 
+    async fn tokenization_profile(&self, name: &str) -> Option<TokenizationProfile> {
+        let config_state = self.config_state.read().await;
+
+        config_state.tokenization_profiles.get(name).cloned()
+    }
+
     async fn reload_config_state(&self) -> Result<(), DynError> {
-        let fpe_key_sources = {
+        let config_key_sources = {
             let keys_db_state = self.keys_db_state.read().await;
             keys_db_state
                 .ids()
                 .into_iter()
                 .filter_map(|kid| {
-                    keys_db_state.get(&kid).map(|loaded_key| FpeKeySource {
+                    keys_db_state.get(&kid).map(|loaded_key| ConfigKeySource {
                         kid,
                         symmetric_key_hex: loaded_key.keys().symmetric().key_hex().to_string(),
+                        symmetric_algorithm: loaded_key.keys().symmetric().variant().to_string(),
                     })
                 })
                 .collect::<Vec<_>>()
@@ -252,7 +269,7 @@ impl HttpState {
         let config = Arc::clone(&self.config);
         let init_state = (*self.init_state).clone();
         let reloaded = blocking::spawn_blocking_crypto(move || {
-            let fpe_key_sources = Zeroizing::new(fpe_key_sources);
+            let config_key_sources = Zeroizing::new(config_key_sources);
             crate::core::config_file::reload_config_state(
                 &config,
                 |config_path, config_content| {
@@ -269,9 +286,9 @@ impl HttpState {
                         &signature_content,
                     )
                 },
-                |kid| fpe_key_sources.iter().any(|source| source.kid == kid),
+                |kid| config_key_sources.iter().any(|source| source.kid == kid),
                 |kid, profile_name, fpe_version| {
-                    let source = fpe_key_sources
+                    let source = config_key_sources
                         .iter()
                         .find(|source| source.kid == kid)
                         .ok_or_else(|| {
@@ -284,6 +301,23 @@ impl HttpState {
                         profile_name,
                         kid,
                         fpe_version,
+                    )
+                },
+                |profile_name, kid, tokenization_version| {
+                    let source = config_key_sources
+                        .iter()
+                        .find(|source| source.kid == kid)
+                        .ok_or_else(|| {
+                            crate::error::invalid_input(format!(
+                                "tokenization profile references kid not loaded in memory: {kid}"
+                            ))
+                        })?;
+                    crate::core::tokenization::derive_tokenization_keys(
+                        &source.symmetric_key_hex,
+                        &source.symmetric_algorithm,
+                        profile_name,
+                        kid,
+                        tokenization_version,
                     )
                 },
             )
@@ -302,6 +336,7 @@ impl HttpState {
             self.remote_routes_loaded().await,
             self.permissions_loaded().await,
             self.fpe_profiles_loaded().await,
+            self.tokenization_profiles_loaded().await,
         );
     }
 
@@ -377,6 +412,8 @@ fn record_operation_denied_metric(event_name: &str) {
         "message.internal.decrypt.denied" => core_metrics::record_message("decrypt", "denied"),
         "fpe.encrypt.denied" => core_metrics::record_crypto_operation("fpe_encrypt", "failed"),
         "fpe.decrypt.denied" => core_metrics::record_crypto_operation("fpe_decrypt", "failed"),
+        "token.encode.denied" => core_metrics::record_crypto_operation("token_encode", "failed"),
+        "token.decode.denied" => core_metrics::record_crypto_operation("token_decode", "failed"),
         "sign.denied" => core_metrics::record_crypto_operation("sign", "failed"),
         "self_test.denied" => {}
         _ => {}
@@ -409,6 +446,8 @@ pub fn router(state: HttpState) -> Router {
         .route("/sign/{kid}", post(sign::sign_endpoint))
         .route("/fpe/encrypt/{kid}", post(fpe::encrypt_endpoint))
         .route("/fpe/decrypt", post(fpe::decrypt_endpoint))
+        .route("/token/encode/{kid}", post(token::encode_endpoint))
+        .route("/token/decode", post(token::decode_endpoint))
         .route("/pub/{kid}", get(pubkey::pub_endpoint))
         .route(
             "/message/internal/encrypt/{kid}",

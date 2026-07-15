@@ -53,7 +53,7 @@ These variables are used by CLI commands that call the HTTP API. `serve` and `in
 | --- | --- | --- | --- |
 | `VECTIS_FINAL_APP_ADDR` | `localhost:3999` | Valid host:port | Default final app destination used when no manual route exists for a `kid`. |
 | `VECTIS_FINAL_APP_PATH` | `/message` | HTTP path beginning with `/`, no spaces | Default final app path. |
-| `VECTIS_CONFIG_PATH` | `config.json` | Non-empty file path | Unified signed config file with `routes`, `remote_routes`, `permissions`, and optional `fpe_profiles` sections. Startup uses empty sections only when the config file is missing. If the file exists but is invalid, startup fails. Runtime reload keeps the previous config if the file exists but is invalid. |
+| `VECTIS_CONFIG_PATH` | `config.json` | Non-empty file path | Unified signed config file with `routes`, `remote_routes`, `permissions`, optional `fpe_profiles`, and optional `tokenization_profiles` sections. Startup uses empty sections only when the config file is missing. If the file exists but is invalid, startup fails. Runtime reload keeps the previous config if the file exists but is invalid. |
 | `VECTIS_CONFIG_SIGN_PATH` | `config_sign.json` | Non-empty file path | Signature token for `VECTIS_CONFIG_PATH`, created by `vectis config sign`. |
 
 `routes` section shape inside `config.json`:
@@ -71,11 +71,12 @@ These variables are used by CLI commands that call the HTTP API. `serve` and `in
   ],
   "remote_routes": [],
   "permissions": [],
-  "fpe_profiles": []
+  "fpe_profiles": [],
+  "tokenization_profiles": []
 }
 ```
 
-The `routes`/`remote_routes`/`permissions`/`fpe_profiles` sections live in the unified signed `config.json`.
+The `routes`/`remote_routes`/`permissions`/`fpe_profiles`/`tokenization_profiles` sections live in the unified signed `config.json`.
 Vectis does not create it and `POST /keys` does not modify it.
 If `config.json` exists, `config_sign.json` must exist and verify before the config is loaded.
 Vectis rejects `config.json` above 8 MiB and `config_sign.json` above 1 MiB before parsing or verifying.
@@ -192,7 +193,7 @@ Recommended admin permission:
 }
 ```
 
-If any permission entry contains `admin`, Vectis treats the whole client as admin and ignores `kid` plus any other actions for that client. Non-admin KID-scoped permissions must reference KIDs already loaded in memory. Global permissions such as `metrics` use `kid: "*"`. `fpe-encrypt` and `fpe-decrypt` require explicit KIDs; `kid: "*"` is rejected for FPE.
+If any permission entry contains `admin`, Vectis treats the whole client as admin and ignores `kid` plus any other actions for that client. Non-admin KID-scoped permissions must reference KIDs already loaded in memory. Global permissions such as `metrics` use `kid: "*"`. FPE and tokenization permissions require explicit KIDs; `kid: "*"` is rejected for those actions.
 
 Allowed actions:
 
@@ -204,6 +205,8 @@ Allowed actions:
 - `message`
 - `fpe-encrypt`
 - `fpe-decrypt`
+- `token-encode`
+- `token-decode`
 - `metrics`
 
 Permission mapping summary:
@@ -216,6 +219,8 @@ Permission mapping summary:
 - `message`: protected message endpoints.
 - `fpe-encrypt`: `POST /fpe/encrypt/{kid}`.
 - `fpe-decrypt`: `POST /fpe/decrypt`.
+- `token-encode`: `POST /token/encode/{kid}`.
+- `token-decode`: `POST /token/decode`.
 - `metrics`: `GET /metrics` with `kid: "*"`; this is a global permission and does not reference a loaded operational KID.
 
 Routes operations require root or `admin`; there is no granular `routes` action.
@@ -259,6 +264,13 @@ CREATE TABLE IF NOT EXISTS opskeys (
     keys VARCHAR(10240) NOT NULL,
     properties VARCHAR(10240) NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS tokens (
+    kid VARCHAR(128) NOT NULL,
+    hashid VARCHAR(128) NOT NULL,
+    data VARCHAR(10240) NOT NULL,
+    PRIMARY KEY (kid, hashid)
+);
 ```
 
 PostgreSQL uses the same storage contract with PostgreSQL-native types. Vectis
@@ -274,6 +286,13 @@ CREATE TABLE opskeys (
     kid VARCHAR(128) PRIMARY KEY,
     keys TEXT NOT NULL,
     properties TEXT NOT NULL
+);
+
+CREATE TABLE tokens (
+    kid VARCHAR(128) NOT NULL,
+    hashid VARCHAR(128) NOT NULL,
+    data TEXT NOT NULL,
+    PRIMARY KEY (kid, hashid)
 );
 ```
 

@@ -115,4 +115,5 @@ def empty_config():
         "remote_routes": [],
         "permissions": [],
         "fpe_profiles": [],
+        "tokenization_profiles": [],
     }

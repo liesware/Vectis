@@ -110,7 +110,7 @@ uv run tests/cli_all.py
 
 - `tests/cli_init.py`: init overwrite protection and custom init file handling.
 - `tests/cli_positive.py`: local `vectis config init`, section list/edit
-  commands for `routes`, `remote-routes`, `permissions`, `fpe`, and full
+  commands for `routes`, `remote-routes`, `permissions`, `fpe`, `token`, and full
   `config list` happy paths.
 - `tests/cli_negative.py`: duplicate names, invalid fields, missing records, and
   mutation safety, including missing config files and overwrite refusal.
@@ -142,9 +142,10 @@ uv run tests/http_all.py --base-url http://127.0.0.1:3000 --apikey <VECTIS_APIKE
 
 `tests/http_all.py` runs:
 
-- `tests/http_positive.py`: valid end-to-end workflows.
+- `tests/http_positive.py`: valid end-to-end workflows, including FPE and
+  reversible tokenization.
 - `tests/http_negative.py`: invalid input, denied permission, lifecycle, and
-  error-path checks.
+  error-path checks, including FPE/tokenization validation failures.
 
 Run targeted manual HTTP fuzzing with:
 

@@ -24,6 +24,7 @@ tags:
   - name: Signatures
   - name: Messages
   - name: FPE
+  - name: Tokenization
   - name: Observability
 security: []
 
@@ -280,7 +281,7 @@ paths:
     post:
       tags: [Config]
       summary: Reload the unified signed config
-      description: Administrative endpoint requiring root or an admin client. Reloads the unified config (routes, remote_routes, permissions, fpe_profiles) only after VECTIS_CONFIG_PATH and VECTIS_CONFIG_SIGN_PATH are successfully read, verified, and validated. Every route kid and FPE profile kid must exist in the keys currently loaded in memory. A missing config reloads to empty sections; an invalid signature, invalid file, or unloaded kid returns an error and keeps the previous in-memory config.
+      description: Administrative endpoint requiring root or an admin client. Reloads the unified config (routes, remote_routes, permissions, fpe_profiles, tokenization_profiles) only after VECTIS_CONFIG_PATH and VECTIS_CONFIG_SIGN_PATH are successfully read, verified, and validated. Every route, FPE profile, and tokenization profile kid must exist in the keys currently loaded in memory. A missing config reloads to empty sections; an invalid signature, invalid file, or unloaded kid returns an error and keeps the previous in-memory config.
       security:
         - ApiKeyAuth: []
       responses:
@@ -556,6 +557,59 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/FpeDecryptOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /token/encode/{kid}:
+    post:
+      tags: [Tokenization]
+      summary: Create a reversible random token
+      description: >
+        Creates a random visible token using a tokenization profile loaded from
+        signed config. The database stores only kid, hashid, and encrypted data.
+        The key must be active.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenEncodeInput"
+      responses:
+        "200":
+          description: Created token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenEncodeOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /token/decode:
+    post:
+      tags: [Tokenization]
+      summary: Resolve a reversible random token
+      description: >
+        Resolves a token by HMAC-derived hashid and decrypts the stored payload.
+        Decode permits active and retired keys.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenDecodeInput"
+      responses:
+        "200":
+          description: Token plaintext and optional metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenDecodeOutput"
         default:
           $ref: "#/components/responses/Error"
 
@@ -842,13 +896,13 @@ components:
           type: array
           items:
             type: string
-            enum: [admin, keys, lifecycle, self-test, sign, message, fpe-encrypt, fpe-decrypt, metrics]
+            enum: [admin, keys, lifecycle, self-test, sign, message, fpe-encrypt, fpe-decrypt, token-encode, token-decode, metrics]
           example:
             - message
 
     ReloadConfigResponse:
       type: object
-      required: [status, routes_loaded, remote_routes_loaded, clients_loaded, fpe_profiles_loaded]
+      required: [status, routes_loaded, remote_routes_loaded, clients_loaded, fpe_profiles_loaded, tokenization_profiles_loaded]
       properties:
         status:
           const: reloaded
@@ -862,6 +916,9 @@ components:
           type: integer
           minimum: 0
         fpe_profiles_loaded:
+          type: integer
+          minimum: 0
+        tokenization_profiles_loaded:
           type: integer
           minimum: 0
 
@@ -1372,6 +1429,64 @@ components:
         plaintext:
           $ref: "#/components/schemas/TextField"
           example: "123456"
+
+    TokenEncodeInput:
+      type: object
+      additionalProperties: false
+      required: [profile, plaintext]
+      properties:
+        profile:
+          $ref: "#/components/schemas/TextField"
+          example: patient-id-token-v1
+        plaintext:
+          $ref: "#/components/schemas/TextField"
+          example: "123456"
+        metadata:
+          type: object
+          description: Optional JSON object. Its compact serialized JSON representation must be at most 128 characters.
+          additionalProperties: true
+          example:
+            tenant: acme
+
+    TokenEncodeOutput:
+      type: object
+      required: [kid, profile, token]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/TextField"
+          example: patient-id-token-v1
+        token:
+          $ref: "#/components/schemas/TextField"
+          example: tok_patient_vGqyEeXKcKz5QK1jwBQTyQ
+
+    TokenDecodeInput:
+      type: object
+      additionalProperties: false
+      required: [kid, profile, token]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/TextField"
+          example: patient-id-token-v1
+        token:
+          $ref: "#/components/schemas/TextField"
+          example: tok_patient_vGqyEeXKcKz5QK1jwBQTyQ
+
+    TokenDecodeOutput:
+      type: object
+      required: [plaintext]
+      properties:
+        plaintext:
+          $ref: "#/components/schemas/TextField"
+          example: "123456"
+        metadata:
+          type: object
+          additionalProperties: true
+          example:
+            tenant: acme
 
     MessageCipher:
       type: object

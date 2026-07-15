@@ -35,6 +35,8 @@ Runtime commands call the HTTP API and normally require `VECTIS_API_URL`:
 - `vectis pub`
 - `vectis sign`
 - `vectis message`
+- `vectis fpe`
+- `vectis token`
 
 Use built-in help for exact syntax:
 
@@ -139,7 +141,8 @@ It writes:
   "routes": [],
   "remote_routes": [],
   "permissions": [],
-  "fpe_profiles": []
+  "fpe_profiles": [],
+  "tokenization_profiles": []
 }
 ```
 
@@ -262,6 +265,25 @@ this release. `min_len` must be at least `6`, and `max_len` must be greater than
 or equal to `min_len`. The CLI validates the KID shape but does not check whether
 the KID is loaded in a running server. That check happens when Vectis loads the
 signed config.
+
+### `vectis config token`
+
+Edits the local `tokenization_profiles` section in `VECTIS_CONFIG_PATH`. The
+lookup key is `name`. Names must be unique.
+
+```sh
+vectis config token list
+vectis config token add --name patient-id-token-v1 --kid <kid> --token-prefix tok_patient --token-len 32 --max-plaintext-len 1024
+vectis config token get patient-id-token-v1
+vectis config token update patient-id-token-v1 --max-plaintext-len 512
+vectis config token delete patient-id-token-v1
+```
+
+`tokenization_version` defaults to `token-random-v1`; that is the only accepted
+version in this release. `token_len` is the number of random bytes before
+base64url encoding and must be at least `32`. The CLI validates field shape but
+does not check whether the KID is loaded in a running server. That check happens
+when Vectis loads the signed config.
 
 Section `list` commands print only the local array from `config.json`. Runtime
 commands such as `vectis routes list` read the server's loaded state instead.
@@ -431,6 +453,21 @@ vectis fpe decrypt --json '{"kid":"<kid>","profile":"patient-id-decimal-v1","cip
 `decrypt` requires `fpe-decrypt` permission and allows `active` or `retired`
 keys. The CLI does not print or accept `fpe_version`; that value is part of the
 signed profile.
+
+### `vectis token`
+
+Calls local reversible tokenization endpoints. Tokenization profiles are not
+defined in the request; they are loaded from signed `config.json`.
+
+```sh
+vectis token encode <kid> --json '{"profile":"patient-id-token-v1","plaintext":"123456","metadata":{}}'
+vectis token decode --json '{"kid":"<kid>","profile":"patient-id-token-v1","token":"tok_patient_..."}'
+```
+
+`encode` requires `token-encode` permission for the KID and an `active` key.
+`decode` requires `token-decode` permission and allows `active` or `retired`
+keys. Metadata is optional, must be a JSON object when present, and its compact
+serialized JSON representation must be at most 128 characters.
 
 ## Authentication
 

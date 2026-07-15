@@ -78,13 +78,15 @@ protected data flows between Vectis instances.
 **Protocol and trust**
 
 - protected messages between Vectis instances, verified before decryption;
-- one operator-signed config file (routes, remote routes, permissions, FPE profiles) as the
+- one operator-signed config file (routes, remote routes, permissions, FPE profiles,
+  and tokenization profiles) as the
   only source of peer public keys — no trust-on-first-use path;
 - local re-encryption before final app delivery: the receiving application
   never gets remote plaintext directly;
 - public key publication by `kid`;
-- internal encrypt/decrypt endpoints for local protected data.
-- local format-preserving encryption for signed field profiles.
+- internal encrypt/decrypt endpoints for local protected data;
+- local format-preserving encryption for signed field profiles;
+- local reversible tokenization for signed token profiles.
 
 **Key management**
 

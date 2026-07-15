@@ -98,6 +98,27 @@ def seed_fpe_profile(env):
     )
 
 
+def seed_token_profile(env):
+    run_cli_json(
+        [
+            "config",
+            "token",
+            "add",
+            "--name",
+            "patient-id-token-v1",
+            "--kid",
+            KID_A,
+            "--token-prefix",
+            "tok_patient",
+            "--token-len",
+            "32",
+            "--max-plaintext-len",
+            "1024",
+        ],
+        env,
+    )
+
+
 def seed_binary_fpe_profile(env):
     config = empty_config()
     config["fpe_profiles"] = [
@@ -192,6 +213,26 @@ def main():
                 ],
             )
 
+        def token_profile_add_missing_config():
+            expect_unchanged_failure(
+                env,
+                [
+                    "config",
+                    "token",
+                    "add",
+                    "--name",
+                    "missing-config-token",
+                    "--kid",
+                    KID_A,
+                    "--token-prefix",
+                    "tok_patient",
+                    "--token-len",
+                    "32",
+                    "--max-plaintext-len",
+                    "1024",
+                ],
+            )
+
         def route_list_missing_config():
             run_cli(["config", "routes", "list"], env, expect_success=False)
 
@@ -203,6 +244,9 @@ def main():
 
         def fpe_profile_list_missing_config():
             run_cli(["config", "fpe", "list"], env, expect_success=False)
+
+        def token_profile_list_missing_config():
+            run_cli(["config", "token", "list"], env, expect_success=False)
 
         def config_init_existing_file():
             init_config(env)
@@ -286,6 +330,27 @@ def main():
                 ],
             )
 
+        def duplicate_token_profile_name():
+            seed_token_profile(env)
+            expect_unchanged_failure(
+                env,
+                [
+                    "config",
+                    "token",
+                    "add",
+                    "--name",
+                    "patient-id-token-v1",
+                    "--kid",
+                    KID_B,
+                    "--token-prefix",
+                    "tok_other",
+                    "--token-len",
+                    "32",
+                    "--max-plaintext-len",
+                    "1024",
+                ],
+            )
+
         def binary_fpe_profile_update_invalid_domain():
             seed_binary_fpe_profile(env)
             expect_unchanged_failure(
@@ -307,6 +372,10 @@ def main():
                 "config fpe add fails when config is missing",
                 fpe_profile_add_missing_config,
             ),
+            (
+                "config token add fails when config is missing",
+                token_profile_add_missing_config,
+            ),
             ("config routes list fails when config is missing", route_list_missing_config),
             (
                 "config permissions list fails when config is missing",
@@ -317,6 +386,7 @@ def main():
                 remote_route_list_missing_config,
             ),
             ("config fpe list fails when config is missing", fpe_profile_list_missing_config),
+            ("config token list fails when config is missing", token_profile_list_missing_config),
             (
                 "config remote-routes import-keys is not a command",
                 lambda: run_cli(
@@ -338,6 +408,10 @@ def main():
             ("duplicate permissions.client fails without rewrite", duplicate_permission_client),
             ("duplicate remote_routes.name fails without rewrite", duplicate_remote_route_name),
             ("duplicate fpe_profiles.name fails without rewrite", duplicate_fpe_profile_name),
+            (
+                "duplicate tokenization_profiles.name fails without rewrite",
+                duplicate_token_profile_name,
+            ),
             (
                 "invalid route kid fails",
                 lambda: expect_unchanged_failure(

@@ -32,6 +32,7 @@ from http_support import (
     write_config,
     write_permissions,
     write_fpe_profiles,
+    write_tokenization_profiles,
     write_test_remote_routes,
     write_test_routes,
 )
@@ -96,6 +97,18 @@ def print_fpe(rows):
     print()
 
 
+def print_token(rows):
+    print("token:")
+    for key_id, profile, token_preview, plaintext in rows:
+        print(f"- kid: {key_id}")
+        print(f"  profile: {profile}")
+        print(f"  encode: OK")
+        print(f"  decode: OK")
+        print(f"  token: {token_preview}")
+        print(f"  plain_text: {plaintext}")
+    print()
+
+
 def validate_init(response):
     require(response.get("timestamp"), "test init response must include timestamp")
     for field in ("hash", "symmetric", "eddsa", "xecdh", "ml-dsa", "ml-kem"):
@@ -142,6 +155,10 @@ def validate_metrics(client):
     require(
         "vectis_fpe_profiles_loaded" in metrics,
         "metrics must include vectis_fpe_profiles_loaded",
+    )
+    require(
+        "vectis_tokenization_profiles_loaded" in metrics,
+        "metrics must include vectis_tokenization_profiles_loaded",
     )
 
 
@@ -205,6 +222,14 @@ def validate_runtime_metrics(client):
     require(
         'vectis_crypto_operation_total{operation="fpe_decrypt",result="success"}' in metrics,
         "metrics must include successful fpe decrypt count",
+    )
+    require(
+        'vectis_crypto_operation_total{operation="token_encode",result="success"}' in metrics,
+        "metrics must include successful token encode count",
+    )
+    require(
+        'vectis_crypto_operation_total{operation="token_decode",result="success"}' in metrics,
+        "metrics must include successful token decode count",
     )
 
 
@@ -591,6 +616,39 @@ def fpe_round_trip(client, key_id):
     return profile, ciphertext, plaintext
 
 
+def token_round_trip(client, key_id):
+    profile = "patient-id-token-v1"
+    plaintext = "123456789"
+    metadata = {"tenant": "acme", "field": "patient_id"}
+    encoded = client.post(
+        f"/token/encode/{key_id}",
+        {"profile": profile, "plaintext": plaintext, "metadata": metadata},
+        auth=True,
+    )
+    require(encoded.get("kid") == key_id, "token encode kid mismatch")
+    require(encoded.get("profile") == profile, "token encode profile mismatch")
+    token = encoded.get("token")
+    require(isinstance(token, str) and token.startswith("tok_patient_"), "token format mismatch")
+    require(plaintext not in token, "token must not include plaintext")
+
+    decoded = client.post(
+        "/token/decode",
+        {"kid": key_id, "profile": profile, "token": token},
+        auth=True,
+    )
+    require(decoded.get("plaintext") == plaintext, "token decode plaintext mismatch")
+    require(decoded.get("metadata") == metadata, "token decode metadata mismatch")
+
+    second = client.post(
+        f"/token/encode/{key_id}",
+        {"profile": profile, "plaintext": plaintext, "metadata": metadata},
+        auth=True,
+    )
+    require(second.get("token") != token, "token encode must generate random tokens")
+
+    return profile, token[:16] + "...", plaintext
+
+
 def validate_permissions_flow(base_url, root_client, key_id, case):
     limited_key, limited_hash = create_api_key_pair()
     admin_key, admin_hash = create_api_key_pair()
@@ -865,6 +923,29 @@ def main():
             *fpe_round_trip(client, created[0][0]),
         )
     ]
+    write_tokenization_profiles(
+        [
+            {
+                "name": "patient-id-token-v1",
+                "tokenization_version": "token-random-v1",
+                "kid": created[0][0],
+                "token_prefix": "tok_patient",
+                "token_len": 32,
+                "max_plaintext_len": 1024,
+            }
+        ]
+    )
+    token_reload = reload_config(client)
+    require(
+        token_reload.get("tokenization_profiles_loaded") == 1,
+        "config reload must report loaded tokenization profile",
+    )
+    token_rows = [
+        (
+            created[0][0],
+            *token_round_trip(client, created[0][0]),
+        )
+    ]
 
     permission_rows = validate_permissions_flow(args.base_url, client, created[0][0], created[0][1])
     print_section("permissions", permission_rows)
@@ -947,6 +1028,7 @@ def main():
     print_section("test key", test_rows)
     print_section("pub", pub_rows)
     print_fpe(fpe_rows)
+    print_token(token_rows)
     print_message(message_rows)
     print_internal_message(internal_message_rows)
     print_section("sign", sign_rows)
@@ -957,6 +1039,7 @@ def main():
     passed_count += len(test_rows)
     passed_count += len(pub_rows)
     passed_count += len(fpe_rows)
+    passed_count += len(token_rows)
     passed_count += len(message_rows)
     passed_count += len(internal_message_rows)
     passed_count += len(sign_rows)
@@ -967,6 +1050,7 @@ def main():
     _CONFIG["remote_routes"] = []
     _CONFIG["permissions"] = []
     _CONFIG["fpe_profiles"] = []
+    _CONFIG["tokenization_profiles"] = []
     write_config()
     reload_config(client)
     restore_config_file(config_backup)

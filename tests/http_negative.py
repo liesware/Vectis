@@ -33,6 +33,7 @@ _CONFIG = {
     "remote_routes": [],
     "permissions": [],
     "fpe_profiles": [],
+    "tokenization_profiles": [],
 }
 
 
@@ -150,6 +151,7 @@ def write_permissions(clients, sign=True):
     _CONFIG["remote_routes"] = []
     _CONFIG["permissions"] = clients
     _CONFIG["fpe_profiles"] = []
+    _CONFIG["tokenization_profiles"] = []
     write_config(sign=sign)
 
 
@@ -158,6 +160,16 @@ def write_fpe_profiles(profiles, sign=True):
     _CONFIG["remote_routes"] = []
     _CONFIG["permissions"] = []
     _CONFIG["fpe_profiles"] = profiles
+    _CONFIG["tokenization_profiles"] = []
+    write_config(sign=sign)
+
+
+def write_tokenization_profiles(profiles, sign=True):
+    _CONFIG["routes"] = []
+    _CONFIG["remote_routes"] = []
+    _CONFIG["permissions"] = []
+    _CONFIG["fpe_profiles"] = []
+    _CONFIG["tokenization_profiles"] = profiles
     write_config(sign=sign)
 
 
@@ -166,6 +178,7 @@ def write_remote_routes(routes, sign=True):
     _CONFIG["permissions"] = []
     _CONFIG["remote_routes"] = routes
     _CONFIG["fpe_profiles"] = []
+    _CONFIG["tokenization_profiles"] = []
     write_config(sign=sign)
 
 
@@ -174,6 +187,7 @@ def write_routes(routes, sign=True):
     _CONFIG["remote_routes"] = []
     _CONFIG["permissions"] = []
     _CONFIG["fpe_profiles"] = []
+    _CONFIG["tokenization_profiles"] = []
     write_config(sign=sign)
 
 
@@ -190,6 +204,10 @@ def reload_config(client):
     require(
         isinstance(response.get("fpe_profiles_loaded"), int),
         "config fpe_profiles_loaded must be int",
+    )
+    require(
+        isinstance(response.get("tokenization_profiles_loaded"), int),
+        "config tokenization_profiles_loaded must be int",
     )
     return response
 
@@ -243,6 +261,33 @@ def valid_fpe_profile(key_id):
         "tweak_aad": "tenant=acme;field=patient_id;version=1",
         "kid": key_id,
     }
+
+
+def valid_tokenization_profile(key_id):
+    return {
+        "name": "patient-id-token-v1",
+        "tokenization_version": "token-random-v1",
+        "kid": key_id,
+        "token_prefix": "tok_patient",
+        "token_len": 32,
+        "max_plaintext_len": 1024,
+    }
+
+
+def create_valid_encoded_token(client, key_id):
+    status, response = client.post(
+        f"/token/encode/{key_id}",
+        {
+            "profile": "patient-id-token-v1",
+            "plaintext": "123456",
+            "metadata": {"suite": "negative"},
+        },
+        auth=True,
+    )
+    require_status("create valid encoded token", status, 200)
+    token = response.get("token")
+    require(isinstance(token, str) and token.startswith("tok_patient_"), "valid encoded token")
+    return token
 
 
 def valid_message_request(key_id):
@@ -528,6 +573,7 @@ def main():
         ]
     )
     _CONFIG["fpe_profiles"] = [valid_fpe_profile(key_id)]
+    _CONFIG["tokenization_profiles"] = [valid_tokenization_profile(key_id)]
     write_config()
     reload_config(client)
     limited_client = Client(args.base_url, limited_api_key)
@@ -591,6 +637,22 @@ def main():
         )
         require_status("limited client blocks fpe decrypt", status, 403)
 
+    def limited_blocks_token_encode():
+        status, _ = limited_client.post(
+            f"/token/encode/{key_id}",
+            {"profile": "patient-id-token-v1", "plaintext": "123456"},
+            auth=True,
+        )
+        require_status("limited client blocks token encode", status, 403)
+
+    def limited_blocks_token_decode():
+        status, _ = limited_client.post(
+            "/token/decode",
+            {"kid": key_id, "profile": "patient-id-token-v1", "token": "tok_patient_missing"},
+            auth=True,
+        )
+        require_status("limited client blocks token decode", status, 403)
+
     def metrics_client_allows_metrics():
         status, _ = metrics_client.get("/metrics", auth=True)
         require_status("metrics client allows metrics", status, 200)
@@ -648,6 +710,8 @@ def main():
         ("limited client blocks metrics", limited_blocks_metrics),
         ("limited client blocks fpe encrypt", limited_blocks_fpe_encrypt),
         ("limited client blocks fpe decrypt", limited_blocks_fpe_decrypt),
+        ("limited client blocks token encode", limited_blocks_token_encode),
+        ("limited client blocks token decode", limited_blocks_token_decode),
         ("metrics client allows metrics", metrics_client_allows_metrics),
         ("metrics client blocks admin", metrics_client_blocks_admin),
         ("limited client blocks permissions list", limited_blocks_permissions_list),
@@ -792,6 +856,20 @@ def main():
         status, _ = client.post("/config/reload", {}, auth=True)
         require_status("permissions wildcard fpe encrypt", status, 400)
 
+    def permissions_wildcard_token_encode():
+        write_permissions(
+            [
+                {
+                    "client": "bad-wildcard-token",
+                    "apikey_hash": limited_api_key_hash,
+                    "status": "active",
+                    "permissions": [{"kid": "*", "actions": ["token-encode"]}],
+                }
+            ]
+        )
+        status, _ = client.post("/config/reload", {}, auth=True)
+        require_status("permissions wildcard token encode", status, 400)
+
     def fpe_profile_duplicate_name():
         profile = valid_fpe_profile(key_id)
         write_fpe_profiles([profile, dict(profile, kid=key_id)])
@@ -832,6 +910,32 @@ def main():
         write_fpe_profiles([profile])
         status, _ = client.post("/config/reload", {}, auth=True)
         require_status("fpe profile unloaded kid", status, 400)
+
+    def token_profile_duplicate_name():
+        profile = valid_tokenization_profile(key_id)
+        write_tokenization_profiles([profile, dict(profile, kid=key_id)])
+        status, _ = client.post("/config/reload", {}, auth=True)
+        require_status("token profile duplicate name", status, 400)
+
+    def token_profile_invalid_version():
+        profile = valid_tokenization_profile(key_id)
+        profile["tokenization_version"] = "token-random-v2"
+        write_tokenization_profiles([profile])
+        status, _ = client.post("/config/reload", {}, auth=True)
+        require_status("token profile invalid version", status, 400)
+
+    def token_profile_invalid_lengths():
+        profile = valid_tokenization_profile(key_id)
+        profile["token_len"] = 31
+        write_tokenization_profiles([profile])
+        status, _ = client.post("/config/reload", {}, auth=True)
+        require_status("token profile invalid token_len", status, 400)
+
+    def token_profile_unloaded_kid():
+        profile = valid_tokenization_profile("00" * 32)
+        write_tokenization_profiles([profile])
+        status, _ = client.post("/config/reload", {}, auth=True)
+        require_status("token profile unloaded kid", status, 400)
 
     def routes_missing_name():
         write_routes(
@@ -1109,12 +1213,17 @@ def main():
         ("permissions invalid action routes", permissions_invalid_action_routes),
         ("permissions wildcard non-global action", permissions_wildcard_non_global_action),
         ("permissions wildcard fpe encrypt", permissions_wildcard_fpe_encrypt),
+        ("permissions wildcard token encode", permissions_wildcard_token_encode),
         ("fpe profile duplicate name", fpe_profile_duplicate_name),
         ("fpe profile invalid version", fpe_profile_invalid_version),
         ("fpe profile duplicate alphabet", fpe_profile_duplicate_alphabet),
         ("fpe profile invalid lengths", fpe_profile_invalid_lengths),
         ("fpe profile max len too large", fpe_profile_max_len_too_large),
         ("fpe profile unloaded kid", fpe_profile_unloaded_kid),
+        ("token profile duplicate name", token_profile_duplicate_name),
+        ("token profile invalid version", token_profile_invalid_version),
+        ("token profile invalid lengths", token_profile_invalid_lengths),
+        ("token profile unloaded kid", token_profile_unloaded_kid),
         ("routes missing name", routes_missing_name),
         ("routes invalid name", routes_invalid_name),
         ("remote routes invalid kid", remote_routes_invalid_kid),
@@ -1512,8 +1621,91 @@ def main():
             "FPE ciphertext outside alphabet must fail by alphabet validation",
         )
 
-    write_fpe_profiles([valid_fpe_profile(key_id)])
+    def token_encode_unknown_profile():
+        status, body = client.post(
+            f"/token/encode/{key_id}",
+            {"profile": "missing-profile", "plaintext": "123456"},
+            auth=True,
+        )
+        require_status("POST /token/encode/{kid} unknown profile", status, 400)
+        require(
+            body.get("error") == "tokenization profile not found",
+            "token encode unknown profile must fail by profile lookup",
+        )
+
+    def token_encode_plaintext_too_long():
+        status, body = client.post(
+            f"/token/encode/{key_id}",
+            {"profile": "patient-id-token-v1", "plaintext": "x" * 1025},
+            auth=True,
+        )
+        require_status("POST /token/encode/{kid} plaintext too long", status, 400)
+        require(
+            body.get("error") == "plaintext length exceeds tokenization profile maximum",
+            "token encode oversized plaintext must fail by tokenization bounds",
+        )
+
+    def token_encode_metadata_too_long():
+        status, body = client.post(
+            f"/token/encode/{key_id}",
+            {
+                "profile": "patient-id-token-v1",
+                "plaintext": "123456",
+                "metadata": {"a": "x" * 129},
+            },
+            auth=True,
+        )
+        require_status("POST /token/encode/{kid} metadata too long", status, 400)
+        require(
+            body.get("error") == "metadata exceeds tokenization maximum length",
+            "token encode oversized metadata must fail by metadata bounds",
+        )
+
+    def token_decode_unknown_profile():
+        status, body = client.post(
+            "/token/decode",
+            {"kid": key_id, "profile": "missing-profile", "token": encoded_token},
+            auth=True,
+        )
+        require_status("POST /token/decode unknown profile", status, 400)
+        require(
+            body.get("error") == "tokenization profile not found",
+            "token decode unknown profile must fail by profile lookup",
+        )
+
+    def token_decode_invalid_prefix():
+        status, body = client.post(
+            "/token/decode",
+            {"kid": key_id, "profile": "patient-id-token-v1", "token": "wrong_prefix"},
+            auth=True,
+        )
+        require_status("POST /token/decode invalid prefix", status, 400)
+        require(
+            body.get("error") == "token prefix does not match tokenization profile",
+            "token decode invalid prefix must fail by token validation",
+        )
+
+    def token_decode_not_found():
+        status, body = client.post(
+            "/token/decode",
+            {
+                "kid": key_id,
+                "profile": "patient-id-token-v1",
+                "token": "tok_patient_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            },
+            auth=True,
+        )
+        require_status("POST /token/decode not found", status, 404)
+        require(body.get("error") == "token not found", "missing token must be reported as not found")
+
+    _CONFIG["routes"] = []
+    _CONFIG["remote_routes"] = []
+    _CONFIG["permissions"] = []
+    _CONFIG["fpe_profiles"] = [valid_fpe_profile(key_id)]
+    _CONFIG["tokenization_profiles"] = [valid_tokenization_profile(key_id)]
+    write_config()
     reload_config(client)
+    encoded_token = create_valid_encoded_token(client, key_id)
 
     for name, func in (
         ("POST /message/internal/encrypt/{kid} without auth", internal_encrypt_without_auth),
@@ -1526,6 +1718,12 @@ def main():
         ("POST /fpe/encrypt/{kid} plaintext too short", fpe_encrypt_plaintext_too_short),
         ("POST /fpe/encrypt/{kid} unknown profile", fpe_encrypt_unknown_profile),
         ("POST /fpe/decrypt ciphertext outside alphabet", fpe_decrypt_ciphertext_outside_alphabet),
+        ("POST /token/encode/{kid} unknown profile", token_encode_unknown_profile),
+        ("POST /token/encode/{kid} plaintext too long", token_encode_plaintext_too_long),
+        ("POST /token/encode/{kid} metadata too long", token_encode_metadata_too_long),
+        ("POST /token/decode unknown profile", token_decode_unknown_profile),
+        ("POST /token/decode invalid prefix", token_decode_invalid_prefix),
+        ("POST /token/decode not found", token_decode_not_found),
     ):
         run_case(rows, name, func)
 
@@ -1689,6 +1887,7 @@ def main():
     _CONFIG["remote_routes"] = []
     _CONFIG["permissions"] = []
     _CONFIG["fpe_profiles"] = []
+    _CONFIG["tokenization_profiles"] = []
     write_config()
     status, _ = client.post("/config/reload", {}, auth=True)
     require_status("restore config reload", status, 200)

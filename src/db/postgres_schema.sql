@@ -3,3 +3,10 @@ CREATE TABLE opskeys (
     keys TEXT NOT NULL,
     properties TEXT NOT NULL
 );
+
+CREATE TABLE tokens (
+    kid VARCHAR(128) NOT NULL,
+    hashid VARCHAR(128) NOT NULL,
+    data TEXT NOT NULL,
+    PRIMARY KEY (kid, hashid)
+);

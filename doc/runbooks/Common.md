@@ -192,6 +192,8 @@ The trimmed value must be one 64-character hex string.
   invalid `remote_addr`.
 - A permissions client has an invalid API key hash or references an unloaded
   KID.
+- An FPE or tokenization profile references an unloaded KID or has invalid
+  profile fields.
 
 ### Checks
 
@@ -251,6 +253,7 @@ For PostgreSQL:
 
 ```sh
 psql "$VECTIS_POSTGRES_DSN" -c '\d opskeys'
+psql "$VECTIS_POSTGRES_DSN" -c '\d tokens'
 ```
 
 ### Recovery
@@ -282,7 +285,7 @@ Vectis reports PostgreSQL connection or schema errors.
 
 - Database is unreachable.
 - User lacks privileges.
-- `opskeys` table does not exist.
+- `opskeys` or `tokens` table does not exist.
 - Column types or nullability do not match the expected schema.
 - The DSN points to the wrong database.
 
@@ -291,6 +294,7 @@ Vectis reports PostgreSQL connection or schema errors.
 ```sh
 psql "$VECTIS_POSTGRES_DSN" -c 'select 1'
 psql "$VECTIS_POSTGRES_DSN" -c '\d opskeys'
+psql "$VECTIS_POSTGRES_DSN" -c '\d tokens'
 ```
 
 Expected table:
@@ -300,6 +304,13 @@ CREATE TABLE opskeys (
     kid VARCHAR(128) PRIMARY KEY,
     keys TEXT NOT NULL,
     properties TEXT NOT NULL
+);
+
+CREATE TABLE tokens (
+    kid VARCHAR(128) NOT NULL,
+    hashid VARCHAR(128) NOT NULL,
+    data TEXT NOT NULL,
+    PRIMARY KEY (kid, hashid)
 );
 ```
 
@@ -564,6 +575,7 @@ vectis_routes_loaded
 vectis_remote_routes_loaded
 vectis_permission_clients
 vectis_fpe_profiles_loaded
+vectis_tokenization_profiles_loaded
 vectis_config_reload_total
 vectis_message_total
 ```

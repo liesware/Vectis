@@ -15,6 +15,8 @@ pub const PERMISSION_ACTIONS: &[&str] = &[
     "message",
     "fpe-encrypt",
     "fpe-decrypt",
+    "token-encode",
+    "token-decode",
     "metrics",
 ];
 const GLOBAL_PERMISSION_ACTIONS: &[&str] = &["metrics"];
@@ -476,12 +478,12 @@ mod tests {
     }
 
     #[test]
-    fn accepts_fpe_actions_only_for_explicit_kid() {
+    fn accepts_fpe_and_token_actions_only_for_explicit_kid() {
         let clients = vec![client(
             "fpe",
             &hex64('8'),
             "active",
-            json!([{"kid": hex64('a'), "actions": ["fpe-encrypt", "fpe-decrypt"]}]),
+            json!([{"kid": hex64('a'), "actions": ["fpe-encrypt", "fpe-decrypt", "token-encode", "token-decode"]}]),
         )];
         let state = validate_permission_clients(clients, |_| true).unwrap();
         let authed = state.authenticate_hash(&hex64('8')).unwrap();
@@ -496,12 +498,22 @@ mod tests {
                 .require_permission(&authed, Some(&hex64('a')), "fpe-decrypt")
                 .is_ok()
         );
+        assert!(
+            state
+                .require_permission(&authed, Some(&hex64('a')), "token-encode")
+                .is_ok()
+        );
+        assert!(
+            state
+                .require_permission(&authed, Some(&hex64('a')), "token-decode")
+                .is_ok()
+        );
 
         let wildcard = vec![client(
-            "fpe-wildcard",
+            "token-wildcard",
             &hex64('9'),
             "active",
-            json!([{"kid": "*", "actions": ["fpe-encrypt"]}]),
+            json!([{"kid": "*", "actions": ["token-encode"]}]),
         )];
         assert!(validate_permission_clients(wildcard, |_| true).is_err());
     }

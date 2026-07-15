@@ -32,6 +32,7 @@ def config_init_case(env):
             "remote_routes": [],
             "permissions": [],
             "fpe_profiles": [],
+            "tokenization_profiles": [],
         },
         "config init must write the minimal skeleton",
     )
@@ -233,6 +234,73 @@ def fpe_profile_cases(env):
     require(read_config(env)["fpe_profiles"] == [], "fpe profile delete must remove profile")
 
 
+def token_profile_cases(env):
+    response = run_cli_json(
+        [
+            "config",
+            "token",
+            "add",
+            "--name",
+            "patient-id-token-v1",
+            "--kid",
+            KID_A,
+            "--token-prefix",
+            "tok_patient",
+            "--token-len",
+            "32",
+            "--max-plaintext-len",
+            "1024",
+        ],
+        env,
+    )
+    require(response["status"] == "added", "token profile add must report added")
+    require_next(response)
+
+    profile = read_config(env)["tokenization_profiles"][0]
+    require(profile["name"] == "patient-id-token-v1", "token profile name must be stored")
+    require(
+        profile["tokenization_version"] == "token-random-v1",
+        "token profile version must default",
+    )
+
+    response = run_cli_json(["config", "token", "get", "patient-id-token-v1"], env)
+    require(response["kid"] == KID_A, "token profile get must return profile")
+
+    response = run_cli_json(["config", "token", "list"], env)
+    require(isinstance(response, list), "token profile list must return an array")
+    require(
+        response[0]["name"] == "patient-id-token-v1",
+        "token profile list must include profile",
+    )
+
+    response = run_cli_json(
+        [
+            "config",
+            "token",
+            "update",
+            "patient-id-token-v1",
+            "--max-plaintext-len",
+            "512",
+        ],
+        env,
+    )
+    require(response["status"] == "updated", "token profile update must report updated")
+    require_next(response)
+    profile = read_config(env)["tokenization_profiles"][0]
+    require(
+        profile["max_plaintext_len"] == 512,
+        "token profile update must persist max_plaintext_len",
+    )
+
+    response = run_cli_json(["config", "token", "delete", "patient-id-token-v1"], env)
+    require(response["status"] == "deleted", "token profile delete must report deleted")
+    require_next(response)
+    require(
+        read_config(env)["tokenization_profiles"] == [],
+        "token profile delete must remove profile",
+    )
+
+
 def config_list_case(env):
     response = run_cli_json(
         [
@@ -317,6 +385,11 @@ def main():
             counters,
             "config fpe add/get/update/delete",
             lambda: fpe_profile_cases(env),
+        )
+        run_case(
+            counters,
+            "config token add/get/update/delete",
+            lambda: token_profile_cases(env),
         )
         run_case(counters, "config list reads edited config", lambda: config_list_case(env))
 

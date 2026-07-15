@@ -10,3 +10,4 @@ pub mod message;
 pub mod pubkey;
 pub mod sign;
 pub mod test;
+pub mod tokenization;

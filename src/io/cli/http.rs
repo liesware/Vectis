@@ -32,6 +32,7 @@ pub async fn run(command: &str, args: Vec<String>) -> Result<(), DynError> {
         "pub" => run_pub(args, output).await,
         "sign" => run_sign(args, output).await,
         "fpe" => run_fpe(args, output).await,
+        "token" => run_token(args, output).await,
         "message" => run_message(args, output).await,
         _ => Err(invalid_input(format!("unknown command: {command}"))),
     }
@@ -50,6 +51,7 @@ pub fn print_help(command: &str) {
         "pub" => print_pub_help(),
         "sign" => print_sign_help(),
         "fpe" => print_fpe_help(),
+        "token" => print_token_help(),
         "message" => print_message_help(),
         _ => print_http_help(),
     }
@@ -216,6 +218,7 @@ async fn run_config(args: Vec<String>, output: OutputFormat) -> Result<(), DynEr
         "remote-routes" => config_editor::run_remote_routes(rest, output).await,
         "permissions" => config_editor::run_permissions(rest, output).await,
         "fpe" => config_editor::run_config_fpe(rest, output).await,
+        "token" => config_editor::run_config_token(rest, output).await,
         _ => Err(invalid_input(format!(
             "unknown config command: {subcommand}"
         ))),
@@ -331,6 +334,37 @@ async fn run_fpe(args: Vec<String>, output: OutputFormat) -> Result<(), DynError
                 .await
         }
         _ => Err(invalid_input(format!("unknown fpe command: {subcommand}"))),
+    }
+}
+
+async fn run_token(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+    let (subcommand, rest) = split_subcommand(args, "token command")?;
+    let client = CliHttpClient::from_env()?;
+
+    match subcommand.as_str() {
+        "encode" => {
+            let (kid, rest) = split_subcommand(rest, "kid")?;
+            validate_kid("kid", &kid)?;
+            let body = parse_json_source(rest)?;
+            client
+                .send(
+                    Method::POST,
+                    &format!("/token/encode/{kid}"),
+                    true,
+                    Some(body),
+                    output,
+                )
+                .await
+        }
+        "decode" => {
+            let body = parse_json_source(rest)?;
+            client
+                .send(Method::POST, "/token/decode", true, Some(body), output)
+                .await
+        }
+        _ => Err(invalid_input(format!(
+            "unknown token command: {subcommand}"
+        ))),
     }
 }
 
@@ -749,15 +783,18 @@ fn print_http_help() {
     println!("  {PROGRAM_NAME} config sign");
     println!("  {PROGRAM_NAME} config list");
     println!("  {PROGRAM_NAME} config reload");
-    println!("  {PROGRAM_NAME} config routes <add|get|update|delete>");
-    println!("  {PROGRAM_NAME} config remote-routes <add|get|update|delete>");
-    println!("  {PROGRAM_NAME} config permissions <add|get|update|delete|grant|revoke>");
-    println!("  {PROGRAM_NAME} config fpe <add|get|update|delete>");
+    println!("  {PROGRAM_NAME} config routes <list|add|get|update|delete>");
+    println!("  {PROGRAM_NAME} config remote-routes <list|add|get|update|delete>");
+    println!("  {PROGRAM_NAME} config permissions <list|add|get|update|delete|grant|revoke>");
+    println!("  {PROGRAM_NAME} config fpe <list|add|get|update|delete>");
+    println!("  {PROGRAM_NAME} config token <list|add|get|update|delete>");
     println!("  {PROGRAM_NAME} pub <kid>");
     println!("  {PROGRAM_NAME} sign <kid> (--json <json>|--file <path>)");
     println!("  {PROGRAM_NAME} sign verify (--json <json>|--file <path>)");
     println!("  {PROGRAM_NAME} fpe encrypt <kid> (--json <json>|--file <path>)");
     println!("  {PROGRAM_NAME} fpe decrypt (--json <json>|--file <path>)");
+    println!("  {PROGRAM_NAME} token encode <kid> (--json <json>|--file <path>)");
+    println!("  {PROGRAM_NAME} token decode (--json <json>|--file <path>)");
     println!("  {PROGRAM_NAME} message send <sender_kid> (--json <json>|--file <path>)");
     println!("  {PROGRAM_NAME} message receive (--json <json>|--file <path>)");
     println!("  {PROGRAM_NAME} message decrypt (--json <json>|--file <path>)");
@@ -959,6 +996,15 @@ fn print_config_help() {
         "  {PROGRAM_NAME} config fpe update <name> [--kid <kid>] [--alphabet <chars>] [--min-len <n>] [--max-len <n>] [--tweak-aad <aad>] [--fpe-version fpe-ff1-2025]"
     );
     println!("  {PROGRAM_NAME} config fpe delete <name>");
+    println!("  {PROGRAM_NAME} config token list");
+    println!(
+        "  {PROGRAM_NAME} config token add --name <name> --kid <kid> --token-prefix <prefix> --token-len <n> --max-plaintext-len <n> [--tokenization-version token-random-v1]"
+    );
+    println!("  {PROGRAM_NAME} config token get <name>");
+    println!(
+        "  {PROGRAM_NAME} config token update <name> [--kid <kid>] [--token-prefix <prefix>] [--token-len <n>] [--max-plaintext-len <n>] [--tokenization-version token-random-v1]"
+    );
+    println!("  {PROGRAM_NAME} config token delete <name>");
     println!();
     println!("Signs, prints, reloads, or edits the unified signed config file.");
     println!();
@@ -971,6 +1017,7 @@ fn print_config_help() {
     println!("  remote-routes         Edits local config remote_routes by unique name");
     println!("  permissions           Edits local config permissions by unique client");
     println!("  fpe                   Edits local config FPE profiles by unique name");
+    println!("  token                 Edits local config tokenization profiles by unique name");
     println!();
     println!("Behavior:");
     println!("  edit commands modify VECTIS_CONFIG_PATH only");
@@ -981,6 +1028,7 @@ fn print_config_help() {
     println!("  permissions grant/revoke only manages kid/action grants");
     println!("  section list commands print one local config array only");
     println!("  config fpe edits signed FPE field profiles; min_len must be at least 6");
+    println!("  config token edits signed reversible tokenization profiles");
     println!("  edit commands do not sign or reload automatically");
     println!();
     println!("Environment:");
@@ -1005,6 +1053,9 @@ fn print_config_help() {
     println!("  {PROGRAM_NAME} config permissions grant \"Acme App\" --kid <kid> --action message");
     println!(
         "  {PROGRAM_NAME} config fpe add --name patient-id-decimal-v1 --kid <kid> --alphabet 0123456789 --min-len 6 --max-len 32 --tweak-aad tenant=acme\\;field=patient_id\\;version=1"
+    );
+    println!(
+        "  {PROGRAM_NAME} config token add --name patient-id-token-v1 --kid <kid> --token-prefix tok_patient --token-len 32 --max-plaintext-len 1024"
     );
     print_output_help();
 }
@@ -1063,6 +1114,33 @@ fn print_fpe_help() {
     println!("Endpoints:");
     println!("  encrypt <kid>         POST /fpe/encrypt/{{kid}}, requires VECTIS_APIKEY");
     println!("  decrypt               POST /fpe/decrypt, requires VECTIS_APIKEY");
+    println!();
+    println!("Input options:");
+    println!("  --json <json>         JSON object as a shell argument");
+    println!("  --file <path>         Path to a JSON file");
+    print_output_help();
+}
+
+fn print_token_help() {
+    println!("Usage:");
+    println!("  {PROGRAM_NAME} token encode <kid> --json '<json>'");
+    println!("  {PROGRAM_NAME} token encode <kid> --file token-encode.json");
+    println!("  {PROGRAM_NAME} token decode --json '<json>'");
+    println!("  {PROGRAM_NAME} token decode --file token-decode.json");
+    println!();
+    println!(
+        "Encodes or decodes reversible random tokens with signed-config tokenization profiles."
+    );
+    println!();
+    println!("Encode request JSON:");
+    println!(r#"  {{"profile":"patient-id-token-v1","plaintext":"123456","metadata":{{}}}}"#);
+    println!();
+    println!("Decode request JSON:");
+    println!(r#"  {{"kid":"<kid>","profile":"patient-id-token-v1","token":"tok_patient_..."}}"#);
+    println!();
+    println!("Endpoints:");
+    println!("  encode <kid>          POST /token/encode/{{kid}}, requires VECTIS_APIKEY");
+    println!("  decode                POST /token/decode, requires VECTIS_APIKEY");
     println!();
     println!("Input options:");
     println!("  --json <json>         JSON object as a shell argument");

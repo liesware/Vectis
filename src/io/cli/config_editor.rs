@@ -1,5 +1,5 @@
 use super::http::{OutputFormat, invalid_input, print_response};
-use crate::core::{config, config_file, fpe, permissions, validation};
+use crate::core::{config, config_file, fpe, permissions, tokenization, validation};
 use crate::error::DynError;
 use serde_json::{Map, Value, json};
 use std::collections::HashSet;
@@ -109,6 +109,23 @@ pub async fn run_config_fpe(args: Vec<String>, output: OutputFormat) -> Result<(
         "delete" => mutate_config(output, |local| fpe_profile_delete(local, rest)).await,
         _ => Err(invalid_input(format!(
             "unknown config fpe command: {command}"
+        ))),
+    }
+}
+
+pub async fn run_config_token(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+    let (command, rest) = split_command(args, "config token command")?;
+    match command.as_str() {
+        "list" => {
+            expect_no_args(rest, "config token list")?;
+            read_config(output, |local| list_section(local, "tokenization_profiles")).await
+        }
+        "add" => mutate_config(output, |local| token_profile_add(local, rest)).await,
+        "get" => read_config(output, |local| token_profile_get(local, rest)).await,
+        "update" => mutate_config(output, |local| token_profile_update(local, rest)).await,
+        "delete" => mutate_config(output, |local| token_profile_delete(local, rest)).await,
+        _ => Err(invalid_input(format!(
+            "unknown config token command: {command}"
         ))),
     }
 }
@@ -520,6 +537,90 @@ fn fpe_profile_delete(local: &mut LocalConfig, args: Vec<String>) -> Result<Valu
     }))
 }
 
+fn token_profile_add(local: &mut LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
+    let profile = parse_token_profile_add(args)?;
+    ensure_unique_field(
+        array_mut(&mut local.value, "tokenization_profiles")?,
+        "name",
+        &profile.name,
+    )?;
+    let value = json!({
+        "name": profile.name,
+        "tokenization_version": profile.tokenization_version,
+        "kid": profile.kid,
+        "token_prefix": profile.token_prefix,
+        "token_len": profile.token_len,
+        "max_plaintext_len": profile.max_plaintext_len,
+    });
+    array_mut(&mut local.value, "tokenization_profiles")?.push(value.clone());
+
+    Ok(json!({
+        "status": "added",
+        "section": "tokenization_profiles",
+        "item": value,
+    }))
+}
+
+fn token_profile_get(local: &LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
+    let name = expect_one(args, "tokenization profile name")?;
+    validate_text("name", &name)?;
+    let profile = find_by_field(
+        array_ref(&local.value, "tokenization_profiles")?,
+        "name",
+        &name,
+    )?;
+    Ok(profile.clone())
+}
+
+fn token_profile_update(local: &mut LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
+    let (name, rest) = split_name_and_rest(args, "tokenization profile name")?;
+    validate_text("name", &name)?;
+    let mut update = parse_token_profile_update(rest)?;
+    let profile = find_by_field_mut(
+        array_mut(&mut local.value, "tokenization_profiles")?,
+        "name",
+        &name,
+    )?;
+
+    if let Some(kid) = update.kid.take() {
+        set_string(profile, "kid", kid)?;
+    }
+    if let Some(tokenization_version) = update.tokenization_version.take() {
+        set_string(profile, "tokenization_version", tokenization_version)?;
+    }
+    if let Some(token_prefix) = update.token_prefix.take() {
+        set_string(profile, "token_prefix", token_prefix)?;
+    }
+    if let Some(token_len) = update.token_len.take() {
+        set_usize(profile, "token_len", token_len)?;
+    }
+    if let Some(max_plaintext_len) = update.max_plaintext_len.take() {
+        set_usize(profile, "max_plaintext_len", max_plaintext_len)?;
+    }
+
+    Ok(json!({
+        "status": "updated",
+        "section": "tokenization_profiles",
+        "item": profile,
+    }))
+}
+
+fn token_profile_delete(local: &mut LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
+    let name = expect_one(args, "tokenization profile name")?;
+    validate_text("name", &name)?;
+    let removed = remove_by_field(
+        array_mut(&mut local.value, "tokenization_profiles")?,
+        "name",
+        &name,
+    )?;
+
+    Ok(json!({
+        "status": "deleted",
+        "section": "tokenization_profiles",
+        "item": removed,
+    }))
+}
+
 #[derive(Default)]
 struct RouteAdd {
     name: String,
@@ -588,6 +689,24 @@ struct FpeProfileUpdate {
     min_len: Option<usize>,
     max_len: Option<usize>,
     tweak_aad: Option<String>,
+}
+
+struct TokenProfileAdd {
+    name: String,
+    tokenization_version: String,
+    kid: String,
+    token_prefix: String,
+    token_len: usize,
+    max_plaintext_len: usize,
+}
+
+#[derive(Default)]
+struct TokenProfileUpdate {
+    kid: Option<String>,
+    tokenization_version: Option<String>,
+    token_prefix: Option<String>,
+    token_len: Option<usize>,
+    max_plaintext_len: Option<usize>,
 }
 
 fn parse_route_add(args: Vec<String>) -> Result<RouteAdd, DynError> {
@@ -963,6 +1082,116 @@ fn parse_fpe_profile_update(args: Vec<String>) -> Result<FpeProfileUpdate, DynEr
     Ok(parsed)
 }
 
+fn parse_token_profile_add(args: Vec<String>) -> Result<TokenProfileAdd, DynError> {
+    let mut name = String::new();
+    let mut tokenization_version = String::from(tokenization::TOKENIZATION_VERSION_RANDOM_V1);
+    let mut kid = String::new();
+    let mut token_prefix = String::new();
+    let mut token_len = None;
+    let mut max_plaintext_len = None;
+    let mut seen = HashSet::new();
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--name" => name = flag_once(&args, &mut seen, &mut index, "--name")?,
+            "--kid" => kid = flag_once(&args, &mut seen, &mut index, "--kid")?,
+            "--tokenization-version" => {
+                tokenization_version =
+                    flag_once(&args, &mut seen, &mut index, "--tokenization-version")?
+            }
+            "--token-prefix" => {
+                token_prefix = flag_once(&args, &mut seen, &mut index, "--token-prefix")?
+            }
+            "--token-len" => {
+                let value = flag_once(&args, &mut seen, &mut index, "--token-len")?;
+                token_len = Some(parse_usize_flag("--token-len", &value)?);
+            }
+            "--max-plaintext-len" => {
+                let value = flag_once(&args, &mut seen, &mut index, "--max-plaintext-len")?;
+                max_plaintext_len = Some(parse_usize_flag("--max-plaintext-len", &value)?);
+            }
+            value => {
+                return Err(invalid_input(format!(
+                    "unknown config token add option: {value}"
+                )));
+            }
+        }
+    }
+
+    let token_len = token_len.ok_or_else(|| invalid_input("--token-len is required"))?;
+    let max_plaintext_len =
+        max_plaintext_len.ok_or_else(|| invalid_input("--max-plaintext-len is required"))?;
+    validate_token_profile_parts(
+        &name,
+        &kid,
+        &tokenization_version,
+        &token_prefix,
+        token_len,
+        max_plaintext_len,
+    )?;
+
+    Ok(TokenProfileAdd {
+        name,
+        tokenization_version,
+        kid,
+        token_prefix,
+        token_len,
+        max_plaintext_len,
+    })
+}
+
+fn parse_token_profile_update(args: Vec<String>) -> Result<TokenProfileUpdate, DynError> {
+    let mut parsed = TokenProfileUpdate::default();
+    let mut seen = HashSet::new();
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--kid" => {
+                let value = flag_once(&args, &mut seen, &mut index, "--kid")?;
+                parsed.kid = Some(validate_kid_value("kid", &value)?);
+            }
+            "--tokenization-version" => {
+                let value = flag_once(&args, &mut seen, &mut index, "--tokenization-version")?;
+                tokenization::validate_tokenization_version(&value)?;
+                parsed.tokenization_version = Some(value);
+            }
+            "--token-prefix" => {
+                let value = flag_once(&args, &mut seen, &mut index, "--token-prefix")?;
+                tokenization::validate_token_prefix(&value)?;
+                parsed.token_prefix = Some(value);
+            }
+            "--token-len" => {
+                let value = flag_once(&args, &mut seen, &mut index, "--token-len")?;
+                parsed.token_len = Some(parse_usize_flag("--token-len", &value)?);
+            }
+            "--max-plaintext-len" => {
+                let value = flag_once(&args, &mut seen, &mut index, "--max-plaintext-len")?;
+                parsed.max_plaintext_len = Some(parse_usize_flag("--max-plaintext-len", &value)?);
+            }
+            value => {
+                return Err(invalid_input(format!(
+                    "unknown config token update option: {value}"
+                )));
+            }
+        }
+    }
+
+    if parsed.kid.is_none()
+        && parsed.tokenization_version.is_none()
+        && parsed.token_prefix.is_none()
+        && parsed.token_len.is_none()
+        && parsed.max_plaintext_len.is_none()
+    {
+        return Err(invalid_input(
+            "config token update requires at least one field",
+        ));
+    }
+
+    Ok(parsed)
+}
+
 fn load_local_config() -> Result<LocalConfig, DynError> {
     let app = config::app_config()?;
     let value = match config_file::read_config_file(&app.config_path) {
@@ -989,6 +1218,7 @@ fn empty_config() -> Value {
         "remote_routes": [],
         "permissions": [],
         "fpe_profiles": [],
+        "tokenization_profiles": [],
     })
 }
 
@@ -1001,6 +1231,7 @@ fn ensure_config_shape(value: &mut Value) -> Result<(), DynError> {
     ensure_section_array(object, "remote_routes")?;
     ensure_section_array(object, "permissions")?;
     ensure_section_array(object, "fpe_profiles")?;
+    ensure_section_array(object, "tokenization_profiles")?;
     Ok(())
 }
 
@@ -1026,6 +1257,19 @@ fn validate_local_config(local: &LocalConfig) -> Result<(), DynError> {
             0u8;
             crate::core::fpe::FPE_KEY_SIZE_BYTES
         ]))
+        },
+        |_, _, _| {
+            Ok(crate::core::tokenization::DerivedTokenizationKeys {
+                hash_key: zeroize::Zeroizing::new(vec![
+                    0u8;
+                    crate::core::tokenization::TOKEN_KEY_SIZE_BYTES
+                ]),
+                data_key: zeroize::Zeroizing::new(vec![
+                    1u8;
+                    crate::core::tokenization::TOKEN_KEY_SIZE_BYTES
+                ]),
+                cipher_algorithm: String::from("AES-256/GCM"),
+            })
         },
     )?;
     Ok(())
@@ -1132,6 +1376,26 @@ fn validate_fpe_profile_parts(
     validate_text("name", name)?;
     validate_kid("kid", kid)?;
     fpe::validate_fpe_profile_fields(name, fpe_version, alphabet, min_len, max_len, tweak_aad)?;
+    Ok(())
+}
+
+fn validate_token_profile_parts(
+    name: &str,
+    kid: &str,
+    tokenization_version: &str,
+    token_prefix: &str,
+    token_len: usize,
+    max_plaintext_len: usize,
+) -> Result<(), DynError> {
+    validate_text("name", name)?;
+    validate_kid("kid", kid)?;
+    tokenization::validate_tokenization_profile_fields(
+        name,
+        tokenization_version,
+        token_prefix,
+        token_len,
+        max_plaintext_len,
+    )?;
     Ok(())
 }
 
@@ -1522,6 +1786,49 @@ mod tests {
 
         fpe_profile_delete(&mut local, vec![String::from("patient-id")]).unwrap();
         assert!(array_ref(&local.value, "fpe_profiles").unwrap().is_empty());
+    }
+
+    #[test]
+    fn token_profile_add_get_update_and_delete_use_name() {
+        let mut local = local_config();
+        token_profile_add(
+            &mut local,
+            vec![
+                String::from("--name"),
+                String::from("patient-token"),
+                String::from("--kid"),
+                "a".repeat(64),
+                String::from("--token-prefix"),
+                String::from("tok_patient"),
+                String::from("--token-len"),
+                String::from("32"),
+                String::from("--max-plaintext-len"),
+                String::from("1024"),
+            ],
+        )
+        .unwrap();
+
+        let profile = token_profile_get(&local, vec![String::from("patient-token")]).unwrap();
+        assert_eq!(profile["kid"], "a".repeat(64));
+
+        token_profile_update(
+            &mut local,
+            vec![
+                String::from("patient-token"),
+                String::from("--max-plaintext-len"),
+                String::from("512"),
+            ],
+        )
+        .unwrap();
+        let profile = token_profile_get(&local, vec![String::from("patient-token")]).unwrap();
+        assert_eq!(profile["max_plaintext_len"], 512);
+
+        token_profile_delete(&mut local, vec![String::from("patient-token")]).unwrap();
+        assert!(
+            array_ref(&local.value, "tokenization_profiles")
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

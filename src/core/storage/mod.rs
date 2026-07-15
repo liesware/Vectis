@@ -7,11 +7,18 @@ mod sqlite;
 
 pub const STORAGE_TYPES: &[&str] = &["sqlite", "postgres"];
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct OpsKeyRow {
     pub kid: String,
     pub keys: String,
     pub properties: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TokenRow {
+    pub kid: String,
+    pub hashid: String,
+    pub data: String,
 }
 
 pub struct StorageState {
@@ -65,6 +72,25 @@ impl StorageState {
         match &self.backend {
             StorageBackend::Sqlite(sqlite) => sqlite.list_ops_keys().await,
             StorageBackend::Postgres(postgres) => postgres.list_ops_keys().await,
+        }
+    }
+
+    pub async fn save_token(
+        &self,
+        kid: &str,
+        hashid: &str,
+        data: &str,
+    ) -> Result<TokenRow, DynError> {
+        match &self.backend {
+            StorageBackend::Sqlite(sqlite) => sqlite.save_token(kid, hashid, data).await,
+            StorageBackend::Postgres(postgres) => postgres.save_token(kid, hashid, data).await,
+        }
+    }
+
+    pub async fn get_token(&self, kid: &str, hashid: &str) -> Result<TokenRow, DynError> {
+        match &self.backend {
+            StorageBackend::Sqlite(sqlite) => sqlite.get_token(kid, hashid).await,
+            StorageBackend::Postgres(postgres) => postgres.get_token(kid, hashid).await,
         }
     }
 

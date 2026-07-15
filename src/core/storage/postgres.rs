@@ -1,4 +1,4 @@
-use crate::core::storage::OpsKeyRow;
+use crate::core::storage::{OpsKeyRow, TokenRow};
 use crate::error::DynError;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::{Postgres, Row, Transaction};
@@ -21,6 +21,8 @@ impl PostgresStorage {
 
         validate_opskeys_schema(&pool).await?;
         info!("validated opskeys postgres schema");
+        validate_tokens_schema(&pool).await?;
+        info!("validated tokens postgres schema");
 
         Ok(Self { pool })
     }
@@ -80,6 +82,59 @@ impl PostgresStorage {
         }
 
         Ok(keys)
+    }
+
+    pub async fn save_token(
+        &self,
+        kid: &str,
+        hashid: &str,
+        data: &str,
+    ) -> Result<TokenRow, DynError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "
+            INSERT INTO tokens (kid, hashid, data)
+            VALUES ($1, $2, $3)
+            ",
+        )
+        .bind(kid)
+        .bind(hashid)
+        .bind(data)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        info!(kid, hashid, "inserted token");
+
+        Ok(TokenRow {
+            kid: kid.to_string(),
+            hashid: hashid.to_string(),
+            data: data.to_string(),
+        })
+    }
+
+    pub async fn get_token(&self, kid: &str, hashid: &str) -> Result<TokenRow, DynError> {
+        let row = sqlx::query(
+            "
+            SELECT kid, hashid, data
+            FROM tokens
+            WHERE kid = $1
+              AND hashid = $2
+            ",
+        )
+        .bind(kid)
+        .bind(hashid)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(row) = row else {
+            return Err(crate::error::not_found("token not found"));
+        };
+
+        Ok(TokenRow {
+            kid: row.get("kid"),
+            hashid: row.get("hashid"),
+            data: row.get("data"),
+        })
     }
 
     pub async fn update_ops_key_properties(
@@ -226,10 +281,43 @@ async fn validate_opskeys_schema(pool: &PgPool) -> Result<(), DynError> {
         crate::error::storage("postgres schema is missing opskeys.properties column")
     })?;
 
-    validate_varchar_column(&kid, "kid", 128, false)?;
-    validate_text_column(&keys, "keys", false)?;
-    validate_text_column(&properties, "properties", false)?;
-    validate_primary_key(pool).await?;
+    validate_varchar_column(&kid, "opskeys", "kid", 128, false)?;
+    validate_text_column(&keys, "opskeys", "keys", false)?;
+    validate_text_column(&properties, "opskeys", "properties", false)?;
+    validate_primary_key(pool, "opskeys", &["kid"]).await?;
+
+    Ok(())
+}
+
+async fn validate_tokens_schema(pool: &PgPool) -> Result<(), DynError> {
+    let columns = sqlx::query(
+        "
+        SELECT column_name, data_type, character_maximum_length, is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'tokens'
+        ",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    if columns.is_empty() {
+        return Err(crate::error::storage(
+            "postgres schema is missing tokens table",
+        ));
+    }
+
+    let kid = find_column(&columns, "kid")
+        .ok_or_else(|| crate::error::storage("postgres schema is missing tokens.kid column"))?;
+    let hashid = find_column(&columns, "hashid")
+        .ok_or_else(|| crate::error::storage("postgres schema is missing tokens.hashid column"))?;
+    let data = find_column(&columns, "data")
+        .ok_or_else(|| crate::error::storage("postgres schema is missing tokens.data column"))?;
+
+    validate_varchar_column(&kid, "tokens", "kid", 128, false)?;
+    validate_varchar_column(&hashid, "tokens", "hashid", 128, false)?;
+    validate_text_column(&data, "tokens", "data", false)?;
+    validate_primary_key(pool, "tokens", &["kid", "hashid"]).await?;
 
     Ok(())
 }
@@ -263,6 +351,7 @@ fn find_column(rows: &[sqlx::postgres::PgRow], name: &str) -> Option<ColumnInfo>
 
 fn validate_varchar_column(
     column: &ColumnInfo,
+    table_name: &str,
     expected_name: &str,
     expected_max_length: i32,
     expected_nullable: bool,
@@ -273,7 +362,7 @@ fn validate_varchar_column(
         || column.nullable != expected_nullable
     {
         return Err(crate::error::storage(format!(
-            "postgres schema mismatch for opskeys.{expected_name}: expected type=VARCHAR({expected_max_length}), nullable={expected_nullable}",
+            "postgres schema mismatch for {table_name}.{expected_name}: expected type=VARCHAR({expected_max_length}), nullable={expected_nullable}",
         )));
     }
 
@@ -282,6 +371,7 @@ fn validate_varchar_column(
 
 fn validate_text_column(
     column: &ColumnInfo,
+    table_name: &str,
     expected_name: &str,
     expected_nullable: bool,
 ) -> Result<(), DynError> {
@@ -291,14 +381,18 @@ fn validate_text_column(
         || column.nullable != expected_nullable
     {
         return Err(crate::error::storage(format!(
-            "postgres schema mismatch for opskeys.{expected_name}: expected type=TEXT, nullable={expected_nullable}",
+            "postgres schema mismatch for {table_name}.{expected_name}: expected type=TEXT, nullable={expected_nullable}",
         )));
     }
 
     Ok(())
 }
 
-async fn validate_primary_key(pool: &PgPool) -> Result<(), DynError> {
+async fn validate_primary_key(
+    pool: &PgPool,
+    table_name: &str,
+    expected_columns: &[&str],
+) -> Result<(), DynError> {
     let rows = sqlx::query(
         "
         SELECT a.attname
@@ -307,19 +401,21 @@ async fn validate_primary_key(pool: &PgPool) -> Result<(), DynError> {
         JOIN pg_namespace n ON n.oid = t.relnamespace
         JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(i.indkey)
         WHERE n.nspname = 'public'
-          AND t.relname = 'opskeys'
+          AND t.relname = $1
           AND i.indisprimary
         ORDER BY a.attnum
         ",
     )
+    .bind(table_name)
     .fetch_all(pool)
     .await?;
 
     let primary_key_columns: Vec<String> = rows.iter().map(|row| row.get("attname")).collect();
-    if primary_key_columns != ["kid"] {
-        return Err(crate::error::storage(
-            "postgres schema mismatch for opskeys primary key: expected kid",
-        ));
+    if primary_key_columns != expected_columns {
+        return Err(crate::error::storage(format!(
+            "postgres schema mismatch for {table_name} primary key: expected {}",
+            expected_columns.join(", ")
+        )));
     }
 
     Ok(())

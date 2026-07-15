@@ -75,6 +75,8 @@ Endpoints requiring auth:
 - `POST /message/internal/decrypt`
 - `POST /fpe/encrypt/{kid}`
 - `POST /fpe/decrypt`
+- `POST /token/encode/{kid}`
+- `POST /token/decode`
 
 Endpoints without auth:
 
@@ -182,12 +184,13 @@ Exposed metrics:
 - `vectis_remote_routes_loaded`
 - `vectis_permission_clients`
 - `vectis_fpe_profiles_loaded`
+- `vectis_tokenization_profiles_loaded`
 - `vectis_permission_total{result}` (`allow` or `deny`)
 - `vectis_config_reload_total{result}` (`success` or `failed`)
 - `vectis_config_last_reload_timestamp_seconds{result}` (`success` or `failed`)
 - `vectis_keys_reload_total{result}` (`success` or `failed`)
 - `vectis_message_total{operation,result}` (`send`, `receive`, or `decrypt`; `success`, `denied`, or `failed`)
-- `vectis_crypto_operation_total{operation,result}` (`sign`, `verify`, `encrypt`, or `decrypt`; `success` or `failed`)
+- `vectis_crypto_operation_total{operation,result}` (`sign`, `verify`, `encrypt`, `decrypt`, `fpe_encrypt`, `fpe_decrypt`, `token_encode`, or `token_decode`; `success` or `failed`)
 
 ### GET /self-test/init
 
@@ -512,7 +515,8 @@ Response:
   "routes_loaded": 1,
   "remote_routes_loaded": 1,
   "clients_loaded": 1,
-  "fpe_profiles_loaded": 1
+  "fpe_profiles_loaded": 1,
+  "tokenization_profiles_loaded": 1
 }
 ```
 
@@ -593,6 +597,8 @@ Allowed actions:
 - `message`
 - `fpe-encrypt`
 - `fpe-decrypt`
+- `token-encode`
+- `token-decode`
 - `metrics`
 
 Permission mapping:
@@ -607,9 +613,11 @@ Permission mapping:
 | `message` | `POST /message/{sender_kid}`, `POST /message/decrypt`, `POST /message/internal/encrypt/{kid}`, `POST /message/internal/decrypt` |
 | `fpe-encrypt` | `POST /fpe/encrypt/{kid}` |
 | `fpe-decrypt` | `POST /fpe/decrypt` |
+| `token-encode` | `POST /token/encode/{kid}` |
+| `token-decode` | `POST /token/decode` |
 | `metrics` | `GET /metrics` with `kid: "*"` |
 
-Root always passes permission checks. Routes operations require root or `admin`; there is no granular `routes` action. `fpe-encrypt` and `fpe-decrypt` require explicit KID-scoped grants; `kid: "*"` is rejected for those actions.
+Root always passes permission checks. Routes operations require root or `admin`; there is no granular `routes` action. FPE and tokenization actions require explicit KID-scoped grants; `kid: "*"` is rejected for those actions.
 
 Permissions file shape:
 
@@ -1067,6 +1075,63 @@ Response:
 }
 ```
 
+## Tokenization
+
+Tokenization is a local reversible random-token operation. It returns a visible random token and stores the original plaintext plus optional metadata encrypted in storage. The database only sees `kid`, `hashid`, and encrypted `data`; it never sees plaintext, metadata, profile name as a column, or the visible token.
+
+Tokenization profiles live in `config.json` under `tokenization_profiles`. Requests cannot provide `token_prefix`, `token_len`, `max_plaintext_len`, or `tokenization_version`; those values come only from signed config.
+
+`hash_key` and `data_key` are derived from the operational key's symmetric key with HKDF-SHA256 and are prepared when config is loaded. The derivation binds the profile name, KID, and `tokenization_version`. `tokens.data` AAD also binds `tokenization_version`. Tokens are random and are not deterministic for the same plaintext.
+
+Encode `metadata` is optional, must be a JSON object when present, and its compact serialized JSON representation must be at most 128 characters.
+
+### POST /token/encode/{kid}
+
+Requires auth and `token-encode` permission for the path `kid`. The key must be `active`.
+
+Request:
+
+```json
+{
+  "profile": "patient-id-token-v1",
+  "plaintext": "123456",
+  "metadata": { "tenant": "acme" }
+}
+```
+
+Response:
+
+```json
+{
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "profile": "patient-id-token-v1",
+  "token": "tok_patient_vGqyEeXKcKz5QK1jwBQTyQ"
+}
+```
+
+### POST /token/decode
+
+Requires auth and `token-decode` permission for the request `kid`. The key may be `active` or `retired`.
+
+Request:
+
+```json
+{
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "profile": "patient-id-token-v1",
+  "token": "tok_patient_vGqyEeXKcKz5QK1jwBQTyQ"
+}
+```
+
+Response:
+
+```json
+{
+  "plaintext": "123456",
+  "metadata": { "tenant": "acme" }
+}
+```
+
 ## Final App Delivery
 
 When `POST /message` receives and validates a protected message, it delivers this JSON to the final app:
@@ -1151,6 +1216,16 @@ Expected file shape:
       "tweak_aad": "tenant=acme;field=patient_id;version=1",
       "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed"
     }
+  ],
+  "tokenization_profiles": [
+    {
+      "name": "patient-id-token-v1",
+      "tokenization_version": "token-random-v1",
+      "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+      "token_prefix": "tok_patient",
+      "token_len": 32,
+      "max_plaintext_len": 1024
+    }
   ]
 }
 ```
@@ -1164,6 +1239,7 @@ Top level:
 | `remote_routes` | yes (may be `[]`) | array | Authorized remote Vectis peers. |
 | `permissions` | yes (may be `[]`) | array | Non-root API key clients and their allowed actions. |
 | `fpe_profiles` | no (defaults to `[]`) | array | Signed local FPE field profiles. |
+| `tokenization_profiles` | no (defaults to `[]`) | array | Signed local reversible tokenization profiles. |
 
 `routes[]` entries:
 
@@ -1194,7 +1270,7 @@ Top level:
 | `client` | yes | text, unique | Client label. |
 | `apikey_hash` | yes | 64 hex (32 bytes) | Server-side verifier for this client's `X-API-Key`. |
 | `status` | yes | `active` \| `disabled` \| `revoked` | Only `active` clients are authorized. |
-| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `fpe-encrypt`, `fpe-decrypt`, `metrics`. `kid: "*"` is allowed with global actions such as `admin` and `metrics`; `fpe-encrypt` and `fpe-decrypt` require explicit KIDs. An `admin` action grants all endpoints and ignores kid-scoped grants. |
+| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `fpe-encrypt`, `fpe-decrypt`, `token-encode`, `token-decode`, `metrics`. `kid: "*"` is allowed with global actions such as `admin` and `metrics`; FPE and tokenization actions require explicit KIDs. An `admin` action grants all endpoints and ignores kid-scoped grants. |
 
 `fpe_profiles[]` entries:
 
@@ -1207,6 +1283,17 @@ Top level:
 | `max_len` | yes | integer >= `min_len` | Maximum accepted field length. |
 | `tweak_aad` | yes | non-empty text | Literal cryptographic tweak context from signed config. |
 | `kid` | yes | loaded local KID | Operational key whose symmetric key derives the FPE key. |
+
+`tokenization_profiles[]` entries:
+
+| Field | Required | Value | Meaning |
+| --- | --- | --- | --- |
+| `name` | yes | unique non-empty text | Profile selected by tokenization requests. |
+| `tokenization_version` | yes | `token-random-v1` | Tokenization profile version. |
+| `kid` | yes | loaded local KID | Operational key whose symmetric key derives tokenization keys. |
+| `token_prefix` | yes | non-empty visible token prefix, no whitespace/control chars | Prefix used in returned tokens. |
+| `token_len` | yes | integer >= 32 | Random bytes generated before base64url encoding. |
+| `max_plaintext_len` | yes | integer 1..1024 | Maximum plaintext length accepted by encode. |
 
 Routing behavior:
 

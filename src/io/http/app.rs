@@ -56,6 +56,20 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
                 fpe_version,
             )
         },
+        |profile_name, kid, tokenization_version| {
+            let loaded_key = keys_db_state.get(kid).ok_or_else(|| {
+                crate::error::invalid_input(format!(
+                    "tokenization profile references kid not loaded in memory: {kid}"
+                ))
+            })?;
+            crate::core::tokenization::derive_tokenization_keys(
+                loaded_key.keys().symmetric().key_hex(),
+                loaded_key.keys().symmetric().variant(),
+                profile_name,
+                kid,
+                tokenization_version,
+            )
+        },
     )?;
     let started_at = validation::current_timestamp()?;
     info!(
@@ -88,6 +102,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         loaded_remote_routes = config_state.remote_routes.len(),
         loaded_permission_clients = config_state.permissions.len(),
         loaded_fpe_profiles = config_state.fpe_profiles.len(),
+        loaded_tokenization_profiles = config_state.tokenization_profiles.len(),
         "signed config loaded into http state"
     );
     if metrics_handle.is_some() {
@@ -98,6 +113,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
             config_state.remote_routes.len(),
             config_state.permissions.len(),
             config_state.fpe_profiles.len(),
+            config_state.tokenization_profiles.len(),
         );
     }
     let app = super::router(super::HttpState::new(super::HttpStateInput {

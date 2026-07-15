@@ -40,8 +40,9 @@ At the current stage, Vectis provides:
 - authenticated encryption for protected messages;
 - local re-encryption before final application delivery;
 - a hybrid timestamp/signature protocol;
-- signed runtime configuration for routes, remote routes, permissions, and FPE profiles;
+- signed runtime configuration for routes, remote routes, permissions, FPE profiles, and tokenization profiles;
 - local format-preserving encryption for signed field profiles;
+- local reversible random tokenization for signed token profiles;
 - SQLite/PostgreSQL-backed storage behind a storage abstraction;
 - API key authentication using derived verification material;
 - startup, liveness, readiness, metrics, structured logs, and audit logs;
@@ -83,6 +84,7 @@ The signed config controls:
 - authorized remote Vectis routes;
 - non-root API key permissions.
 - local FPE field profiles.
+- local tokenization profiles.
 
 ### Cryptographic Material Has Lifecycle
 
@@ -124,6 +126,7 @@ Important modules:
 - `core/routes.rs`: final app route validation and lookup.
 - `core/remote_routes.rs`: remote Vectis route validation and lookup.
 - `core/permissions.rs`: permission model and API key client authorization data.
+- `core/tokenization.rs`: reversible tokenization profile validation and token data crypto.
 - `core/storage/mod.rs`: storage abstraction.
 - `core/storage/sqlite.rs`: SQLite implementation.
 - `core/storage/postgres.rs`: PostgreSQL implementation.
@@ -147,6 +150,7 @@ Important modules:
 - `ops/sign.rs`: hybrid signing and signature verification.
 - `ops/message.rs`: protected message send, receive, decrypt, internal encrypt,
   and internal decrypt flows.
+- `ops/tokenization.rs`: reversible token encode/decode flows.
 - `ops/apikey.rs`: API key generation and hashing.
 - `ops/test.rs`: self-test operations.
 - `ops/contracts.rs`: shared request and response contracts.
@@ -344,7 +348,8 @@ Runtime policy lives in one signed JSON file:
   "routes": [],
   "remote_routes": [],
   "permissions": [],
-  "fpe_profiles": []
+  "fpe_profiles": [],
+  "tokenization_profiles": []
 }
 ```
 
@@ -367,6 +372,7 @@ empty config sections:
 - no remote routes;
 - no non-root permission clients;
 - no FPE profiles.
+- no tokenization profiles.
 
 If the config file exists, it must be valid and its signature must verify.
 Invalid existing config is fatal at startup.
@@ -454,6 +460,10 @@ Supported actions:
 - `sign`;
 - `message`;
 - `metrics`.
+- `fpe-encrypt`;
+- `fpe-decrypt`;
+- `token-encode`;
+- `token-decode`.
 
 `admin` grants access to all protected endpoints and ignores kid-scoped grants.
 `GET /permissions` exposes a redacted administrative view of the effective
@@ -533,6 +543,29 @@ come from signed config. FPE is deterministic for the same key/profile/tweak and
 plaintext. It preserves format, but it does not authenticate data and does not
 replace AEAD message encryption.
 
+## Reversible Tokenization
+
+Vectis exposes local reversible tokenization endpoints for applications that
+need stable-looking tokens while storing the original value encrypted:
+
+- `POST /token/encode/{kid}`;
+- `POST /token/decode`.
+
+Tokenization profiles live in signed config under `tokenization_profiles`.
+Requests select a profile by name; token prefix, token length, plaintext length
+limit, tokenization version, and bound KID come from signed config. Encode
+generates a random visible token, stores encrypted payload data in storage, and
+returns only the token. Decode hashes the presented token, looks up the encrypted
+payload, decrypts it, and returns the original plaintext plus optional metadata.
+Tokenization hash/data keys are derived per profile, KID, and
+`tokenization_version`; the encrypted token payload AAD also binds
+`tokenization_version`.
+Encode metadata must be a JSON object and is capped at 128 characters after
+compact JSON serialization.
+
+The database stores only `kid`, `hashid`, and encrypted `data`. It does not see
+the profile name, plaintext, metadata, or visible token.
+
 ## Hybrid Timestamp And Signing Protocol
 
 `POST /sign/{kid}` signs a supplied message hash. The caller supplies:
@@ -602,6 +635,8 @@ Current logical storage operations:
 - get operational key by ID;
 - list operational keys;
 - update encrypted properties;
+- save tokenization data;
+- get tokenization data by KID and hash ID;
 - health check.
 
 Current SQLite table:
@@ -612,6 +647,13 @@ CREATE TABLE IF NOT EXISTS opskeys (
     keys VARCHAR(10240) NOT NULL,
     properties VARCHAR(10240) NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS tokens (
+    kid VARCHAR(128) NOT NULL,
+    hashid VARCHAR(128) NOT NULL,
+    data VARCHAR(10240) NOT NULL,
+    PRIMARY KEY (kid, hashid)
+);
 ```
 
 Current PostgreSQL table:
@@ -621,6 +663,13 @@ CREATE TABLE opskeys (
     kid VARCHAR(128) PRIMARY KEY,
     keys TEXT NOT NULL,
     properties TEXT NOT NULL
+);
+
+CREATE TABLE tokens (
+    kid VARCHAR(128) NOT NULL,
+    hashid VARCHAR(128) NOT NULL,
+    data TEXT NOT NULL,
+    PRIMARY KEY (kid, hashid)
 );
 ```
 
@@ -676,6 +725,7 @@ Vectis exposes these major endpoint groups:
 - internal messaging: `/message/internal/encrypt/{kid}`,
   `/message/internal/decrypt`;
 - FPE: `/fpe/encrypt/{kid}`, `/fpe/decrypt`;
+- tokenization: `/token/encode/{kid}`, `/token/decode`;
 - self-test: `/self-test/init`, `/self-test/keys/{kid}`.
 
 Public endpoints are intentionally limited. Protected endpoints require
@@ -704,6 +754,8 @@ HTTP client commands:
 - public key lookup (`GET /pub`);
 - sign;
 - message send/decrypt;
+- FPE encrypt/decrypt;
+- token encode/decode;
 - self-test.
 
 The CLI defaults to YAML output for readability, with JSON available for HTTP

@@ -38,7 +38,7 @@ Important `core` responsibilities:
 - cryptographic helper functions;
 - external input validators;
 - signed config loading;
-- routes, remote routes, permissions, and FPE profiles;
+- routes, remote routes, permissions, FPE profiles, and tokenization profiles;
 - storage abstraction and SQLite/PostgreSQL backends;
 - HTTP client construction;
 - operational logs, audit logs, and metrics;
@@ -52,6 +52,7 @@ Important `ops` responsibilities:
 - public key output;
 - hybrid timestamp signing and verification;
 - protected message send, receive, decrypt, and internal message encryption;
+- reversible token encode/decode flows;
 - API key generation.
 
 Important `io/http` responsibilities:
@@ -127,8 +128,8 @@ material.
 Reload boundaries are explicit:
 
 - `POST /keys/reload` refreshes loaded key state from storage.
-- `POST /config/reload` refreshes signed routes, remote routes, and
-  permissions plus FPE profiles.
+- `POST /config/reload` refreshes signed routes, remote routes, permissions,
+  FPE profiles, and tokenization profiles.
 - missing-key lazy-load loads one key from storage if a request references a
   valid `kid` not present in memory.
 
@@ -268,6 +269,33 @@ using the profile name, KID, and FPE version as AAD-style info. Encrypt requires
 an `active` key. Decrypt allows `active` and `retired`. FPE preserves format but
 does not authenticate data and is not part of the remote message protocol.
 
+### Tokenization Flow
+
+`POST /token/encode/{kid}` and `POST /token/decode` are local reversible
+tokenization operations. The request selects a profile name, but the profile
+parameters come from signed config:
+
+- `token_prefix`;
+- `token_len`;
+- `max_plaintext_len`;
+- `tokenization_version`;
+- bound local `kid`.
+
+Config loading derives and stores tokenization hash/data keys from the loaded
+key's symmetric key. The derivation binds profile name, KID, and
+`tokenization_version`; `tokens.data` AAD also binds `tokenization_version`.
+Encode generates a random visible token, hashes it to a storage `hashid`,
+encrypts plaintext plus optional metadata, and stores the row in `tokens`.
+Decode hashes the presented token, loads `tokens.data`, decrypts the payload,
+validates that the stored profile matches the request, and returns plaintext
+plus optional metadata.
+
+Encode metadata must be a JSON object and is capped at 128 characters after
+compact JSON serialization before it is encrypted into `tokens.data`.
+
+The database never receives the visible token, plaintext, metadata, or profile
+as separate columns. It stores only `kid`, `hashid`, and encrypted `data`.
+
 ## Signed Config Flow
 
 Runtime policy is stored in `config.json` and signed in `config_sign.json`.
@@ -278,6 +306,7 @@ The signed config contains:
 - remote Vectis routes and peer public keys;
 - API key permission clients.
 - FPE field profiles.
+- tokenization profiles.
 
 The signing flow uses canonical JSON. Vectis signs the canonical config hash
 inside a timestamp token using init keys. The signature is not bound to the local

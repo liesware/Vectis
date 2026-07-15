@@ -45,7 +45,8 @@ It is not a cluster-wide cache and it is not automatically synchronized.
 ## Shared Storage
 
 PostgreSQL is the shared durable backend for clustered deployments. It stores
-encrypted operational key material in `opskeys`.
+encrypted operational key material in `opskeys` and encrypted reversible
+tokenization payloads in `tokens`.
 
 PostgreSQL is durable storage. It is not automatic live state.
 
@@ -61,10 +62,17 @@ CREATE TABLE opskeys (
     keys TEXT NOT NULL,
     properties TEXT NOT NULL
 );
+
+CREATE TABLE tokens (
+    kid VARCHAR(128) NOT NULL,
+    hashid VARCHAR(128) NOT NULL,
+    data TEXT NOT NULL,
+    PRIMARY KEY (kid, hashid)
+);
 ```
 
-`keys` and `properties` are encrypted by Vectis before storage. PostgreSQL
-does not need to understand their contents.
+`keys`, `properties`, and `tokens.data` are encrypted by Vectis before storage.
+PostgreSQL does not need to understand their contents.
 
 ## Key Loading
 
@@ -93,6 +101,8 @@ Config controls:
 - local final app routes;
 - remote Vectis routes;
 - API key permissions.
+- FPE profiles;
+- tokenization profiles.
 
 `POST /config/reload` reloads config only on the node that receives the request.
 There is no cluster-wide config reload.
@@ -152,7 +162,8 @@ Vectis owns:
 - reporting storage readiness.
 
 For runtime access, Vectis needs `SELECT`, `INSERT`, and `UPDATE` on
-`public.opskeys`. It does not need schema creation privileges.
+`public.opskeys`, plus `SELECT` and `INSERT` on `public.tokens`. It does not
+need schema creation privileges.
 
 ## Failure Modes
 

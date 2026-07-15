@@ -22,7 +22,7 @@ A useful Vectis recovery set includes:
 - the unseal key or unseal provider state;
 - `config.json`;
 - `config_sign.json`;
-- PostgreSQL `opskeys`;
+- PostgreSQL `opskeys` and `tokens`;
 - API key distribution material;
 - TLS certificate and key material when running in `prod`;
 - audit logs if they are required for investigation or compliance.
@@ -54,6 +54,7 @@ Each Vectis node keeps its own in-memory state:
 
 - loaded operational keys in `KeysDbState`;
 - signed config state for routes, remote routes, and permissions;
+- signed config state for FPE and tokenization profiles;
 - local HTTP runtime state.
 
 If one node creates or updates a key, PostgreSQL stores the durable row. Other
@@ -80,7 +81,7 @@ set of data and cryptographic state.
 
 Recommended restore order:
 
-1. Restore PostgreSQL and verify the `opskeys` table exists.
+1. Restore PostgreSQL and verify the `opskeys` and `tokens` tables exist.
 2. Restore `init.json` and the matching unseal method.
 3. Restore `config.json` and `config_sign.json`.
 4. Restore TLS material and runtime secrets if used.
@@ -124,6 +125,7 @@ Recovery:
 
 - restart Vectis nodes, or explicitly run `POST /keys/reload` on each node;
 - validate lifecycle state for sensitive keys;
+- validate token decode for any tokenized fields that must be recoverable;
 - run message and signing smoke tests.
 
 ### Config Invalid Or Suspicious Rollback
@@ -248,4 +250,3 @@ For functional smoke tests, validate:
 If the smoke test fails after restore, do not assume the database is the only
 problem. Check init material, unseal state, signed config, lifecycle state,
 remote routes, and final app reachability.
-

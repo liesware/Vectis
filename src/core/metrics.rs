@@ -75,12 +75,14 @@ pub fn set_loaded_gauges(
     remote_routes: usize,
     permission_clients: usize,
     fpe_profiles: usize,
+    tokenization_profiles: usize,
 ) {
     gauge!("vectis_keys_loaded").set(keys as f64);
     gauge!("vectis_routes_loaded").set(routes as f64);
     gauge!("vectis_remote_routes_loaded").set(remote_routes as f64);
     gauge!("vectis_permission_clients").set(permission_clients as f64);
     gauge!("vectis_fpe_profiles_loaded").set(fpe_profiles as f64);
+    gauge!("vectis_tokenization_profiles_loaded").set(tokenization_profiles as f64);
 }
 
 pub fn record_permission(result: &str) {

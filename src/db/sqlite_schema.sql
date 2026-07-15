@@ -3,3 +3,10 @@ CREATE TABLE IF NOT EXISTS opskeys (
     keys VARCHAR(10240) NOT NULL,
     properties VARCHAR(10240) NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS tokens (
+    kid VARCHAR(128) NOT NULL,
+    hashid VARCHAR(128) NOT NULL,
+    data VARCHAR(10240) NOT NULL,
+    PRIMARY KEY (kid, hashid)
+);

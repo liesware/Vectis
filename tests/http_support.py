@@ -22,6 +22,7 @@ _CONFIG = {
     "remote_routes": [],
     "permissions": [],
     "fpe_profiles": [],
+    "tokenization_profiles": [],
 }
 
 KEY_CASES = [
@@ -395,6 +396,10 @@ def write_fpe_profiles(profiles):
     _CONFIG["fpe_profiles"] = profiles
     write_config()
 
+def write_tokenization_profiles(profiles):
+    _CONFIG["tokenization_profiles"] = profiles
+    write_config()
+
 
 def reload_config(client):
     response = client.post("/config/reload", {}, auth=True)
@@ -414,6 +419,10 @@ def reload_config(client):
     require(
         isinstance(response.get("fpe_profiles_loaded"), int),
         "config reload fpe_profiles_loaded must be an integer",
+    )
+    require(
+        isinstance(response.get("tokenization_profiles_loaded"), int),
+        "config reload tokenization_profiles_loaded must be an integer",
     )
     return response
 
