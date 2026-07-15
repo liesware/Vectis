@@ -25,7 +25,14 @@ def config_init_case(env):
     require_next(response)
     config = read_config(env)
     require(
-        config == {"version": "v1", "routes": [], "remote_routes": [], "permissions": []},
+        config
+        == {
+            "version": "v1",
+            "routes": [],
+            "remote_routes": [],
+            "permissions": [],
+            "fpe_profiles": [],
+        },
         "config init must write the minimal skeleton",
     )
 
@@ -55,6 +62,10 @@ def route_cases(env):
 
     response = run_cli_json(["config", "routes", "get", "app-a"], env)
     require(response["kid"] == KID_A, "route get must return route")
+
+    response = run_cli_json(["config", "routes", "list"], env)
+    require(isinstance(response, list), "route list must return an array")
+    require(response[0]["name"] == "app-a", "route list must include route")
 
     response = run_cli_json(
         ["config", "routes", "update", "app-a", "--final-app-path", "/updated"],
@@ -93,6 +104,10 @@ def permission_cases(env):
 
     response = run_cli_json(["config", "permissions", "get", "client-a"], env)
     require(response["client"] == "client-a", "permission get must return client")
+
+    response = run_cli_json(["config", "permissions", "list"], env)
+    require(isinstance(response, list), "permission list must return an array")
+    require(response[0]["client"] == "client-a", "permission list must include client")
 
     response = run_cli_json(
         ["config", "permissions", "update", "client-a", "--status", "disabled"],
@@ -152,6 +167,72 @@ def permission_cases(env):
     require(read_config(env)["permissions"] == [], "permission delete must remove client")
 
 
+def fpe_profile_cases(env):
+    response = run_cli_json(
+        [
+            "config",
+            "fpe",
+            "add",
+            "--name",
+            "patient-id-decimal-v1",
+            "--kid",
+            KID_A,
+            "--alphabet",
+            "0123456789",
+            "--min-len",
+            "6",
+            "--max-len",
+            "32",
+            "--tweak-aad",
+            "tenant=acme;field=patient_id;version=1",
+        ],
+        env,
+    )
+    require(response["status"] == "added", "fpe profile add must report added")
+    require_next(response)
+
+    profile = read_config(env)["fpe_profiles"][0]
+    require(profile["name"] == "patient-id-decimal-v1", "fpe profile name must be stored")
+    require(profile["fpe_version"] == "fpe-ff1-2025", "fpe profile version must default")
+
+    response = run_cli_json(["config", "fpe", "get", "patient-id-decimal-v1"], env)
+    require(response["kid"] == KID_A, "fpe profile get must return profile")
+
+    response = run_cli_json(["config", "fpe", "list"], env)
+    require(isinstance(response, list), "fpe profile list must return an array")
+    require(
+        response[0]["name"] == "patient-id-decimal-v1",
+        "fpe profile list must include profile",
+    )
+
+    response = run_cli_json(
+        [
+            "config",
+            "fpe",
+            "update",
+            "patient-id-decimal-v1",
+            "--max-len",
+            "40",
+            "--tweak-aad",
+            "tenant=acme;field=patient_id;version=2",
+        ],
+        env,
+    )
+    require(response["status"] == "updated", "fpe profile update must report updated")
+    require_next(response)
+    profile = read_config(env)["fpe_profiles"][0]
+    require(profile["max_len"] == 40, "fpe profile update must persist max_len")
+    require(
+        profile["tweak_aad"].endswith("version=2"),
+        "fpe profile update must persist tweak_aad",
+    )
+
+    response = run_cli_json(["config", "fpe", "delete", "patient-id-decimal-v1"], env)
+    require(response["status"] == "deleted", "fpe profile delete must report deleted")
+    require_next(response)
+    require(read_config(env)["fpe_profiles"] == [], "fpe profile delete must remove profile")
+
+
 def config_list_case(env):
     response = run_cli_json(
         [
@@ -208,6 +289,9 @@ def remote_route_dynamic_import(env, base_url, apikey):
     route = read_config(env)["remote_routes"][0]
     require(route["public_keys"], "remote route add must import public_keys")
     require(route["remote_kid"] == kid, "remote route add must store remote kid")
+    response = run_cli_json(["config", "remote-routes", "list"], env)
+    require(isinstance(response, list), "remote route list must return an array")
+    require(response[0]["name"] == "peer-a", "remote route list must include route")
     return True
 
 
@@ -228,6 +312,11 @@ def main():
             counters,
             "config permissions add/get/update/grant/revoke/delete",
             lambda: permission_cases(env),
+        )
+        run_case(
+            counters,
+            "config fpe add/get/update/delete",
+            lambda: fpe_profile_cases(env),
         )
         run_case(counters, "config list reads edited config", lambda: config_list_case(env))
 

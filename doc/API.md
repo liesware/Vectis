@@ -1201,7 +1201,7 @@ Top level:
 | `name` | yes | unique non-empty text | Profile selected by FPE requests. |
 | `fpe_version` | yes | `fpe-ff1-2025` | FF1 profile version and HKDF binding value. |
 | `alphabet` | yes | unique characters, no control chars | Domain alphabet for plaintext and ciphertext. |
-| `min_len` | yes | integer >= 1 | Minimum accepted field length. |
+| `min_len` | yes | integer >= 6 | Minimum accepted field length. |
 | `max_len` | yes | integer >= `min_len` | Maximum accepted field length. |
 | `tweak_aad` | yes | non-empty text | Literal cryptographic tweak context from signed config. |
 | `kid` | yes | loaded local KID | Operational key whose symmetric key derives the FPE key. |
@@ -1283,9 +1283,10 @@ CLI output defaults to YAML for readability. Add `--output json` to HTTP client 
 | `vectis permissions list` | `GET /permissions` | Yes |
 | `vectis config sign` | Local `config_sign.json` update | No HTTP |
 | `vectis config list` | Prints local `config.json` | No HTTP |
-| `vectis config routes ...` | Edits local `config.json` routes | No HTTP |
-| `vectis config remote-routes ...` | Edits local `config.json` remote routes; `add` and identity/address updates fetch peer public keys from `/pub/{kid}` | No HTTP for most local edits; remote `/pub` for key import |
-| `vectis config permissions ...` | Edits local `config.json` permissions | No HTTP |
+| `vectis config routes ...` | Lists or edits local `config.json` routes | No HTTP |
+| `vectis config remote-routes ...` | Lists or edits local `config.json` remote routes; `add` and identity/address updates fetch peer public keys from `/pub/{kid}` | No HTTP for most local edits; remote `/pub` for key import |
+| `vectis config permissions ...` | Lists or edits local `config.json` permissions | No HTTP |
+| `vectis config fpe ...` | Lists or edits local `config.json` FPE profiles | No HTTP |
 | `vectis config reload` | `POST /config/reload` | Yes |
 | `vectis pub <kid>` | `GET /pub/{kid}` | No |
 | `vectis sign <kid>` | `POST /sign/{kid}` | Yes |

@@ -138,7 +138,8 @@ It writes:
   "version": "v1",
   "routes": [],
   "remote_routes": [],
-  "permissions": []
+  "permissions": [],
+  "fpe_profiles": []
 }
 ```
 
@@ -181,6 +182,7 @@ Edits the local `routes` section in `VECTIS_CONFIG_PATH`. The lookup key is
 `name`. Names must be unique.
 
 ```sh
+vectis config routes list
 vectis config routes add --name clinical-app-a --kid <kid> --final-app-addr 127.0.0.1:3999 --final-app-path /message
 vectis config routes get clinical-app-a
 vectis config routes update clinical-app-a --final-app-path /clinical/message
@@ -201,6 +203,7 @@ is `name`. Names must be unique.
 The scheme comes from `VECTIS_MODE`: `dev` uses `http`, `prod` uses `https`.
 
 ```sh
+vectis config remote-routes list
 vectis config remote-routes add --name clinic-b --remote-kid <kid> --remote-addr vectis-b.example.com:443 --allowed-local-kid <local-kid> --status active
 vectis config remote-routes add --name clinic-b --remote-kid <kid> --remote-addr vectis-b.example.com:443 --allowed-local-kid "*" --status active
 vectis config remote-routes get clinic-b
@@ -221,6 +224,7 @@ Edits the local `permissions` section in `VECTIS_CONFIG_PATH`. The lookup key is
 `client`. Clients must be unique.
 
 ```sh
+vectis config permissions list
 vectis config permissions add --client clinic-app --apikey-hash <hex> --status active
 vectis config permissions get clinic-app
 vectis config permissions update clinic-app --status disabled
@@ -239,6 +243,28 @@ vectis config permissions grant "Acme App" --kid "*" --action admin
 `add` and `update` manage the client record and `apikey_hash`. `grant` and
 `revoke` only manage `kid`/`action` grants. Quote `"*"` when granting wildcard
 permissions so the shell does not expand it.
+
+### `vectis config fpe`
+
+Edits the local `fpe_profiles` section in `VECTIS_CONFIG_PATH`. The lookup key
+is `name`. Names must be unique.
+
+```sh
+vectis config fpe list
+vectis config fpe add --name patient-id-decimal-v1 --kid <kid> --alphabet 0123456789 --min-len 6 --max-len 32 --tweak-aad 'tenant=acme;field=patient_id;version=1'
+vectis config fpe get patient-id-decimal-v1
+vectis config fpe update patient-id-decimal-v1 --max-len 40
+vectis config fpe delete patient-id-decimal-v1
+```
+
+`fpe_version` defaults to `fpe-ff1-2025`; that is the only accepted version in
+this release. `min_len` must be at least `6`, and `max_len` must be greater than
+or equal to `min_len`. The CLI validates the KID shape but does not check whether
+the KID is loaded in a running server. That check happens when Vectis loads the
+signed config.
+
+Section `list` commands print only the local array from `config.json`. Runtime
+commands such as `vectis routes list` read the server's loaded state instead.
 
 Config edit commands write `config.json` only. They do not sign or reload. Run:
 

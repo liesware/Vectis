@@ -1,5 +1,5 @@
 use super::http::{OutputFormat, invalid_input, print_response};
-use crate::core::{config, config_file, permissions, validation};
+use crate::core::{config, config_file, fpe, permissions, validation};
 use crate::error::DynError;
 use serde_json::{Map, Value, json};
 use std::collections::HashSet;
@@ -46,6 +46,10 @@ pub fn init_config(output: OutputFormat) -> Result<(), DynError> {
 pub async fn run_routes(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let (command, rest) = split_command(args, "config routes command")?;
     match command.as_str() {
+        "list" => {
+            expect_no_args(rest, "config routes list")?;
+            read_config(output, |local| list_section(local, "routes")).await
+        }
         "add" => mutate_config(output, |local| route_add(local, rest)).await,
         "get" => read_config(output, |local| route_get(local, rest)).await,
         "update" => mutate_config(output, |local| route_update(local, rest)).await,
@@ -59,6 +63,10 @@ pub async fn run_routes(args: Vec<String>, output: OutputFormat) -> Result<(), D
 pub async fn run_remote_routes(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let (command, rest) = split_command(args, "config remote-routes command")?;
     match command.as_str() {
+        "list" => {
+            expect_no_args(rest, "config remote-routes list")?;
+            read_config(output, |local| list_section(local, "remote_routes")).await
+        }
         "add" => remote_route_add(rest, output).await,
         "get" => read_config(output, |local| remote_route_get(local, rest)).await,
         "update" => remote_route_update(rest, output).await,
@@ -72,6 +80,10 @@ pub async fn run_remote_routes(args: Vec<String>, output: OutputFormat) -> Resul
 pub async fn run_permissions(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let (command, rest) = split_command(args, "config permissions command")?;
     match command.as_str() {
+        "list" => {
+            expect_no_args(rest, "config permissions list")?;
+            read_config(output, |local| list_section(local, "permissions")).await
+        }
         "add" => mutate_config(output, |local| permission_add(local, rest)).await,
         "get" => read_config(output, |local| permission_get(local, rest)).await,
         "update" => mutate_config(output, |local| permission_update(local, rest)).await,
@@ -80,6 +92,23 @@ pub async fn run_permissions(args: Vec<String>, output: OutputFormat) -> Result<
         "revoke" => mutate_config(output, |local| permission_revoke(local, rest)).await,
         _ => Err(invalid_input(format!(
             "unknown config permissions command: {command}"
+        ))),
+    }
+}
+
+pub async fn run_config_fpe(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+    let (command, rest) = split_command(args, "config fpe command")?;
+    match command.as_str() {
+        "list" => {
+            expect_no_args(rest, "config fpe list")?;
+            read_config(output, |local| list_section(local, "fpe_profiles")).await
+        }
+        "add" => mutate_config(output, |local| fpe_profile_add(local, rest)).await,
+        "get" => read_config(output, |local| fpe_profile_get(local, rest)).await,
+        "update" => mutate_config(output, |local| fpe_profile_update(local, rest)).await,
+        "delete" => mutate_config(output, |local| fpe_profile_delete(local, rest)).await,
+        _ => Err(invalid_input(format!(
+            "unknown config fpe command: {command}"
         ))),
     }
 }
@@ -195,6 +224,10 @@ fn route_add(local: &mut LocalConfig, args: Vec<String>) -> Result<Value, DynErr
         "section": "routes",
         "item": value,
     }))
+}
+
+fn list_section(local: &LocalConfig, section: &str) -> Result<Value, DynError> {
+    Ok(Value::Array(array_ref(&local.value, section)?.to_vec()))
 }
 
 fn route_get(local: &LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
@@ -411,6 +444,82 @@ fn permission_revoke(local: &mut LocalConfig, args: Vec<String>) -> Result<Value
     }))
 }
 
+fn fpe_profile_add(local: &mut LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
+    let profile = parse_fpe_profile_add(args)?;
+    ensure_unique_field(
+        array_mut(&mut local.value, "fpe_profiles")?,
+        "name",
+        &profile.name,
+    )?;
+    let value = json!({
+        "name": profile.name,
+        "fpe_version": profile.fpe_version,
+        "alphabet": profile.alphabet,
+        "min_len": profile.min_len,
+        "max_len": profile.max_len,
+        "tweak_aad": profile.tweak_aad,
+        "kid": profile.kid,
+    });
+    array_mut(&mut local.value, "fpe_profiles")?.push(value.clone());
+
+    Ok(json!({
+        "status": "added",
+        "section": "fpe_profiles",
+        "item": value,
+    }))
+}
+
+fn fpe_profile_get(local: &LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
+    let name = expect_one(args, "fpe profile name")?;
+    validate_text("name", &name)?;
+    let profile = find_by_field(array_ref(&local.value, "fpe_profiles")?, "name", &name)?;
+    Ok(profile.clone())
+}
+
+fn fpe_profile_update(local: &mut LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
+    let (name, rest) = split_name_and_rest(args, "fpe profile name")?;
+    validate_text("name", &name)?;
+    let mut update = parse_fpe_profile_update(rest)?;
+    let profile = find_by_field_mut(array_mut(&mut local.value, "fpe_profiles")?, "name", &name)?;
+
+    if let Some(kid) = update.kid.take() {
+        set_string(profile, "kid", kid)?;
+    }
+    if let Some(fpe_version) = update.fpe_version.take() {
+        set_string(profile, "fpe_version", fpe_version)?;
+    }
+    if let Some(alphabet) = update.alphabet.take() {
+        set_string(profile, "alphabet", alphabet)?;
+    }
+    if let Some(min_len) = update.min_len.take() {
+        set_usize(profile, "min_len", min_len)?;
+    }
+    if let Some(max_len) = update.max_len.take() {
+        set_usize(profile, "max_len", max_len)?;
+    }
+    if let Some(tweak_aad) = update.tweak_aad.take() {
+        set_string(profile, "tweak_aad", tweak_aad)?;
+    }
+
+    Ok(json!({
+        "status": "updated",
+        "section": "fpe_profiles",
+        "item": profile,
+    }))
+}
+
+fn fpe_profile_delete(local: &mut LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
+    let name = expect_one(args, "fpe profile name")?;
+    validate_text("name", &name)?;
+    let removed = remove_by_field(array_mut(&mut local.value, "fpe_profiles")?, "name", &name)?;
+
+    Ok(json!({
+        "status": "deleted",
+        "section": "fpe_profiles",
+        "item": removed,
+    }))
+}
+
 #[derive(Default)]
 struct RouteAdd {
     name: String,
@@ -459,6 +568,26 @@ struct PermissionUpdate {
 struct PermissionGrant {
     kid: String,
     action: String,
+}
+
+struct FpeProfileAdd {
+    name: String,
+    fpe_version: String,
+    alphabet: String,
+    min_len: usize,
+    max_len: usize,
+    tweak_aad: String,
+    kid: String,
+}
+
+#[derive(Default)]
+struct FpeProfileUpdate {
+    kid: Option<String>,
+    fpe_version: Option<String>,
+    alphabet: Option<String>,
+    min_len: Option<usize>,
+    max_len: Option<usize>,
+    tweak_aad: Option<String>,
 }
 
 fn parse_route_add(args: Vec<String>) -> Result<RouteAdd, DynError> {
@@ -718,6 +847,122 @@ fn parse_permission_grant(args: Vec<String>) -> Result<PermissionGrant, DynError
     Ok(PermissionGrant { kid, action })
 }
 
+fn parse_fpe_profile_add(args: Vec<String>) -> Result<FpeProfileAdd, DynError> {
+    let mut name = String::new();
+    let mut kid = String::new();
+    let mut fpe_version = String::from(fpe::FPE_VERSION_FF1_2025);
+    let mut alphabet = String::new();
+    let mut min_len = None;
+    let mut max_len = None;
+    let mut tweak_aad = String::new();
+    let mut seen = HashSet::new();
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--name" => name = flag_once(&args, &mut seen, &mut index, "--name")?,
+            "--kid" => kid = flag_once(&args, &mut seen, &mut index, "--kid")?,
+            "--fpe-version" => {
+                fpe_version = flag_once(&args, &mut seen, &mut index, "--fpe-version")?
+            }
+            "--alphabet" => alphabet = flag_once(&args, &mut seen, &mut index, "--alphabet")?,
+            "--min-len" => {
+                let value = flag_once(&args, &mut seen, &mut index, "--min-len")?;
+                min_len = Some(parse_usize_flag("--min-len", &value)?);
+            }
+            "--max-len" => {
+                let value = flag_once(&args, &mut seen, &mut index, "--max-len")?;
+                max_len = Some(parse_usize_flag("--max-len", &value)?);
+            }
+            "--tweak-aad" => tweak_aad = flag_once(&args, &mut seen, &mut index, "--tweak-aad")?,
+            value => {
+                return Err(invalid_input(format!(
+                    "unknown config fpe add option: {value}"
+                )));
+            }
+        }
+    }
+
+    let min_len = min_len.ok_or_else(|| invalid_input("--min-len is required"))?;
+    let max_len = max_len.ok_or_else(|| invalid_input("--max-len is required"))?;
+    validate_fpe_profile_parts(
+        &name,
+        &kid,
+        &fpe_version,
+        &alphabet,
+        min_len,
+        max_len,
+        &tweak_aad,
+    )?;
+
+    Ok(FpeProfileAdd {
+        name,
+        fpe_version,
+        alphabet,
+        min_len,
+        max_len,
+        tweak_aad,
+        kid,
+    })
+}
+
+fn parse_fpe_profile_update(args: Vec<String>) -> Result<FpeProfileUpdate, DynError> {
+    let mut parsed = FpeProfileUpdate::default();
+    let mut seen = HashSet::new();
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--kid" => {
+                let value = flag_once(&args, &mut seen, &mut index, "--kid")?;
+                parsed.kid = Some(validate_kid_value("kid", &value)?);
+            }
+            "--fpe-version" => {
+                let value = flag_once(&args, &mut seen, &mut index, "--fpe-version")?;
+                fpe::validate_fpe_version(&value)?;
+                parsed.fpe_version = Some(value);
+            }
+            "--alphabet" => {
+                let value = flag_once(&args, &mut seen, &mut index, "--alphabet")?;
+                fpe::validate_fpe_alphabet(&value)?;
+                parsed.alphabet = Some(value);
+            }
+            "--min-len" => {
+                let value = flag_once(&args, &mut seen, &mut index, "--min-len")?;
+                parsed.min_len = Some(parse_usize_flag("--min-len", &value)?);
+            }
+            "--max-len" => {
+                let value = flag_once(&args, &mut seen, &mut index, "--max-len")?;
+                parsed.max_len = Some(parse_usize_flag("--max-len", &value)?);
+            }
+            "--tweak-aad" => {
+                let value = flag_once(&args, &mut seen, &mut index, "--tweak-aad")?;
+                validate_text("tweak_aad", &value)?;
+                parsed.tweak_aad = Some(value);
+            }
+            value => {
+                return Err(invalid_input(format!(
+                    "unknown config fpe update option: {value}"
+                )));
+            }
+        }
+    }
+
+    if parsed.kid.is_none()
+        && parsed.fpe_version.is_none()
+        && parsed.alphabet.is_none()
+        && parsed.min_len.is_none()
+        && parsed.max_len.is_none()
+        && parsed.tweak_aad.is_none()
+    {
+        return Err(invalid_input(
+            "config fpe update requires at least one field",
+        ));
+    }
+
+    Ok(parsed)
+}
+
 fn load_local_config() -> Result<LocalConfig, DynError> {
     let app = config::app_config()?;
     let value = match config_file::read_config_file(&app.config_path) {
@@ -743,6 +988,7 @@ fn empty_config() -> Value {
         "routes": [],
         "remote_routes": [],
         "permissions": [],
+        "fpe_profiles": [],
     })
 }
 
@@ -754,6 +1000,7 @@ fn ensure_config_shape(value: &mut Value) -> Result<(), DynError> {
     ensure_section_array(object, "routes")?;
     ensure_section_array(object, "remote_routes")?;
     ensure_section_array(object, "permissions")?;
+    ensure_section_array(object, "fpe_profiles")?;
     Ok(())
 }
 
@@ -871,6 +1118,21 @@ fn validate_remote_route_status(status: &str) -> Result<(), DynError> {
 
 fn validate_permission_status(status: &str) -> Result<(), DynError> {
     validation::validate_allowed_value("status", status, &["active", "disabled", "revoked"])
+}
+
+fn validate_fpe_profile_parts(
+    name: &str,
+    kid: &str,
+    fpe_version: &str,
+    alphabet: &str,
+    min_len: usize,
+    max_len: usize,
+    tweak_aad: &str,
+) -> Result<(), DynError> {
+    validate_text("name", name)?;
+    validate_kid("kid", kid)?;
+    fpe::validate_fpe_profile_fields(name, fpe_version, alphabet, min_len, max_len, tweak_aad)?;
+    Ok(())
 }
 
 fn validate_permission_kid(kid: &str) -> Result<(), DynError> {
@@ -1020,6 +1282,11 @@ fn set_value(value: &mut Value, field: &str, item: Value) -> Result<(), DynError
     Ok(())
 }
 
+fn set_usize(value: &mut Value, field: &str, item: usize) -> Result<(), DynError> {
+    object_mut(value)?.insert(field.to_string(), Value::Number(item.into()));
+    Ok(())
+}
+
 fn split_command(mut args: Vec<String>, field: &str) -> Result<(String, Vec<String>), DynError> {
     if args.is_empty() {
         return Err(invalid_input(format!("missing {field}")));
@@ -1047,6 +1314,16 @@ fn expect_one(args: Vec<String>, field: &str) -> Result<String, DynError> {
     Ok(args[0].clone())
 }
 
+fn expect_no_args(args: Vec<String>, command: &str) -> Result<(), DynError> {
+    if args.is_empty() {
+        Ok(())
+    } else {
+        Err(invalid_input(format!(
+            "{command} does not accept arguments"
+        )))
+    }
+}
+
 fn flag_once(
     args: &[String],
     seen: &mut HashSet<String>,
@@ -1066,6 +1343,12 @@ fn flag_value(args: &[String], index: &mut usize, flag: &str) -> Result<String, 
         .clone();
     *index += 2;
     Ok(value)
+}
+
+fn parse_usize_flag(flag: &str, value: &str) -> Result<usize, DynError> {
+    value
+        .parse::<usize>()
+        .map_err(|_| invalid_input(format!("{flag} must be a positive integer")))
 }
 
 fn response_with_reminder(mut response: Value) -> Value {
@@ -1198,5 +1481,156 @@ mod tests {
 
         let item = permission_get(&local, vec![String::from("app-a")]).unwrap();
         assert_eq!(item["permissions"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn fpe_profile_add_get_update_and_delete_use_name() {
+        let mut local = local_config();
+        fpe_profile_add(
+            &mut local,
+            vec![
+                String::from("--name"),
+                String::from("patient-id"),
+                String::from("--kid"),
+                "a".repeat(64),
+                String::from("--alphabet"),
+                String::from("0123456789"),
+                String::from("--min-len"),
+                String::from("6"),
+                String::from("--max-len"),
+                String::from("32"),
+                String::from("--tweak-aad"),
+                String::from("tenant=acme;field=patient_id;version=1"),
+            ],
+        )
+        .unwrap();
+
+        let profile = fpe_profile_get(&local, vec![String::from("patient-id")]).unwrap();
+        assert_eq!(profile["kid"], "a".repeat(64));
+
+        fpe_profile_update(
+            &mut local,
+            vec![
+                String::from("patient-id"),
+                String::from("--max-len"),
+                String::from("40"),
+            ],
+        )
+        .unwrap();
+        let profile = fpe_profile_get(&local, vec![String::from("patient-id")]).unwrap();
+        assert_eq!(profile["max_len"], 40);
+
+        fpe_profile_delete(&mut local, vec![String::from("patient-id")]).unwrap();
+        assert!(array_ref(&local.value, "fpe_profiles").unwrap().is_empty());
+    }
+
+    #[test]
+    fn fpe_profile_rejects_invalid_fields() {
+        assert!(
+            parse_fpe_profile_add(vec![
+                String::from("--name"),
+                String::from("patient-id"),
+                String::from("--kid"),
+                String::from("bad"),
+                String::from("--alphabet"),
+                String::from("0123456789"),
+                String::from("--min-len"),
+                String::from("6"),
+                String::from("--max-len"),
+                String::from("32"),
+                String::from("--tweak-aad"),
+                String::from("tenant=acme"),
+            ])
+            .is_err()
+        );
+        assert!(
+            parse_fpe_profile_add(vec![
+                String::from("--name"),
+                String::from("patient-id"),
+                String::from("--kid"),
+                "a".repeat(64),
+                String::from("--alphabet"),
+                String::from("001234"),
+                String::from("--min-len"),
+                String::from("6"),
+                String::from("--max-len"),
+                String::from("32"),
+                String::from("--tweak-aad"),
+                String::from("tenant=acme"),
+            ])
+            .is_err()
+        );
+        assert!(
+            parse_fpe_profile_add(vec![
+                String::from("--name"),
+                String::from("patient-id"),
+                String::from("--kid"),
+                "a".repeat(64),
+                String::from("--alphabet"),
+                String::from("0123456789"),
+                String::from("--min-len"),
+                String::from("5"),
+                String::from("--max-len"),
+                String::from("32"),
+                String::from("--tweak-aad"),
+                String::from("tenant=acme"),
+            ])
+            .is_err()
+        );
+        assert!(
+            parse_fpe_profile_add(vec![
+                String::from("--name"),
+                String::from("patient-id"),
+                String::from("--kid"),
+                "a".repeat(64),
+                String::from("--alphabet"),
+                String::from("ABCDEF"),
+                String::from("--min-len"),
+                String::from("6"),
+                String::from("--max-len"),
+                String::from("32"),
+                String::from("--tweak-aad"),
+                String::from("tenant=acme"),
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn fpe_profile_update_uses_full_config_validation_for_domain() {
+        let mut local = local_config();
+        fpe_profile_add(
+            &mut local,
+            vec![
+                String::from("--name"),
+                String::from("binary-id"),
+                String::from("--kid"),
+                "a".repeat(64),
+                String::from("--alphabet"),
+                String::from("01"),
+                String::from("--min-len"),
+                String::from("20"),
+                String::from("--max-len"),
+                String::from("32"),
+                String::from("--tweak-aad"),
+                String::from("tenant=acme;field=binary_id;version=1"),
+            ],
+        )
+        .unwrap();
+        validate_local_config(&local).expect("seed profile must validate");
+
+        fpe_profile_update(
+            &mut local,
+            vec![
+                String::from("binary-id"),
+                String::from("--min-len"),
+                String::from("6"),
+            ],
+        )
+        .expect("parser must not invent radix for partial update");
+
+        let err = validate_local_config(&local)
+            .expect_err("full config validation must reject the small binary domain");
+        assert_eq!(err.to_string(), "fpe profile domain is too small for FF1");
     }
 }

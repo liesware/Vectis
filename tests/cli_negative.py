@@ -75,6 +75,45 @@ def seed_remote_route(env):
     write_config(env, config)
 
 
+def seed_fpe_profile(env):
+    run_cli_json(
+        [
+            "config",
+            "fpe",
+            "add",
+            "--name",
+            "patient-id-decimal-v1",
+            "--kid",
+            KID_A,
+            "--alphabet",
+            "0123456789",
+            "--min-len",
+            "6",
+            "--max-len",
+            "32",
+            "--tweak-aad",
+            "tenant=acme;field=patient_id;version=1",
+        ],
+        env,
+    )
+
+
+def seed_binary_fpe_profile(env):
+    config = empty_config()
+    config["fpe_profiles"] = [
+        {
+            "name": "binary-id",
+            "fpe_version": "fpe-ff1-2025",
+            "alphabet": "01",
+            "min_len": 20,
+            "max_len": 32,
+            "tweak_aad": "tenant=acme;field=binary_id;version=1",
+            "kid": KID_A,
+        }
+    ]
+    write_config(env, config)
+
+
 def main():
     counters = {"passed": 0}
     print("CLI negative:", flush=True)
@@ -130,6 +169,40 @@ def main():
                     "*",
                 ],
             )
+
+        def fpe_profile_add_missing_config():
+            expect_unchanged_failure(
+                env,
+                [
+                    "config",
+                    "fpe",
+                    "add",
+                    "--name",
+                    "missing-config-fpe",
+                    "--kid",
+                    KID_A,
+                    "--alphabet",
+                    "0123456789",
+                    "--min-len",
+                    "6",
+                    "--max-len",
+                    "32",
+                    "--tweak-aad",
+                    "tenant=acme",
+                ],
+            )
+
+        def route_list_missing_config():
+            run_cli(["config", "routes", "list"], env, expect_success=False)
+
+        def permission_list_missing_config():
+            run_cli(["config", "permissions", "list"], env, expect_success=False)
+
+        def remote_route_list_missing_config():
+            run_cli(["config", "remote-routes", "list"], env, expect_success=False)
+
+        def fpe_profile_list_missing_config():
+            run_cli(["config", "fpe", "list"], env, expect_success=False)
 
         def config_init_existing_file():
             init_config(env)
@@ -190,6 +263,36 @@ def main():
                 ],
             )
 
+        def duplicate_fpe_profile_name():
+            seed_fpe_profile(env)
+            expect_unchanged_failure(
+                env,
+                [
+                    "config",
+                    "fpe",
+                    "add",
+                    "--name",
+                    "patient-id-decimal-v1",
+                    "--kid",
+                    KID_B,
+                    "--alphabet",
+                    "abcdef",
+                    "--min-len",
+                    "6",
+                    "--max-len",
+                    "16",
+                    "--tweak-aad",
+                    "tenant=other",
+                ],
+            )
+
+        def binary_fpe_profile_update_invalid_domain():
+            seed_binary_fpe_profile(env)
+            expect_unchanged_failure(
+                env,
+                ["config", "fpe", "update", "binary-id", "--min-len", "6"],
+            )
+
         cases = [
             ("config routes add fails when config is missing", route_add_missing_config),
             (
@@ -201,9 +304,31 @@ def main():
                 remote_route_add_missing_config,
             ),
             (
+                "config fpe add fails when config is missing",
+                fpe_profile_add_missing_config,
+            ),
+            ("config routes list fails when config is missing", route_list_missing_config),
+            (
+                "config permissions list fails when config is missing",
+                permission_list_missing_config,
+            ),
+            (
+                "config remote-routes list fails when config is missing",
+                remote_route_list_missing_config,
+            ),
+            ("config fpe list fails when config is missing", fpe_profile_list_missing_config),
+            (
                 "config remote-routes import-keys is not a command",
                 lambda: run_cli(
                     ["config", "remote-routes", "import-keys", "clinic-b"],
+                    env,
+                    expect_success=False,
+                ),
+            ),
+            (
+                "config fpe-profiles is not a command",
+                lambda: run_cli(
+                    ["config", "fpe-profiles", "get", "patient-id-decimal-v1"],
                     env,
                     expect_success=False,
                 ),
@@ -212,6 +337,7 @@ def main():
             ("duplicate routes.name fails without rewrite", duplicate_route_name),
             ("duplicate permissions.client fails without rewrite", duplicate_permission_client),
             ("duplicate remote_routes.name fails without rewrite", duplicate_remote_route_name),
+            ("duplicate fpe_profiles.name fails without rewrite", duplicate_fpe_profile_name),
             (
                 "invalid route kid fails",
                 lambda: expect_unchanged_failure(
@@ -396,6 +522,171 @@ def main():
                         "--apikey-hash",
                         "not-hex",
                     ],
+                ),
+            ),
+            (
+                "invalid fpe profile kid fails",
+                lambda: expect_unchanged_failure(
+                    env,
+                    [
+                        "config",
+                        "fpe",
+                        "add",
+                        "--name",
+                        "bad-fpe-kid",
+                        "--kid",
+                        "bad",
+                        "--alphabet",
+                        "0123456789",
+                        "--min-len",
+                        "6",
+                        "--max-len",
+                        "32",
+                        "--tweak-aad",
+                        "tenant=acme",
+                    ],
+                ),
+            ),
+            (
+                "invalid fpe alphabet fails",
+                lambda: expect_unchanged_failure(
+                    env,
+                    [
+                        "config",
+                        "fpe",
+                        "add",
+                        "--name",
+                        "bad-fpe-alphabet",
+                        "--kid",
+                        KID_A,
+                        "--alphabet",
+                        "001234",
+                        "--min-len",
+                        "6",
+                        "--max-len",
+                        "32",
+                        "--tweak-aad",
+                        "tenant=acme",
+                    ],
+                ),
+            ),
+            (
+                "invalid fpe domain fails",
+                lambda: expect_unchanged_failure(
+                    env,
+                    [
+                        "config",
+                        "fpe",
+                        "add",
+                        "--name",
+                        "bad-fpe-domain",
+                        "--kid",
+                        KID_A,
+                        "--alphabet",
+                        "ABCDEF",
+                        "--min-len",
+                        "6",
+                        "--max-len",
+                        "32",
+                        "--tweak-aad",
+                        "tenant=acme",
+                    ],
+                ),
+            ),
+            (
+                "invalid fpe update domain fails without rewrite",
+                binary_fpe_profile_update_invalid_domain,
+            ),
+            (
+                "invalid fpe version fails",
+                lambda: expect_unchanged_failure(
+                    env,
+                    [
+                        "config",
+                        "fpe",
+                        "add",
+                        "--name",
+                        "bad-fpe-version",
+                        "--kid",
+                        KID_A,
+                        "--fpe-version",
+                        "fpe-ff1-legacy",
+                        "--alphabet",
+                        "0123456789",
+                        "--min-len",
+                        "6",
+                        "--max-len",
+                        "32",
+                        "--tweak-aad",
+                        "tenant=acme",
+                    ],
+                ),
+            ),
+            (
+                "invalid fpe min length fails",
+                lambda: expect_unchanged_failure(
+                    env,
+                    [
+                        "config",
+                        "fpe",
+                        "add",
+                        "--name",
+                        "bad-fpe-min-len",
+                        "--kid",
+                        KID_A,
+                        "--alphabet",
+                        "0123456789",
+                        "--min-len",
+                        "5",
+                        "--max-len",
+                        "32",
+                        "--tweak-aad",
+                        "tenant=acme",
+                    ],
+                ),
+            ),
+            (
+                "invalid fpe max length fails",
+                lambda: expect_unchanged_failure(
+                    env,
+                    [
+                        "config",
+                        "fpe",
+                        "add",
+                        "--name",
+                        "bad-fpe-max-len",
+                        "--kid",
+                        KID_A,
+                        "--alphabet",
+                        "0123456789",
+                        "--min-len",
+                        "6",
+                        "--max-len",
+                        "5",
+                        "--tweak-aad",
+                        "tenant=acme",
+                    ],
+                ),
+            ),
+            (
+                "fpe profile get missing name fails",
+                lambda: run_cli(
+                    ["config", "fpe", "get", "missing"],
+                    env,
+                    expect_success=False,
+                ),
+            ),
+            (
+                "fpe profile update missing name fails",
+                lambda: expect_unchanged_failure(
+                    env,
+                    ["config", "fpe", "update", "missing", "--max-len", "32"],
+                ),
+            ),
+            (
+                "fpe profile delete missing name fails",
+                lambda: expect_unchanged_failure(
+                    env, ["config", "fpe", "delete", "missing"]
                 ),
             ),
             (

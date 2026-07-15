@@ -109,8 +109,9 @@ uv run tests/cli_all.py
 `tests/cli_all.py` runs:
 
 - `tests/cli_init.py`: init overwrite protection and custom init file handling.
-- `tests/cli_positive.py`: local `vectis config init`, `routes`,
-  `remote-routes`, `permissions`, and `config list` happy paths.
+- `tests/cli_positive.py`: local `vectis config init`, section list/edit
+  commands for `routes`, `remote-routes`, `permissions`, `fpe`, and full
+  `config list` happy paths.
 - `tests/cli_negative.py`: duplicate names, invalid fields, missing records, and
   mutation safety, including missing config files and overwrite refusal.
 

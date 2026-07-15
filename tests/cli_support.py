@@ -109,4 +109,10 @@ def run_case(counters, name, func):
 
 
 def empty_config():
-    return {"version": "v1", "routes": [], "remote_routes": [], "permissions": []}
+    return {
+        "version": "v1",
+        "routes": [],
+        "remote_routes": [],
+        "permissions": [],
+        "fpe_profiles": [],
+    }

@@ -10,6 +10,7 @@ use zeroize::{Zeroize, Zeroizing};
 pub const FPE_VERSION_FF1_2025: &str = "fpe-ff1-2025";
 pub const FPE_KEY_SALT: &[u8] = b"vectis:fpe:ff1:v1";
 pub const FPE_KEY_SIZE_BYTES: usize = 32;
+pub const FPE_VALUE_MIN_LEN: usize = 6;
 pub const FPE_VALUE_MAX_LEN: usize = 1024;
 
 type PreparedFpeCipher = Arc<vectis_fpe::ff1::FF1<aes::Aes256>>;
@@ -166,19 +167,14 @@ pub(crate) fn validate_fpe_profiles(
     let mut profiles = Vec::new();
 
     for profile in profile_inputs {
-        validation::validate_text_field("fpe_profiles.name", &profile.name)?;
-        validation::validate_allowed_value(
-            "fpe_profiles.fpe_version",
+        validate_fpe_profile_fields(
+            &profile.name,
             &profile.fpe_version,
-            &[FPE_VERSION_FF1_2025],
-        )?;
-        validate_fpe_alphabet(&profile.alphabet)?;
-        validate_fpe_lengths(
+            &profile.alphabet,
             profile.min_len,
             profile.max_len,
-            profile.alphabet.chars().count(),
+            &profile.tweak_aad,
         )?;
-        validation::validate_text_field("fpe_profiles.tweak_aad", &profile.tweak_aad)?;
         keys::validate_key_id(&profile.kid).map_err(|err| {
             crate::error::invalid_input(format!("fpe_profiles.kid is invalid: {err}"))
         })?;
@@ -246,7 +242,27 @@ fn parse_fpe_value_digits(
     Ok(digits)
 }
 
-fn validate_fpe_alphabet(alphabet: &str) -> Result<(), DynError> {
+pub fn validate_fpe_version(value: &str) -> Result<(), DynError> {
+    validation::validate_allowed_value("fpe_profiles.fpe_version", value, &[FPE_VERSION_FF1_2025])
+}
+
+pub fn validate_fpe_profile_fields(
+    name: &str,
+    fpe_version: &str,
+    alphabet: &str,
+    min_len: usize,
+    max_len: usize,
+    tweak_aad: &str,
+) -> Result<usize, DynError> {
+    validation::validate_text_field("fpe_profiles.name", name)?;
+    validate_fpe_version(fpe_version)?;
+    let radix = validate_fpe_alphabet(alphabet)?;
+    validate_fpe_lengths(min_len, max_len, radix)?;
+    validation::validate_text_field("fpe_profiles.tweak_aad", tweak_aad)?;
+    Ok(radix)
+}
+
+pub fn validate_fpe_alphabet(alphabet: &str) -> Result<usize, DynError> {
     validation::validate_text_field("fpe_profiles.alphabet", alphabet)?;
     let mut seen = HashSet::new();
     for item in alphabet.chars() {
@@ -263,7 +279,7 @@ fn validate_fpe_alphabet(alphabet: &str) -> Result<(), DynError> {
         ));
     }
 
-    Ok(())
+    Ok(radix)
 }
 
 fn prepare_fpe_alphabet(
@@ -280,11 +296,11 @@ fn prepare_fpe_alphabet(
     Ok((alphabet_chars, Arc::new(alphabet_index)))
 }
 
-fn validate_fpe_lengths(min_len: usize, max_len: usize, radix: usize) -> Result<(), DynError> {
-    if min_len == 0 {
-        return Err(crate::error::invalid_input(
-            "fpe_profiles.min_len must be greater than zero",
-        ));
+pub fn validate_fpe_lengths(min_len: usize, max_len: usize, radix: usize) -> Result<(), DynError> {
+    if min_len < FPE_VALUE_MIN_LEN {
+        return Err(crate::error::invalid_input(format!(
+            "fpe_profiles.min_len must be at least {FPE_VALUE_MIN_LEN}"
+        )));
     }
     if max_len < min_len {
         return Err(crate::error::invalid_input(
@@ -498,7 +514,7 @@ mod tests {
     #[test]
     fn rejects_invalid_lengths() {
         let mut profile = input("patient-id", kid());
-        profile.min_len = 0;
+        profile.min_len = FPE_VALUE_MIN_LEN - 1;
         assert!(
             validate_fpe_profiles(vec![profile], |item| item == kid(), |_, _, _| Ok(fpe_key()))
                 .is_err()
@@ -510,6 +526,32 @@ mod tests {
         assert!(
             validate_fpe_profiles(vec![profile], |item| item == kid(), |_, _, _| Ok(fpe_key()))
                 .is_err()
+        );
+
+        let err =
+            validate_fpe_lengths(6, 32, 6).expect_err("small FF1 domain must fail validation");
+        assert_eq!(err.to_string(), "fpe profile domain is too small for FF1");
+    }
+
+    #[test]
+    fn public_fpe_field_validators_match_profile_policy() {
+        assert!(validate_fpe_version(FPE_VERSION_FF1_2025).is_ok());
+        assert!(validate_fpe_version("fpe-ff1-legacy").is_err());
+        assert_eq!(validate_fpe_alphabet("0123456789").unwrap(), 10);
+        assert!(validate_fpe_alphabet("001234").is_err());
+        assert!(validate_fpe_lengths(6, 32, 10).is_ok());
+        assert!(validate_fpe_lengths(5, 32, 10).is_err());
+        assert!(validate_fpe_lengths(6, 32, 6).is_err());
+        assert!(
+            validate_fpe_profile_fields(
+                "patient-id",
+                FPE_VERSION_FF1_2025,
+                "0123456789",
+                6,
+                32,
+                "tenant=acme"
+            )
+            .is_ok()
         );
     }
 

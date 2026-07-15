@@ -215,6 +215,7 @@ async fn run_config(args: Vec<String>, output: OutputFormat) -> Result<(), DynEr
         "routes" => config_editor::run_routes(rest, output).await,
         "remote-routes" => config_editor::run_remote_routes(rest, output).await,
         "permissions" => config_editor::run_permissions(rest, output).await,
+        "fpe" => config_editor::run_config_fpe(rest, output).await,
         _ => Err(invalid_input(format!(
             "unknown config command: {subcommand}"
         ))),
@@ -751,6 +752,7 @@ fn print_http_help() {
     println!("  {PROGRAM_NAME} config routes <add|get|update|delete>");
     println!("  {PROGRAM_NAME} config remote-routes <add|get|update|delete>");
     println!("  {PROGRAM_NAME} config permissions <add|get|update|delete|grant|revoke>");
+    println!("  {PROGRAM_NAME} config fpe <add|get|update|delete>");
     println!("  {PROGRAM_NAME} pub <kid>");
     println!("  {PROGRAM_NAME} sign <kid> (--json <json>|--file <path>)");
     println!("  {PROGRAM_NAME} sign verify (--json <json>|--file <path>)");
@@ -919,6 +921,7 @@ fn print_config_help() {
     println!("  {PROGRAM_NAME} config sign");
     println!("  {PROGRAM_NAME} config list");
     println!("  {PROGRAM_NAME} config reload");
+    println!("  {PROGRAM_NAME} config routes list");
     println!(
         "  {PROGRAM_NAME} config routes add --name <name> --kid <kid> --final-app-addr <host:port> --final-app-path <path>"
     );
@@ -927,6 +930,7 @@ fn print_config_help() {
         "  {PROGRAM_NAME} config routes update <name> [--kid <kid>] [--final-app-addr <host:port>] [--final-app-path <path>]"
     );
     println!("  {PROGRAM_NAME} config routes delete <name>");
+    println!("  {PROGRAM_NAME} config remote-routes list");
     println!(
         "  {PROGRAM_NAME} config remote-routes add --name <name> --remote-kid <kid> --remote-addr <host:port> --allowed-local-kid <kid|*> [--status active|disabled]"
     );
@@ -935,6 +939,7 @@ fn print_config_help() {
         "  {PROGRAM_NAME} config remote-routes update <name> [--remote-kid <kid>] [--remote-addr <host:port>] [--allowed-local-kid <kid|*>...] [--status active|disabled]"
     );
     println!("  {PROGRAM_NAME} config remote-routes delete <name>");
+    println!("  {PROGRAM_NAME} config permissions list");
     println!(
         "  {PROGRAM_NAME} config permissions add --client <client> --apikey-hash <hex> [--status active|disabled|revoked]"
     );
@@ -945,6 +950,15 @@ fn print_config_help() {
     println!("  {PROGRAM_NAME} config permissions delete <client>");
     println!("  {PROGRAM_NAME} config permissions grant <client> --kid <kid|*> --action <action>");
     println!("  {PROGRAM_NAME} config permissions revoke <client> --kid <kid|*> --action <action>");
+    println!("  {PROGRAM_NAME} config fpe list");
+    println!(
+        "  {PROGRAM_NAME} config fpe add --name <name> --kid <kid> --alphabet <chars> --min-len <n> --max-len <n> --tweak-aad <aad> [--fpe-version fpe-ff1-2025]"
+    );
+    println!("  {PROGRAM_NAME} config fpe get <name>");
+    println!(
+        "  {PROGRAM_NAME} config fpe update <name> [--kid <kid>] [--alphabet <chars>] [--min-len <n>] [--max-len <n>] [--tweak-aad <aad>] [--fpe-version fpe-ff1-2025]"
+    );
+    println!("  {PROGRAM_NAME} config fpe delete <name>");
     println!();
     println!("Signs, prints, reloads, or edits the unified signed config file.");
     println!();
@@ -956,6 +970,7 @@ fn print_config_help() {
     println!("  routes                Edits local config routes by unique name");
     println!("  remote-routes         Edits local config remote_routes by unique name");
     println!("  permissions           Edits local config permissions by unique client");
+    println!("  fpe                   Edits local config FPE profiles by unique name");
     println!();
     println!("Behavior:");
     println!("  edit commands modify VECTIS_CONFIG_PATH only");
@@ -964,6 +979,8 @@ fn print_config_help() {
     println!("  quote \"*\" for wildcard KIDs so the shell does not expand it");
     println!("  permissions add/update manages clients and apikey_hash");
     println!("  permissions grant/revoke only manages kid/action grants");
+    println!("  section list commands print one local config array only");
+    println!("  config fpe edits signed FPE field profiles; min_len must be at least 6");
     println!("  edit commands do not sign or reload automatically");
     println!();
     println!("Environment:");
@@ -974,6 +991,7 @@ fn print_config_help() {
     println!("  {PROGRAM_NAME} config init");
     println!("  {PROGRAM_NAME} config sign");
     println!("  {PROGRAM_NAME} config reload");
+    println!("  {PROGRAM_NAME} config routes list");
     println!(
         "  {PROGRAM_NAME} config routes add --name app-a --kid <kid> --final-app-addr 127.0.0.1:3999 --final-app-path /message"
     );
@@ -985,6 +1003,9 @@ fn print_config_help() {
     );
     println!("  {PROGRAM_NAME} config permissions grant \"Acme App\" --kid \"*\" --action admin");
     println!("  {PROGRAM_NAME} config permissions grant \"Acme App\" --kid <kid> --action message");
+    println!(
+        "  {PROGRAM_NAME} config fpe add --name patient-id-decimal-v1 --kid <kid> --alphabet 0123456789 --min-len 6 --max-len 32 --tweak-aad tenant=acme\\;field=patient_id\\;version=1"
+    );
     print_output_help();
 }
 
