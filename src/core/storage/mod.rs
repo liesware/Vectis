@@ -87,6 +87,24 @@ impl StorageState {
         }
     }
 
+    pub async fn save_tokens_batch(&self, records: &[TokenRow]) -> Result<(), DynError> {
+        match &self.backend {
+            StorageBackend::Sqlite(sqlite) => sqlite.save_tokens_batch(records).await,
+            StorageBackend::Postgres(postgres) => postgres.save_tokens_batch(records).await,
+        }
+    }
+
+    pub async fn get_tokens_batch(
+        &self,
+        kid: &str,
+        hashids: &[String],
+    ) -> Result<std::collections::HashMap<String, String>, DynError> {
+        match &self.backend {
+            StorageBackend::Sqlite(sqlite) => sqlite.get_tokens_batch(kid, hashids).await,
+            StorageBackend::Postgres(postgres) => postgres.get_tokens_batch(kid, hashids).await,
+        }
+    }
+
     pub async fn get_token(&self, kid: &str, hashid: &str) -> Result<TokenRow, DynError> {
         match &self.backend {
             StorageBackend::Sqlite(sqlite) => sqlite.get_token(kid, hashid).await,

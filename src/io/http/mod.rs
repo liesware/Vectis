@@ -411,6 +411,8 @@ fn record_operation_denied_metric(event_name: &str) {
         "fpe.decrypt.batch.denied" => record_crypto_failed("fpe_decrypt_batch"),
         "token.encode.denied" => core_metrics::record_crypto_operation("token_encode", "failed"),
         "token.decode.denied" => core_metrics::record_crypto_operation("token_decode", "failed"),
+        "token.encode.batch.denied" => record_crypto_failed("token_encode_batch"),
+        "token.decode.batch.denied" => record_crypto_failed("token_decode_batch"),
         "sign.denied" => core_metrics::record_crypto_operation("sign", "failed"),
         "self_test.denied" => {}
         _ => {}
@@ -423,6 +425,7 @@ fn record_crypto_failed(operation: &str) {
 
 pub fn router(state: HttpState) -> Router {
     use fpe::encrypt_batch_endpoint as fpe_encrypt_batch;
+    use token::encode_batch_endpoint as token_encode_batch;
 
     debug_assert!(state.key_material_loaded());
 
@@ -451,6 +454,8 @@ pub fn router(state: HttpState) -> Router {
         .route("/fpe/decrypt/batch", post(fpe::decrypt_batch_endpoint))
         .route("/fpe/encrypt/{kid}", post(fpe::encrypt_endpoint))
         .route("/fpe/decrypt", post(fpe::decrypt_endpoint))
+        .route("/token/encode/batch/{kid}", post(token_encode_batch))
+        .route("/token/decode/batch", post(token::decode_batch_endpoint))
         .route("/token/encode/{kid}", post(token::encode_endpoint))
         .route("/token/decode", post(token::decode_endpoint))
         .route("/pub/{kid}", get(pubkey::pub_endpoint))

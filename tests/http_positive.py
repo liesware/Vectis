@@ -121,6 +121,18 @@ def print_token(rows):
     print()
 
 
+def print_token_batch(rows):
+    print("token batch:")
+    for key_id, profile, token_previews, plaintexts in rows:
+        print(f"- kid: {key_id}")
+        print(f"  profile: {profile}")
+        print(f"  encode_batch: OK")
+        print(f"  decode_batch: OK")
+        print(f"  tokens: {','.join(token_previews)}")
+        print(f"  plain_texts: {','.join(plaintexts)}")
+    print()
+
+
 def validate_init(response):
     require(response.get("timestamp"), "test init response must include timestamp")
     for field in ("hash", "symmetric", "eddsa", "xecdh", "ml-dsa", "ml-kem"):
@@ -250,6 +262,14 @@ def validate_runtime_metrics(client):
     require(
         'vectis_crypto_operation_total{operation="token_decode",result="success"}' in metrics,
         "metrics must include successful token decode count",
+    )
+    require(
+        'vectis_crypto_operation_total{operation="token_encode_batch",result="success"}' in metrics,
+        "metrics must include successful token encode batch count",
+    )
+    require(
+        'vectis_crypto_operation_total{operation="token_decode_batch",result="success"}' in metrics,
+        "metrics must include successful token decode batch count",
     )
 
 
@@ -712,6 +732,64 @@ def token_round_trip(client, key_id):
     return profile, token[:16] + "...", plaintext
 
 
+def token_batch_round_trip(client, key_id):
+    profile = "patient-id-token-v1"
+    plaintexts = ["123456789", "987654321"]
+    metadata = [
+        {"tenant": "acme", "field": "patient_id", "item": "one"},
+        {"tenant": "acme", "field": "patient_id", "item": "two"},
+    ]
+    encoded = client.post(
+        f"/token/encode/batch/{key_id}",
+        {
+            "profile": profile,
+            "items": [
+                {"plaintext": plaintexts[0], "metadata": metadata[0]},
+                {"plaintext": plaintexts[1], "metadata": metadata[1]},
+            ],
+        },
+        auth=True,
+    )
+    require(encoded.get("kid") == key_id, "token batch encode kid mismatch")
+    require(encoded.get("profile") == profile, "token batch encode profile mismatch")
+    encoded_items = encoded.get("items")
+    require(isinstance(encoded_items, list), "token batch encode items must be a list")
+    tokens = [item.get("token") for item in encoded_items]
+    require(
+        all(isinstance(token, str) and token.startswith("tok_patient_") for token in tokens),
+        "token batch format mismatch",
+    )
+    require(tokens[0] != tokens[1], "token batch must generate distinct tokens")
+    require(
+        all(plaintext not in token for plaintext, token in zip(plaintexts, tokens)),
+        "token batch must not include plaintext",
+    )
+
+    decoded = client.post(
+        "/token/decode/batch",
+        {
+            "kid": key_id,
+            "profile": profile,
+            "items": [{"token": token} for token in tokens],
+        },
+        auth=True,
+    )
+    require(decoded.get("kid") == key_id, "token batch decode kid mismatch")
+    require(decoded.get("profile") == profile, "token batch decode profile mismatch")
+    decoded_items = decoded.get("items")
+    require(isinstance(decoded_items, list), "token batch decode items must be a list")
+    require(
+        [item.get("plaintext") for item in decoded_items] == plaintexts,
+        "token batch decode plaintext order mismatch",
+    )
+    require(
+        [item.get("metadata") for item in decoded_items] == metadata,
+        "token batch decode metadata order mismatch",
+    )
+
+    return profile, [token[:16] + "..." for token in tokens], plaintexts
+
+
 def validate_permissions_flow(base_url, root_client, key_id, case):
     limited_key, limited_hash = create_api_key_pair()
     admin_key, admin_hash = create_api_key_pair()
@@ -1015,6 +1093,12 @@ def main():
             *token_round_trip(client, created[0][0]),
         )
     ]
+    token_batch_rows = [
+        (
+            created[0][0],
+            *token_batch_round_trip(client, created[0][0]),
+        )
+    ]
 
     permission_rows = validate_permissions_flow(args.base_url, client, created[0][0], created[0][1])
     print_section("permissions", permission_rows)
@@ -1099,6 +1183,7 @@ def main():
     print_fpe(fpe_rows)
     print_fpe_batch(fpe_batch_rows)
     print_token(token_rows)
+    print_token_batch(token_batch_rows)
     print_message(message_rows)
     print_internal_message(internal_message_rows)
     print_section("sign", sign_rows)
@@ -1111,6 +1196,7 @@ def main():
     passed_count += len(fpe_rows)
     passed_count += len(fpe_batch_rows)
     passed_count += len(token_rows)
+    passed_count += len(token_batch_rows)
     passed_count += len(message_rows)
     passed_count += len(internal_message_rows)
     passed_count += len(sign_rows)

@@ -78,7 +78,9 @@ Endpoints requiring auth:
 - `POST /fpe/decrypt`
 - `POST /fpe/decrypt/batch`
 - `POST /token/encode/{kid}`
+- `POST /token/encode/batch/{kid}`
 - `POST /token/decode`
+- `POST /token/decode/batch`
 
 Endpoints without auth:
 
@@ -192,7 +194,7 @@ Exposed metrics:
 - `vectis_config_last_reload_timestamp_seconds{result}` (`success` or `failed`)
 - `vectis_keys_reload_total{result}` (`success` or `failed`)
 - `vectis_message_total{operation,result}` (`send`, `receive`, or `decrypt`; `success`, `denied`, or `failed`)
-- `vectis_crypto_operation_total{operation,result}` (`sign`, `verify`, `encrypt`, `decrypt`, `fpe_encrypt`, `fpe_decrypt`, `fpe_encrypt_batch`, `fpe_decrypt_batch`, `token_encode`, or `token_decode`; `success` or `failed`)
+- `vectis_crypto_operation_total{operation,result}` (`sign`, `verify`, `encrypt`, `decrypt`, `fpe_encrypt`, `fpe_decrypt`, `fpe_encrypt_batch`, `fpe_decrypt_batch`, `token_encode`, `token_decode`, `token_encode_batch`, or `token_decode_batch`; `success` or `failed`)
 
 ### GET /self-test/init
 
@@ -610,8 +612,8 @@ Permission mapping:
 | `message` | `POST /message/{sender_kid}`, `POST /message/decrypt`, `POST /message/internal/encrypt/{kid}`, `POST /message/internal/decrypt` |
 | `fpe-encrypt` | `POST /fpe/encrypt/{kid}`, `POST /fpe/encrypt/batch/{kid}` |
 | `fpe-decrypt` | `POST /fpe/decrypt`, `POST /fpe/decrypt/batch` |
-| `token-encode` | `POST /token/encode/{kid}` |
-| `token-decode` | `POST /token/decode` |
+| `token-encode` | `POST /token/encode/{kid}`, `POST /token/encode/batch/{kid}` |
+| `token-decode` | `POST /token/decode`, `POST /token/decode/batch` |
 | `metrics` | `GET /metrics` with `kid: "*"` |
 
 Root always passes permission checks. Routes operations require root or `admin`; there is no granular `routes` action. FPE and tokenization actions require explicit KID-scoped grants; `kid: "*"` is rejected for those actions.
@@ -1147,6 +1149,8 @@ Visible tokens have the form `<token_prefix>_<base64url-no-pad random bytes>`. `
 
 Encode `metadata` is optional, must be a JSON object when present, and its compact serialized JSON representation must be at most 128 characters.
 
+Batch tokenization preserves item order and is all-or-nothing. If any item fails validation, lookup, encryption, decryption, or storage insert, the response is a single error and no partial `items` are returned. `POST /token/encode/batch/{kid}` writes all token rows in one storage transaction. The maximum batch size is `INTERNAL_TOKEN_BATCH` (`128`).
+
 ### POST /token/encode/{kid}
 
 Requires auth and `token-encode` permission for the path `kid`. The key must be `active`.
@@ -1182,6 +1186,65 @@ Request:
   "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
   "profile": "patient-id-token-v1",
   "token": "tok_patient_vGqyEeXKcKz5QK1jwBQTyQ"
+}
+```
+
+### POST /token/encode/batch/{kid}
+
+Requires auth and `token-encode` permission for the path `kid`. The key must be `active`.
+
+Request:
+
+```json
+{
+  "profile": "patient-id-token-v1",
+  "items": [
+    { "plaintext": "123456", "metadata": { "tenant": "acme" } },
+    { "plaintext": "654321" }
+  ]
+}
+```
+
+Response:
+
+```json
+{
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "profile": "patient-id-token-v1",
+  "items": [
+    { "token": "tok_patient_vGqyEeXKcKz5QK1jwBQTyQ" },
+    { "token": "tok_patient_j43sAUddCPYAaHwvA6Yoww" }
+  ]
+}
+```
+
+### POST /token/decode/batch
+
+Requires auth and `token-decode` permission for the request `kid`. The key may be `active` or `retired`.
+
+Request:
+
+```json
+{
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "profile": "patient-id-token-v1",
+  "items": [
+    { "token": "tok_patient_vGqyEeXKcKz5QK1jwBQTyQ" },
+    { "token": "tok_patient_j43sAUddCPYAaHwvA6Yoww" }
+  ]
+}
+```
+
+Response:
+
+```json
+{
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "profile": "patient-id-token-v1",
+  "items": [
+    { "plaintext": "123456", "metadata": { "tenant": "acme" } },
+    { "plaintext": "654321" }
+  ]
 }
 ```
 

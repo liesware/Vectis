@@ -642,6 +642,35 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
+  /token/encode/batch/{kid}:
+    post:
+      tags: [Tokenization]
+      summary: Create reversible random tokens as an all-or-nothing batch
+      description: >
+        Creates random visible tokens using one tokenization profile loaded from
+        signed config. The database stores only kid, hashid, and encrypted data.
+        The key must be active. All token rows are inserted in one storage
+        transaction; any item failure returns one error and no partial items.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenEncodeBatchInput"
+      responses:
+        "200":
+          description: Created tokens
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenEncodeBatchOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
   /token/decode:
     post:
       tags: [Tokenization]
@@ -664,6 +693,32 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TokenDecodeOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /token/decode/batch:
+    post:
+      tags: [Tokenization]
+      summary: Resolve reversible random tokens as an all-or-nothing batch
+      description: >
+        Resolves tokens by HMAC-derived hashid and decrypts the stored payloads.
+        Decode permits active and retired keys. If any item fails, the response
+        is one error and no partial items are returned.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenDecodeBatchInput"
+      responses:
+        "200":
+          description: Token plaintexts and optional metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenDecodeBatchOutput"
         default:
           $ref: "#/components/responses/Error"
 
@@ -1599,6 +1654,59 @@ components:
           description: Visible token in the form <token_prefix>_<base64url-no-pad random bytes>. The decoded random byte length equals the signed profile token_len.
           example: tok_patient_vGqyEeXKcKz5QK1jwBQTyQ
 
+    TokenEncodeBatchItemInput:
+      type: object
+      additionalProperties: false
+      required: [plaintext]
+      properties:
+        plaintext:
+          $ref: "#/components/schemas/TextField"
+          example: "123456"
+        metadata:
+          type: object
+          description: Optional JSON object. Its compact serialized JSON representation must be at most 128 characters.
+          additionalProperties: true
+          example:
+            tenant: acme
+
+    TokenEncodeBatchInput:
+      type: object
+      additionalProperties: false
+      required: [profile, items]
+      properties:
+        profile:
+          $ref: "#/components/schemas/TextField"
+          example: patient-id-token-v1
+        items:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items:
+            $ref: "#/components/schemas/TokenEncodeBatchItemInput"
+
+    TokenEncodeBatchOutputItem:
+      type: object
+      required: [token]
+      properties:
+        token:
+          $ref: "#/components/schemas/TextField"
+          description: Visible token in the form <token_prefix>_<base64url-no-pad random bytes>. The decoded random byte length equals the signed profile token_len.
+          example: tok_patient_vGqyEeXKcKz5QK1jwBQTyQ
+
+    TokenEncodeBatchOutput:
+      type: object
+      required: [kid, profile, items]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/TextField"
+          example: patient-id-token-v1
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/TokenEncodeBatchOutputItem"
+
     TokenDecodeInput:
       type: object
       additionalProperties: false
@@ -1626,6 +1734,60 @@ components:
           additionalProperties: true
           example:
             tenant: acme
+
+    TokenDecodeBatchItemInput:
+      type: object
+      additionalProperties: false
+      required: [token]
+      properties:
+        token:
+          $ref: "#/components/schemas/TextField"
+          description: Visible token in the form <token_prefix>_<base64url-no-pad random bytes>. Decode validates the configured prefix and decoded byte length before lookup.
+          example: tok_patient_vGqyEeXKcKz5QK1jwBQTyQ
+
+    TokenDecodeBatchInput:
+      type: object
+      additionalProperties: false
+      required: [kid, profile, items]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/TextField"
+          example: patient-id-token-v1
+        items:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items:
+            $ref: "#/components/schemas/TokenDecodeBatchItemInput"
+
+    TokenDecodeBatchOutputItem:
+      type: object
+      required: [plaintext]
+      properties:
+        plaintext:
+          $ref: "#/components/schemas/TextField"
+          example: "123456"
+        metadata:
+          type: object
+          additionalProperties: true
+          example:
+            tenant: acme
+
+    TokenDecodeBatchOutput:
+      type: object
+      required: [kid, profile, items]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/TextField"
+          example: patient-id-token-v1
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/TokenDecodeBatchOutputItem"
 
     MessageCipher:
       type: object

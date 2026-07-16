@@ -2,6 +2,7 @@ use crate::core::storage::{OpsKeyRow, TokenRow};
 use crate::error::DynError;
 use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
+use std::collections::HashMap;
 use tracing::info;
 
 pub struct SqliteStorage {
@@ -122,6 +123,53 @@ impl SqliteStorage {
             hashid: hashid.to_string(),
             data: data.to_string(),
         })
+    }
+
+    pub async fn save_tokens_batch(&self, records: &[TokenRow]) -> Result<(), DynError> {
+        let mut tx = self.pool.begin().await?;
+        for record in records {
+            sqlx::query(
+                "
+                INSERT INTO tokens (kid, hashid, data)
+                VALUES (?, ?, ?)
+                ",
+            )
+            .bind(&record.kid)
+            .bind(&record.hashid)
+            .bind(&record.data)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        info!(items_count = records.len(), "inserted token batch");
+
+        Ok(())
+    }
+
+    pub async fn get_tokens_batch(
+        &self,
+        kid: &str,
+        hashids: &[String],
+    ) -> Result<HashMap<String, String>, DynError> {
+        if hashids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders = std::iter::repeat_n("?", hashids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql =
+            format!("SELECT hashid, data FROM tokens WHERE kid = ? AND hashid IN ({placeholders})");
+        let mut query = sqlx::query(&sql).bind(kid);
+        for hashid in hashids {
+            query = query.bind(hashid);
+        }
+        let rows = query.fetch_all(&self.pool).await?;
+
+        let mut found = HashMap::with_capacity(rows.len());
+        for row in rows {
+            found.insert(row.get("hashid"), row.get("data"));
+        }
+        Ok(found)
     }
 
     pub async fn get_token(&self, kid: &str, hashid: &str) -> Result<TokenRow, DynError> {
@@ -467,6 +515,68 @@ mod tests {
             .await
             .expect_err("missing token must fail");
         assert!(is_not_found(err.as_ref()));
+
+        cleanup(path).await;
+    }
+
+    #[tokio::test]
+    async fn token_batch_save_rolls_back_on_insert_failure() {
+        let (storage, path) = test_storage("token-batch-rollback").await;
+        let records = vec![
+            TokenRow {
+                kid: String::from("kid-1"),
+                hashid: String::from("hash-1"),
+                data: String::from("ciphertext-1.nonce.aad"),
+            },
+            TokenRow {
+                kid: String::from("kid-1"),
+                hashid: String::from("hash-1"),
+                data: String::from("ciphertext-2.nonce.aad"),
+            },
+        ];
+
+        storage
+            .save_tokens_batch(&records)
+            .await
+            .expect_err("duplicate token in batch must fail");
+
+        let err = storage
+            .get_token("kid-1", "hash-1")
+            .await
+            .expect_err("failed batch must not leave partial token");
+        assert!(is_not_found(err.as_ref()));
+
+        cleanup(path).await;
+    }
+
+    #[tokio::test]
+    async fn get_tokens_batch_returns_found_rows_only() {
+        let (storage, path) = test_storage("token-batch-get").await;
+        storage
+            .save_token("kid-1", "hash-1", "data-1")
+            .await
+            .expect("token must save");
+        storage
+            .save_token("kid-1", "hash-2", "data-2")
+            .await
+            .expect("token must save");
+
+        let found = storage
+            .get_tokens_batch(
+                "kid-1",
+                &[
+                    String::from("hash-1"),
+                    String::from("hash-2"),
+                    String::from("hash-missing"),
+                ],
+            )
+            .await
+            .expect("batch lookup must succeed");
+
+        assert_eq!(found.len(), 2);
+        assert_eq!(found.get("hash-1").map(String::as_str), Some("data-1"));
+        assert_eq!(found.get("hash-2").map(String::as_str), Some("data-2"));
+        assert!(found.get("hash-missing").is_none());
 
         cleanup(path).await;
     }

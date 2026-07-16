@@ -2,6 +2,7 @@ use crate::core::storage::{OpsKeyRow, TokenRow};
 use crate::error::DynError;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::{Postgres, Row, Transaction};
+use std::collections::HashMap;
 use tracing::info;
 
 pub struct PostgresStorage {
@@ -110,6 +111,52 @@ impl PostgresStorage {
             hashid: hashid.to_string(),
             data: data.to_string(),
         })
+    }
+
+    pub async fn save_tokens_batch(&self, records: &[TokenRow]) -> Result<(), DynError> {
+        let mut tx = self.pool.begin().await?;
+        for record in records {
+            sqlx::query(
+                "
+                INSERT INTO tokens (kid, hashid, data)
+                VALUES ($1, $2, $3)
+                ",
+            )
+            .bind(&record.kid)
+            .bind(&record.hashid)
+            .bind(&record.data)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        info!(items_count = records.len(), "inserted token batch");
+
+        Ok(())
+    }
+
+    pub async fn get_tokens_batch(
+        &self,
+        kid: &str,
+        hashids: &[String],
+    ) -> Result<HashMap<String, String>, DynError> {
+        let rows = sqlx::query(
+            "
+            SELECT hashid, data
+            FROM tokens
+            WHERE kid = $1
+              AND hashid = ANY($2)
+            ",
+        )
+        .bind(kid)
+        .bind(hashids)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut found = HashMap::with_capacity(rows.len());
+        for row in rows {
+            found.insert(row.get("hashid"), row.get("data"));
+        }
+        Ok(found)
     }
 
     pub async fn get_token(&self, kid: &str, hashid: &str) -> Result<TokenRow, DynError> {

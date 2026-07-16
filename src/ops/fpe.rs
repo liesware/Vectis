@@ -191,12 +191,20 @@ pub fn parse_decrypt_input(request: Value) -> Result<FpeDecryptInput, DynError> 
 }
 
 pub fn parse_encrypt_batch_input(request: Value) -> Result<FpeEncryptBatchInput, DynError> {
-    reject_oversized_batch_value(&request)?;
+    crate::ops::batch::reject_oversized_value(
+        &request,
+        crate::core::config::INTERNAL_FPE_BATCH,
+        "fpe",
+    )?;
     serde_json::from_value(request).map_err(|_| crate::error::invalid_input("invalid fpe request"))
 }
 
 pub fn parse_decrypt_batch_input(request: Value) -> Result<FpeDecryptBatchInput, DynError> {
-    reject_oversized_batch_value(&request)?;
+    crate::ops::batch::reject_oversized_value(
+        &request,
+        crate::core::config::INTERNAL_FPE_BATCH,
+        "fpe",
+    )?;
     serde_json::from_value(request).map_err(|_| crate::error::invalid_input("invalid fpe request"))
 }
 
@@ -230,7 +238,11 @@ pub fn validate_encrypt_batch_input(
     input: FpeEncryptBatchInput,
 ) -> Result<ValidatedFpeEncryptBatchInput, DynError> {
     validation::validate_text_field("profile", &input.profile)?;
-    validate_batch_len(input.items.len())?;
+    crate::ops::batch::validate_len(
+        input.items.len(),
+        crate::core::config::INTERNAL_FPE_BATCH,
+        "fpe",
+    )?;
     let mut items = Vec::with_capacity(input.items.len());
     for item in input.items {
         validation::validate_text_field("plaintext", &item.plaintext)?;
@@ -250,7 +262,11 @@ pub fn validate_decrypt_batch_input(
 ) -> Result<ValidatedFpeDecryptBatchInput, DynError> {
     keys::validate_key_id(&input.kid)?;
     validation::validate_text_field("profile", &input.profile)?;
-    validate_batch_len(input.items.len())?;
+    crate::ops::batch::validate_len(
+        input.items.len(),
+        crate::core::config::INTERNAL_FPE_BATCH,
+        "fpe",
+    )?;
     let mut items = Vec::with_capacity(input.items.len());
     for item in input.items {
         validation::validate_text_field("ciphertext", &item.ciphertext)?;
@@ -264,36 +280,6 @@ pub fn validate_decrypt_batch_input(
         profile: input.profile,
         items,
     })
-}
-
-fn reject_oversized_batch_value(request: &Value) -> Result<(), DynError> {
-    if let Some(items) = request.get("items").and_then(Value::as_array)
-        && items.len() > crate::core::config::INTERNAL_FPE_BATCH
-    {
-        return Err(oversized_batch_error());
-    }
-
-    Ok(())
-}
-
-fn validate_batch_len(len: usize) -> Result<(), DynError> {
-    if len == 0 {
-        return Err(crate::error::invalid_input(
-            "fpe batch items must not be empty",
-        ));
-    }
-    if len > crate::core::config::INTERNAL_FPE_BATCH {
-        return Err(oversized_batch_error());
-    }
-
-    Ok(())
-}
-
-fn oversized_batch_error() -> DynError {
-    crate::error::invalid_input(format!(
-        "fpe batch items exceeds maximum allowed value: {}",
-        crate::core::config::INTERNAL_FPE_BATCH
-    ))
 }
 
 pub fn prepare_encrypt(

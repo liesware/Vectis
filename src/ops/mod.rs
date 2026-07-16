@@ -1,4 +1,5 @@
 pub mod apikey;
+pub mod batch;
 pub mod contracts;
 pub mod fpe;
 pub mod init;

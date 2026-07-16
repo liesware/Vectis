@@ -671,6 +671,14 @@ def main():
         )
         require_status("limited client blocks token encode", status, 403)
 
+    def limited_blocks_token_encode_batch():
+        status, _ = limited_client.post(
+            f"/token/encode/batch/{key_id}",
+            {"profile": "patient-id-token-v1", "items": [{"plaintext": "123456"}]},
+            auth=True,
+        )
+        require_status("limited client blocks token encode batch", status, 403)
+
     def limited_blocks_token_decode():
         status, _ = limited_client.post(
             "/token/decode",
@@ -678,6 +686,18 @@ def main():
             auth=True,
         )
         require_status("limited client blocks token decode", status, 403)
+
+    def limited_blocks_token_decode_batch():
+        status, _ = limited_client.post(
+            "/token/decode/batch",
+            {
+                "kid": key_id,
+                "profile": "patient-id-token-v1",
+                "items": [{"token": "tok_patient_missing"}],
+            },
+            auth=True,
+        )
+        require_status("limited client blocks token decode batch", status, 403)
 
     def metrics_client_allows_metrics():
         status, _ = metrics_client.get("/metrics", auth=True)
@@ -739,7 +759,9 @@ def main():
         ("limited client blocks fpe encrypt batch", limited_blocks_fpe_encrypt_batch),
         ("limited client blocks fpe decrypt batch", limited_blocks_fpe_decrypt_batch),
         ("limited client blocks token encode", limited_blocks_token_encode),
+        ("limited client blocks token encode batch", limited_blocks_token_encode_batch),
         ("limited client blocks token decode", limited_blocks_token_decode),
+        ("limited client blocks token decode batch", limited_blocks_token_decode_batch),
         ("metrics client allows metrics", metrics_client_allows_metrics),
         ("metrics client blocks admin", metrics_client_blocks_admin),
         ("limited client blocks permissions list", limited_blocks_permissions_list),
@@ -1741,6 +1763,75 @@ def main():
             "token encode oversized metadata must fail by metadata bounds",
         )
 
+    def token_encode_batch_empty_items():
+        status, body = client.post(
+            f"/token/encode/batch/{key_id}",
+            {"profile": "patient-id-token-v1", "items": []},
+            auth=True,
+        )
+        require_status("POST /token/encode/batch/{kid} empty items", status, 400)
+        require("items" not in body, "token encode batch error must not return partial items")
+        require(
+            body.get("error") == "token batch items must not be empty",
+            "token encode batch empty items must fail by batch bounds",
+        )
+
+    def token_encode_batch_too_many_items():
+        status, body = client.post(
+            f"/token/encode/batch/{key_id}",
+            {
+                "profile": "patient-id-token-v1",
+                "items": [{"plaintext": "123456"} for _ in range(129)],
+            },
+            auth=True,
+        )
+        require_status("POST /token/encode/batch/{kid} too many items", status, 400)
+        require("items" not in body, "token encode batch error must not return partial items")
+        require(
+            body.get("error") == "token batch items exceeds maximum allowed value: 128",
+            "token encode batch oversized request must fail by batch bounds",
+        )
+
+    def token_encode_batch_metadata_too_long():
+        status, body = client.post(
+            f"/token/encode/batch/{key_id}",
+            {
+                "profile": "patient-id-token-v1",
+                "items": [
+                    {"plaintext": "123456"},
+                    {"plaintext": "654321", "metadata": {"a": "x" * 129}},
+                ],
+            },
+            auth=True,
+        )
+        require_status("POST /token/encode/batch/{kid} metadata too long", status, 400)
+        require("items" not in body, "token encode batch error must not return partial items")
+        require(
+            body.get("error")
+            == "batch item 1 failed: metadata exceeds tokenization maximum length",
+            "token encode batch oversized metadata must fail all-or-nothing",
+        )
+
+    def token_encode_batch_plaintext_too_long():
+        status, body = client.post(
+            f"/token/encode/batch/{key_id}",
+            {
+                "profile": "patient-id-token-v1",
+                "items": [
+                    {"plaintext": "123456"},
+                    {"plaintext": "x" * 1025},
+                ],
+            },
+            auth=True,
+        )
+        require_status("POST /token/encode/batch/{kid} plaintext too long", status, 400)
+        require("items" not in body, "token encode batch error must not return partial items")
+        require(
+            body.get("error")
+            == "batch item 1 failed: plaintext length exceeds tokenization profile maximum",
+            "token encode batch oversized plaintext must fail all-or-nothing",
+        )
+
     def token_decode_unknown_profile():
         status, body = client.post(
             "/token/decode",
@@ -1810,6 +1901,57 @@ def main():
         require_status("POST /token/decode not found", status, 404)
         require(body.get("error") == "token not found", "missing token must be reported as not found")
 
+    def token_decode_batch_invalid_prefix():
+        status, body = client.post(
+            "/token/decode/batch",
+            {
+                "kid": key_id,
+                "profile": "patient-id-token-v1",
+                "items": [{"token": encoded_token}, {"token": "wrong_prefix"}],
+            },
+            auth=True,
+        )
+        require_status("POST /token/decode/batch invalid prefix", status, 400)
+        require("items" not in body, "token decode batch error must not return partial items")
+        require(
+            body.get("error")
+            == "batch item 1 failed: token prefix does not match tokenization profile",
+            "token decode batch invalid prefix must fail all-or-nothing with item position",
+        )
+
+    def token_decode_batch_empty_items():
+        status, body = client.post(
+            "/token/decode/batch",
+            {"kid": key_id, "profile": "patient-id-token-v1", "items": []},
+            auth=True,
+        )
+        require_status("POST /token/decode/batch empty items", status, 400)
+        require("items" not in body, "token decode batch error must not return partial items")
+        require(
+            body.get("error") == "token batch items must not be empty",
+            "token decode batch empty items must fail by batch bounds",
+        )
+
+    def token_decode_batch_not_found():
+        status, body = client.post(
+            "/token/decode/batch",
+            {
+                "kid": key_id,
+                "profile": "patient-id-token-v1",
+                "items": [
+                    {"token": encoded_token},
+                    {"token": "tok_patient_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
+                ],
+            },
+            auth=True,
+        )
+        require_status("POST /token/decode/batch not found", status, 404)
+        require("items" not in body, "token decode batch error must not return partial items")
+        require(
+            body.get("error") == "batch item 1 failed: token not found",
+            "token decode batch missing token must fail all-or-nothing with item position",
+        )
+
     _CONFIG["routes"] = []
     _CONFIG["remote_routes"] = []
     _CONFIG["permissions"] = []
@@ -1843,11 +1985,24 @@ def main():
         ("POST /token/encode/{kid} unknown profile", token_encode_unknown_profile),
         ("POST /token/encode/{kid} plaintext too long", token_encode_plaintext_too_long),
         ("POST /token/encode/{kid} metadata too long", token_encode_metadata_too_long),
+        ("POST /token/encode/batch/{kid} empty items", token_encode_batch_empty_items),
+        ("POST /token/encode/batch/{kid} too many items", token_encode_batch_too_many_items),
+        (
+            "POST /token/encode/batch/{kid} metadata too long",
+            token_encode_batch_metadata_too_long,
+        ),
+        (
+            "POST /token/encode/batch/{kid} plaintext too long",
+            token_encode_batch_plaintext_too_long,
+        ),
         ("POST /token/decode unknown profile", token_decode_unknown_profile),
         ("POST /token/decode invalid prefix", token_decode_invalid_prefix),
         ("POST /token/decode invalid encoding", token_decode_invalid_encoding),
         ("POST /token/decode wrong length", token_decode_wrong_length),
         ("POST /token/decode not found", token_decode_not_found),
+        ("POST /token/decode/batch invalid prefix", token_decode_batch_invalid_prefix),
+        ("POST /token/decode/batch empty items", token_decode_batch_empty_items),
+        ("POST /token/decode/batch not found", token_decode_batch_not_found),
     ):
         run_case(rows, name, func)
 

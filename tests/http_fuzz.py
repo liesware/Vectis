@@ -30,6 +30,7 @@ FPE_PLAINTEXT = "1234567890"
 FPE_BATCH_PLAINTEXTS = [FPE_PLAINTEXT, "9876543210"]
 TOKENIZATION_PROFILE = "fuzz-patient-id-token-v1"
 TOKEN_PLAINTEXT = "fuzz token plaintext"
+TOKEN_BATCH_PLAINTEXTS = [TOKEN_PLAINTEXT, "second fuzz token plaintext"]
 
 # Minimal, policy-safe key requests (one per crypto profile) used to CREATE seed
 # keys. Creating with only tag+profile works under both crypto policies, and the
@@ -512,6 +513,46 @@ def tokenization_semantic(sent_value, seed, status, body):
         if sent_value != seed and returned == TOKEN_PLAINTEXT:
             findings.append(
                 "SEMANTIC: token decode accepted mutated token as original plaintext"
+            )
+    return findings
+
+
+def tokenization_batch_semantic(sent_value, seed, status, body):
+    findings = []
+    if status != 200:
+        return findings
+    parsed = _parse(body)
+    if not isinstance(parsed, dict):
+        return ["SEMANTIC: token batch 200 body is not JSON object"]
+    items = parsed.get("items")
+    if not isinstance(items, list):
+        return ["SEMANTIC: token batch 200 body is missing items list"]
+    seed_items = seed.get("items") if isinstance(seed, dict) else None
+    if not isinstance(seed_items, list) or not seed_items:
+        return findings
+
+    if "plaintext" in seed_items[0]:
+        if sent_value == seed:
+            if len(items) != len(seed_items):
+                findings.append("SEMANTIC: token batch encode item count mismatch")
+            for out_item, in_item in zip(items, seed_items):
+                token = out_item.get("token") if isinstance(out_item, dict) else None
+                plaintext = in_item.get("plaintext") if isinstance(in_item, dict) else None
+                if token is None:
+                    findings.append("SEMANTIC: token batch encode item is missing token")
+                    break
+                if isinstance(token, str) and isinstance(plaintext, str) and plaintext in token:
+                    findings.append("SEMANTIC: token batch encode leaked plaintext in token")
+                    break
+        return findings
+
+    if "token" in seed_items[0]:
+        returned = [it.get("plaintext") for it in items if isinstance(it, dict)]
+        if sent_value == seed and returned != TOKEN_BATCH_PLAINTEXTS:
+            findings.append("SEMANTIC: token batch decode returned unexpected plaintext")
+        if sent_value != seed and returned == TOKEN_BATCH_PLAINTEXTS:
+            findings.append(
+                "SEMANTIC: token batch decode accepted mutated token as original plaintext"
             )
     return findings
 
@@ -1037,6 +1078,37 @@ def tokenization_seeds(client):
     ]
 
 
+def tokenization_batch_seeds(client):
+    kid = _create_key(client, {"tag": "fuzz-token-batch", "profile": "hybrid-performance-v1"})
+    configure_tokenization_profile(client, kid)
+    encode_seed = {
+        "profile": TOKENIZATION_PROFILE,
+        "items": [
+            {
+                "plaintext": TOKEN_BATCH_PLAINTEXTS[0],
+                "metadata": {"tenant": "fuzz", "field": "patient_id", "item": "one"},
+            },
+            {
+                "plaintext": TOKEN_BATCH_PLAINTEXTS[1],
+                "metadata": {"tenant": "fuzz", "field": "patient_id", "item": "two"},
+            },
+        ],
+    }
+    status, body = client.post_json(f"/token/encode/batch/{kid}", encode_seed, auth=True)
+    if status != 200:
+        raise RuntimeError(f"could not encode token batch seed: HTTP {status}: {body}")
+    parsed = json.loads(body)
+    decode_seed = {
+        "kid": kid,
+        "profile": TOKENIZATION_PROFILE,
+        "items": [{"token": item["token"]} for item in parsed["items"]],
+    }
+    return [
+        (f"/token/encode/batch/{kid}", encode_seed),
+        ("/token/decode/batch", decode_seed),
+    ]
+
+
 TARGETS = [
     {"name": "token", "runner": run_body, "seed_factory": token_seeds,
      "path": "/sign/verification", "auth": False, "semantic": token_semantic},
@@ -1059,6 +1131,8 @@ TARGETS = [
      "auth": True, "semantic": fpe_batch_semantic},
     {"name": "tokenization", "runner": run_body, "seed_factory": tokenization_seeds,
      "auth": True, "semantic": tokenization_semantic},
+    {"name": "tokenization_batch", "runner": run_body, "seed_factory": tokenization_batch_seeds,
+     "auth": True, "semantic": tokenization_batch_semantic},
     {"name": "pubkid", "runner": run_path_param, "require_json_error": False, "endpoints": [
         ("/pub/{}", False),
         ("/keys/properties/{}", True),
@@ -1266,6 +1340,63 @@ def self_check():
     expect(
         not tokenization_semantic(token_decode_mut, token_decode_seed, 400, '{"error":"x"}'),
         "token decode ignores 4xx",
+    )
+
+    token_batch_encode_seed = {
+        "profile": TOKENIZATION_PROFILE,
+        "items": [
+            {"plaintext": TOKEN_BATCH_PLAINTEXTS[0], "metadata": {}},
+            {"plaintext": TOKEN_BATCH_PLAINTEXTS[1], "metadata": {}},
+        ],
+    }
+    token_batch_decode_seed = {
+        "kid": "a" * 64,
+        "profile": TOKENIZATION_PROFILE,
+        "items": [{"token": "tok_fuzz_deadbeef"}, {"token": "tok_fuzz_cafebabe"}],
+    }
+    token_batch_decode_mut = json.loads(json.dumps(token_batch_decode_seed))
+    token_batch_decode_mut["items"][0]["token"] = "tok_fuzz_ffffffff"
+    correct_token_batch_plaintext_body = json.dumps(
+        {"items": [{"plaintext": TOKEN_BATCH_PLAINTEXTS[0]}, {"plaintext": TOKEN_BATCH_PLAINTEXTS[1]}]}
+    )
+    expect(
+        tokenization_batch_semantic(
+            token_batch_encode_seed, token_batch_encode_seed, 200,
+            json.dumps({"items": [{"token": "tok_fuzz_" + TOKEN_BATCH_PLAINTEXTS[0]}, {"token": "tok_fuzz_clean"}]}),
+        ),
+        "token batch encode flags plaintext leak",
+    )
+    expect(
+        not tokenization_batch_semantic(
+            token_batch_encode_seed, token_batch_encode_seed, 200,
+            json.dumps({"items": [{"token": "tok_fuzz_abcdef"}, {"token": "tok_fuzz_123456"}]}),
+        ),
+        "token batch encode ignores clean tokens",
+    )
+    expect(
+        tokenization_batch_semantic(
+            token_batch_decode_seed, token_batch_decode_seed, 200,
+            json.dumps({"items": [{"plaintext": "WRONG"}, {"plaintext": "X"}]}),
+        ),
+        "token batch decode flags wrong plaintext",
+    )
+    expect(
+        tokenization_batch_semantic(
+            token_batch_decode_mut, token_batch_decode_seed, 200, correct_token_batch_plaintext_body
+        ),
+        "token batch decode flags mutated token as original",
+    )
+    expect(
+        not tokenization_batch_semantic(
+            token_batch_decode_seed, token_batch_decode_seed, 200, correct_token_batch_plaintext_body
+        ),
+        "token batch decode ignores correct plaintext",
+    )
+    expect(
+        not tokenization_batch_semantic(
+            token_batch_decode_mut, token_batch_decode_seed, 400, '{"error":"x"}'
+        ),
+        "token batch decode ignores 4xx",
     )
 
     for label in failures:
