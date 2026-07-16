@@ -97,6 +97,18 @@ def print_fpe(rows):
     print()
 
 
+def print_fpe_batch(rows):
+    print("fpe batch:")
+    for key_id, profile, ciphertexts, plaintexts in rows:
+        print(f"- kid: {key_id}")
+        print(f"  profile: {profile}")
+        print(f"  encrypt_batch: OK")
+        print(f"  decrypt_batch: OK")
+        print(f"  ciphertexts: {','.join(ciphertexts)}")
+        print(f"  plain_texts: {','.join(plaintexts)}")
+    print()
+
+
 def print_token(rows):
     print("token:")
     for key_id, profile, token_preview, plaintext in rows:
@@ -222,6 +234,14 @@ def validate_runtime_metrics(client):
     require(
         'vectis_crypto_operation_total{operation="fpe_decrypt",result="success"}' in metrics,
         "metrics must include successful fpe decrypt count",
+    )
+    require(
+        'vectis_crypto_operation_total{operation="fpe_encrypt_batch",result="success"}' in metrics,
+        "metrics must include successful fpe encrypt batch count",
+    )
+    require(
+        'vectis_crypto_operation_total{operation="fpe_decrypt_batch",result="success"}' in metrics,
+        "metrics must include successful fpe decrypt batch count",
     )
     require(
         'vectis_crypto_operation_total{operation="token_encode",result="success"}' in metrics,
@@ -617,6 +637,48 @@ def fpe_round_trip(client, key_id):
     return profile, ciphertext, plaintext
 
 
+def fpe_batch_round_trip(client, key_id):
+    profile = "patient-id-decimal-v1"
+    plaintexts = ["123456789", "987654321"]
+    encrypted = client.post(
+        f"/fpe/encrypt/batch/{key_id}",
+        {"profile": profile, "items": [{"plaintext": item} for item in plaintexts]},
+        auth=True,
+    )
+    require(encrypted.get("kid") == key_id, "fpe batch encrypt kid mismatch")
+    require(encrypted.get("profile") == profile, "fpe batch encrypt profile mismatch")
+    encrypted_items = encrypted.get("items")
+    require(isinstance(encrypted_items, list), "fpe batch encrypt items must be a list")
+    require(len(encrypted_items) == len(plaintexts), "fpe batch encrypt item count mismatch")
+    require(
+        all(set(item.keys()) == {"ciphertext"} for item in encrypted_items),
+        "fpe batch encrypt items must only include ciphertext",
+    )
+    ciphertexts = [item["ciphertext"] for item in encrypted_items]
+    require(ciphertexts[0] != ciphertexts[1], "fpe batch ciphertexts should differ")
+    require(all(item.isdigit() for item in ciphertexts), "fpe batch must preserve decimal alphabet")
+
+    decrypted = client.post(
+        "/fpe/decrypt/batch",
+        {
+            "kid": key_id,
+            "profile": profile,
+            "items": [{"ciphertext": item} for item in ciphertexts],
+        },
+        auth=True,
+    )
+    require(decrypted.get("kid") == key_id, "fpe batch decrypt kid mismatch")
+    require(decrypted.get("profile") == profile, "fpe batch decrypt profile mismatch")
+    decrypted_items = decrypted.get("items")
+    require(isinstance(decrypted_items, list), "fpe batch decrypt items must be a list")
+    require(
+        [item.get("plaintext") for item in decrypted_items] == plaintexts,
+        "fpe batch decrypt plaintext order mismatch",
+    )
+
+    return profile, ciphertexts, plaintexts
+
+
 def token_round_trip(client, key_id):
     profile = "patient-id-token-v1"
     plaintext = "123456789"
@@ -924,6 +986,12 @@ def main():
             *fpe_round_trip(client, created[0][0]),
         )
     ]
+    fpe_batch_rows = [
+        (
+            created[0][0],
+            *fpe_batch_round_trip(client, created[0][0]),
+        )
+    ]
     write_tokenization_profiles(
         [
             {
@@ -1029,6 +1097,7 @@ def main():
     print_section("test key", test_rows)
     print_section("pub", pub_rows)
     print_fpe(fpe_rows)
+    print_fpe_batch(fpe_batch_rows)
     print_token(token_rows)
     print_message(message_rows)
     print_internal_message(internal_message_rows)
@@ -1040,6 +1109,7 @@ def main():
     passed_count += len(test_rows)
     passed_count += len(pub_rows)
     passed_count += len(fpe_rows)
+    passed_count += len(fpe_batch_rows)
     passed_count += len(token_rows)
     passed_count += len(message_rows)
     passed_count += len(internal_message_rows)

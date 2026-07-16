@@ -74,7 +74,9 @@ Endpoints requiring auth:
 - `POST /message/internal/encrypt/{kid}`
 - `POST /message/internal/decrypt`
 - `POST /fpe/encrypt/{kid}`
+- `POST /fpe/encrypt/batch/{kid}`
 - `POST /fpe/decrypt`
+- `POST /fpe/decrypt/batch`
 - `POST /token/encode/{kid}`
 - `POST /token/decode`
 
@@ -190,7 +192,7 @@ Exposed metrics:
 - `vectis_config_last_reload_timestamp_seconds{result}` (`success` or `failed`)
 - `vectis_keys_reload_total{result}` (`success` or `failed`)
 - `vectis_message_total{operation,result}` (`send`, `receive`, or `decrypt`; `success`, `denied`, or `failed`)
-- `vectis_crypto_operation_total{operation,result}` (`sign`, `verify`, `encrypt`, `decrypt`, `fpe_encrypt`, `fpe_decrypt`, `token_encode`, or `token_decode`; `success` or `failed`)
+- `vectis_crypto_operation_total{operation,result}` (`sign`, `verify`, `encrypt`, `decrypt`, `fpe_encrypt`, `fpe_decrypt`, `fpe_encrypt_batch`, `fpe_decrypt_batch`, `token_encode`, or `token_decode`; `success` or `failed`)
 
 ### GET /self-test/init
 
@@ -606,8 +608,8 @@ Permission mapping:
 | `self-test` | `GET /self-test/keys/{kid}` |
 | `sign` | `POST /sign/{kid}` |
 | `message` | `POST /message/{sender_kid}`, `POST /message/decrypt`, `POST /message/internal/encrypt/{kid}`, `POST /message/internal/decrypt` |
-| `fpe-encrypt` | `POST /fpe/encrypt/{kid}` |
-| `fpe-decrypt` | `POST /fpe/decrypt` |
+| `fpe-encrypt` | `POST /fpe/encrypt/{kid}`, `POST /fpe/encrypt/batch/{kid}` |
+| `fpe-decrypt` | `POST /fpe/decrypt`, `POST /fpe/decrypt/batch` |
 | `token-encode` | `POST /token/encode/{kid}` |
 | `token-decode` | `POST /token/decode` |
 | `metrics` | `GET /metrics` with `kid: "*"` |
@@ -1048,6 +1050,37 @@ Response:
 
 The response intentionally does not include `fpe_version`.
 
+### POST /fpe/encrypt/batch/{kid}
+
+Requires auth and `fpe-encrypt` permission for the path `kid`. The key must be `active`.
+
+The batch uses one profile and is all-or-nothing. `items` must contain between `1` and `128` entries. Response order matches request order. If any item is invalid, the whole request fails and no partial `items` are returned.
+
+Request:
+
+```json
+{
+  "profile": "patient-id-decimal-v1",
+  "items": [
+    { "plaintext": "123456" },
+    { "plaintext": "654321" }
+  ]
+}
+```
+
+Response:
+
+```json
+{
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "profile": "patient-id-decimal-v1",
+  "items": [
+    { "ciphertext": "839201" },
+    { "ciphertext": "102938" }
+  ]
+}
+```
+
 ### POST /fpe/decrypt
 
 Requires auth and `fpe-decrypt` permission for the request `kid`. The key may be `active` or `retired`.
@@ -1067,6 +1100,38 @@ Response:
 ```json
 {
   "plaintext": "123456"
+}
+```
+
+### POST /fpe/decrypt/batch
+
+Requires auth and `fpe-decrypt` permission for the request `kid`. The key may be `active` or `retired`.
+
+The batch uses one profile and is all-or-nothing. `items` must contain between `1` and `128` entries. Response order matches request order. If any item is invalid, the whole request fails and no partial `items` are returned.
+
+Request:
+
+```json
+{
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "profile": "patient-id-decimal-v1",
+  "items": [
+    { "ciphertext": "839201" },
+    { "ciphertext": "102938" }
+  ]
+}
+```
+
+Response:
+
+```json
+{
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "profile": "patient-id-decimal-v1",
+  "items": [
+    { "plaintext": "123456" },
+    { "plaintext": "654321" }
+  ]
 }
 ```
 

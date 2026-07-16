@@ -643,6 +643,26 @@ def main():
         )
         require_status("limited client blocks fpe decrypt", status, 403)
 
+    def limited_blocks_fpe_encrypt_batch():
+        status, _ = limited_client.post(
+            f"/fpe/encrypt/batch/{key_id}",
+            {"profile": "patient-id-decimal-v1", "items": [{"plaintext": "123456"}]},
+            auth=True,
+        )
+        require_status("limited client blocks fpe encrypt batch", status, 403)
+
+    def limited_blocks_fpe_decrypt_batch():
+        status, _ = limited_client.post(
+            "/fpe/decrypt/batch",
+            {
+                "kid": key_id,
+                "profile": "patient-id-decimal-v1",
+                "items": [{"ciphertext": "123456"}],
+            },
+            auth=True,
+        )
+        require_status("limited client blocks fpe decrypt batch", status, 403)
+
     def limited_blocks_token_encode():
         status, _ = limited_client.post(
             f"/token/encode/{key_id}",
@@ -716,6 +736,8 @@ def main():
         ("limited client blocks metrics", limited_blocks_metrics),
         ("limited client blocks fpe encrypt", limited_blocks_fpe_encrypt),
         ("limited client blocks fpe decrypt", limited_blocks_fpe_decrypt),
+        ("limited client blocks fpe encrypt batch", limited_blocks_fpe_encrypt_batch),
+        ("limited client blocks fpe decrypt batch", limited_blocks_fpe_decrypt_batch),
         ("limited client blocks token encode", limited_blocks_token_encode),
         ("limited client blocks token decode", limited_blocks_token_decode),
         ("metrics client allows metrics", metrics_client_allows_metrics),
@@ -1617,6 +1639,68 @@ def main():
             "FPE ciphertext outside alphabet must fail by alphabet validation",
         )
 
+    def fpe_encrypt_batch_plaintext_outside_alphabet():
+        status, body = client.post(
+            f"/fpe/encrypt/batch/{key_id}",
+            {
+                "profile": "patient-id-decimal-v1",
+                "items": [{"plaintext": "123456"}, {"plaintext": "abc123"}],
+            },
+            auth=True,
+        )
+        require_status("POST /fpe/encrypt/batch/{kid} invalid item", status, 400)
+        require("items" not in body, "FPE batch error must not return partial items")
+        require(
+            body.get("error")
+            == "batch item 1 failed: plaintext contains character outside fpe profile alphabet",
+            "FPE batch invalid item must fail all-or-nothing with item position",
+        )
+
+    def fpe_encrypt_batch_empty_items():
+        status, body = client.post(
+            f"/fpe/encrypt/batch/{key_id}",
+            {"profile": "patient-id-decimal-v1", "items": []},
+            auth=True,
+        )
+        require_status("POST /fpe/encrypt/batch/{kid} empty items", status, 400)
+        require(
+            body.get("error") == "fpe batch items must not be empty",
+            "FPE batch empty items must fail",
+        )
+
+    def fpe_encrypt_batch_too_many_items():
+        status, body = client.post(
+            f"/fpe/encrypt/batch/{key_id}",
+            {
+                "profile": "patient-id-decimal-v1",
+                "items": [{"plaintext": "123456"} for _ in range(129)],
+            },
+            auth=True,
+        )
+        require_status("POST /fpe/encrypt/batch/{kid} too many items", status, 400)
+        require(
+            body.get("error") == "fpe batch items exceeds maximum allowed value: 128",
+            "FPE batch too many items must fail",
+        )
+
+    def fpe_decrypt_batch_ciphertext_outside_alphabet():
+        status, body = client.post(
+            "/fpe/decrypt/batch",
+            {
+                "kid": key_id,
+                "profile": "patient-id-decimal-v1",
+                "items": [{"ciphertext": "123456"}, {"ciphertext": "abc123"}],
+            },
+            auth=True,
+        )
+        require_status("POST /fpe/decrypt/batch invalid item", status, 400)
+        require("items" not in body, "FPE decrypt batch error must not return partial items")
+        require(
+            body.get("error")
+            == "batch item 1 failed: ciphertext contains character outside fpe profile alphabet",
+            "FPE decrypt batch invalid item must fail all-or-nothing with item position",
+        )
+
     def token_encode_unknown_profile():
         status, body = client.post(
             f"/token/encode/{key_id}",
@@ -1746,6 +1830,16 @@ def main():
         ("POST /fpe/encrypt/{kid} plaintext too short", fpe_encrypt_plaintext_too_short),
         ("POST /fpe/encrypt/{kid} unknown profile", fpe_encrypt_unknown_profile),
         ("POST /fpe/decrypt ciphertext outside alphabet", fpe_decrypt_ciphertext_outside_alphabet),
+        (
+            "POST /fpe/encrypt/batch/{kid} plaintext outside alphabet",
+            fpe_encrypt_batch_plaintext_outside_alphabet,
+        ),
+        ("POST /fpe/encrypt/batch/{kid} empty items", fpe_encrypt_batch_empty_items),
+        ("POST /fpe/encrypt/batch/{kid} too many items", fpe_encrypt_batch_too_many_items),
+        (
+            "POST /fpe/decrypt/batch ciphertext outside alphabet",
+            fpe_decrypt_batch_ciphertext_outside_alphabet,
+        ),
         ("POST /token/encode/{kid} unknown profile", token_encode_unknown_profile),
         ("POST /token/encode/{kid} plaintext too long", token_encode_plaintext_too_long),
         ("POST /token/encode/{kid} metadata too long", token_encode_metadata_too_long),

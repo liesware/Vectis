@@ -407,6 +407,8 @@ fn record_operation_denied_metric(event_name: &str) {
         "message.internal.decrypt.denied" => core_metrics::record_message("decrypt", "denied"),
         "fpe.encrypt.denied" => core_metrics::record_crypto_operation("fpe_encrypt", "failed"),
         "fpe.decrypt.denied" => core_metrics::record_crypto_operation("fpe_decrypt", "failed"),
+        "fpe.encrypt.batch.denied" => record_crypto_failed("fpe_encrypt_batch"),
+        "fpe.decrypt.batch.denied" => record_crypto_failed("fpe_decrypt_batch"),
         "token.encode.denied" => core_metrics::record_crypto_operation("token_encode", "failed"),
         "token.decode.denied" => core_metrics::record_crypto_operation("token_decode", "failed"),
         "sign.denied" => core_metrics::record_crypto_operation("sign", "failed"),
@@ -415,7 +417,13 @@ fn record_operation_denied_metric(event_name: &str) {
     }
 }
 
+fn record_crypto_failed(operation: &str) {
+    core_metrics::record_crypto_operation(operation, "failed");
+}
+
 pub fn router(state: HttpState) -> Router {
+    use fpe::encrypt_batch_endpoint as fpe_encrypt_batch;
+
     debug_assert!(state.key_material_loaded());
 
     Router::new()
@@ -439,6 +447,8 @@ pub fn router(state: HttpState) -> Router {
         )
         .route("/sign/verification", post(sign::sign_verification_endpoint))
         .route("/sign/{kid}", post(sign::sign_endpoint))
+        .route("/fpe/encrypt/batch/{kid}", post(fpe_encrypt_batch))
+        .route("/fpe/decrypt/batch", post(fpe::decrypt_batch_endpoint))
         .route("/fpe/encrypt/{kid}", post(fpe::encrypt_endpoint))
         .route("/fpe/decrypt", post(fpe::decrypt_endpoint))
         .route("/token/encode/{kid}", post(token::encode_endpoint))

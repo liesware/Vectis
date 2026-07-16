@@ -17,6 +17,7 @@ pub const INTERNAL_KEYS_EDDSA_ALGORITHM: &str = "Ed25519";
 pub const INTERNAL_KEYS_XECDH_ALGORITHM: &str = "X25519";
 pub const INTERNAL_KEYS_ML_DSA_VARIANT: &str = "ML-DSA-44";
 pub const INTERNAL_KEYS_ML_KEM_VARIANT: &str = "ML-KEM-512";
+pub const INTERNAL_FPE_BATCH: usize = 128;
 pub const CRYPTO_PROFILES: &[&str] = &[
     "hybrid-performance-v1",
     "hybrid-standard-v1",

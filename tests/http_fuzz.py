@@ -27,6 +27,9 @@ RECIPIENT_HEX = "b" * 64
 INTERNAL_SEED_PLAINTEXT = "fuzz seed plaintext"
 FPE_PROFILE = "fuzz-patient-id-decimal-v1"
 FPE_PLAINTEXT = "1234567890"
+FPE_BATCH_PLAINTEXTS = [FPE_PLAINTEXT, "9876543210"]
+TOKENIZATION_PROFILE = "fuzz-patient-id-token-v1"
+TOKEN_PLAINTEXT = "fuzz token plaintext"
 
 # Minimal, policy-safe key requests (one per crypto profile) used to CREATE seed
 # keys. Creating with only tag+profile works under both crypto policies, and the
@@ -451,6 +454,68 @@ def fpe_semantic(sent_value, seed, status, body):
     return findings
 
 
+def fpe_batch_semantic(sent_value, seed, status, body):
+    findings = []
+    if status != 200:
+        return findings
+    parsed = _parse(body)
+    if not isinstance(parsed, dict):
+        return ["SEMANTIC: fpe batch 200 body is not JSON object"]
+    items = parsed.get("items")
+    if not isinstance(items, list):
+        return ["SEMANTIC: fpe batch 200 body is missing items list"]
+    seed_items = seed.get("items") if isinstance(seed, dict) else None
+    if not isinstance(seed_items, list) or not seed_items:
+        return findings
+
+    if "plaintext" in seed_items[0]:
+        if sent_value == seed:
+            if len(items) != len(seed_items):
+                findings.append("SEMANTIC: fpe batch encrypt item count mismatch")
+            for out_item, in_item in zip(items, seed_items):
+                if isinstance(out_item, dict) and out_item.get("ciphertext") == in_item.get("plaintext"):
+                    findings.append("SEMANTIC: fpe batch encrypt returned plaintext as ciphertext")
+                    break
+        return findings
+
+    if "ciphertext" in seed_items[0]:
+        returned = [it.get("plaintext") for it in items if isinstance(it, dict)]
+        if sent_value == seed and returned != FPE_BATCH_PLAINTEXTS:
+            findings.append("SEMANTIC: fpe batch decrypt returned unexpected plaintext")
+        if sent_value != seed and returned == FPE_BATCH_PLAINTEXTS:
+            findings.append(
+                "SEMANTIC: fpe batch decrypt accepted mutated input as original plaintext"
+            )
+    return findings
+
+
+def tokenization_semantic(sent_value, seed, status, body):
+    findings = []
+    if status != 200:
+        return findings
+    parsed = _parse(body)
+    if not isinstance(parsed, dict):
+        return ["SEMANTIC: token 200 body is not JSON object"]
+
+    if "plaintext" in seed:
+        token = parsed.get("token")
+        if token is None:
+            findings.append("SEMANTIC: token encode 200 body is missing token")
+        elif isinstance(token, str) and TOKEN_PLAINTEXT in token:
+            findings.append("SEMANTIC: token encode leaked plaintext in token")
+        return findings
+
+    if "token" in seed:
+        returned = parsed.get("plaintext")
+        if sent_value == seed and returned != TOKEN_PLAINTEXT:
+            findings.append("SEMANTIC: token decode returned unexpected plaintext")
+        if sent_value != seed and returned == TOKEN_PLAINTEXT:
+            findings.append(
+                "SEMANTIC: token decode accepted mutated token as original plaintext"
+            )
+    return findings
+
+
 # --- reporting ---------------------------------------------------------------
 
 
@@ -713,6 +778,39 @@ def configure_fpe_profile(client, kid):
     atexit.register(restore)
 
 
+def configure_tokenization_profile(client, kid):
+    original_cfg = CONFIG_PATH.read_bytes() if CONFIG_PATH.exists() else None
+    original_sig = CONFIG_SIGN_PATH.read_bytes() if CONFIG_SIGN_PATH.exists() else None
+    config = read_config_or_empty()
+    config["tokenization_profiles"] = [
+        {
+            "name": TOKENIZATION_PROFILE,
+            "tokenization_version": "token-random-v1",
+            "kid": kid,
+            "token_prefix": "tok_fuzz",
+            "token_len": 32,
+            "max_plaintext_len": 1024,
+        }
+    ]
+    CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    sign_config_file()
+    status, body = client.post_json("/config/reload", {}, auth=True)
+    if status != 200:
+        raise RuntimeError(f"could not load tokenization seed config: HTTP {status}: {body}")
+
+    def restore():
+        if original_cfg is None:
+            CONFIG_PATH.unlink(missing_ok=True)
+        else:
+            CONFIG_PATH.write_bytes(original_cfg)
+        if original_sig is None:
+            CONFIG_SIGN_PATH.unlink(missing_ok=True)
+        else:
+            CONFIG_SIGN_PATH.write_bytes(original_sig)
+
+    atexit.register(restore)
+
+
 def run_config(target, client, rng, args, secrets):
     apikey, unseal = secrets
     counters = {"passed": 0, "failed": 0}
@@ -896,6 +994,49 @@ def fpe_seeds(client):
     return [(f"/fpe/encrypt/{kid}", encrypt_seed), ("/fpe/decrypt", decrypt_seed)]
 
 
+def fpe_batch_seeds(client):
+    kid = _create_key(
+        client, {"tag": "fuzz-fpe-batch", "profile": "hybrid-high-assurance-v1"}
+    )
+    configure_fpe_profile(client, kid)
+    encrypt_seed = {
+        "profile": FPE_PROFILE,
+        "items": [{"plaintext": item} for item in FPE_BATCH_PLAINTEXTS],
+    }
+    status, body = client.post_json(f"/fpe/encrypt/batch/{kid}", encrypt_seed, auth=True)
+    if status != 200:
+        raise RuntimeError(f"could not encrypt fpe batch seed: HTTP {status}: {body}")
+    parsed = json.loads(body)
+    decrypt_seed = {
+        "kid": kid,
+        "profile": FPE_PROFILE,
+        "items": [{"ciphertext": item["ciphertext"]} for item in parsed["items"]],
+    }
+    return [
+        (f"/fpe/encrypt/batch/{kid}", encrypt_seed),
+        ("/fpe/decrypt/batch", decrypt_seed),
+    ]
+
+
+def tokenization_seeds(client):
+    kid = _create_key(client, {"tag": "fuzz-token", "profile": "hybrid-performance-v1"})
+    configure_tokenization_profile(client, kid)
+    encode_seed = {
+        "profile": TOKENIZATION_PROFILE,
+        "plaintext": TOKEN_PLAINTEXT,
+        "metadata": {"tenant": "fuzz", "field": "patient_id"},
+    }
+    status, body = client.post_json(f"/token/encode/{kid}", encode_seed, auth=True)
+    if status != 200:
+        raise RuntimeError(f"could not encode token seed: HTTP {status}: {body}")
+    token = json.loads(body)["token"]
+    decode_seed = {"kid": kid, "profile": TOKENIZATION_PROFILE, "token": token}
+    return [
+        (f"/token/encode/{kid}", encode_seed),
+        ("/token/decode", decode_seed),
+    ]
+
+
 TARGETS = [
     {"name": "token", "runner": run_body, "seed_factory": token_seeds,
      "path": "/sign/verification", "auth": False, "semantic": token_semantic},
@@ -914,6 +1055,10 @@ TARGETS = [
     {"name": "config", "runner": run_config},
     {"name": "fpe", "runner": run_body, "seed_factory": fpe_seeds,
      "auth": True, "semantic": fpe_semantic},
+    {"name": "fpe_batch", "runner": run_body, "seed_factory": fpe_batch_seeds,
+     "auth": True, "semantic": fpe_batch_semantic},
+    {"name": "tokenization", "runner": run_body, "seed_factory": tokenization_seeds,
+     "auth": True, "semantic": tokenization_semantic},
     {"name": "pubkid", "runner": run_path_param, "require_json_error": False, "endpoints": [
         ("/pub/{}", False),
         ("/keys/properties/{}", True),
@@ -943,8 +1088,11 @@ TARGET_NAMES = [t["name"] for t in TARGETS]
 
 def self_check():
     failures = []
+    total = 0
 
     def expect(condition, label):
+        nonlocal total
+        total += 1
         if not condition:
             failures.append(label)
 
@@ -1023,7 +1171,103 @@ def self_check():
         "fpe decrypt ignores correct plaintext",
     )
 
-    total = 20
+    fpe_batch_encrypt_seed = {
+        "profile": FPE_PROFILE,
+        "items": [{"plaintext": item} for item in FPE_BATCH_PLAINTEXTS],
+    }
+    fpe_batch_decrypt_seed = {
+        "kid": "a" * 64,
+        "profile": FPE_PROFILE,
+        "items": [{"ciphertext": "9876543210"}, {"ciphertext": "0123456789"}],
+    }
+    fpe_batch_decrypt_mut = json.loads(json.dumps(fpe_batch_decrypt_seed))
+    fpe_batch_decrypt_mut["items"][0]["ciphertext"] = "9876543211"
+    correct_batch_plaintext_body = json.dumps(
+        {"items": [{"plaintext": FPE_BATCH_PLAINTEXTS[0]}, {"plaintext": FPE_BATCH_PLAINTEXTS[1]}]}
+    )
+    expect(
+        fpe_batch_semantic(
+            fpe_batch_encrypt_seed, fpe_batch_encrypt_seed, 200,
+            json.dumps({"items": [{"ciphertext": FPE_BATCH_PLAINTEXTS[0]}, {"ciphertext": "aaaa"}]}),
+        ),
+        "fpe batch encrypt flags plaintext ciphertext",
+    )
+    expect(
+        not fpe_batch_semantic(
+            fpe_batch_encrypt_seed, fpe_batch_encrypt_seed, 200,
+            json.dumps({"items": [{"ciphertext": "111"}, {"ciphertext": "222"}]}),
+        ),
+        "fpe batch encrypt ignores changed ciphertext",
+    )
+    expect(
+        fpe_batch_semantic(
+            fpe_batch_decrypt_seed, fpe_batch_decrypt_seed, 200,
+            json.dumps({"items": [{"plaintext": "WRONG"}, {"plaintext": "X"}]}),
+        ),
+        "fpe batch decrypt flags wrong plaintext",
+    )
+    expect(
+        fpe_batch_semantic(
+            fpe_batch_decrypt_mut, fpe_batch_decrypt_seed, 200, correct_batch_plaintext_body
+        ),
+        "fpe batch decrypt flags mutated original plaintext",
+    )
+    expect(
+        not fpe_batch_semantic(
+            fpe_batch_decrypt_seed, fpe_batch_decrypt_seed, 200, correct_batch_plaintext_body
+        ),
+        "fpe batch decrypt ignores correct plaintext",
+    )
+    expect(
+        not fpe_batch_semantic(fpe_batch_decrypt_mut, fpe_batch_decrypt_seed, 400, '{"error":"x"}'),
+        "fpe batch ignores 4xx",
+    )
+
+    token_encode_seed = {
+        "profile": TOKENIZATION_PROFILE,
+        "plaintext": TOKEN_PLAINTEXT,
+        "metadata": {},
+    }
+    token_decode_seed = {
+        "kid": "a" * 64,
+        "profile": TOKENIZATION_PROFILE,
+        "token": "tok_fuzz_deadbeef",
+    }
+    token_decode_mut = dict(token_decode_seed, token="tok_fuzz_ffffffff")
+    expect(
+        tokenization_semantic(
+            token_encode_seed, token_encode_seed, 200,
+            json.dumps({"kid": "a" * 64, "profile": TOKENIZATION_PROFILE, "token": "tok_fuzz_" + TOKEN_PLAINTEXT}),
+        ),
+        "token encode flags plaintext leak",
+    )
+    expect(
+        not tokenization_semantic(
+            token_encode_seed, token_encode_seed, 200, json.dumps({"token": "tok_fuzz_abcdef"})
+        ),
+        "token encode ignores clean token",
+    )
+    expect(
+        tokenization_semantic(token_decode_seed, token_decode_seed, 200, '{"plaintext":"WRONG"}'),
+        "token decode flags wrong plaintext",
+    )
+    expect(
+        tokenization_semantic(
+            token_decode_mut, token_decode_seed, 200, json.dumps({"plaintext": TOKEN_PLAINTEXT})
+        ),
+        "token decode flags mutated token as original",
+    )
+    expect(
+        not tokenization_semantic(
+            token_decode_seed, token_decode_seed, 200, json.dumps({"plaintext": TOKEN_PLAINTEXT})
+        ),
+        "token decode ignores correct plaintext",
+    )
+    expect(
+        not tokenization_semantic(token_decode_mut, token_decode_seed, 400, '{"error":"x"}'),
+        "token decode ignores 4xx",
+    )
+
     for label in failures:
         print(f"SELF-CHECK FAIL: {label}")
     print(f"SUMMARY self-check passed={total - len(failures)} failed={len(failures)}")

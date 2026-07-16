@@ -12,6 +12,7 @@ pub mod permissions;
 pub mod protocol;
 pub mod remote_routes;
 pub mod routes;
+pub mod sensitive;
 pub mod storage;
 pub mod tokenization;
 pub mod unseal;

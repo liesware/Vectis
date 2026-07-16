@@ -534,6 +534,34 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
+  /fpe/encrypt/batch/{kid}:
+    post:
+      tags: [FPE]
+      summary: Format-preserving encrypt a batch of local fields
+      description: >
+        Encrypts a batch with one FPE profile. Results preserve request item
+        order. The operation is all-or-nothing: if any item is invalid, the
+        request fails and no partial results are returned.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FpeEncryptBatchInput"
+      responses:
+        "200":
+          description: Batch format-preserving ciphertexts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FpeEncryptBatchOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
   /fpe/decrypt:
     post:
       tags: [FPE]
@@ -557,6 +585,32 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/FpeDecryptOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /fpe/decrypt/batch:
+    post:
+      tags: [FPE]
+      summary: Format-preserving decrypt a batch of local fields
+      description: >
+        Decrypts a batch with one FPE profile. Results preserve request item
+        order. The operation is all-or-nothing: if any item is invalid, the
+        request fails and no partial results are returned.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FpeDecryptBatchInput"
+      responses:
+        "200":
+          description: Batch FPE plaintexts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FpeDecryptBatchOutput"
         default:
           $ref: "#/components/responses/Error"
 
@@ -1409,6 +1463,46 @@ components:
           $ref: "#/components/schemas/TextField"
           example: "839201"
 
+    FpeEncryptBatchInput:
+      type: object
+      additionalProperties: false
+      required: [profile, items]
+      properties:
+        profile:
+          $ref: "#/components/schemas/TextField"
+          example: patient-id-decimal-v1
+        items:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items:
+            type: object
+            additionalProperties: false
+            required: [plaintext]
+            properties:
+              plaintext:
+                $ref: "#/components/schemas/TextField"
+                example: "123456"
+
+    FpeEncryptBatchOutput:
+      type: object
+      required: [kid, profile, items]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/TextField"
+          example: patient-id-decimal-v1
+        items:
+          type: array
+          items:
+            type: object
+            required: [ciphertext]
+            properties:
+              ciphertext:
+                $ref: "#/components/schemas/TextField"
+                example: "839201"
+
     FpeDecryptInput:
       type: object
       additionalProperties: false
@@ -1430,6 +1524,48 @@ components:
         plaintext:
           $ref: "#/components/schemas/TextField"
           example: "123456"
+
+    FpeDecryptBatchInput:
+      type: object
+      additionalProperties: false
+      required: [kid, profile, items]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/TextField"
+          example: patient-id-decimal-v1
+        items:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items:
+            type: object
+            additionalProperties: false
+            required: [ciphertext]
+            properties:
+              ciphertext:
+                $ref: "#/components/schemas/TextField"
+                example: "839201"
+
+    FpeDecryptBatchOutput:
+      type: object
+      required: [kid, profile, items]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/TextField"
+          example: patient-id-decimal-v1
+        items:
+          type: array
+          items:
+            type: object
+            required: [plaintext]
+            properties:
+              plaintext:
+                $ref: "#/components/schemas/TextField"
+                example: "123456"
 
     TokenEncodeInput:
       type: object

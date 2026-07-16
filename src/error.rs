@@ -49,6 +49,23 @@ pub fn internal(message: impl Into<String>) -> DynError {
     Box::new(VectisError::Internal(message.into()))
 }
 
+pub fn with_prefix(prefix: &str, err: DynError) -> DynError {
+    match err.downcast_ref::<VectisError>() {
+        Some(VectisError::InvalidInput(message)) => invalid_input(format!("{prefix}: {message}")),
+        Some(VectisError::NotFound(message)) => not_found(format!("{prefix}: {message}")),
+        Some(VectisError::Forbidden(message)) => forbidden(format!("{prefix}: {message}")),
+        Some(VectisError::InvalidSignature(message)) => {
+            invalid_signature(format!("{prefix}: {message}"))
+        }
+        Some(VectisError::RemoteUnreachable(message)) => {
+            remote_unreachable(format!("{prefix}: {message}"))
+        }
+        Some(VectisError::Storage(message)) => storage(format!("{prefix}: {message}")),
+        Some(VectisError::Internal(message)) => internal(format!("{prefix}: {message}")),
+        None => internal(format!("{prefix}: {err}")),
+    }
+}
+
 pub fn is_not_found(err: &(dyn Error + Send + Sync + 'static)) -> bool {
     if matches!(
         err.downcast_ref::<VectisError>(),
