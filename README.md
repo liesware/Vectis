@@ -140,23 +140,23 @@ The repository includes a two-site clinical demo:
 - Clinic B's final app calls local Vectis to decrypt and print the recovered
   record.
 
-See [demo/README.md](demo/README.md).
+See [demo/message/README.md](demo/message/README.md).
 
 Quick demo setup:
 
 ```sh
-bash demo/setup.sh
-bash demo/create-keys.sh
-bash demo/configure-routes.sh
+bash demo/message/setup.sh
+bash demo/message/create-keys.sh
+bash demo/message/configure-routes.sh
 ```
 
 Then run the four demo processes:
 
 ```sh
-bash demo/start-vectis-a.sh
-bash demo/start-vectis-b.sh
-bash demo/start-app-a.sh
-bash demo/start-app-b.sh
+bash demo/message/start-vectis-a.sh
+bash demo/message/start-vectis-b.sh
+bash demo/message/start-app-a.sh
+bash demo/message/start-app-b.sh
 ```
 
 In the Clinic A terminal:
@@ -360,7 +360,8 @@ native `cargo-fuzz` targets.
 - [doc/Reference.md](doc/Reference.md): architecture and design reference.
 - [doc/Internal.md](doc/Internal.md): implementation flows and internal invariants.
 - [doc/Design.md](doc/Design.md): reusable design principles distilled from this project.
-- [demo/README.md](demo/README.md): clinical data exchange demo.
+- [demo/message/README.md](demo/message/README.md): clinical data exchange demo.
+- [demo/local/README.md](demo/local/README.md): local FPE, tokenization, internal message, and sign demo.
 - [charts/vectis/README.md](charts/vectis/README.md): Kubernetes Helm chart.
 
 ## What Vectis Is Not

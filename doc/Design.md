@@ -338,7 +338,7 @@ green).
 doubles as living documentation. Before trusting any verification run, confirm
 the running binary is the one you just built.
 
-**In Vectis**: `demo/` (two clinics exchanging a record end-to-end); a session
+**In Vectis**: `demo/message/` (two clinics exchanging a record end-to-end); a session
 lesson: suites once passed against a server started before the rebuild — the
 results were discarded and re-run.
 

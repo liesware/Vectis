@@ -2,11 +2,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 VECTIS="${SCRIPT_DIR}/bin/vectis"
 
 if [[ ! -x "${VECTIS}" ]]; then
-  echo "Missing ${VECTIS}. Run: bash demo/setup.sh" >&2
+  echo "Missing ${VECTIS}. Run: bash demo/message/setup.sh" >&2
   exit 1
 fi
 
@@ -205,4 +205,4 @@ ENV
 echo "Created demo keys:"
 echo "  site-a kid: ${kid_a}"
 echo "  site-b kid: ${kid_b}"
-echo "Next: bash demo/configure-routes.sh"
+echo "Next: bash demo/message/configure-routes.sh"

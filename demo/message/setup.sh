@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 BIN_DIR="${SCRIPT_DIR}/bin"
 
 mkdir -p "${BIN_DIR}" "${SCRIPT_DIR}/site-a/db" "${SCRIPT_DIR}/site-a/logs" "${SCRIPT_DIR}/site-b/db" "${SCRIPT_DIR}/site-b/logs"
@@ -68,4 +68,4 @@ write_env "site-a" "127.0.0.1:3001" "127.0.0.1:3001" "127.0.0.1:4001" "site-a.lo
 write_env "site-b" "127.0.0.1:3002" "127.0.0.1:3002" "127.0.0.1:4002" "site-b.local" "site-a.local"
 
 echo "Demo workspace ready."
-echo "Next: bash demo/create-keys.sh"
+echo "Next: bash demo/message/create-keys.sh"

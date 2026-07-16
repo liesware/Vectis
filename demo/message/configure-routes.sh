@@ -13,7 +13,7 @@ load_app_env() {
 }
 
 if [[ ! -f "${SCRIPT_DIR}/site-a/app.env" || ! -f "${SCRIPT_DIR}/site-b/app.env" ]]; then
-  echo "Missing app.env files. Run: bash demo/create-keys.sh" >&2
+  echo "Missing app.env files. Run: bash demo/message/create-keys.sh" >&2
   exit 1
 fi
 

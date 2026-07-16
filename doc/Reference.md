@@ -1148,7 +1148,7 @@ Recommended onboarding path:
 2. Read this document.
 3. Read [doc/API.md](API.md).
 4. Read [doc/ENV.md](ENV.md).
-5. Run the clinical demo in [demo/README.md](../demo/README.md).
+5. Run the clinical demo in [demo/message/README.md](../demo/message/README.md).
 6. Read `src/io/http/mod.rs` to understand runtime state and routing.
 7. Read `src/ops/keys.rs`, `src/ops/message.rs`, and `src/ops/sign.rs`.
 8. Read `src/core/config_file.rs`, `src/core/remote_routes.rs`, and
