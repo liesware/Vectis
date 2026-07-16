@@ -138,6 +138,12 @@ def try_sign_config():
     )
 
 
+def require_config_sign_fails(name):
+    result = try_sign_config()
+    require(result.returncode != 0, f"{name} must fail config sign")
+    require(result.stderr.strip(), f"{name} must report config sign error")
+
+
 def write_config(sign=True):
     CONFIG_PATH.write_text(json.dumps(_CONFIG, indent=2), encoding="utf-8")
     if sign:
@@ -809,10 +815,10 @@ def main():
                     "status": "active",
                     "permissions": [{"kid": key_id, "actions": ["pub"]}],
                 }
-            ]
+            ],
+            sign=False,
         )
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("permissions invalid action pub", status, 400)
+        require_config_sign_fails("permissions invalid action pub")
 
     def permissions_invalid_action_routes():
         write_permissions(
@@ -823,10 +829,10 @@ def main():
                     "status": "active",
                     "permissions": [{"kid": key_id, "actions": ["routes"]}],
                 }
-            ]
+            ],
+            sign=False,
         )
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("permissions invalid action routes", status, 400)
+        require_config_sign_fails("permissions invalid action routes")
 
     def permissions_wildcard_non_global_action():
         write_permissions(
@@ -837,10 +843,10 @@ def main():
                     "status": "active",
                     "permissions": [{"kid": "*", "actions": ["message"]}],
                 }
-            ]
+            ],
+            sign=False,
         )
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("permissions wildcard non-global action", status, 400)
+        require_config_sign_fails("permissions wildcard non-global action")
 
     def permissions_wildcard_fpe_encrypt():
         write_permissions(
@@ -851,10 +857,10 @@ def main():
                     "status": "active",
                     "permissions": [{"kid": "*", "actions": ["fpe-encrypt"]}],
                 }
-            ]
+            ],
+            sign=False,
         )
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("permissions wildcard fpe encrypt", status, 400)
+        require_config_sign_fails("permissions wildcard fpe encrypt")
 
     def permissions_wildcard_token_encode():
         write_permissions(
@@ -865,77 +871,67 @@ def main():
                     "status": "active",
                     "permissions": [{"kid": "*", "actions": ["token-encode"]}],
                 }
-            ]
+            ],
+            sign=False,
         )
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("permissions wildcard token encode", status, 400)
+        require_config_sign_fails("permissions wildcard token encode")
 
     def fpe_profile_duplicate_name():
         profile = valid_fpe_profile(key_id)
-        write_fpe_profiles([profile, dict(profile, kid=key_id)])
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("fpe profile duplicate name", status, 400)
+        write_fpe_profiles([profile, dict(profile, kid=key_id)], sign=False)
+        require_config_sign_fails("fpe profile duplicate name")
 
     def fpe_profile_invalid_version():
         profile = valid_fpe_profile(key_id)
         profile["fpe_version"] = "fpe-ff1-legacy"
-        write_fpe_profiles([profile])
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("fpe profile invalid version", status, 400)
+        write_fpe_profiles([profile], sign=False)
+        require_config_sign_fails("fpe profile invalid version")
 
     def fpe_profile_duplicate_alphabet():
         profile = valid_fpe_profile(key_id)
         profile["alphabet"] = "00123456789"
-        write_fpe_profiles([profile])
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("fpe profile duplicate alphabet", status, 400)
+        write_fpe_profiles([profile], sign=False)
+        require_config_sign_fails("fpe profile duplicate alphabet")
 
     def fpe_profile_invalid_lengths():
         profile = valid_fpe_profile(key_id)
         profile["min_len"] = 32
         profile["max_len"] = 6
-        write_fpe_profiles([profile])
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("fpe profile invalid lengths", status, 400)
+        write_fpe_profiles([profile], sign=False)
+        require_config_sign_fails("fpe profile invalid lengths")
 
     def fpe_profile_max_len_too_large():
         profile = valid_fpe_profile(key_id)
         profile["max_len"] = 1025
-        write_fpe_profiles([profile])
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("fpe profile max len too large", status, 400)
+        write_fpe_profiles([profile], sign=False)
+        require_config_sign_fails("fpe profile max len too large")
 
     def fpe_profile_unloaded_kid():
         profile = valid_fpe_profile("00" * 32)
-        write_fpe_profiles([profile])
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("fpe profile unloaded kid", status, 400)
+        write_fpe_profiles([profile], sign=False)
+        require_config_sign_fails("fpe profile unloaded kid")
 
     def token_profile_duplicate_name():
         profile = valid_tokenization_profile(key_id)
-        write_tokenization_profiles([profile, dict(profile, kid=key_id)])
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("token profile duplicate name", status, 400)
+        write_tokenization_profiles([profile, dict(profile, kid=key_id)], sign=False)
+        require_config_sign_fails("token profile duplicate name")
 
     def token_profile_invalid_version():
         profile = valid_tokenization_profile(key_id)
         profile["tokenization_version"] = "token-random-v2"
-        write_tokenization_profiles([profile])
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("token profile invalid version", status, 400)
+        write_tokenization_profiles([profile], sign=False)
+        require_config_sign_fails("token profile invalid version")
 
     def token_profile_invalid_lengths():
         profile = valid_tokenization_profile(key_id)
         profile["token_len"] = 31
-        write_tokenization_profiles([profile])
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("token profile invalid token_len", status, 400)
+        write_tokenization_profiles([profile], sign=False)
+        require_config_sign_fails("token profile invalid token_len")
 
     def token_profile_unloaded_kid():
         profile = valid_tokenization_profile("00" * 32)
-        write_tokenization_profiles([profile])
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("token profile unloaded kid", status, 400)
+        write_tokenization_profiles([profile], sign=False)
+        require_config_sign_fails("token profile unloaded kid")
 
     def routes_missing_name():
         write_routes(
@@ -964,10 +960,10 @@ def main():
                     "final_app_addr": "localhost:3999",
                     "final_app_path": "/message",
                 }
-            ]
+            ],
+            sign=False,
         )
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("routes invalid name", status, 400)
+        require_config_sign_fails("routes invalid name")
 
     def remote_routes_invalid_kid():
         write_remote_routes(
@@ -979,10 +975,10 @@ def main():
                     "allowed_local_kids": [key_id],
                     "status": "active",
                 }
-            ]
+            ],
+            sign=False,
         )
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("remote routes invalid kid", status, 400)
+        require_config_sign_fails("remote routes invalid kid")
 
     def remote_routes_invalid_addr():
         write_remote_routes(
@@ -994,10 +990,10 @@ def main():
                     "allowed_local_kids": [key_id],
                     "status": "active",
                 }
-            ]
+            ],
+            sign=False,
         )
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("remote routes invalid addr", status, 400)
+        require_config_sign_fails("remote routes invalid addr")
 
     def remote_routes_invalid_signature():
         write_remote_routes(
@@ -1025,10 +1021,10 @@ def main():
                     "allowed_local_kids": [],
                     "status": "active",
                 }
-            ]
+            ],
+            sign=False,
         )
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("remote routes empty allowed local kids", status, 400)
+        require_config_sign_fails("remote routes empty allowed local kids")
 
     def remote_routes_wildcard_mixed_with_kid():
         write_remote_routes(
@@ -1040,10 +1036,10 @@ def main():
                     "allowed_local_kids": ["*", key_id],
                     "status": "active",
                 }
-            ]
+            ],
+            sign=False,
         )
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("remote routes wildcard mixed with kid", status, 400)
+        require_config_sign_fails("remote routes wildcard mixed with kid")
 
     def remote_routes_invalid_allowed_local_kid():
         write_remote_routes(
@@ -1055,10 +1051,10 @@ def main():
                     "allowed_local_kids": ["not-hex"],
                     "status": "active",
                 }
-            ]
+            ],
+            sign=False,
         )
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("remote routes invalid allowed local kid", status, 400)
+        require_config_sign_fails("remote routes invalid allowed local kid")
 
     def remote_routes_unloaded_allowed_local_kid():
         write_remote_routes(
@@ -1070,10 +1066,10 @@ def main():
                     "allowed_local_kids": ["00" * 32],
                     "status": "active",
                 }
-            ]
+            ],
+            sign=False,
         )
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("remote routes unloaded allowed local kid", status, 400)
+        require_config_sign_fails("remote routes unloaded allowed local kid")
 
     def remote_routes_invalid_status():
         write_remote_routes(
@@ -1085,10 +1081,10 @@ def main():
                     "allowed_local_kids": [key_id],
                     "status": "paused",
                 }
-            ]
+            ],
+            sign=False,
         )
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("remote routes invalid status", status, 400)
+        require_config_sign_fails("remote routes invalid status")
 
     def _peer_public_keys():
         status, response = client.get(f"/pub/{key_id}")
@@ -1110,10 +1106,10 @@ def main():
                     "status": "active",
                     "public_keys": public_keys,
                 }
-            ]
+            ],
+            sign=False,
         )
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("remote routes invalid public key alg", status, 400)
+        require_config_sign_fails("remote routes invalid public key alg")
 
     def remote_routes_invalid_public_key_hex():
         public_keys = _peer_public_keys()
@@ -1128,10 +1124,10 @@ def main():
                     "status": "active",
                     "public_keys": public_keys,
                 }
-            ]
+            ],
+            sign=False,
         )
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("remote routes invalid public key hex", status, 400)
+        require_config_sign_fails("remote routes invalid public key hex")
 
     def remote_routes_invalid_public_key_der():
         public_keys = _peer_public_keys()
@@ -1146,10 +1142,10 @@ def main():
                     "status": "active",
                     "public_keys": public_keys,
                 }
-            ]
+            ],
+            sign=False,
         )
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("remote routes invalid public key der", status, 400)
+        require_config_sign_fails("remote routes invalid public key der")
 
     def permissions_missing_kid():
         write_permissions(
@@ -1160,10 +1156,10 @@ def main():
                     "status": "active",
                     "permissions": [{"kid": "00" * 32, "actions": ["message"]}],
                 }
-            ]
+            ],
+            sign=False,
         )
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("permissions missing kid", status, 400)
+        require_config_sign_fails("permissions missing kid")
 
     def permissions_invalid_apikey_hash():
         write_permissions(
@@ -1174,10 +1170,10 @@ def main():
                     "status": "active",
                     "permissions": [{"kid": key_id, "actions": ["message"]}],
                 }
-            ]
+            ],
+            sign=False,
         )
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("permissions invalid apikey_hash", status, 400)
+        require_config_sign_fails("permissions invalid apikey_hash")
 
     def permissions_invalid_status():
         write_permissions(
@@ -1188,10 +1184,10 @@ def main():
                     "status": "paused",
                     "permissions": [{"kid": key_id, "actions": ["message"]}],
                 }
-            ]
+            ],
+            sign=False,
         )
-        status, _ = client.post("/config/reload", {}, auth=True)
-        require_status("permissions invalid status", status, 400)
+        require_config_sign_fails("permissions invalid status")
 
     def permissions_invalid_signature():
         write_permissions(
