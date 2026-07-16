@@ -161,7 +161,7 @@ impl Zeroize for FpeProfile {
 pub(crate) fn validate_fpe_profiles(
     profile_inputs: Vec<FpeProfileInput>,
     is_loaded_kid: impl Fn(&str) -> bool,
-    derive_fpe_key: impl Fn(&str, &str, &str) -> Result<Zeroizing<Vec<u8>>, DynError>,
+    derive_fpe_key: impl Fn(FpeKeyDerivationRequest<'_>) -> Result<Zeroizing<Vec<u8>>, DynError>,
 ) -> Result<FpeProfilesState, DynError> {
     let mut seen_names = HashSet::new();
     let mut profiles = Vec::new();
@@ -191,7 +191,11 @@ pub(crate) fn validate_fpe_profiles(
                 profile.name
             )));
         }
-        let fpe_key = derive_fpe_key(&profile.kid, &profile.name, &profile.fpe_version)?;
+        let fpe_key = derive_fpe_key(FpeKeyDerivationRequest {
+            kid: &profile.kid,
+            profile_name: &profile.name,
+            fpe_version: &profile.fpe_version,
+        })?;
         if fpe_key.len() != FPE_KEY_SIZE_BYTES {
             return Err(crate::error::internal("derived fpe key has invalid length"));
         }
@@ -213,6 +217,12 @@ pub(crate) fn validate_fpe_profiles(
     }
 
     Ok(FpeProfilesState::from_profiles(profiles))
+}
+
+pub struct FpeKeyDerivationRequest<'a> {
+    pub kid: &'a str,
+    pub profile_name: &'a str,
+    pub fpe_version: &'a str,
 }
 
 fn parse_fpe_value_digits(
@@ -254,7 +264,7 @@ pub fn validate_fpe_profile_fields(
     max_len: usize,
     tweak_aad: &str,
 ) -> Result<usize, DynError> {
-    validation::validate_text_field("fpe_profiles.name", name)?;
+    validation::validate_aad_value("fpe_profiles.name", name)?;
     validate_fpe_version(fpe_version)?;
     let radix = validate_fpe_alphabet(alphabet)?;
     validate_fpe_lengths(min_len, max_len, radix)?;
@@ -297,24 +307,42 @@ fn prepare_fpe_alphabet(
 }
 
 pub fn validate_fpe_lengths(min_len: usize, max_len: usize, radix: usize) -> Result<(), DynError> {
+    validate_fpe_length_bounds(min_len, max_len)?;
+    if !fpe_domain_is_large_enough(radix, min_len) {
+        return Err(crate::error::invalid_input(
+            "fpe profile domain is too small for FF1",
+        ));
+    }
+
+    Ok(())
+}
+
+pub fn validate_fpe_min_len(min_len: usize) -> Result<(), DynError> {
     if min_len < FPE_VALUE_MIN_LEN {
         return Err(crate::error::invalid_input(format!(
             "fpe_profiles.min_len must be at least {FPE_VALUE_MIN_LEN}"
         )));
     }
-    if max_len < min_len {
-        return Err(crate::error::invalid_input(
-            "fpe_profiles.max_len must be greater than or equal to min_len",
-        ));
-    }
+
+    Ok(())
+}
+
+pub fn validate_fpe_max_len(max_len: usize) -> Result<(), DynError> {
     if max_len > FPE_VALUE_MAX_LEN {
         return Err(crate::error::invalid_input(
             "fpe_profiles.max_len exceeds maximum allowed value",
         ));
     }
-    if !fpe_domain_is_large_enough(radix, min_len) {
+
+    Ok(())
+}
+
+pub fn validate_fpe_length_bounds(min_len: usize, max_len: usize) -> Result<(), DynError> {
+    validate_fpe_min_len(min_len)?;
+    validate_fpe_max_len(max_len)?;
+    if max_len < min_len {
         return Err(crate::error::invalid_input(
-            "fpe profile domain is too small for FF1",
+            "fpe_profiles.max_len must be greater than or equal to min_len",
         ));
     }
 
@@ -339,23 +367,23 @@ pub fn derive_fpe_key(
 ) -> Result<Zeroizing<Vec<u8>>, DynError> {
     derive_fpe_key_for_profile(
         ops_symmetric_key_hex,
-        profile.name(),
-        profile.kid(),
-        profile.fpe_version(),
+        FpeKeyDerivationRequest {
+            kid: profile.kid(),
+            profile_name: profile.name(),
+            fpe_version: profile.fpe_version(),
+        },
     )
 }
 
 pub(crate) fn derive_fpe_key_for_profile(
     ops_symmetric_key_hex: &str,
-    profile_name: &str,
-    kid: &str,
-    fpe_version: &str,
+    request: FpeKeyDerivationRequest<'_>,
 ) -> Result<Zeroizing<Vec<u8>>, DynError> {
     let ops_symmetric_key = Zeroizing::new(hex::decode(ops_symmetric_key_hex)?);
     let info = validation::build_aad(&[
-        ("profile", profile_name),
-        ("kid", kid),
-        ("fpe_version", fpe_version),
+        ("profile", request.profile_name),
+        ("kid", request.kid),
+        ("fpe_version", request.fpe_version),
     ]);
     let fpe_key = crate::core::crypto::create_hkdf(
         &ops_symmetric_key,
@@ -451,7 +479,25 @@ mod tests {
     }
 
     fn real_fpe_key(kid: &str, profile_name: &str, fpe_version: &str) -> Zeroizing<Vec<u8>> {
-        derive_fpe_key_for_profile(&"11".repeat(32), profile_name, kid, fpe_version).unwrap()
+        derive_fpe_key_for_profile(
+            &"11".repeat(32),
+            FpeKeyDerivationRequest {
+                kid,
+                profile_name,
+                fpe_version,
+            },
+        )
+        .unwrap()
+    }
+
+    fn real_fpe_key_for_request(
+        request: FpeKeyDerivationRequest<'_>,
+    ) -> Result<Zeroizing<Vec<u8>>, DynError> {
+        Ok(real_fpe_key(
+            request.kid,
+            request.profile_name,
+            request.fpe_version,
+        ))
     }
 
     #[test]
@@ -459,7 +505,7 @@ mod tests {
         let state = validate_fpe_profiles(
             vec![input("patient-id", kid())],
             |item| item == kid(),
-            |_, _, _| Ok(fpe_key()),
+            |_| Ok(fpe_key()),
         )
         .expect("profile must validate");
         assert_eq!(state.len(), 1);
@@ -480,7 +526,7 @@ mod tests {
         let err = validate_fpe_profiles(
             vec![input("patient-id", kid()), input("patient-id", kid())],
             |item| item == kid(),
-            |_, _, _| Ok(fpe_key()),
+            |_| Ok(fpe_key()),
         )
         .expect_err("duplicate name must fail");
         assert!(err.to_string().contains("duplicated name"));
@@ -491,20 +537,18 @@ mod tests {
         let mut profile = input("patient-id", kid());
         profile.alphabet = "001234".to_string();
         assert!(
-            validate_fpe_profiles(vec![profile], |item| item == kid(), |_, _, _| Ok(fpe_key()))
-                .is_err()
+            validate_fpe_profiles(vec![profile], |item| item == kid(), |_| Ok(fpe_key())).is_err()
         );
 
         let mut profile = input("patient-id", kid());
         profile.max_len = FPE_VALUE_MAX_LEN;
-        validate_fpe_profiles(vec![profile], |item| item == kid(), |_, _, _| Ok(fpe_key()))
+        validate_fpe_profiles(vec![profile], |item| item == kid(), |_| Ok(fpe_key()))
             .expect("maximum allowed fpe length must validate");
 
         let mut profile = input("patient-id", kid());
         profile.max_len = FPE_VALUE_MAX_LEN + 1;
-        let err =
-            validate_fpe_profiles(vec![profile], |item| item == kid(), |_, _, _| Ok(fpe_key()))
-                .expect_err("oversized fpe max length must fail");
+        let err = validate_fpe_profiles(vec![profile], |item| item == kid(), |_| Ok(fpe_key()))
+            .expect_err("oversized fpe max length must fail");
         assert_eq!(
             err.to_string(),
             "fpe_profiles.max_len exceeds maximum allowed value"
@@ -513,19 +557,38 @@ mod tests {
 
     #[test]
     fn rejects_invalid_lengths() {
+        let min_len_err =
+            validate_fpe_min_len(5).expect_err("short minimum length must fail validation");
+        assert_eq!(
+            min_len_err.to_string(),
+            "fpe_profiles.min_len must be at least 6"
+        );
+
+        let max_len_err = validate_fpe_max_len(FPE_VALUE_MAX_LEN + 1)
+            .expect_err("oversized maximum length must fail validation");
+        assert_eq!(
+            max_len_err.to_string(),
+            "fpe_profiles.max_len exceeds maximum allowed value"
+        );
+
+        let bounds_err = validate_fpe_length_bounds(10, 9)
+            .expect_err("max length below min length must fail validation");
+        assert_eq!(
+            bounds_err.to_string(),
+            "fpe_profiles.max_len must be greater than or equal to min_len"
+        );
+
         let mut profile = input("patient-id", kid());
         profile.min_len = FPE_VALUE_MIN_LEN - 1;
         assert!(
-            validate_fpe_profiles(vec![profile], |item| item == kid(), |_, _, _| Ok(fpe_key()))
-                .is_err()
+            validate_fpe_profiles(vec![profile], |item| item == kid(), |_| Ok(fpe_key())).is_err()
         );
 
         let mut profile = input("patient-id", kid());
         profile.min_len = 4;
         profile.max_len = 3;
         assert!(
-            validate_fpe_profiles(vec![profile], |item| item == kid(), |_, _, _| Ok(fpe_key()))
-                .is_err()
+            validate_fpe_profiles(vec![profile], |item| item == kid(), |_| Ok(fpe_key())).is_err()
         );
 
         let err =
@@ -553,6 +616,21 @@ mod tests {
             )
             .is_ok()
         );
+        for name in ["bad=name", "bad;name"] {
+            let err = validate_fpe_profile_fields(
+                name,
+                FPE_VERSION_FF1_2025,
+                "0123456789",
+                6,
+                32,
+                "tenant=acme",
+            )
+            .expect_err("AAD delimiters in FPE profile names must fail");
+            assert_eq!(
+                err.to_string(),
+                "fpe_profiles.name must not contain ';' or '='"
+            );
+        }
     }
 
     #[test]
@@ -561,7 +639,7 @@ mod tests {
             validate_fpe_profiles(
                 vec![input("patient-id", kid())],
                 |_| false,
-                |_, _, _| { Ok(fpe_key()) }
+                |_| { Ok(fpe_key()) }
             )
             .is_err()
         );
@@ -581,7 +659,7 @@ mod tests {
         let state = validate_fpe_profiles(
             vec![input("patient-id", kid())],
             |item| item == kid(),
-            |_, _, _| Ok(fpe_key()),
+            |_| Ok(fpe_key()),
         )
         .expect("profile must validate");
         let profile = state.get("patient-id").expect("profile must exist");
@@ -597,7 +675,7 @@ mod tests {
         let state = validate_fpe_profiles(
             vec![input("patient-id", kid())],
             |item| item == kid(),
-            |kid, profile_name, fpe_version| Ok(real_fpe_key(kid, profile_name, fpe_version)),
+            real_fpe_key_for_request,
         )
         .expect("profile must validate");
         let profile = state.get("patient-id").expect("profile must exist");
@@ -613,7 +691,7 @@ mod tests {
         let state = validate_fpe_profiles(
             vec![input("patient-id", kid())],
             |item| item == kid(),
-            |kid, profile_name, fpe_version| Ok(real_fpe_key(kid, profile_name, fpe_version)),
+            real_fpe_key_for_request,
         )
         .expect("profile must validate");
         let profile = state.get("patient-id").expect("profile must exist");
@@ -624,7 +702,7 @@ mod tests {
         let other_tweak_state = validate_fpe_profiles(
             vec![other_tweak],
             |item| item == kid(),
-            |kid, profile_name, fpe_version| Ok(real_fpe_key(kid, profile_name, fpe_version)),
+            real_fpe_key_for_request,
         )
         .expect("profile must validate");
         let other_tweak_profile = other_tweak_state
@@ -634,7 +712,7 @@ mod tests {
         let other_profile_state = validate_fpe_profiles(
             vec![input("other-profile", kid())],
             |item| item == kid(),
-            |kid, profile_name, fpe_version| Ok(real_fpe_key(kid, profile_name, fpe_version)),
+            real_fpe_key_for_request,
         )
         .expect("profile must validate");
         let other_profile = other_profile_state
@@ -657,7 +735,7 @@ mod tests {
         let state = validate_fpe_profiles(
             vec![input("patient-id", kid())],
             |item| item == kid(),
-            |_, _, _| Ok(fpe_key()),
+            |_| Ok(fpe_key()),
         )
         .expect("profile must validate");
         let profile = state.get("patient-id").expect("profile must exist");
@@ -680,7 +758,7 @@ mod tests {
         let state = validate_fpe_profiles(
             vec![input("patient-id", kid())],
             |item| item == kid(),
-            |_, _, _| Ok(fpe_key()),
+            |_| Ok(fpe_key()),
         )
         .expect("profile must validate");
         let mut profile = state.get("patient-id").expect("profile must exist").clone();

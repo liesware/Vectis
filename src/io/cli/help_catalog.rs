@@ -41,6 +41,7 @@ pub(crate) const HTTP_COMMANDS: &[&str] = &[
 
 pub(crate) const CONFIG_COMMANDS: &[&str] = &[
     "init",
+    "validate",
     "sign",
     "list",
     "reload",
@@ -112,11 +113,7 @@ pub(crate) fn render_help_path(path: &[&str]) -> String {
     } else {
         root_help
     };
-    render_command(command_help_path(path).unwrap_or_else(fallback))
-}
-
-pub(crate) fn render_config_section_help(section: &str) -> String {
-    render_command(config_section_help(section).unwrap_or_else(config_help))
+    render_command(best_help_path(path).unwrap_or_else(fallback))
 }
 
 pub(crate) fn root_help() -> &'static CommandHelp {
@@ -137,8 +134,14 @@ pub(crate) fn command_help_path(path: &[&str]) -> Option<&'static CommandHelp> {
     COMMAND_HELPS.iter().find(|help| help.key == key)
 }
 
-pub(crate) fn config_section_help(section: &str) -> Option<&'static CommandHelp> {
-    command_help_path(&["config", section])
+fn best_help_path(path: &[&str]) -> Option<&'static CommandHelp> {
+    for len in (1..=path.len()).rev() {
+        if let Some(help) = command_help_path(&path[..len]) {
+            return Some(help);
+        }
+    }
+
+    None
 }
 
 fn render_command(help: &CommandHelp) -> String {
@@ -223,7 +226,7 @@ const ROOT_HELP: CommandHelp = CommandHelp {
                 "  routes                List final app routes",
                 "  remote-routes         List remote Vectis routes",
                 "  permissions           List loaded API key permissions",
-                "  config                Sign, list, or reload the unified signed config",
+                "  config                Validate, sign, list, or reload the unified signed config",
                 "  pub                   Fetch public keys through HTTP",
                 "  sign                  Create or verify timestamp signatures through HTTP",
                 "  fpe                   Encrypt or decrypt field values through HTTP",
@@ -242,6 +245,7 @@ const ROOT_HELP: CommandHelp = CommandHelp {
                 "  vectis keys create --tag payments --profile hybrid-high-assurance-v1",
                 "  vectis lifecycle <kid> --status disabled --reason maintenance",
                 "  vectis routes list",
+                "  vectis config validate",
                 "  vectis config sign",
                 "  vectis sign <kid> --file sign-request.json",
                 "  vectis fpe encrypt <kid> --file fpe-encrypt.json",
@@ -628,6 +632,7 @@ const CONFIG_HELP: CommandHelp = CommandHelp {
     heading: "Usage:",
     usage: &[
         "vectis config init",
+        "vectis config validate",
         "vectis config sign",
         "vectis config list",
         "vectis config reload",
@@ -659,13 +664,14 @@ const CONFIG_HELP: CommandHelp = CommandHelp {
         "vectis config token update <name> [--kid <kid>] [--token-prefix <prefix>] [--token-len <n>] [--max-plaintext-len <n>] [--tokenization-version token-random-v1]",
         "vectis config token delete <name>",
     ],
-    summary: Some("Signs, prints, reloads, or edits the unified signed config file."),
+    summary: Some("Validates, signs, prints, reloads, or edits the unified signed config file."),
     sections: &[
         HelpSection {
             title: "Commands:",
             lines: &[
                 "  init                  Creates an empty VECTIS_CONFIG_PATH skeleton (local)",
-                "  sign                  Signs VECTIS_CONFIG_PATH with init keys (local)",
+                "  validate              Validates VECTIS_CONFIG_PATH against local init/storage/keys",
+                "  sign                  Validates and signs VECTIS_CONFIG_PATH with init keys (local)",
                 "  list                  Prints VECTIS_CONFIG_PATH (local)",
                 "  reload                POST /config/reload, requires admin VECTIS_APIKEY",
                 "  routes                Edits local config routes by unique name",
@@ -679,6 +685,8 @@ const CONFIG_HELP: CommandHelp = CommandHelp {
             title: "Behavior:",
             lines: &[
                 "  edit commands modify VECTIS_CONFIG_PATH only",
+                "  config validate is local; it opens configured storage and does not read config_sign.json",
+                "  config sign validates first and does not write config_sign.json if validation fails",
                 "  remote-routes add fetches public keys from remote /pub/{kid}",
                 "  remote-routes update re-fetches keys when remote_kid or remote_addr changes",
                 "  quote \"*\" for wildcard KIDs so the shell does not expand it",
@@ -701,6 +709,7 @@ const CONFIG_HELP: CommandHelp = CommandHelp {
             title: "Examples:",
             lines: &[
                 "  vectis config init",
+                "  vectis config validate",
                 "  vectis config sign",
                 "  vectis config reload",
                 "  vectis config routes list",
@@ -1158,6 +1167,21 @@ mod tests {
     }
 
     #[test]
+    fn help_path_uses_longest_known_prefix() {
+        let sign_help = render_help_path(&["sign", "verify"]);
+        assert!(sign_help.contains("vectis sign <kid>"));
+        assert!(!sign_help.contains("vectis <command> [options]"));
+
+        let keys_help = render_help_path(&["keys", "create"]);
+        assert!(keys_help.contains("vectis keys create"));
+        assert!(!keys_help.contains("vectis <command> [options]"));
+
+        let token_help = render_help_path(&["config", "token", "add"]);
+        assert!(token_help.contains("vectis config token add --name <name>"));
+        assert!(token_help.contains("tokenization_profiles"));
+    }
+
+    #[test]
     fn command_help_unknown_falls_back_to_root() {
         assert_eq!(render_help("unknown"), render_help(""));
     }
@@ -1165,6 +1189,15 @@ mod tests {
     #[test]
     fn unknown_config_section_help_falls_back_to_config() {
         assert_eq!(render_help_path(&["config", "nope"]), render_help("config"));
+        assert_eq!(
+            render_help_path(&["config", "nope", "extra"]),
+            render_help("config")
+        );
+    }
+
+    #[test]
+    fn unknown_non_config_help_path_falls_back_to_root() {
+        assert_eq!(render_help_path(&["unknown", "extra"]), render_help(""));
     }
 
     #[test]

@@ -2,6 +2,7 @@
 import json
 import os
 import subprocess
+import sqlite3
 from pathlib import Path
 
 
@@ -30,7 +31,17 @@ def isolated_env(tmpdir):
     env["VECTIS_CONFIG_SIGN_PATH"] = str(tmpdir / "config_sign.json")
     env["VECTIS_INIT_KEYS_FILE"] = str(tmpdir / "init.json")
     env["VECTIS_UNSEAL_KEY_FILE"] = str(tmpdir / ".unseal_key")
+    env["VECTIS_STORAGE"] = "sqlite"
+    env["VECTIS_SQLITE_PATH"] = str(tmpdir / "data.db")
+    ensure_sqlite_schema(env)
     return env
+
+
+def ensure_sqlite_schema(env):
+    schema = (ROOT / "src" / "db" / "sqlite_schema.sql").read_text(encoding="utf-8")
+    db_path = Path(env["VECTIS_SQLITE_PATH"])
+    with sqlite3.connect(db_path) as connection:
+        connection.executescript(schema)
 
 
 def run_cli(args, env, expect_success=True):
@@ -65,6 +76,24 @@ def run_cli_json(args, env):
 
 def init_config(env):
     return run_cli_json(["config", "init"], env)
+
+
+def init_material(env):
+    init_path = Path(env["VECTIS_INIT_KEYS_FILE"])
+    unseal_path = Path(env["VECTIS_UNSEAL_KEY_FILE"])
+    if init_path.exists() and unseal_path.exists():
+        ensure_sqlite_schema(env)
+        return
+    result = run_cli(["init"], env)
+    unseal_key = None
+    for line in result.stdout.splitlines():
+        if line.startswith("VECTIS_UNSEAL_KEY="):
+            unseal_key = line.split("=", 1)[1]
+            break
+    require(unseal_key, "init output must include VECTIS_UNSEAL_KEY")
+    unseal_path.write_text(unseal_key, encoding="utf-8")
+    unseal_path.chmod(0o600)
+    ensure_sqlite_schema(env)
 
 
 def config_path(env):

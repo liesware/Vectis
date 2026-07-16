@@ -5,9 +5,11 @@ import urllib.parse
 
 from cli_support import (
     APIKEY_HASH_A,
+    APIKEY_HASH_B,
     KID_A,
     KID_B,
     init_config,
+    init_material,
     isolated_env,
     read_config,
     require,
@@ -35,6 +37,22 @@ def config_init_case(env):
             "tokenization_profiles": [],
         },
         "config init must write the minimal skeleton",
+    )
+
+
+def config_validate_case(env):
+    init_material(env)
+    response = run_cli_json(["config", "validate"], env)
+    require(response["status"] == "valid", "config validate must report valid")
+    require(response["config_path"].endswith("config.json"), "validate must report config path")
+    require(response["keys_loaded"] == 0, "empty test DB must have no loaded keys")
+    require(response["routes_loaded"] == 0, "empty config must have no routes")
+    require(response["remote_routes_loaded"] == 0, "empty config must have no remote routes")
+    require(response["clients_loaded"] == 0, "empty config must have no permission clients")
+    require(response["fpe_profiles_loaded"] == 0, "empty config must have no FPE profiles")
+    require(
+        response["tokenization_profiles_loaded"] == 0,
+        "empty config must have no tokenization profiles",
     )
 
 
@@ -120,6 +138,24 @@ def route_cases(env):
 
 
 def permission_cases(env):
+    response = run_cli_json(
+        [
+            "config",
+            "permissions",
+            "add",
+            "--client",
+            "help",
+            "--apikey-hash",
+            APIKEY_HASH_B,
+        ],
+        env,
+    )
+    require(response["status"] == "added", "permission add must accept client named help")
+    require_next(response)
+    response = run_cli_json(["config", "permissions", "delete", "help"], env)
+    require(response["status"] == "deleted", "permission delete must remove help client")
+    require_next(response)
+
     response = run_cli_json(
         [
             "config",
@@ -410,6 +446,7 @@ def main():
 
         run_case(counters, "version prints local compatibility info", lambda: version_case(env))
         run_case(counters, "config init creates skeleton", lambda: config_init_case(env))
+        run_case(counters, "config validate checks local node state", lambda: config_validate_case(env))
         run_case(counters, "config routes add/get/update/delete", lambda: route_cases(env))
         run_case(
             counters,

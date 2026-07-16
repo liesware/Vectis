@@ -1083,6 +1083,8 @@ Tokenization profiles live in `config.json` under `tokenization_profiles`. Reque
 
 `hash_key` and `data_key` are derived from the operational key's symmetric key with `INTERNAL_KEYS_HKDF` and are prepared when config is loaded. The derivation binds the profile name, KID, and `tokenization_version`. `tokens.data` AAD also binds `tokenization_version`. Tokens are random and are not deterministic for the same plaintext.
 
+Visible tokens have the form `<token_prefix>_<base64url-no-pad random bytes>`. `token_len` is the number of random bytes before base64url encoding, and decode validates both the configured prefix and decoded byte length before looking up the token.
+
 Encode `metadata` is optional, must be a JSON object when present, and its compact serialized JSON representation must be at most 128 characters.
 
 ### POST /token/encode/{kid}
@@ -1292,7 +1294,7 @@ Top level:
 | `tokenization_version` | yes | `token-random-v1` | Tokenization profile version. |
 | `kid` | yes | loaded local KID | Operational key whose symmetric key derives tokenization keys. |
 | `token_prefix` | yes | non-empty visible token prefix, no whitespace/control chars | Prefix used in returned tokens. |
-| `token_len` | yes | integer >= 32 | Random bytes generated before base64url encoding. |
+| `token_len` | yes | integer >= 32 | Random bytes generated before base64url-no-pad encoding; decode requires this exact decoded byte length. |
 | `max_plaintext_len` | yes | integer 1..1024 | Maximum plaintext length accepted by encode. |
 
 Routing behavior:

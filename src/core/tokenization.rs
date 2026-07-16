@@ -174,7 +174,9 @@ impl Zeroize for TokenizationProfile {
 pub(crate) fn validate_tokenization_profiles(
     profile_inputs: Vec<TokenizationProfileInput>,
     is_loaded_kid: impl Fn(&str) -> bool,
-    derive_keys: impl Fn(&str, &str, &str) -> Result<DerivedTokenizationKeys, DynError>,
+    derive_keys: impl Fn(
+        TokenizationKeyDerivationRequest<'_>,
+    ) -> Result<DerivedTokenizationKeys, DynError>,
 ) -> Result<TokenizationProfilesState, DynError> {
     let mut seen_names = HashSet::new();
     let mut profiles = Vec::new();
@@ -203,7 +205,11 @@ pub(crate) fn validate_tokenization_profiles(
             )));
         }
 
-        let derived = derive_keys(&profile.name, &profile.kid, &profile.tokenization_version)?;
+        let derived = derive_keys(TokenizationKeyDerivationRequest {
+            profile_name: &profile.name,
+            kid: &profile.kid,
+            tokenization_version: &profile.tokenization_version,
+        })?;
         if derived.hash_key.len() != TOKEN_KEY_SIZE_BYTES
             || derived.data_key.len() != TOKEN_KEY_SIZE_BYTES
         {
@@ -234,6 +240,12 @@ pub(crate) fn validate_tokenization_profiles(
     Ok(TokenizationProfilesState::from_profiles(profiles))
 }
 
+pub struct TokenizationKeyDerivationRequest<'a> {
+    pub profile_name: &'a str,
+    pub kid: &'a str,
+    pub tokenization_version: &'a str,
+}
+
 pub fn validate_tokenization_version(value: &str) -> Result<(), DynError> {
     validation::validate_allowed_value(
         "tokenization_profiles.tokenization_version",
@@ -249,7 +261,7 @@ pub fn validate_tokenization_profile_fields(
     token_len: usize,
     max_plaintext_len: usize,
 ) -> Result<(), DynError> {
-    validation::validate_text_field("tokenization_profiles.name", name)?;
+    validation::validate_aad_value("tokenization_profiles.name", name)?;
     validate_tokenization_version(tokenization_version)?;
     validate_token_prefix(token_prefix)?;
     validate_token_lengths(token_len, max_plaintext_len)?;
@@ -291,22 +303,20 @@ pub fn validate_token_lengths(token_len: usize, max_plaintext_len: usize) -> Res
 pub(crate) fn derive_tokenization_keys(
     ops_symmetric_key_hex: &str,
     cipher_algorithm: &str,
-    profile_name: &str,
-    kid: &str,
-    tokenization_version: &str,
+    request: TokenizationKeyDerivationRequest<'_>,
 ) -> Result<DerivedTokenizationKeys, DynError> {
     let ops_symmetric_key = Zeroizing::new(hex::decode(ops_symmetric_key_hex)?);
     let hash_info = tokenization_key_info(
         TOKEN_HASH_KEY_PURPOSE,
-        profile_name,
-        kid,
-        tokenization_version,
+        request.profile_name,
+        request.kid,
+        request.tokenization_version,
     );
     let data_info = tokenization_key_info(
         TOKEN_DATA_KEY_PURPOSE,
-        profile_name,
-        kid,
-        tokenization_version,
+        request.profile_name,
+        request.kid,
+        request.tokenization_version,
     );
     let hash_key = crypto::create_hkdf(
         &ops_symmetric_key,
@@ -351,7 +361,7 @@ pub fn generate_token(profile: &TokenizationProfile) -> Result<String, DynError>
     ))
 }
 
-pub fn hash_token(profile: &TokenizationProfile, token: &str) -> Result<String, DynError> {
+pub fn validate_token_value(profile: &TokenizationProfile, token: &str) -> Result<(), DynError> {
     validation::validate_text_field("token", token)?;
     let expected_prefix = format!("{}_", profile.token_prefix());
     if !token.starts_with(&expected_prefix) {
@@ -359,6 +369,22 @@ pub fn hash_token(profile: &TokenizationProfile, token: &str) -> Result<String, 
             "token prefix does not match tokenization profile",
         ));
     }
+
+    let encoded = &token[expected_prefix.len()..];
+    let random = Zeroizing::new(general_purpose::URL_SAFE_NO_PAD.decode(encoded).map_err(
+        |_| crate::error::invalid_input("token contains invalid tokenization encoding"),
+    )?);
+    if random.len() != profile.token_len() {
+        return Err(crate::error::invalid_input(
+            "token length does not match tokenization profile",
+        ));
+    }
+
+    Ok(())
+}
+
+pub fn hash_token(profile: &TokenizationProfile, token: &str) -> Result<String, DynError> {
+    validate_token_value(profile, token)?;
     let message = validation::build_aad(&[("profile", profile.name()), ("token", token)]);
     Ok(hex::encode(crypto::create_hmac(
         profile.hash_key(),
@@ -508,7 +534,7 @@ mod tests {
         validate_tokenization_profiles(
             vec![input("patient-id-token-v1")],
             |item| item == kid(),
-            |_, _, _| Ok(derived()),
+            |_| Ok(derived()),
         )
         .unwrap()
         .get("patient-id-token-v1")
@@ -521,7 +547,7 @@ mod tests {
         let state = validate_tokenization_profiles(
             vec![input("patient-id-token-v1")],
             |item| item == kid(),
-            |_, _, _| Ok(derived()),
+            |_| Ok(derived()),
         )
         .expect("profile must validate");
         assert_eq!(state.len(), 1);
@@ -537,33 +563,41 @@ mod tests {
         let first = derive_tokenization_keys(
             &ops_key,
             "AES-256/GCM",
-            "patient-id-token-v1",
-            kid(),
-            TOKENIZATION_VERSION_RANDOM_V1,
+            TokenizationKeyDerivationRequest {
+                profile_name: "patient-id-token-v1",
+                kid: kid(),
+                tokenization_version: TOKENIZATION_VERSION_RANDOM_V1,
+            },
         )
         .expect("first profile keys must derive");
         let same = derive_tokenization_keys(
             &ops_key,
             "AES-256/GCM",
-            "patient-id-token-v1",
-            kid(),
-            TOKENIZATION_VERSION_RANDOM_V1,
+            TokenizationKeyDerivationRequest {
+                profile_name: "patient-id-token-v1",
+                kid: kid(),
+                tokenization_version: TOKENIZATION_VERSION_RANDOM_V1,
+            },
         )
         .expect("same profile keys must derive");
         let other_profile = derive_tokenization_keys(
             &ops_key,
             "AES-256/GCM",
-            "account-id-token-v1",
-            kid(),
-            TOKENIZATION_VERSION_RANDOM_V1,
+            TokenizationKeyDerivationRequest {
+                profile_name: "account-id-token-v1",
+                kid: kid(),
+                tokenization_version: TOKENIZATION_VERSION_RANDOM_V1,
+            },
         )
         .expect("other profile keys must derive");
         let other_version = derive_tokenization_keys(
             &ops_key,
             "AES-256/GCM",
-            "patient-id-token-v1",
-            kid(),
-            "token-random-v2",
+            TokenizationKeyDerivationRequest {
+                profile_name: "patient-id-token-v1",
+                kid: kid(),
+                tokenization_version: "token-random-v2",
+            },
         )
         .expect("other version keys must derive");
 
@@ -581,17 +615,30 @@ mod tests {
         let err = validate_tokenization_profiles(
             vec![input("patient-id-token-v1"), duplicate.clone()],
             |item| item == kid(),
-            |_, _, _| Ok(derived()),
+            |_| Ok(derived()),
         )
         .expect_err("duplicate names must fail");
         assert!(err.to_string().contains("duplicated name"));
+
+        for invalid_name in ["bad=name", "bad;name"] {
+            let err = validate_tokenization_profiles(
+                vec![input(invalid_name)],
+                |item| item == kid(),
+                |_| Ok(derived()),
+            )
+            .expect_err("name with AAD delimiter must fail");
+            assert_eq!(
+                err.to_string(),
+                "tokenization_profiles.name must not contain ';' or '='"
+            );
+        }
 
         duplicate.tokenization_version = String::from("token-v0");
         assert!(
             validate_tokenization_profiles(
                 vec![duplicate],
                 |item| item == kid(),
-                |_, _, _| { Ok(derived()) }
+                |_| { Ok(derived()) }
             )
             .is_err()
         );
@@ -602,7 +649,7 @@ mod tests {
             validate_tokenization_profiles(
                 vec![bad_prefix],
                 |item| item == kid(),
-                |_, _, _| { Ok(derived()) }
+                |_| { Ok(derived()) }
             )
             .is_err()
         );
@@ -613,18 +660,14 @@ mod tests {
             validate_tokenization_profiles(
                 vec![short_token],
                 |item| item == kid(),
-                |_, _, _| { Ok(derived()) }
+                |_| { Ok(derived()) }
             )
             .is_err()
         );
 
         assert!(
-            validate_tokenization_profiles(
-                vec![input("unloaded")],
-                |_| false,
-                |_, _, _| Ok(derived())
-            )
-            .is_err()
+            validate_tokenization_profiles(vec![input("unloaded")], |_| false, |_| Ok(derived()))
+                .is_err()
         );
     }
 
@@ -655,7 +698,34 @@ mod tests {
         let second = generate_token(&profile).unwrap();
         assert_ne!(first, second);
         assert!(first.starts_with("tok_patient_"));
+        validate_token_value(&profile, &first).expect("generated token must validate");
         assert!(hash_token(&profile, "wrong_prefix_abc").is_err());
+    }
+
+    #[test]
+    fn token_value_rejects_malformed_encoding_and_wrong_length() {
+        let profile = profile();
+
+        let err = validate_token_value(&profile, "tok_patient_abc;def")
+            .expect_err("AAD delimiters must not be accepted in token encoding");
+        assert_eq!(
+            err.to_string(),
+            "token contains invalid tokenization encoding"
+        );
+
+        let err = validate_token_value(&profile, "tok_patient_abc=def")
+            .expect_err("padding or '=' must not be accepted in token encoding");
+        assert_eq!(
+            err.to_string(),
+            "token contains invalid tokenization encoding"
+        );
+
+        let err = validate_token_value(&profile, "tok_patient_AA")
+            .expect_err("decoded random token length must match the profile");
+        assert_eq!(
+            err.to_string(),
+            "token length does not match tokenization profile"
+        );
     }
 
     #[test]
@@ -663,15 +733,12 @@ mod tests {
         let profile = profile();
         let mut other = input("other-token-v1");
         other.token_prefix = String::from("tok_other");
-        let other_profile = validate_tokenization_profiles(
-            vec![other],
-            |item| item == kid(),
-            |_, _, _| Ok(derived()),
-        )
-        .unwrap()
-        .get("other-token-v1")
-        .unwrap()
-        .clone();
+        let other_profile =
+            validate_tokenization_profiles(vec![other], |item| item == kid(), |_| Ok(derived()))
+                .unwrap()
+                .get("other-token-v1")
+                .unwrap()
+                .clone();
         let token = generate_token(&profile).unwrap();
         let hashid = hash_token(&profile, &token).unwrap();
         let payload = TokenDataPayload {

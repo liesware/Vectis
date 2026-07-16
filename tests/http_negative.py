@@ -1685,6 +1685,38 @@ def main():
             "token decode invalid prefix must fail by token validation",
         )
 
+    def token_decode_invalid_encoding():
+        status, body = client.post(
+            "/token/decode",
+            {
+                "kid": key_id,
+                "profile": "patient-id-token-v1",
+                "token": "tok_patient_abc;def",
+            },
+            auth=True,
+        )
+        require_status("POST /token/decode invalid encoding", status, 400)
+        require(
+            body.get("error") == "token contains invalid tokenization encoding",
+            "token decode invalid encoding must fail before token lookup",
+        )
+
+    def token_decode_wrong_length():
+        status, body = client.post(
+            "/token/decode",
+            {
+                "kid": key_id,
+                "profile": "patient-id-token-v1",
+                "token": "tok_patient_AA",
+            },
+            auth=True,
+        )
+        require_status("POST /token/decode wrong length", status, 400)
+        require(
+            body.get("error") == "token length does not match tokenization profile",
+            "token decode wrong length must fail before token lookup",
+        )
+
     def token_decode_not_found():
         status, body = client.post(
             "/token/decode",
@@ -1723,6 +1755,8 @@ def main():
         ("POST /token/encode/{kid} metadata too long", token_encode_metadata_too_long),
         ("POST /token/decode unknown profile", token_decode_unknown_profile),
         ("POST /token/decode invalid prefix", token_decode_invalid_prefix),
+        ("POST /token/decode invalid encoding", token_decode_invalid_encoding),
+        ("POST /token/decode wrong length", token_decode_wrong_length),
         ("POST /token/decode not found", token_decode_not_found),
     ):
         run_case(rows, name, func)

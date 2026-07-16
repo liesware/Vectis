@@ -1459,6 +1459,7 @@ components:
           example: patient-id-token-v1
         token:
           $ref: "#/components/schemas/TextField"
+          description: Visible token in the form <token_prefix>_<base64url-no-pad random bytes>. The decoded random byte length equals the signed profile token_len.
           example: tok_patient_vGqyEeXKcKz5QK1jwBQTyQ
 
     TokenDecodeInput:
@@ -1473,6 +1474,7 @@ components:
           example: patient-id-token-v1
         token:
           $ref: "#/components/schemas/TextField"
+          description: Visible token in the form <token_prefix>_<base64url-no-pad random bytes>. Decode validates the configured prefix and decoded byte length before lookup.
           example: tok_patient_vGqyEeXKcKz5QK1jwBQTyQ
 
     TokenDecodeOutput:

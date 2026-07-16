@@ -1,7 +1,7 @@
 use std::env;
 use std::process;
 use tracing::{error, info};
-use vectis::error::DynError;
+use vectis::error::{self, DynError};
 use vectis::{core, io};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,9 +69,7 @@ async fn real_main(args: Vec<String>) -> Result<(), DynError> {
     match args.next().as_deref() {
         Some(command) if command != "help" && command != "-h" && command != "--help" => {
             let Some(root_command) = find_root_command(command) else {
-                eprintln!("unknown command: {command}\n");
-                print_help();
-                return Ok(());
+                return Err(error::invalid_input(format!("unknown command: {command}")));
             };
             run_root_command(root_command, command, args.collect()).await?;
         }
@@ -85,8 +83,7 @@ async fn real_main(args: Vec<String>) -> Result<(), DynError> {
         },
         Some("-h" | "--help") | None => print_help(),
         Some(command) => {
-            eprintln!("unknown command: {command}\n");
-            print_help();
+            return Err(error::invalid_input(format!("unknown command: {command}")));
         }
     }
 
@@ -275,6 +272,18 @@ mod tests {
         assert_eq!(command.kind, RootCommandKind::Version);
     }
 
+    #[tokio::test]
+    async fn unknown_root_command_returns_error() {
+        let err = real_main(vec![
+            String::from("vectis"),
+            String::from("definitely-not-a-command"),
+        ])
+        .await
+        .expect_err("unknown root command must fail");
+
+        assert_eq!(err.to_string(), "unknown command: definitely-not-a-command");
+    }
+
     #[test]
     fn detects_json_error_format_from_output_flag() {
         let args = vec![
@@ -307,5 +316,15 @@ mod tests {
 
         let human = render_cli_error(err.as_ref(), CliErrorFormat::Human);
         assert_eq!(human, "Error: field must not be empty");
+    }
+
+    #[test]
+    fn renders_unknown_command_as_json_error() {
+        let err = error::invalid_input("unknown command: typo");
+        let rendered = render_cli_error(err.as_ref(), CliErrorFormat::Json);
+        let value: serde_json::Value =
+            serde_json::from_str(&rendered).expect("error must render JSON");
+
+        assert_eq!(value["error"], "unknown command: typo");
     }
 }

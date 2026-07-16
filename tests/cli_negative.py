@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import tempfile
+from pathlib import Path
 
 from cli_support import (
     APIKEY_HASH_A,
@@ -11,6 +12,7 @@ from cli_support import (
     config_bytes,
     empty_config,
     init_config,
+    init_material,
     isolated_env,
     run_case,
     run_cli,
@@ -278,6 +280,27 @@ def main():
             run_cli(["config", "init"], env, expect_success=False)
             assert_config_unchanged(env, before)
 
+        def config_sign_invalid_config_does_not_write_signature():
+            init_material(env)
+            config = empty_config()
+            config["routes"] = [
+                {
+                    "name": "missing-key-route",
+                    "kid": KID_A,
+                    "final_app_addr": "localhost:3999",
+                    "final_app_path": "/message",
+                }
+            ]
+            write_config(env, config)
+            sign_path = Path(env["VECTIS_CONFIG_SIGN_PATH"])
+            sign_path.write_text("sentinel\n", encoding="utf-8")
+            run_cli(["config", "sign"], env, expect_success=False)
+            require(
+                sign_path.read_text(encoding="utf-8") == "sentinel\n",
+                "config sign must not rewrite signature when validation fails",
+            )
+            write_config(env, empty_config())
+
         def duplicate_route_name():
             seed_route(env)
             expect_unchanged_failure(
@@ -430,6 +453,10 @@ def main():
                 ),
             ),
             ("config init existing file fails without rewrite", config_init_existing_file),
+            (
+                "config sign validates before writing signature",
+                config_sign_invalid_config_does_not_write_signature,
+            ),
             ("duplicate routes.name fails without rewrite", duplicate_route_name),
             ("duplicate permissions.client fails without rewrite", duplicate_permission_client),
             ("duplicate remote_routes.name fails without rewrite", duplicate_remote_route_name),
@@ -648,6 +675,29 @@ def main():
                 ),
             ),
             (
+                "invalid fpe profile name fails",
+                lambda: expect_unchanged_failure(
+                    env,
+                    [
+                        "config",
+                        "fpe",
+                        "add",
+                        "--name",
+                        "bad=name",
+                        "--kid",
+                        KID_A,
+                        "--alphabet",
+                        "0123456789",
+                        "--min-len",
+                        "6",
+                        "--max-len",
+                        "32",
+                        "--tweak-aad",
+                        "tenant=acme",
+                    ],
+                ),
+            ),
+            (
                 "invalid fpe alphabet fails",
                 lambda: expect_unchanged_failure(
                     env,
@@ -763,6 +813,29 @@ def main():
                         "6",
                         "--max-len",
                         "5",
+                        "--tweak-aad",
+                        "tenant=acme",
+                    ],
+                ),
+            ),
+            (
+                "oversized fpe max length fails",
+                lambda: expect_unchanged_failure(
+                    env,
+                    [
+                        "config",
+                        "fpe",
+                        "add",
+                        "--name",
+                        "oversized-fpe-max-len",
+                        "--kid",
+                        KID_A,
+                        "--alphabet",
+                        "0123456789",
+                        "--min-len",
+                        "6",
+                        "--max-len",
+                        "1025",
                         "--tweak-aad",
                         "tenant=acme",
                     ],

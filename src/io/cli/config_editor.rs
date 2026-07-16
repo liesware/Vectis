@@ -16,6 +16,8 @@ struct LocalConfig {
     value: Value,
 }
 
+type ParsedFieldValidator = fn(&Map<String, Value>) -> Result<(), DynError>;
+
 #[derive(Clone, Copy)]
 struct SectionSpec {
     cli_name: &'static str,
@@ -25,6 +27,7 @@ struct SectionSpec {
     command_context: &'static str,
     fields: &'static [FieldSpec],
     add_defaults: &'static [DefaultField],
+    parsed_validator: Option<ParsedFieldValidator>,
 }
 
 #[derive(Clone, Copy)]
@@ -63,10 +66,12 @@ enum FieldKind {
     PermissionKid,
     PermissionAction,
     Usize,
+    FpeProfileName,
     FpeVersion,
     FpeAlphabet,
     FpeTweakAad,
     TokenizationVersion,
+    TokenProfileName,
     TokenPrefix,
 }
 
@@ -121,6 +126,7 @@ const ROUTES_SECTION: SectionSpec = SectionSpec {
         },
     ],
     add_defaults: &[],
+    parsed_validator: None,
 };
 
 const REMOTE_ROUTES_SECTION: SectionSpec = SectionSpec {
@@ -177,6 +183,7 @@ const REMOTE_ROUTES_SECTION: SectionSpec = SectionSpec {
         },
     ],
     add_defaults: &[],
+    parsed_validator: None,
 };
 
 const PERMISSION_GRANT_FIELDS: &[FieldSpec] = &[
@@ -239,6 +246,7 @@ const PERMISSIONS_SECTION: SectionSpec = SectionSpec {
         json_field: "permissions",
         value: DefaultValue::EmptyArray,
     }],
+    parsed_validator: None,
 };
 
 const FPE_PROFILES_SECTION: SectionSpec = SectionSpec {
@@ -251,7 +259,7 @@ const FPE_PROFILES_SECTION: SectionSpec = SectionSpec {
         FieldSpec {
             flag: "--name",
             json_field: "name",
-            kind: FieldKind::Text,
+            kind: FieldKind::FpeProfileName,
             cardinality: FieldCardinality::One,
             required_on_add: true,
             mutable_on_update: false,
@@ -313,6 +321,7 @@ const FPE_PROFILES_SECTION: SectionSpec = SectionSpec {
         },
     ],
     add_defaults: &[],
+    parsed_validator: Some(validate_fpe_profile_parsed_fields),
 };
 
 const TOKENIZATION_PROFILES_SECTION: SectionSpec = SectionSpec {
@@ -325,7 +334,7 @@ const TOKENIZATION_PROFILES_SECTION: SectionSpec = SectionSpec {
         FieldSpec {
             flag: "--name",
             json_field: "name",
-            kind: FieldKind::Text,
+            kind: FieldKind::TokenProfileName,
             cardinality: FieldCardinality::One,
             required_on_add: true,
             mutable_on_update: false,
@@ -380,6 +389,7 @@ const TOKENIZATION_PROFILES_SECTION: SectionSpec = SectionSpec {
         },
     ],
     add_defaults: &[],
+    parsed_validator: Some(validate_tokenization_profile_parsed_fields),
 };
 
 pub fn init_config(output: OutputFormat) -> Result<(), DynError> {
@@ -627,7 +637,7 @@ fn parse_section_add(spec: &SectionSpec, args: Vec<String>) -> Result<Value, Dyn
             .entry(default.json_field.to_string())
             .or_insert_with(|| default.value.to_value());
     }
-    validate_parsed_field_combinations(&parsed)?;
+    validate_parsed_field_combinations(spec, &parsed)?;
     Ok(Value::Object(parsed))
 }
 
@@ -642,11 +652,14 @@ fn parse_section_update(
             spec.command_context
         )));
     }
-    validate_parsed_field_combinations(&parsed)?;
+    validate_parsed_field_combinations(spec, &parsed)?;
     Ok(parsed)
 }
 
-fn validate_parsed_field_combinations(parsed: &Map<String, Value>) -> Result<(), DynError> {
+fn validate_parsed_field_combinations(
+    spec: &SectionSpec,
+    parsed: &Map<String, Value>,
+) -> Result<(), DynError> {
     if let Some(kids) = parsed.get("allowed_local_kids") {
         let kids = kids
             .as_array()
@@ -660,7 +673,58 @@ fn validate_parsed_field_combinations(parsed: &Map<String, Value>) -> Result<(),
             .collect::<Result<Vec<_>, _>>()?;
         validate_allowed_local_kids(&kids)?;
     }
+    if let Some(validator) = spec.parsed_validator {
+        validator(parsed)?;
+    }
     Ok(())
+}
+
+fn validate_tokenization_profile_parsed_fields(
+    parsed: &Map<String, Value>,
+) -> Result<(), DynError> {
+    let token_len = optional_usize_field(parsed, "token_len")?;
+    let max_plaintext_len = optional_usize_field(parsed, "max_plaintext_len")?;
+
+    match (token_len, max_plaintext_len) {
+        (Some(token_len), Some(max_plaintext_len)) => {
+            tokenization::validate_token_lengths(token_len, max_plaintext_len)
+        }
+        (Some(token_len), None) => {
+            tokenization::validate_token_lengths(token_len, tokenization::TOKEN_PLAINTEXT_MAX_LEN)
+        }
+        (None, Some(max_plaintext_len)) => tokenization::validate_token_lengths(
+            tokenization::TOKEN_LEN_MIN_BYTES,
+            max_plaintext_len,
+        ),
+        (None, None) => Ok(()),
+    }
+}
+
+fn validate_fpe_profile_parsed_fields(parsed: &Map<String, Value>) -> Result<(), DynError> {
+    let min_len = optional_usize_field(parsed, "min_len")?;
+    let max_len = optional_usize_field(parsed, "max_len")?;
+
+    match (min_len, max_len) {
+        (Some(min_len), Some(max_len)) => fpe::validate_fpe_length_bounds(min_len, max_len),
+        (Some(min_len), None) => fpe::validate_fpe_min_len(min_len),
+        (None, Some(max_len)) => fpe::validate_fpe_max_len(max_len),
+        (None, None) => Ok(()),
+    }
+}
+
+fn optional_usize_field(
+    parsed: &Map<String, Value>,
+    field: &str,
+) -> Result<Option<usize>, DynError> {
+    let Some(value) = parsed.get(field) else {
+        return Ok(None);
+    };
+    let value = value
+        .as_u64()
+        .ok_or_else(|| invalid_input(format!("{field} must be an unsigned integer")))?;
+    usize::try_from(value)
+        .map(Some)
+        .map_err(|_| invalid_input(format!("{field} is too large")))
 }
 
 fn parse_section_fields(
@@ -754,6 +818,10 @@ fn parse_field_value(field: &FieldSpec, raw: &str) -> Result<Value, DynError> {
             Ok(Value::String(raw.to_string()))
         }
         FieldKind::Usize => Ok(Value::Number(parse_usize_flag(field.flag, raw)?.into())),
+        FieldKind::FpeProfileName => {
+            validation::validate_aad_value("fpe_profiles.name", raw)?;
+            Ok(Value::String(raw.to_string()))
+        }
         FieldKind::FpeVersion => {
             fpe::validate_fpe_version(raw)?;
             Ok(Value::String(raw.to_string()))
@@ -768,6 +836,10 @@ fn parse_field_value(field: &FieldSpec, raw: &str) -> Result<Value, DynError> {
         }
         FieldKind::TokenizationVersion => {
             tokenization::validate_tokenization_version(raw)?;
+            Ok(Value::String(raw.to_string()))
+        }
+        FieldKind::TokenProfileName => {
+            validation::validate_aad_value("tokenization_profiles.name", raw)?;
             Ok(Value::String(raw.to_string()))
         }
         FieldKind::TokenPrefix => {
@@ -1009,13 +1081,13 @@ fn validate_local_config(local: &LocalConfig) -> Result<(), DynError> {
         &content,
         &local.app,
         |_| true,
-        |_, _, _| {
+        |_| {
             Ok(zeroize::Zeroizing::new(vec![
             0u8;
             crate::core::fpe::FPE_KEY_SIZE_BYTES
         ]))
         },
-        |_, _, _| {
+        |_| {
             Ok(crate::core::tokenization::DerivedTokenizationKeys {
                 hash_key: zeroize::Zeroizing::new(vec![
                     0u8;
@@ -1367,6 +1439,38 @@ mod tests {
         assert!(validate_allowed_local_kids(&kids).is_err());
     }
 
+    fn valid_token_profile_args(token_len: &str, max_plaintext_len: &str) -> Vec<String> {
+        vec![
+            String::from("--name"),
+            String::from("patient-token"),
+            String::from("--kid"),
+            "a".repeat(64),
+            String::from("--token-prefix"),
+            String::from("tok_patient"),
+            String::from("--token-len"),
+            String::from(token_len),
+            String::from("--max-plaintext-len"),
+            String::from(max_plaintext_len),
+        ]
+    }
+
+    fn valid_fpe_profile_args(name: &str, min_len: &str, max_len: &str) -> Vec<String> {
+        vec![
+            String::from("--name"),
+            String::from(name),
+            String::from("--kid"),
+            "a".repeat(64),
+            String::from("--alphabet"),
+            String::from("0123456789"),
+            String::from("--min-len"),
+            String::from(min_len),
+            String::from("--max-len"),
+            String::from(max_len),
+            String::from("--tweak-aad"),
+            String::from("tenant=acme"),
+        ]
+    }
+
     #[test]
     fn remove_by_field_requires_single_match() {
         let mut items = vec![json!({"name": "a"}), json!({"name": "a"})];
@@ -1697,18 +1801,7 @@ mod tests {
         let mut local = local_config();
         let value = parse_section_add(
             &TOKENIZATION_PROFILES_SECTION,
-            vec![
-                String::from("--name"),
-                String::from("patient-token"),
-                String::from("--kid"),
-                "a".repeat(64),
-                String::from("--token-prefix"),
-                String::from("tok_patient"),
-                String::from("--token-len"),
-                String::from("32"),
-                String::from("--max-plaintext-len"),
-                String::from("1024"),
-            ],
+            valid_token_profile_args("32", "1024"),
         )
         .unwrap();
         section_add_value(&mut local, &TOKENIZATION_PROFILES_SECTION, value).unwrap();
@@ -1750,6 +1843,127 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn token_profile_rejects_invalid_lengths_inline() {
+        let short_token_len = parse_section_add(
+            &TOKENIZATION_PROFILES_SECTION,
+            valid_token_profile_args("4", "1024"),
+        )
+        .expect_err("short token length must fail during parsing");
+        assert_eq!(
+            short_token_len.to_string(),
+            "tokenization_profiles.token_len must be at least 32"
+        );
+
+        let invalid_plaintext_len = parse_section_add(
+            &TOKENIZATION_PROFILES_SECTION,
+            valid_token_profile_args("32", "0"),
+        )
+        .expect_err("invalid plaintext length must fail during parsing");
+        assert_eq!(
+            invalid_plaintext_len.to_string(),
+            "tokenization_profiles.max_plaintext_len must be between 1 and 1024"
+        );
+    }
+
+    #[test]
+    fn token_profile_update_rejects_invalid_lengths_before_mutation() {
+        let mut local = local_config();
+        let value = parse_section_add(
+            &TOKENIZATION_PROFILES_SECTION,
+            valid_token_profile_args("32", "1024"),
+        )
+        .unwrap();
+        section_add_value(&mut local, &TOKENIZATION_PROFILES_SECTION, value).unwrap();
+
+        let before = local.value.clone();
+        let short_token_len = section_update(
+            &mut local,
+            &TOKENIZATION_PROFILES_SECTION,
+            vec![
+                String::from("patient-token"),
+                String::from("--token-len"),
+                String::from("4"),
+            ],
+        )
+        .expect_err("invalid token length must fail before mutation");
+        assert_eq!(
+            short_token_len.to_string(),
+            "tokenization_profiles.token_len must be at least 32"
+        );
+        assert_eq!(local.value, before);
+
+        let invalid_plaintext_len = section_update(
+            &mut local,
+            &TOKENIZATION_PROFILES_SECTION,
+            vec![
+                String::from("patient-token"),
+                String::from("--max-plaintext-len"),
+                String::from("0"),
+            ],
+        )
+        .expect_err("invalid plaintext length must fail before mutation");
+        assert_eq!(
+            invalid_plaintext_len.to_string(),
+            "tokenization_profiles.max_plaintext_len must be between 1 and 1024"
+        );
+        assert_eq!(local.value, before);
+    }
+
+    #[test]
+    fn token_profile_name_must_be_aad_safe() {
+        let err = parse_section_add(
+            &TOKENIZATION_PROFILES_SECTION,
+            vec![
+                String::from("--name"),
+                String::from("bad=name"),
+                String::from("--kid"),
+                "a".repeat(64),
+                String::from("--token-prefix"),
+                String::from("tok_patient"),
+                String::from("--token-len"),
+                String::from("32"),
+                String::from("--max-plaintext-len"),
+                String::from("1024"),
+            ],
+        )
+        .expect_err("token profile name must reject AAD delimiters");
+
+        assert_eq!(
+            err.to_string(),
+            "tokenization_profiles.name must not contain ';' or '='"
+        );
+    }
+
+    #[test]
+    fn fpe_profile_name_must_be_aad_safe() {
+        for name in ["bad=name", "bad;name"] {
+            let err = parse_section_add(
+                &FPE_PROFILES_SECTION,
+                vec![
+                    String::from("--name"),
+                    String::from(name),
+                    String::from("--kid"),
+                    "a".repeat(64),
+                    String::from("--alphabet"),
+                    String::from("0123456789"),
+                    String::from("--min-len"),
+                    String::from("6"),
+                    String::from("--max-len"),
+                    String::from("32"),
+                    String::from("--tweak-aad"),
+                    String::from("tenant=acme"),
+                ],
+            )
+            .expect_err("FPE profile name must reject AAD delimiters");
+
+            assert_eq!(
+                err.to_string(),
+                "fpe_profiles.name must not contain ';' or '='"
+            );
+        }
     }
 
     #[test]
@@ -1797,32 +2011,84 @@ mod tests {
     }
 
     #[test]
-    fn fpe_profile_cross_field_rules_stay_in_full_config_validation() {
-        let mut short_local = local_config();
-        let short = parse_section_add(
+    fn fpe_profile_rejects_invalid_lengths_inline() {
+        let short_min_len = parse_section_add(
             &FPE_PROFILES_SECTION,
-            vec![
-                String::from("--name"),
-                String::from("patient-id"),
-                String::from("--kid"),
-                "a".repeat(64),
-                String::from("--alphabet"),
-                String::from("0123456789"),
-                String::from("--min-len"),
-                String::from("5"),
-                String::from("--max-len"),
-                String::from("32"),
-                String::from("--tweak-aad"),
-                String::from("tenant=acme"),
-            ],
+            valid_fpe_profile_args("patient-id", "5", "32"),
         )
-        .expect("field parser only validates field-local values");
-        section_add_value(&mut short_local, &FPE_PROFILES_SECTION, short).unwrap();
+        .expect_err("short min length must fail during parsing");
         assert_eq!(
-            validate_local_config(&short_local).unwrap_err().to_string(),
+            short_min_len.to_string(),
             "fpe_profiles.min_len must be at least 6"
         );
 
+        let oversized_max_len = parse_section_add(
+            &FPE_PROFILES_SECTION,
+            valid_fpe_profile_args("patient-id", "6", "1025"),
+        )
+        .expect_err("oversized max length must fail during parsing");
+        assert_eq!(
+            oversized_max_len.to_string(),
+            "fpe_profiles.max_len exceeds maximum allowed value"
+        );
+
+        let invalid_bounds = parse_section_add(
+            &FPE_PROFILES_SECTION,
+            valid_fpe_profile_args("patient-id", "10", "9"),
+        )
+        .expect_err("max length below min length must fail during parsing");
+        assert_eq!(
+            invalid_bounds.to_string(),
+            "fpe_profiles.max_len must be greater than or equal to min_len"
+        );
+    }
+
+    #[test]
+    fn fpe_profile_update_rejects_invalid_lengths_before_mutation() {
+        let mut local = local_config();
+        let value = parse_section_add(
+            &FPE_PROFILES_SECTION,
+            valid_fpe_profile_args("patient-id", "6", "32"),
+        )
+        .expect("seed profile must parse");
+        section_add_value(&mut local, &FPE_PROFILES_SECTION, value).unwrap();
+
+        let before = local.value.clone();
+        let short_min_len = section_update(
+            &mut local,
+            &FPE_PROFILES_SECTION,
+            vec![
+                String::from("patient-id"),
+                String::from("--min-len"),
+                String::from("5"),
+            ],
+        )
+        .expect_err("short min length must fail before mutation");
+        assert_eq!(
+            short_min_len.to_string(),
+            "fpe_profiles.min_len must be at least 6"
+        );
+        assert_eq!(local.value, before);
+
+        let oversized_max_len = section_update(
+            &mut local,
+            &FPE_PROFILES_SECTION,
+            vec![
+                String::from("patient-id"),
+                String::from("--max-len"),
+                String::from("1025"),
+            ],
+        )
+        .expect_err("oversized max length must fail before mutation");
+        assert_eq!(
+            oversized_max_len.to_string(),
+            "fpe_profiles.max_len exceeds maximum allowed value"
+        );
+        assert_eq!(local.value, before);
+    }
+
+    #[test]
+    fn fpe_profile_domain_stays_in_full_config_validation() {
         let mut domain_local = local_config();
         let small_domain = parse_section_add(
             &FPE_PROFILES_SECTION,

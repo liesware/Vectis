@@ -43,31 +43,29 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
             )
         },
         |kid| keys_db_state.contains_id(kid),
-        |kid, profile_name, fpe_version| {
-            let loaded_key = keys_db_state.get(kid).ok_or_else(|| {
+        |request| {
+            let loaded_key = keys_db_state.get(request.kid).ok_or_else(|| {
                 crate::error::invalid_input(format!(
-                    "fpe profile references kid not loaded in memory: {kid}"
+                    "fpe profile references kid not loaded in memory: {}",
+                    request.kid
                 ))
             })?;
             crate::core::fpe::derive_fpe_key_for_profile(
                 loaded_key.keys().symmetric().key_hex(),
-                profile_name,
-                kid,
-                fpe_version,
+                request,
             )
         },
-        |profile_name, kid, tokenization_version| {
-            let loaded_key = keys_db_state.get(kid).ok_or_else(|| {
+        |request| {
+            let loaded_key = keys_db_state.get(request.kid).ok_or_else(|| {
                 crate::error::invalid_input(format!(
-                    "tokenization profile references kid not loaded in memory: {kid}"
+                    "tokenization profile references kid not loaded in memory: {}",
+                    request.kid
                 ))
             })?;
             crate::core::tokenization::derive_tokenization_keys(
                 loaded_key.keys().symmetric().key_hex(),
                 loaded_key.keys().symmetric().variant(),
-                profile_name,
-                kid,
-                tokenization_version,
+                request,
             )
         },
     )?;

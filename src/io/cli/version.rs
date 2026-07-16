@@ -1,6 +1,9 @@
 use crate::core::{config, crypto, fpe, protocol, tokenization, validation};
 use crate::error::DynError;
-use crate::io::cli::http::{OutputFormat, invalid_input, print_response};
+use crate::io::cli::{
+    help_catalog,
+    http::{OutputFormat, invalid_input, print_response},
+};
 use serde_json::{Value, json};
 
 const PROGRAM_NAME: &str = "vectis";
@@ -14,6 +17,10 @@ pub const TOKENIZATION_VERSIONS: &[&str] = &[tokenization::TOKENIZATION_VERSION_
 
 pub fn run(args: Vec<String>) -> Result<(), DynError> {
     let (output, rest) = parse_output_option(args)?;
+    if has_help_token(&rest) {
+        print!("{}", help_catalog::render_help_path(&["version"]));
+        return Ok(());
+    }
     expect_no_args(&rest)?;
 
     let payload = version_payload();
@@ -79,6 +86,11 @@ fn expect_no_args(args: &[String]) -> Result<(), DynError> {
     Ok(())
 }
 
+fn has_help_token(args: &[String]) -> bool {
+    args.iter()
+        .any(|arg| matches!(arg.as_str(), "help" | "-h" | "--help"))
+}
+
 fn next_flag_value<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a str, DynError> {
     args.get(index + 1)
         .map(String::as_str)
@@ -88,6 +100,24 @@ fn next_flag_value<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn has_help_token_detects_version_help_tokens() {
+        assert!(has_help_token(&strings(&["--help"])));
+        assert!(has_help_token(&strings(&["-h"])));
+        assert!(has_help_token(&strings(&["help"])));
+        assert!(has_help_token(&strings(&["--output", "json", "--help"])));
+    }
+
+    #[test]
+    fn has_help_token_rejects_similar_values() {
+        assert!(!has_help_token(&strings(&["--helpful"])));
+        assert!(!has_help_token(&strings(&["helpful"])));
+    }
 
     #[test]
     fn version_payload_contains_crate_and_protocol_versions() {

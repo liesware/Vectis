@@ -67,11 +67,9 @@ pub fn validate_config_content(
     content: &str,
     config: &config::AppConfig,
     is_loaded_kid: impl Fn(&str) -> bool,
-    derive_fpe_key: impl Fn(&str, &str, &str) -> Result<Zeroizing<Vec<u8>>, DynError>,
+    derive_fpe_key: impl Fn(fpe::FpeKeyDerivationRequest<'_>) -> Result<Zeroizing<Vec<u8>>, DynError>,
     derive_tokenization_keys: impl Fn(
-        &str,
-        &str,
-        &str,
+        tokenization::TokenizationKeyDerivationRequest<'_>,
     ) -> Result<tokenization::DerivedTokenizationKeys, DynError>,
 ) -> Result<ConfigState, DynError> {
     let config_file: ConfigFile = serde_json::from_str(content).map_err(|err| {
@@ -102,11 +100,9 @@ pub fn load_config_state(
     config: &config::AppConfig,
     verify_config: impl Fn(&Path, &str) -> Result<(), DynError>,
     is_loaded_kid: impl Fn(&str) -> bool,
-    derive_fpe_key: impl Fn(&str, &str, &str) -> Result<Zeroizing<Vec<u8>>, DynError>,
+    derive_fpe_key: impl Fn(fpe::FpeKeyDerivationRequest<'_>) -> Result<Zeroizing<Vec<u8>>, DynError>,
     derive_tokenization_keys: impl Fn(
-        &str,
-        &str,
-        &str,
+        tokenization::TokenizationKeyDerivationRequest<'_>,
     ) -> Result<tokenization::DerivedTokenizationKeys, DynError>,
 ) -> Result<ConfigState, DynError> {
     match load_config_file(
@@ -143,11 +139,9 @@ pub fn reload_config_state(
     config: &config::AppConfig,
     verify_config: impl Fn(&Path, &str) -> Result<(), DynError>,
     is_loaded_kid: impl Fn(&str) -> bool,
-    derive_fpe_key: impl Fn(&str, &str, &str) -> Result<Zeroizing<Vec<u8>>, DynError>,
+    derive_fpe_key: impl Fn(fpe::FpeKeyDerivationRequest<'_>) -> Result<Zeroizing<Vec<u8>>, DynError>,
     derive_tokenization_keys: impl Fn(
-        &str,
-        &str,
-        &str,
+        tokenization::TokenizationKeyDerivationRequest<'_>,
     ) -> Result<tokenization::DerivedTokenizationKeys, DynError>,
 ) -> Result<ConfigState, DynError> {
     match load_config_file(
@@ -169,11 +163,9 @@ fn load_config_file(
     verify_config: impl Fn(&Path, &str) -> Result<(), DynError>,
     config: &config::AppConfig,
     is_loaded_kid: &impl Fn(&str) -> bool,
-    derive_fpe_key: &impl Fn(&str, &str, &str) -> Result<Zeroizing<Vec<u8>>, DynError>,
+    derive_fpe_key: &impl Fn(fpe::FpeKeyDerivationRequest<'_>) -> Result<Zeroizing<Vec<u8>>, DynError>,
     derive_tokenization_keys: &impl Fn(
-        &str,
-        &str,
-        &str,
+        tokenization::TokenizationKeyDerivationRequest<'_>,
     ) -> Result<tokenization::DerivedTokenizationKeys, DynError>,
 ) -> Result<ConfigState, DynError> {
     let content = read_config_file(path)?;
@@ -194,11 +186,9 @@ fn validate_config_file(
     config_file: ConfigFile,
     config: &config::AppConfig,
     is_loaded_kid: &impl Fn(&str) -> bool,
-    derive_fpe_key: &impl Fn(&str, &str, &str) -> Result<Zeroizing<Vec<u8>>, DynError>,
+    derive_fpe_key: &impl Fn(fpe::FpeKeyDerivationRequest<'_>) -> Result<Zeroizing<Vec<u8>>, DynError>,
     derive_tokenization_keys: &impl Fn(
-        &str,
-        &str,
-        &str,
+        tokenization::TokenizationKeyDerivationRequest<'_>,
     ) -> Result<tokenization::DerivedTokenizationKeys, DynError>,
 ) -> Result<ConfigState, DynError> {
     protocol::validate_protocol_version("config.version", &config_file.version)?;
@@ -362,8 +352,8 @@ mod tests {
             &config,
             |_, _| Ok(()),
             |_| true,
-            |_, _, _| Ok(dummy_fpe_key()),
-            |_, _, _| Ok(dummy_tokenization_keys()),
+            |_| Ok(dummy_fpe_key()),
+            |_| Ok(dummy_tokenization_keys()),
         )
         .unwrap();
         assert_eq!(state.routes.len(), 0);
@@ -384,8 +374,8 @@ mod tests {
             &config,
             |_, _| Err(crate::error::invalid_signature("bad signature")),
             |_| true,
-            |_, _, _| Ok(dummy_fpe_key()),
-            |_, _, _| Ok(dummy_tokenization_keys()),
+            |_| Ok(dummy_fpe_key()),
+            |_| Ok(dummy_tokenization_keys()),
         );
         let _ = fs::remove_file(&path);
         assert!(result.is_err());
@@ -400,8 +390,8 @@ mod tests {
             &config,
             |_, _| Ok(()),
             |_| true,
-            |_, _, _| Ok(dummy_fpe_key()),
-            |_, _, _| Ok(dummy_tokenization_keys()),
+            |_| Ok(dummy_fpe_key()),
+            |_| Ok(dummy_tokenization_keys()),
         );
         let _ = fs::remove_file(&path);
         let err = match result {
@@ -424,8 +414,8 @@ mod tests {
             &config,
             |_, _| Ok(()),
             |_| true,
-            |_, _, _| Ok(dummy_fpe_key()),
-            |_, _, _| Ok(dummy_tokenization_keys()),
+            |_| Ok(dummy_fpe_key()),
+            |_| Ok(dummy_tokenization_keys()),
         );
 
         let _ = fs::remove_file(&path);
@@ -443,8 +433,8 @@ mod tests {
             &config,
             |_, _| Ok(()),
             |_| true,
-            |_, _, _| Ok(dummy_fpe_key()),
-            |_, _, _| Ok(dummy_tokenization_keys()),
+            |_| Ok(dummy_fpe_key()),
+            |_| Ok(dummy_tokenization_keys()),
         )
         .unwrap();
         assert_eq!(state.routes.len(), 0);
@@ -463,8 +453,8 @@ mod tests {
             &config,
             |_, _| Err(crate::error::invalid_signature("bad signature")),
             |_| true,
-            |_, _, _| Ok(dummy_fpe_key()),
-            |_, _, _| Ok(dummy_tokenization_keys()),
+            |_| Ok(dummy_fpe_key()),
+            |_| Ok(dummy_tokenization_keys()),
         );
         let _ = fs::remove_file(&path);
         assert!(result.is_err());
@@ -483,8 +473,8 @@ mod tests {
             &config,
             |_, _| Ok(()),
             |_| true,
-            |_, _, _| Ok(dummy_fpe_key()),
-            |_, _, _| Ok(dummy_tokenization_keys()),
+            |_| Ok(dummy_fpe_key()),
+            |_| Ok(dummy_tokenization_keys()),
         );
 
         let _ = fs::remove_file(&path);
@@ -575,8 +565,8 @@ mod tests {
             r#"{"version":"v1"}"#,
             &config,
             |_| true,
-            |_, _, _| Ok(dummy_fpe_key()),
-            |_, _, _| Ok(dummy_tokenization_keys()),
+            |_| Ok(dummy_fpe_key()),
+            |_| Ok(dummy_tokenization_keys()),
         )
         .unwrap();
 
@@ -594,8 +584,8 @@ mod tests {
                 r#"{"version":"v2"}"#,
                 &config,
                 |_| true,
-                |_, _, _| { Ok(dummy_fpe_key()) },
-                |_, _, _| Ok(dummy_tokenization_keys()),
+                |_| { Ok(dummy_fpe_key()) },
+                |_| Ok(dummy_tokenization_keys()),
             )
             .is_err()
         );
@@ -604,8 +594,8 @@ mod tests {
                 r#"{"version":"v1","routes":{}}"#,
                 &config,
                 |_| true,
-                |_, _, _| Ok(dummy_fpe_key()),
-                |_, _, _| Ok(dummy_tokenization_keys()),
+                |_| Ok(dummy_fpe_key()),
+                |_| Ok(dummy_tokenization_keys()),
             )
             .is_err()
         );
@@ -614,8 +604,8 @@ mod tests {
                 r#"{"version":"v1","remote_routes":{}}"#,
                 &config,
                 |_| true,
-                |_, _, _| Ok(dummy_fpe_key()),
-                |_, _, _| Ok(dummy_tokenization_keys()),
+                |_| Ok(dummy_fpe_key()),
+                |_| Ok(dummy_tokenization_keys()),
             )
             .is_err()
         );
@@ -624,8 +614,8 @@ mod tests {
                 r#"{"version":"v1","permissions":{}}"#,
                 &config,
                 |_| true,
-                |_, _, _| Ok(dummy_fpe_key()),
-                |_, _, _| Ok(dummy_tokenization_keys()),
+                |_| Ok(dummy_fpe_key()),
+                |_| Ok(dummy_tokenization_keys()),
             )
             .is_err()
         );

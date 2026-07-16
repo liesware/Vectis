@@ -1,8 +1,9 @@
-use crate::core::{config, validation};
+use crate::core::{config, storage::StorageState, validation};
 use crate::error::DynError;
 use crate::io::cli::{config_editor, help_catalog, init};
 use crate::ops;
 use reqwest::{Method, Url};
+use serde::Serialize;
 use serde_json::{Map, Value, json};
 use std::fs;
 use std::future::Future;
@@ -16,7 +17,6 @@ const PROGRAM_NAME: &str = "vectis";
 
 type CommandFuture = Pin<Box<dyn Future<Output = Result<(), DynError>>>>;
 type CommandHandler = fn(Vec<String>, OutputFormat) -> CommandFuture;
-type ConfigCommandHandler = fn(Vec<String>, OutputFormat) -> CommandFuture;
 
 struct HttpCommand {
     name: &'static str,
@@ -25,7 +25,15 @@ struct HttpCommand {
 
 struct ConfigCommand {
     name: &'static str,
-    handler: ConfigCommandHandler,
+    handler: CommandHandler,
+}
+
+macro_rules! boxed_command {
+    ($wrapper:ident, $handler:path) => {
+        fn $wrapper(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+            Box::pin($handler(args, output))
+        }
+    };
 }
 
 const HTTP_COMMANDS: &[HttpCommand] = &[
@@ -46,6 +54,7 @@ const HTTP_COMMANDS: &[HttpCommand] = &[
 
 const CONFIG_COMMANDS: &[ConfigCommand] = &[
     ConfigCommand::new("init", config_command_init),
+    ConfigCommand::new("validate", config_command_validate),
     ConfigCommand::new("sign", config_command_sign),
     ConfigCommand::new("list", config_command_list),
     ConfigCommand::new("reload", config_command_reload),
@@ -63,14 +72,14 @@ impl HttpCommand {
 }
 
 impl ConfigCommand {
-    const fn new(name: &'static str, handler: ConfigCommandHandler) -> Self {
+    const fn new(name: &'static str, handler: CommandHandler) -> Self {
         Self { name, handler }
     }
 }
 
 pub async fn run(command: &str, args: Vec<String>) -> Result<(), DynError> {
-    if is_help_request(&args) {
-        print_help(command);
+    if let Some(path) = help_request_path(command, &args) {
+        print_help_path(&path);
         return Ok(());
     }
 
@@ -125,57 +134,19 @@ fn find_config_command(name: &str) -> Option<&'static ConfigCommand> {
     CONFIG_COMMANDS.iter().find(|command| command.name == name)
 }
 
-fn command_health(args: Vec<String>, output: OutputFormat) -> CommandFuture {
-    Box::pin(run_health(args, output))
-}
-
-fn command_test(args: Vec<String>, output: OutputFormat) -> CommandFuture {
-    Box::pin(run_test(args, output))
-}
-
-fn command_keys(args: Vec<String>, output: OutputFormat) -> CommandFuture {
-    Box::pin(run_keys(args, output))
-}
-
-fn command_lifecycle(args: Vec<String>, output: OutputFormat) -> CommandFuture {
-    Box::pin(run_lifecycle(args, output))
-}
-
-fn command_routes(args: Vec<String>, output: OutputFormat) -> CommandFuture {
-    Box::pin(run_routes(args, output))
-}
-
-fn command_remote_routes(args: Vec<String>, output: OutputFormat) -> CommandFuture {
-    Box::pin(run_remote_routes(args, output))
-}
-
-fn command_permissions(args: Vec<String>, output: OutputFormat) -> CommandFuture {
-    Box::pin(run_permissions(args, output))
-}
-
-fn command_config(args: Vec<String>, output: OutputFormat) -> CommandFuture {
-    Box::pin(run_config(args, output))
-}
-
-fn command_pub(args: Vec<String>, output: OutputFormat) -> CommandFuture {
-    Box::pin(run_pub(args, output))
-}
-
-fn command_sign(args: Vec<String>, output: OutputFormat) -> CommandFuture {
-    Box::pin(run_sign(args, output))
-}
-
-fn command_fpe(args: Vec<String>, output: OutputFormat) -> CommandFuture {
-    Box::pin(run_fpe(args, output))
-}
-
-fn command_token(args: Vec<String>, output: OutputFormat) -> CommandFuture {
-    Box::pin(run_token(args, output))
-}
-
-fn command_message(args: Vec<String>, output: OutputFormat) -> CommandFuture {
-    Box::pin(run_message(args, output))
-}
+boxed_command!(command_health, run_health);
+boxed_command!(command_test, run_test);
+boxed_command!(command_keys, run_keys);
+boxed_command!(command_lifecycle, run_lifecycle);
+boxed_command!(command_routes, run_routes);
+boxed_command!(command_remote_routes, run_remote_routes);
+boxed_command!(command_permissions, run_permissions);
+boxed_command!(command_config, run_config);
+boxed_command!(command_pub, run_pub);
+boxed_command!(command_sign, run_sign);
+boxed_command!(command_fpe, run_fpe);
+boxed_command!(command_token, run_token);
+boxed_command!(command_message, run_message);
 
 fn config_command_init(args: Vec<String>, output: OutputFormat) -> CommandFuture {
     Box::pin(async move {
@@ -187,7 +158,14 @@ fn config_command_init(args: Vec<String>, output: OutputFormat) -> CommandFuture
 fn config_command_sign(args: Vec<String>, output: OutputFormat) -> CommandFuture {
     Box::pin(async move {
         expect_no_args(&args, "config sign")?;
-        run_config_sign(output)
+        run_config_sign(output).await
+    })
+}
+
+fn config_command_validate(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+    Box::pin(async move {
+        expect_no_args(&args, "config validate")?;
+        run_config_validate(output).await
     })
 }
 
@@ -208,25 +186,14 @@ fn config_command_reload(args: Vec<String>, output: OutputFormat) -> CommandFutu
     })
 }
 
-fn config_command_routes(args: Vec<String>, output: OutputFormat) -> CommandFuture {
-    Box::pin(config_editor::run_routes(args, output))
-}
-
-fn config_command_remote_routes(args: Vec<String>, output: OutputFormat) -> CommandFuture {
-    Box::pin(config_editor::run_remote_routes(args, output))
-}
-
-fn config_command_permissions(args: Vec<String>, output: OutputFormat) -> CommandFuture {
-    Box::pin(config_editor::run_permissions(args, output))
-}
-
-fn config_command_fpe(args: Vec<String>, output: OutputFormat) -> CommandFuture {
-    Box::pin(config_editor::run_config_fpe(args, output))
-}
-
-fn config_command_token(args: Vec<String>, output: OutputFormat) -> CommandFuture {
-    Box::pin(config_editor::run_config_token(args, output))
-}
+boxed_command!(config_command_routes, config_editor::run_routes);
+boxed_command!(
+    config_command_remote_routes,
+    config_editor::run_remote_routes
+);
+boxed_command!(config_command_permissions, config_editor::run_permissions);
+boxed_command!(config_command_fpe, config_editor::run_config_fpe);
+boxed_command!(config_command_token, config_editor::run_config_token);
 
 async fn run_health(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let target = expect_one(args, "health target")?;
@@ -359,17 +326,32 @@ async fn run_permissions(args: Vec<String>, output: OutputFormat) -> Result<(), 
 
 async fn run_config(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "config command")?;
-    if is_help_request(&rest) {
-        print!("{}", help_catalog::render_config_section_help(&subcommand));
-        return Ok(());
-    }
-
     let command = find_config_command(&subcommand)
         .ok_or_else(|| invalid_input(format!("unknown config command: {subcommand}")))?;
     (command.handler)(rest, output).await
 }
 
-fn run_config_sign(output: OutputFormat) -> Result<(), DynError> {
+#[derive(Serialize)]
+struct ConfigValidationOutput {
+    status: &'static str,
+    config_path: String,
+    keys_loaded: usize,
+    routes_loaded: usize,
+    remote_routes_loaded: usize,
+    clients_loaded: usize,
+    fpe_profiles_loaded: usize,
+    tokenization_profiles_loaded: usize,
+}
+
+async fn validate_config_for_local_node() -> Result<
+    (
+        config::AppConfig,
+        ops::init::ValidatedInitState,
+        String,
+        ConfigValidationOutput,
+    ),
+    DynError,
+> {
     let config = config::app_config()?;
     let init_state = init::load_init_state()?;
     let config_content =
@@ -379,6 +361,61 @@ fn run_config_sign(output: OutputFormat) -> Result<(), DynError> {
                 config.config_path.display()
             ))
         })?;
+    let internal_keys = ops::internal_keys::InternalDerivedKeysState::from_init_state(&init_state)?;
+    let storage = StorageState::new(&config).await?;
+    let keys_db_state = ops::keys::load_keys_db_state(&storage, &internal_keys).await?;
+    let config_state = crate::core::config_file::validate_config_content(
+        &config_content,
+        &config,
+        |kid| keys_db_state.contains_id(kid),
+        |request| {
+            let loaded_key = keys_db_state.get(request.kid).ok_or_else(|| {
+                invalid_input(format!(
+                    "fpe profile references kid not loaded in memory: {}",
+                    request.kid
+                ))
+            })?;
+            crate::core::fpe::derive_fpe_key_for_profile(
+                loaded_key.keys().symmetric().key_hex(),
+                request,
+            )
+        },
+        |request| {
+            let loaded_key = keys_db_state.get(request.kid).ok_or_else(|| {
+                invalid_input(format!(
+                    "tokenization profile references kid not loaded in memory: {}",
+                    request.kid
+                ))
+            })?;
+            crate::core::tokenization::derive_tokenization_keys(
+                loaded_key.keys().symmetric().key_hex(),
+                loaded_key.keys().symmetric().variant(),
+                request,
+            )
+        },
+    )?;
+    let output = ConfigValidationOutput {
+        status: "valid",
+        config_path: config.config_path.display().to_string(),
+        keys_loaded: keys_db_state.len(),
+        routes_loaded: config_state.routes.len(),
+        remote_routes_loaded: config_state.remote_routes.len(),
+        clients_loaded: config_state.permissions.len(),
+        fpe_profiles_loaded: config_state.fpe_profiles.len(),
+        tokenization_profiles_loaded: config_state.tokenization_profiles.len(),
+    };
+
+    Ok((config, init_state, config_content, output))
+}
+
+async fn run_config_validate(output: OutputFormat) -> Result<(), DynError> {
+    let (_, _, _, validation) = validate_config_for_local_node().await?;
+
+    print_response(&serde_json::to_string(&validation)?, output)
+}
+
+async fn run_config_sign(output: OutputFormat) -> Result<(), DynError> {
+    let (config, init_state, config_content, validation) = validate_config_for_local_node().await?;
     let token = ops::sign::sign_config_file(&init_state, &config.config_path, &config_content)?;
     let config_sign_path = crate::core::config_file::config_signature_path(
         &config.config_path,
@@ -392,6 +429,12 @@ fn run_config_sign(output: OutputFormat) -> Result<(), DynError> {
             "status": "updated",
             "config_path": config.config_path.display().to_string(),
             "config_sign_path": config_sign_path.display().to_string(),
+            "keys_loaded": validation.keys_loaded,
+            "routes_loaded": validation.routes_loaded,
+            "remote_routes_loaded": validation.remote_routes_loaded,
+            "clients_loaded": validation.clients_loaded,
+            "fpe_profiles_loaded": validation.fpe_profiles_loaded,
+            "tokenization_profiles_loaded": validation.tokenization_profiles_loaded,
         }))?,
         output,
     )
@@ -904,10 +947,65 @@ pub(super) fn invalid_input(message: impl Into<String>) -> DynError {
     crate::error::invalid_input(message.into())
 }
 
-fn is_help_request(args: &[String]) -> bool {
+fn is_help_token(value: &str, index: usize) -> bool {
+    matches!(value, "-h" | "--help") || (value == "help" && index == 0)
+}
+
+fn help_request_path<'a>(command: &'a str, args: &'a [String]) -> Option<Vec<&'a str>> {
+    let mut path = Vec::with_capacity(args.len() + 1);
+    path.push(command);
+    append_help_path_args(&mut path, args).then_some(path)
+}
+
+fn append_help_path_args<'a>(path: &mut Vec<&'a str>, args: &'a [String]) -> bool {
+    let mut index = 0;
+    let mut found_help = false;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        if arg == "--" {
+            break;
+        } else if is_help_token(arg, index) {
+            found_help = true;
+            index += 1;
+        } else if flag_consumes_value(arg) {
+            index += 2;
+        } else {
+            path.push(arg);
+            index += 1;
+        }
+    }
+    found_help
+}
+
+fn flag_consumes_value(flag: &str) -> bool {
     matches!(
-        args.first().map(String::as_str),
-        Some("help" | "-h" | "--help")
+        flag,
+        "--output"
+            | "--tag"
+            | "--profile"
+            | "--status"
+            | "--reason"
+            | "--file"
+            | "--json"
+            | "--name"
+            | "--kid"
+            | "--final-app-addr"
+            | "--final-app-path"
+            | "--remote-kid"
+            | "--remote-addr"
+            | "--allowed-local-kid"
+            | "--client"
+            | "--apikey-hash"
+            | "--action"
+            | "--alphabet"
+            | "--min-len"
+            | "--max-len"
+            | "--tweak-aad"
+            | "--fpe-version"
+            | "--token-prefix"
+            | "--token-len"
+            | "--max-plaintext-len"
+            | "--tokenization-version"
     )
 }
 
@@ -922,6 +1020,100 @@ mod tests {
 
     fn config_dispatch_names() -> Vec<&'static str> {
         CONFIG_COMMANDS.iter().map(|command| command.name).collect()
+    }
+
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn help_request_path_detects_free_help_tokens() {
+        assert_eq!(
+            help_request_path("keys", &strings(&["create", "--help"])).unwrap(),
+            vec!["keys", "create"]
+        );
+        assert_eq!(
+            help_request_path("keys", &strings(&["create", "-h", "--tag", "demo"])).unwrap(),
+            vec!["keys", "create"]
+        );
+        assert_eq!(
+            help_request_path("keys", &strings(&["help"])).unwrap(),
+            vec!["keys"]
+        );
+    }
+
+    #[test]
+    fn help_request_path_ignores_help_like_values() {
+        assert!(help_request_path("keys", &strings(&["--helpful"])).is_none());
+        assert!(help_request_path("keys", &strings(&["create", "helpful"])).is_none());
+        assert!(help_request_path("keys", &strings(&["create", "help"])).is_none());
+        assert!(help_request_path("keys", &strings(&["create", "--tag", "help"])).is_none());
+        assert!(help_request_path("lifecycle", &strings(&["a", "--reason", "help"])).is_none());
+        assert!(
+            help_request_path("config", &strings(&["permissions", "delete", "help"])).is_none()
+        );
+        assert!(
+            help_request_path(
+                "config",
+                &strings(&[
+                    "permissions",
+                    "add",
+                    "--client",
+                    "help",
+                    "--apikey-hash",
+                    "d"
+                ])
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn help_request_path_stops_at_double_dash() {
+        assert!(help_request_path("keys", &strings(&["create", "--", "--help"])).is_none());
+    }
+
+    #[test]
+    fn help_path_removes_help_and_flag_values() {
+        let args = strings(&["create", "--output", "json", "--help"]);
+        assert_eq!(
+            help_request_path("keys", &args).unwrap(),
+            vec!["keys", "create"]
+        );
+
+        let args = strings(&["routes", "add", "--help", "--output", "yaml"]);
+        assert_eq!(
+            help_request_path("config", &args).unwrap(),
+            vec!["config", "routes", "add"]
+        );
+    }
+
+    #[test]
+    fn help_path_renders_most_specific_available_help() {
+        let sign_args = strings(&[
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "--help",
+        ]);
+        let sign_path = help_request_path("sign", &sign_args).unwrap();
+        let sign_help = help_catalog::render_help_path(&sign_path);
+        assert!(sign_help.contains("vectis sign <kid>"));
+        assert!(!sign_help.contains("vectis <command> [options]"));
+
+        let keys_args = strings(&["create", "--help"]);
+        let keys_path = help_request_path("keys", &keys_args).unwrap();
+        let keys_help = help_catalog::render_help_path(&keys_path);
+        assert!(keys_help.contains("vectis keys create"));
+        assert!(!keys_help.contains("vectis <command> [options]"));
+
+        let routes_args = strings(&["routes", "add", "--help"]);
+        let routes_path = help_request_path("config", &routes_args).unwrap();
+        let routes_help = help_catalog::render_help_path(&routes_path);
+        assert!(routes_help.contains("vectis config routes add"));
+
+        let token_args = strings(&["token", "add", "--help"]);
+        let token_path = help_request_path("config", &token_args).unwrap();
+        let token_help = help_catalog::render_help_path(&token_path);
+        assert!(token_help.contains("vectis config token add --name <name>"));
     }
 
     #[test]

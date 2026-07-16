@@ -287,37 +287,32 @@ impl HttpState {
                     )
                 },
                 |kid| config_key_sources.iter().any(|source| source.kid == kid),
-                |kid, profile_name, fpe_version| {
+                |request| {
                     let source = config_key_sources
                         .iter()
-                        .find(|source| source.kid == kid)
+                        .find(|source| source.kid == request.kid)
                         .ok_or_else(|| {
                             crate::error::invalid_input(format!(
-                                "fpe profile references kid not loaded in memory: {kid}"
+                                "fpe profile references kid not loaded in memory: {}",
+                                request.kid
                             ))
                         })?;
-                    crate::core::fpe::derive_fpe_key_for_profile(
-                        &source.symmetric_key_hex,
-                        profile_name,
-                        kid,
-                        fpe_version,
-                    )
+                    crate::core::fpe::derive_fpe_key_for_profile(&source.symmetric_key_hex, request)
                 },
-                |profile_name, kid, tokenization_version| {
+                |request| {
                     let source = config_key_sources
                         .iter()
-                        .find(|source| source.kid == kid)
+                        .find(|source| source.kid == request.kid)
                         .ok_or_else(|| {
                             crate::error::invalid_input(format!(
-                                "tokenization profile references kid not loaded in memory: {kid}"
+                                "tokenization profile references kid not loaded in memory: {}",
+                                request.kid
                             ))
                         })?;
                     crate::core::tokenization::derive_tokenization_keys(
                         &source.symmetric_key_hex,
                         &source.symmetric_algorithm,
-                        profile_name,
-                        kid,
-                        tokenization_version,
+                        request,
                     )
                 },
             )
