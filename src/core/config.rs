@@ -12,12 +12,14 @@ pub const INTERNAL_KEYS_NONCE_SIZE_BYTES: usize = 12;
 pub const INTERNAL_KEYS_HASH: &str = "BLAKE2b(256)";
 pub const INTERNAL_KEYS_HKDF: &str = "HKDF(BLAKE2b(256))";
 pub const INTERNAL_KEYS_HMAC: &str = "HMAC(BLAKE2b(256))";
+pub const INTERNAL_KEYS_KMAC: &str = "KMAC-256";
 pub const INTERNAL_KEYS_EDDSA_ALGORITHM: &str = "Ed25519";
 pub const INTERNAL_KEYS_XECDH_ALGORITHM: &str = "X25519";
 pub const INTERNAL_KEYS_ML_DSA_VARIANT: &str = "ML-DSA-44";
 pub const INTERNAL_KEYS_ML_KEM_VARIANT: &str = "ML-KEM-512";
 pub const CRYPTO_PROFILES: &[&str] = &[
     "hybrid-performance-v1",
+    "hybrid-standard-v1",
     "hybrid-high-assurance-v1",
     "hybrid-long-term-v1",
 ];

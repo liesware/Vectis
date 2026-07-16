@@ -16,6 +16,7 @@ pub(crate) type OpsKeysOutput = KeyMaterialOutput;
 pub(crate) type OpsKeys = KeyMaterialKeys;
 const PROPERTY_PROFILES: &[&str] = &[
     "hybrid-performance-v1",
+    "hybrid-standard-v1",
     "hybrid-high-assurance-v1",
     "hybrid-long-term-v1",
     "custom",
@@ -1111,10 +1112,19 @@ fn crypto_profile(name: &str) -> Result<CryptoProfile, DynError> {
             ml_dsa_variant: "ML-DSA-44",
             ml_kem_variant: "ML-KEM-512",
         }),
+        "hybrid-standard-v1" => Ok(CryptoProfile {
+            name: "hybrid-standard-v1",
+            hash_algorithm: "SHA-3(256)",
+            symmetric_algorithm: "AES-128/GCM",
+            eddsa_algorithm: "Ed25519",
+            xecdh_algorithm: "X25519",
+            ml_dsa_variant: "ML-DSA-44",
+            ml_kem_variant: "ML-KEM-512",
+        }),
         "hybrid-high-assurance-v1" => Ok(CryptoProfile {
             name: "hybrid-high-assurance-v1",
             hash_algorithm: "SHA-3(384)",
-            symmetric_algorithm: "AES-256/GCM",
+            symmetric_algorithm: "AES-192/GCM",
             eddsa_algorithm: "Ed25519",
             xecdh_algorithm: "X25519",
             ml_dsa_variant: "ML-DSA-65",

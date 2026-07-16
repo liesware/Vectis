@@ -325,6 +325,7 @@ def validate_keys_properties_list(response, key_ids):
             properties.get("profile")
             in {
                 "hybrid-performance-v1",
+                "hybrid-standard-v1",
                 "hybrid-high-assurance-v1",
                 "hybrid-long-term-v1",
                 "custom",

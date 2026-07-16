@@ -30,10 +30,11 @@ FPE_PLAINTEXT = "1234567890"
 
 # Minimal, policy-safe key requests (one per crypto profile) used to CREATE seed
 # keys. Creating with only tag+profile works under both crypto policies, and the
-# different profiles exercise AES-256/GCM (12-byte nonce) vs ChaCha20 (24-byte),
+# different profiles exercise AES-GCM nonce sizes, ChaCha20 (24-byte nonce),
 # and Ed448/X448 vs Ed25519/X25519.
 KEY_CASES = [
     {"tag": "fuzz-performance", "profile": "hybrid-performance-v1"},
+    {"tag": "fuzz-standard", "profile": "hybrid-standard-v1"},
     {"tag": "fuzz-high-assurance", "profile": "hybrid-high-assurance-v1"},
     {"tag": "fuzz-long-term", "profile": "hybrid-long-term-v1"},
 ]

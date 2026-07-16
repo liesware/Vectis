@@ -65,6 +65,10 @@ def version_case(env):
         "version must include supported crypto profiles",
     )
     require(
+        "hybrid-standard-v1" in response["crypto_profiles"],
+        "version must include standard crypto profile",
+    )
+    require(
         "profile-only" in response["crypto_policies"],
         "version must include supported crypto policies",
     )

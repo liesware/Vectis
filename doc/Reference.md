@@ -285,6 +285,7 @@ Operational key creation is profile-driven.
 Supported profiles:
 
 - `hybrid-performance-v1`;
+- `hybrid-standard-v1`;
 - `hybrid-high-assurance-v1`;
 - `hybrid-long-term-v1`.
 

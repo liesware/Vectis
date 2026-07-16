@@ -509,6 +509,7 @@ const KEYS_HELP: CommandHelp = CommandHelp {
             title: "Profiles:",
             lines: &[
                 "  hybrid-performance-v1",
+                "  hybrid-standard-v1",
                 "  hybrid-high-assurance-v1",
                 "  hybrid-long-term-v1",
             ],

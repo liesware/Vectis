@@ -750,7 +750,7 @@ components:
                 $ref: "#/components/schemas/Kid"
               info:
                 $ref: "#/components/schemas/TextField"
-                example: version=v1;hostname=localhost;type=ops-keys;cipher=AES-256/GCM;tag=payments;profile=hybrid-high-assurance-v1;timestamp=1782058090
+                example: version=v1;hostname=localhost;type=ops-keys;cipher=AES-192/GCM;tag=payments;profile=hybrid-high-assurance-v1;timestamp=1782058090
 
     ListKeysPropertiesOutput:
       type: object
@@ -793,6 +793,7 @@ components:
         profile:
           enum:
             - hybrid-performance-v1
+            - hybrid-standard-v1
             - hybrid-high-assurance-v1
             - hybrid-long-term-v1
             - custom
@@ -1506,6 +1507,7 @@ components:
     CryptoProfile:
       enum:
         - hybrid-performance-v1
+        - hybrid-standard-v1
         - hybrid-high-assurance-v1
         - hybrid-long-term-v1
 

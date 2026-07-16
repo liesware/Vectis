@@ -299,6 +299,7 @@ See [doc/ENV.md](doc/ENV.md) for the full list and expected values.
 `POST /keys` supports crypto profiles:
 
 - `hybrid-performance-v1`;
+- `hybrid-standard-v1`;
 - `hybrid-high-assurance-v1`;
 - `hybrid-long-term-v1`.
 
