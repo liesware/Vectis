@@ -121,13 +121,13 @@ def print_http_step(name, exchange):
     print("response:", flush=True)
     print(pretty_json(exchange["response"]), flush=True)
     print(flush=True)
-    wait_for_continue()
 
 
 def print_summary(rows):
     for key, value in rows:
         print(f"{key}: {value}", flush=True)
     print(flush=True)
+    wait_for_continue()
 
 
 def run_fpe(base_url, kid, api_key):

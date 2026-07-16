@@ -24,12 +24,12 @@ This document complements:
 
 ## What Vectis Does
 
-Vectis is an experimental system for **Sensitive Data Lifecycle Protection**.
-TLS protects a network connection, but sensitive data often continues moving
-through applications, queues, services, storage, logs, jobs, and final systems
-after the TLS session ends. Vectis explores object-level protection: the data
-itself is encrypted, signed, routed, verified, re-encrypted, and governed across
-its lifecycle.
+Vectis is an experimental **cryptographic data protection toolkit for sensitive
+data workflows**. TLS protects a network connection, but sensitive data often
+continues moving through applications, queues, services, storage, logs, jobs,
+and final systems after the TLS session ends. Vectis explores object-level
+protection: the data itself is encrypted, signed, routed, verified,
+re-encrypted, and governed after it leaves the transport layer.
 
 At the current stage, Vectis provides:
 
@@ -1118,6 +1118,11 @@ Vectis is still experimental. Important boundaries:
 - SQLite and PostgreSQL storage are implemented; PostgreSQL is schema-managed by
   the operator, not migrated by Vectis;
 - no custom CA bundle support yet;
+- no mTLS support yet;
+- no Vault, KMS, or HSM auto-unseal yet;
+- no masking, hash commitments, Merkle proofs, or tamper-evident audit chains
+  yet;
+- no SLH-DSA support yet;
 - production TLS policy exists, but deployment hardening still needs more work;
 - config reload is whole-file, not per-section transactional;
 - message exchange requires peer `public_keys` registered in the signed config;
@@ -1132,6 +1137,12 @@ Likely future work:
 - additional storage backends if they keep the same storage contract;
 - stronger cluster-aware key loading and cache invalidation;
 - custom trust store / CA bundle support;
+- masking for display-safe sensitive fields;
+- commitments and Merkle-based batch verification;
+- tamper-evident audit export built on signed roots;
+- SLH-DSA support if it fits the profile model;
+- Vault/KMS/HSM-backed auto-unseal;
+- mTLS for deployments that need transport-level client identity;
 - richer permission model if endpoint-level actions become necessary;
 - signed audit event export;
 - stronger key rotation workflows;

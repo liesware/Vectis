@@ -4,13 +4,19 @@
   <img width="300" alt="Vectis logo" src="logo.png">
 </p>
 
-Vectis is a personal open source project for **Sensitive Data Lifecycle
-Protection**.
+Vectis is a **cryptographic data protection toolkit for sensitive data
+workflows**.
 
 The core idea is simple: TLS protects the connection, but sensitive data often
 continues moving through applications, services, queues, storage, logs, workers,
 and final systems after the transport session is over. Vectis explores how to
-protect the data object itself across that lifecycle.
+protect the data object or payload itself after it leaves the transport layer.
+
+Today it provides hybrid encryption, hybrid signatures, protected messages,
+FF1 format-preserving encryption, reversible random tokenization, signed
+configuration, API-key permissions, encrypted storage, health probes, metrics,
+structured logs, and a dedicated audit log stream through a consistent HTTP and
+CLI interface.
 
 > In Latin, *vectis* can mean a lever, crowbar, fastening bar, or carrying pole:
 > a simple tool used to move something heavy with controlled force.
@@ -30,15 +36,16 @@ Write programs to work together.
 Write programs to handle text streams, because that is a universal interface.
 ```
 
-Vectis has one narrow job: protect sensitive data objects as they move between
-systems. It does not try to replace TLS, KMS, HSMs, databases, access control,
-or traditional DLP tools. Those systems already have their own jobs.
+Vectis has one narrow job: provide composable cryptographic protection for
+sensitive data workflows. It does not try to replace TLS, KMS, HSMs, databases,
+access control, or traditional DLP tools. Those systems already have their own
+jobs.
 
 Vectis exposes HTTP, CLI commands, JSON, OpenAPI, logs, and metrics because
-plain interfaces are easier to inspect, automate, and combine. Features such as
-clustering, HSM/KMS support, mTLS, or distributed storage should exist only when
-the operating environment requires them, not as product tiers or decorative
-complexity.
+plain interfaces are easier to inspect, automate, and combine. Future
+capabilities such as stronger clustering, HSM/KMS support, mTLS, or additional
+distributed storage should exist only when the operating environment requires
+them, not as product tiers or decorative complexity.
 
 ## Why Vectis?
 
@@ -60,12 +67,12 @@ temporary processing steps.
 Vectis explores a different question:
 
 > What if sensitive data stayed protected as a data object while it moves
-> through its lifecycle?
+> through an application workflow?
 
 ## What Vectis Does Today
 
 Vectis currently provides an HTTP service and CLI for experimenting with
-object-level sensitive-data protection.
+cryptographic data protection primitives and workflows.
 
 **Cryptography**
 
@@ -79,8 +86,8 @@ object-level sensitive-data protection.
 
 - protected messages between Vectis instances, verified before decryption;
 - one operator-signed config file (routes, remote routes, permissions, FPE profiles,
-  and tokenization profiles) as the only source of peer public keys — no
-  trust-on-first-use path;
+  and tokenization profiles); its registered `remote_routes` are the only source of
+  peer public keys — no trust-on-first-use path;
 - local re-encryption before final app delivery: the receiving application
   never gets remote plaintext directly;
 - public key publication by `kid`;
@@ -377,9 +384,12 @@ Vectis is not a replacement for:
 - access control;
 - traditional DLP products.
 
+Vectis does not currently provide masking, commitments, Merkle proofs,
+tamper-evident audit chains, SLH-DSA, Vault/KMS/HSM auto-unseal, or mTLS.
+
 Vectis is intended to complement existing security controls by exploring
-object-level protection for sensitive data flows. It should work with other
-tools, not absorb their responsibilities.
+cryptographic protection for sensitive data workflows. It should work with
+other tools, not absorb their responsibilities.
 
 ## Security Status
 
