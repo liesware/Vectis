@@ -260,7 +260,7 @@ config:
 
 - alphabet;
 - minimum and maximum length;
-- `tweak_aad`;
+- `tweak_aad` labels in `key=value;key=value` form;
 - `fpe_version`;
 - bound local `kid`.
 
@@ -275,7 +275,7 @@ does not authenticate data and is not part of the remote message protocol.
 tokenization operations. The request selects a profile name, but the profile
 parameters come from signed config:
 
-- `token_prefix`;
+- `token_prefix`, a short visible prefix capped at 16 characters;
 - `token_len`;
 - `max_plaintext_len`;
 - `tokenization_version`;

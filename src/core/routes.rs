@@ -121,7 +121,7 @@ pub(crate) fn validate_routes(
             )));
         }
 
-        validation::validate_text_field("routes.name", &route.name)?;
+        validation::validate_config_name("routes.name", &route.name)?;
         if !seen_names.insert(route.name.clone()) {
             return Err(crate::error::invalid_input(format!(
                 "routes file has duplicated name: {}",
@@ -200,6 +200,23 @@ mod tests {
     fn rejects_invalid_name() {
         let routes = vec![route_input_with_name(&kid('a'), "")];
         assert!(validate_routes(routes, |_| true).is_err());
+    }
+
+    #[test]
+    fn route_name_is_limited_to_config_name_max_chars() {
+        let max = crate::core::config::CONFIG_NAME_MAX_CHARS;
+        let accepted = vec![route_input_with_name(&kid('a'), &"a".repeat(max))];
+        assert!(validate_routes(accepted, |_| true).is_ok());
+
+        let rejected = vec![route_input_with_name(&kid('a'), &"a".repeat(max + 1))];
+        let err = match validate_routes(rejected, |_| true) {
+            Ok(_) => panic!("overlong route name must fail validation"),
+            Err(err) => err,
+        };
+        assert_eq!(
+            err.to_string(),
+            "routes.name exceeds maximum allowed length: 128"
+        );
     }
 
     #[test]

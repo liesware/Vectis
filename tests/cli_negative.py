@@ -466,6 +466,27 @@ def main():
                 duplicate_token_profile_name,
             ),
             (
+                "oversized tokenization token_prefix fails without rewrite",
+                lambda: expect_unchanged_failure(
+                    env,
+                    [
+                        "config",
+                        "token",
+                        "add",
+                        "--name",
+                        "bad-token-prefix",
+                        "--kid",
+                        KID_A,
+                        "--token-prefix",
+                        "a" * 17,
+                        "--token-len",
+                        "32",
+                        "--max-plaintext-len",
+                        "1024",
+                    ],
+                ),
+            ),
+            (
                 "invalid route kid fails",
                 lambda: expect_unchanged_failure(
                     env,

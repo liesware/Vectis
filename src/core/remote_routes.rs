@@ -169,7 +169,7 @@ pub(crate) fn validate_remote_routes(
             )));
         }
 
-        validation::validate_text_field("remote_routes.name", &route.name)?;
+        validation::validate_config_name("remote_routes.name", &route.name)?;
         if !seen_names.insert(route.name.clone()) {
             return Err(crate::error::invalid_input(format!(
                 "remote routes file has duplicated name: {}",
@@ -359,6 +359,15 @@ mod tests {
         public_keys: Option<serde_json::Value>,
     ) -> RemoteRouteInput {
         let name = format!("peer-{}", &remote_kid[..8]);
+        route_input_with_name(remote_kid, &name, status, public_keys)
+    }
+
+    fn route_input_with_name(
+        remote_kid: &str,
+        name: &str,
+        status: &str,
+        public_keys: Option<serde_json::Value>,
+    ) -> RemoteRouteInput {
         let mut value = json!({
             "remote_kid": remote_kid,
             "name": name,
@@ -416,6 +425,33 @@ mod tests {
         ];
 
         assert!(validate_remote_routes(routes, |_| true).is_err());
+    }
+
+    #[test]
+    fn remote_route_name_is_limited_to_config_name_max_chars() {
+        let max = crate::core::config::CONFIG_NAME_MAX_CHARS;
+        let accepted = vec![route_input_with_name(
+            &kid('a'),
+            &"a".repeat(max),
+            "active",
+            None,
+        )];
+        assert!(validate_remote_routes(accepted, |_| true).is_ok());
+
+        let rejected = vec![route_input_with_name(
+            &kid('a'),
+            &"a".repeat(max + 1),
+            "active",
+            None,
+        )];
+        let err = match validate_remote_routes(rejected, |_| true) {
+            Ok(_) => panic!("overlong remote route name must fail validation"),
+            Err(err) => err,
+        };
+        assert_eq!(
+            err.to_string(),
+            "remote_routes.name exceeds maximum allowed length: 128"
+        );
     }
 
     #[test]

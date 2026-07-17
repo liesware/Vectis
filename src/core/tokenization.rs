@@ -16,6 +16,7 @@ pub const TOKEN_KEY_SIZE_BYTES: usize = 32;
 pub const TOKEN_LEN_MIN_BYTES: usize = 32;
 pub const TOKEN_PLAINTEXT_MAX_LEN: usize = 1024;
 pub const TOKEN_METADATA_MAX_CHARS: usize = 128;
+pub const TOKEN_PREFIX_MAX_CHARS: usize = 16;
 pub const TOKEN_DATA_TYPE: &str = "token-data";
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -261,7 +262,7 @@ pub fn validate_tokenization_profile_fields(
     token_len: usize,
     max_plaintext_len: usize,
 ) -> Result<(), DynError> {
-    validation::validate_aad_value("tokenization_profiles.name", name)?;
+    validation::validate_aad_config_name("tokenization_profiles.name", name)?;
     validate_tokenization_version(tokenization_version)?;
     validate_token_prefix(token_prefix)?;
     validate_token_lengths(token_len, max_plaintext_len)?;
@@ -271,6 +272,11 @@ pub fn validate_tokenization_profile_fields(
 
 pub fn validate_token_prefix(value: &str) -> Result<(), DynError> {
     validation::validate_text_field("tokenization_profiles.token_prefix", value)?;
+    if value.chars().count() > TOKEN_PREFIX_MAX_CHARS {
+        return Err(crate::error::invalid_input(format!(
+            "tokenization_profiles.token_prefix exceeds maximum allowed length: {TOKEN_PREFIX_MAX_CHARS}"
+        )));
+    }
     if value.chars().any(char::is_whitespace) {
         return Err(crate::error::invalid_input(
             "tokenization_profiles.token_prefix must not contain whitespace",
@@ -311,13 +317,13 @@ pub(crate) fn derive_tokenization_keys(
         request.profile_name,
         request.kid,
         request.tokenization_version,
-    );
+    )?;
     let data_info = tokenization_key_info(
         TOKEN_DATA_KEY_PURPOSE,
         request.profile_name,
         request.kid,
         request.tokenization_version,
-    );
+    )?;
     let hash_key = crypto::create_hkdf(
         &ops_symmetric_key,
         TOKENIZATION_HKDF_SALT,
@@ -343,8 +349,8 @@ fn tokenization_key_info(
     profile_name: &str,
     kid: &str,
     tokenization_version: &str,
-) -> String {
-    validation::build_aad(&[
+) -> Result<String, DynError> {
+    validation::build_validated_aad(&[
         ("purpose", purpose),
         ("profile", profile_name),
         ("kid", kid),
@@ -385,7 +391,8 @@ pub fn validate_token_value(profile: &TokenizationProfile, token: &str) -> Resul
 
 pub fn hash_token(profile: &TokenizationProfile, token: &str) -> Result<String, DynError> {
     validate_token_value(profile, token)?;
-    let message = validation::build_aad(&[("profile", profile.name()), ("token", token)]);
+    let message =
+        validation::build_validated_aad(&[("profile", profile.name()), ("token", token)])?;
     Ok(hex::encode(crypto::create_hmac(
         profile.hash_key(),
         message.as_bytes(),
@@ -401,7 +408,7 @@ pub fn encrypt_token_data(
         crate::error::invalid_input("tokenization symmetric algorithm is not supported")
     })?;
     let nonce = Zeroizing::new(crypto::random_bytes(cipher.nonce_size_bytes)?);
-    let aad = token_data_aad(profile, hashid);
+    let aad = token_data_aad(profile, hashid)?;
     let plaintext = Zeroizing::new(serde_json::to_string(payload)?);
     let ciphertext = crypto::encrypt_symmetric(
         cipher.algorithm,
@@ -433,7 +440,7 @@ pub fn decrypt_token_data(
     let aad_bytes = Zeroizing::new(general_purpose::STANDARD.decode(aad_b64)?);
     let aad = std::str::from_utf8(&aad_bytes)
         .map_err(|_| crate::error::invalid_input("token data aad is not valid UTF-8"))?;
-    let expected_aad = token_data_aad(profile, hashid);
+    let expected_aad = token_data_aad(profile, hashid)?;
     if aad != expected_aad {
         return Err(crate::error::invalid_input(
             "token data aad does not match request",
@@ -471,8 +478,8 @@ pub fn decrypt_token_data(
     Ok(payload)
 }
 
-fn token_data_aad(profile: &TokenizationProfile, hashid: &str) -> String {
-    validation::build_aad(&[
+fn token_data_aad(profile: &TokenizationProfile, hashid: &str) -> Result<String, DynError> {
+    validation::build_validated_aad(&[
         ("version", "v1"),
         ("type", TOKEN_DATA_TYPE),
         ("kid", profile.kid()),
@@ -610,6 +617,93 @@ mod tests {
     }
 
     #[test]
+    fn tokenization_key_derivation_keeps_legacy_aad_format_for_valid_fields() {
+        let ops_key = "11".repeat(32);
+        let actual = derive_tokenization_keys(
+            &ops_key,
+            "AES-256/GCM",
+            TokenizationKeyDerivationRequest {
+                profile_name: "patient-id-token-v1",
+                kid: kid(),
+                tokenization_version: TOKENIZATION_VERSION_RANDOM_V1,
+            },
+        )
+        .expect("valid tokenization keys must derive");
+        let ops_symmetric_key = Zeroizing::new(hex::decode(ops_key).unwrap());
+        let legacy_hash_info = validation::build_aad(&[
+            ("purpose", TOKEN_HASH_KEY_PURPOSE),
+            ("profile", "patient-id-token-v1"),
+            ("kid", kid()),
+            ("tokenization_version", TOKENIZATION_VERSION_RANDOM_V1),
+        ]);
+        let legacy_data_info = validation::build_aad(&[
+            ("purpose", TOKEN_DATA_KEY_PURPOSE),
+            ("profile", "patient-id-token-v1"),
+            ("kid", kid()),
+            ("tokenization_version", TOKENIZATION_VERSION_RANDOM_V1),
+        ]);
+        let expected_hash_key = crypto::create_hkdf(
+            &ops_symmetric_key,
+            TOKENIZATION_HKDF_SALT,
+            legacy_hash_info.as_bytes(),
+            TOKEN_KEY_SIZE_BYTES,
+        )
+        .expect("legacy hash key must derive");
+        let expected_data_key = crypto::create_hkdf(
+            &ops_symmetric_key,
+            TOKENIZATION_HKDF_SALT,
+            legacy_data_info.as_bytes(),
+            TOKEN_KEY_SIZE_BYTES,
+        )
+        .expect("legacy data key must derive");
+
+        assert_eq!(actual.hash_key.as_slice(), expected_hash_key.as_slice());
+        assert_eq!(actual.data_key.as_slice(), expected_data_key.as_slice());
+    }
+
+    #[test]
+    fn tokenization_key_derivation_rejects_aad_delimiters_in_dynamic_fields() {
+        for request in [
+            TokenizationKeyDerivationRequest {
+                profile_name: "bad;profile",
+                kid: kid(),
+                tokenization_version: TOKENIZATION_VERSION_RANDOM_V1,
+            },
+            TokenizationKeyDerivationRequest {
+                profile_name: "bad=profile",
+                kid: kid(),
+                tokenization_version: TOKENIZATION_VERSION_RANDOM_V1,
+            },
+            TokenizationKeyDerivationRequest {
+                profile_name: "patient-id-token-v1",
+                kid: "bad;kid",
+                tokenization_version: TOKENIZATION_VERSION_RANDOM_V1,
+            },
+            TokenizationKeyDerivationRequest {
+                profile_name: "patient-id-token-v1",
+                kid: "bad=kid",
+                tokenization_version: TOKENIZATION_VERSION_RANDOM_V1,
+            },
+            TokenizationKeyDerivationRequest {
+                profile_name: "patient-id-token-v1",
+                kid: kid(),
+                tokenization_version: "bad;version",
+            },
+            TokenizationKeyDerivationRequest {
+                profile_name: "patient-id-token-v1",
+                kid: kid(),
+                tokenization_version: "bad=version",
+            },
+        ] {
+            let err = match derive_tokenization_keys(&"11".repeat(32), "AES-256/GCM", request) {
+                Ok(_) => panic!("AAD delimiters in tokenization HKDF fields must fail"),
+                Err(err) => err,
+            };
+            assert!(err.to_string().contains("must not contain ';' or '='"));
+        }
+    }
+
+    #[test]
     fn rejects_invalid_tokenization_profiles() {
         let mut duplicate = input("patient-id-token-v1");
         let err = validate_tokenization_profiles(
@@ -633,6 +727,26 @@ mod tests {
             );
         }
 
+        let max = crate::core::config::CONFIG_NAME_MAX_CHARS;
+        assert!(
+            validate_tokenization_profiles(
+                vec![input(&"a".repeat(max))],
+                |item| item == kid(),
+                |_| Ok(derived()),
+            )
+            .is_ok()
+        );
+        let err = validate_tokenization_profiles(
+            vec![input(&"a".repeat(max + 1))],
+            |item| item == kid(),
+            |_| Ok(derived()),
+        )
+        .expect_err("overlong tokenization profile name must fail");
+        assert_eq!(
+            err.to_string(),
+            "tokenization_profiles.name exceeds maximum allowed length: 128"
+        );
+
         duplicate.tokenization_version = String::from("token-v0");
         assert!(
             validate_tokenization_profiles(
@@ -652,6 +766,26 @@ mod tests {
                 |_| { Ok(derived()) }
             )
             .is_err()
+        );
+        assert!(validate_token_prefix("tok_patient").is_ok());
+        assert!(validate_token_prefix(&"a".repeat(TOKEN_PREFIX_MAX_CHARS)).is_ok());
+        let err = validate_token_prefix(&"a".repeat(TOKEN_PREFIX_MAX_CHARS + 1))
+            .expect_err("overlong token prefix must fail");
+        assert_eq!(
+            err.to_string(),
+            "tokenization_profiles.token_prefix exceeds maximum allowed length: 16"
+        );
+        assert_eq!(
+            validate_token_prefix("tok patient")
+                .unwrap_err()
+                .to_string(),
+            "tokenization_profiles.token_prefix must not contain whitespace"
+        );
+        assert_eq!(
+            validate_token_prefix("tok=patient")
+                .unwrap_err()
+                .to_string(),
+            "tokenization_profiles.token_prefix must not contain ';' or '='"
         );
 
         let mut short_token = input("short-token");
@@ -689,6 +823,61 @@ mod tests {
         assert_eq!(decrypted.profile, profile.name());
         assert_eq!(decrypted.plaintext, "123456");
         assert_eq!(decrypted.metadata, payload.metadata);
+    }
+
+    #[test]
+    fn token_hash_keeps_legacy_message_format_for_valid_fields() {
+        let profile = profile();
+        let token = generate_token(&profile).expect("token must generate");
+        let actual = hash_token(&profile, &token).expect("token must hash");
+        let legacy_message =
+            validation::build_aad(&[("profile", profile.name()), ("token", &token)]);
+        let expected = hex::encode(
+            crypto::create_hmac(profile.hash_key(), legacy_message.as_bytes())
+                .expect("legacy token hash must work"),
+        );
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn token_data_aad_keeps_legacy_format_for_valid_fields() {
+        let profile = profile();
+        let hashid = "b".repeat(64);
+        let actual = token_data_aad(&profile, &hashid).expect("valid token data AAD must build");
+        let expected = validation::build_aad(&[
+            ("version", "v1"),
+            ("type", TOKEN_DATA_TYPE),
+            ("kid", profile.kid()),
+            ("profile", profile.name()),
+            ("tokenization_version", profile.tokenization_version()),
+            ("hashid", &hashid),
+            ("cipher", profile.cipher_algorithm()),
+        ]);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn token_data_aad_rejects_aad_delimiters_in_dynamic_fields() {
+        let profile = profile();
+        for hashid in ["bad;hashid", "bad=hashid"] {
+            let err = token_data_aad(&profile, hashid)
+                .expect_err("AAD delimiters in token data hashid must fail");
+            assert!(err.to_string().contains("must not contain ';' or '='"));
+        }
+
+        let mut bad_profile = profile.clone();
+        bad_profile.name = String::from("bad;profile");
+        let err = token_data_aad(&bad_profile, &"b".repeat(64))
+            .expect_err("AAD delimiters in token data profile must fail");
+        assert!(err.to_string().contains("must not contain ';' or '='"));
+
+        let mut bad_profile = profile.clone();
+        bad_profile.tokenization_version = String::from("bad=version");
+        let err = token_data_aad(&bad_profile, &"b".repeat(64))
+            .expect_err("AAD delimiters in tokenization version must fail");
+        assert!(err.to_string().contains("must not contain ';' or '='"));
     }
 
     #[test]

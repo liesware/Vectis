@@ -1,5 +1,6 @@
 use crate::core::crypto;
 use crate::error::DynError;
+use std::collections::HashSet;
 use std::net::{IpAddr, SocketAddr};
 use std::time::{SystemTime, UNIX_EPOCH};
 use zeroize::Zeroizing;
@@ -12,9 +13,15 @@ pub fn build_aad(fields: &[(&str, &str)]) -> String {
         .join(";")
 }
 
-pub fn validate_aad_value(field: &str, value: &str) -> Result<(), DynError> {
-    validate_text_field(field, value)?;
+pub fn build_validated_aad(fields: &[(&str, &str)]) -> Result<String, DynError> {
+    for (key, value) in fields {
+        validate_aad_value(&format!("aad.{key}"), value)?;
+    }
 
+    Ok(build_aad(fields))
+}
+
+fn reject_aad_delimiters(field: &str, value: &str) -> Result<(), DynError> {
     if value.contains(';') || value.contains('=') {
         return Err(crate::error::invalid_input(format!(
             "{field} must not contain ';' or '='"
@@ -22,6 +29,11 @@ pub fn validate_aad_value(field: &str, value: &str) -> Result<(), DynError> {
     }
 
     Ok(())
+}
+
+pub fn validate_aad_value(field: &str, value: &str) -> Result<(), DynError> {
+    validate_text_field(field, value)?;
+    reject_aad_delimiters(field, value)
 }
 
 pub fn validate_symmetric_key(
@@ -89,6 +101,71 @@ pub fn validate_text_field(field: &str, value: &str) -> Result<(), DynError> {
         return Err(crate::error::invalid_input(format!(
             "{field} must not contain control characters"
         )));
+    }
+
+    Ok(())
+}
+
+pub fn validate_config_name(field: &str, value: &str) -> Result<(), DynError> {
+    validate_text_field(field, value)?;
+    let max = crate::core::config::CONFIG_NAME_MAX_CHARS;
+    if value.chars().count() > max {
+        return Err(crate::error::invalid_input(format!(
+            "{field} exceeds maximum allowed length: {max}"
+        )));
+    }
+
+    Ok(())
+}
+
+pub fn validate_aad_config_name(field: &str, value: &str) -> Result<(), DynError> {
+    validate_config_name(field, value)?;
+    reject_aad_delimiters(field, value)
+}
+
+pub fn validate_labels(field: &str, value: &str, max_chars: usize) -> Result<(), DynError> {
+    validate_text_field(field, value)?;
+    if value.chars().count() > max_chars {
+        return Err(crate::error::invalid_input(format!(
+            "{field} exceeds maximum allowed length: {max_chars}"
+        )));
+    }
+
+    let mut seen = HashSet::new();
+    for label in value.split(';') {
+        let Some((key, label_value)) = label.split_once('=') else {
+            return Err(crate::error::invalid_input(format!(
+                "{field} labels must use key=value format"
+            )));
+        };
+        if key.is_empty() {
+            return Err(crate::error::invalid_input(format!(
+                "{field} label key must not be empty"
+            )));
+        }
+        if label_value.is_empty() {
+            return Err(crate::error::invalid_input(format!(
+                "{field} label value must not be empty"
+            )));
+        }
+        if label_value.contains('=') {
+            return Err(crate::error::invalid_input(format!(
+                "{field} label value must not contain '='"
+            )));
+        }
+        if !key
+            .chars()
+            .all(|item| item.is_ascii_alphanumeric() || matches!(item, '_' | '.' | '-'))
+        {
+            return Err(crate::error::invalid_input(format!(
+                "{field} label key contains invalid characters"
+            )));
+        }
+        if !seen.insert(key) {
+            return Err(crate::error::invalid_input(format!(
+                "{field} label keys must be unique"
+            )));
+        }
     }
 
     Ok(())
@@ -282,6 +359,102 @@ mod tests {
     }
 
     #[test]
+    fn validate_config_name_enforces_text_and_length() {
+        let max = crate::core::config::CONFIG_NAME_MAX_CHARS;
+        assert!(validate_config_name("config.name", &"a".repeat(max)).is_ok());
+
+        let err = validate_config_name("config.name", &"a".repeat(max + 1))
+            .expect_err("overlong config names must fail");
+        assert_eq!(
+            err.to_string(),
+            "config.name exceeds maximum allowed length: 128"
+        );
+
+        assert_eq!(
+            validate_config_name("config.name", "")
+                .unwrap_err()
+                .to_string(),
+            "config.name must not be empty"
+        );
+        assert_eq!(
+            validate_config_name("config.name", "bad\nname")
+                .unwrap_err()
+                .to_string(),
+            "config.name must not contain control characters"
+        );
+    }
+
+    #[test]
+    fn validate_aad_config_name_enforces_length_and_delimiters() {
+        let max = crate::core::config::CONFIG_NAME_MAX_CHARS;
+        assert!(validate_aad_config_name("fpe_profiles.name", &"a".repeat(max)).is_ok());
+
+        assert_eq!(
+            validate_aad_config_name("fpe_profiles.name", &"a".repeat(max + 1))
+                .unwrap_err()
+                .to_string(),
+            "fpe_profiles.name exceeds maximum allowed length: 128"
+        );
+        assert_eq!(
+            validate_aad_config_name("fpe_profiles.name", "bad;name")
+                .unwrap_err()
+                .to_string(),
+            "fpe_profiles.name must not contain ';' or '='"
+        );
+        assert_eq!(
+            validate_aad_config_name("fpe_profiles.name", "bad=name")
+                .unwrap_err()
+                .to_string(),
+            "fpe_profiles.name must not contain ';' or '='"
+        );
+    }
+
+    #[test]
+    fn validate_labels_accepts_structured_key_value_pairs() {
+        let value = "tenant=acme;field=patient_id;version=1";
+        assert!(validate_labels("labels", value, value.chars().count()).is_ok());
+    }
+
+    #[test]
+    fn validate_labels_rejects_invalid_shapes() {
+        let cases = [
+            ("", "labels must not be empty"),
+            (
+                "tenant=acme\n",
+                "labels must not contain control characters",
+            ),
+            ("tenant", "labels labels must use key=value format"),
+            ("=acme", "labels label key must not be empty"),
+            ("tenant=", "labels label value must not be empty"),
+            (
+                "tenant=acme=extra",
+                "labels label value must not contain '='",
+            ),
+            (
+                "tenant name=acme",
+                "labels label key contains invalid characters",
+            ),
+            (
+                "tenant=acme;tenant=other",
+                "labels label keys must be unique",
+            ),
+        ];
+
+        for (value, expected) in cases {
+            let err =
+                validate_labels("labels", value, 128).expect_err("invalid labels value must fail");
+            assert_eq!(err.to_string(), expected);
+        }
+
+        let err =
+            validate_labels("labels", &"a".repeat(129), 128).expect_err("overlong labels fail");
+        assert_eq!(
+            err.to_string(),
+            "labels exceeds maximum allowed length: 128"
+        );
+    }
+
+    #[test]
     fn validate_hex_field_rejects_non_hex_and_bad_length() {
         for value in [
             "", "a", "AAA", "gg", "café", "aa\u{1d}", "aa bb", "0xdead", "  ",
@@ -329,6 +502,57 @@ mod tests {
                 "must accept {value:?}"
             );
         }
+    }
+
+    #[test]
+    fn build_validated_aad_matches_build_aad_for_valid_fields() {
+        let fields = [
+            ("tenant", "acme"),
+            ("field", "patient_id"),
+            ("version", "1"),
+        ];
+
+        assert_eq!(
+            build_validated_aad(&fields).expect("valid AAD fields must build"),
+            build_aad(&fields)
+        );
+        assert_eq!(
+            build_validated_aad(&fields).expect("valid AAD fields must build"),
+            "tenant=acme;field=patient_id;version=1"
+        );
+    }
+
+    #[test]
+    fn build_validated_aad_rejects_delimiters_in_values() {
+        for value in ["acme;field=evil", "acme=extra"] {
+            let err = build_validated_aad(&[("tenant", value)])
+                .expect_err("AAD values with delimiters must fail");
+            assert_eq!(err.to_string(), "aad.tenant must not contain ';' or '='");
+        }
+    }
+
+    #[test]
+    fn build_validated_aad_rejects_empty_or_control_values() {
+        for value in ["", "acme\n"] {
+            assert!(
+                build_validated_aad(&[("tenant", value)]).is_err(),
+                "must reject {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_validated_aad_allows_expected_key_chars() {
+        let fields = [
+            ("tokenization_version", "token-random-v1"),
+            ("cipher_alg", "AES-256/GCM"),
+            ("profile.name-1", "patient-id-token-v1"),
+        ];
+
+        assert_eq!(
+            build_validated_aad(&fields).expect("expected key chars must be valid"),
+            "tokenization_version=token-random-v1;cipher_alg=AES-256/GCM;profile.name-1=patient-id-token-v1"
+        );
     }
 
     #[test]

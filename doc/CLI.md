@@ -262,7 +262,9 @@ vectis config fpe delete patient-id-decimal-v1
 
 `fpe_version` defaults to `fpe-ff1-2025`; that is the only accepted version in
 this release. `min_len` must be at least `6`, and `max_len` must be greater than
-or equal to `min_len`. The CLI validates the KID shape but does not check whether
+or equal to `min_len`. `tweak_aad` must use `key=value;key=value` labels such as
+`tenant=acme;field=patient_id;version=1` and is limited to 128 characters. The
+CLI validates the KID shape but does not check whether
 the KID is loaded in a running server. That check happens when Vectis loads the
 signed config.
 
@@ -281,9 +283,11 @@ vectis config token delete patient-id-token-v1
 
 `tokenization_version` defaults to `token-random-v1`; that is the only accepted
 version in this release. `token_len` is the number of random bytes before
-base64url encoding and must be at least `32`. The CLI validates field shape but
-does not check whether the KID is loaded in a running server. That check happens
-when Vectis loads the signed config.
+base64url encoding and must be at least `32`. `token_prefix` is a visible
+prefix, is limited to 16 characters, and cannot contain whitespace, control
+characters, `;`, or `=`. The CLI validates field shape but does not check
+whether the KID is loaded in a running server. That check happens when Vectis
+loads the signed config.
 
 Section `list` commands print only the local array from `config.json`. Runtime
 commands such as `vectis routes list` read the server's loaded state instead.

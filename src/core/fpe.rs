@@ -264,11 +264,15 @@ pub fn validate_fpe_profile_fields(
     max_len: usize,
     tweak_aad: &str,
 ) -> Result<usize, DynError> {
-    validation::validate_aad_value("fpe_profiles.name", name)?;
+    validation::validate_aad_config_name("fpe_profiles.name", name)?;
     validate_fpe_version(fpe_version)?;
     let radix = validate_fpe_alphabet(alphabet)?;
     validate_fpe_lengths(min_len, max_len, radix)?;
-    validation::validate_text_field("fpe_profiles.tweak_aad", tweak_aad)?;
+    validation::validate_labels(
+        "fpe_profiles.tweak_aad",
+        tweak_aad,
+        crate::core::config::FPE_TWEAK_AAD_MAX_CHARS,
+    )?;
     Ok(radix)
 }
 
@@ -380,11 +384,11 @@ pub(crate) fn derive_fpe_key_for_profile(
     request: FpeKeyDerivationRequest<'_>,
 ) -> Result<Zeroizing<Vec<u8>>, DynError> {
     let ops_symmetric_key = Zeroizing::new(hex::decode(ops_symmetric_key_hex)?);
-    let info = validation::build_aad(&[
+    let info = validation::build_validated_aad(&[
         ("profile", request.profile_name),
         ("kid", request.kid),
         ("fpe_version", request.fpe_version),
-    ]);
+    ])?;
     let fpe_key = crate::core::crypto::create_hkdf(
         &ops_symmetric_key,
         FPE_KEY_SALT,
@@ -631,6 +635,45 @@ mod tests {
                 "fpe_profiles.name must not contain ';' or '='"
             );
         }
+        let max = crate::core::config::CONFIG_NAME_MAX_CHARS;
+        assert!(
+            validate_fpe_profile_fields(
+                &"a".repeat(max),
+                FPE_VERSION_FF1_2025,
+                "0123456789",
+                6,
+                32,
+                "tenant=acme",
+            )
+            .is_ok()
+        );
+        let err = validate_fpe_profile_fields(
+            &"a".repeat(max + 1),
+            FPE_VERSION_FF1_2025,
+            "0123456789",
+            6,
+            32,
+            "tenant=acme",
+        )
+        .expect_err("overlong FPE profile name must fail validation");
+        assert_eq!(
+            err.to_string(),
+            "fpe_profiles.name exceeds maximum allowed length: 128"
+        );
+
+        let err = validate_fpe_profile_fields(
+            "patient-id",
+            FPE_VERSION_FF1_2025,
+            "0123456789",
+            6,
+            32,
+            "tenant",
+        )
+        .expect_err("malformed FPE tweak AAD must fail validation");
+        assert_eq!(
+            err.to_string(),
+            "fpe_profiles.tweak_aad labels must use key=value format"
+        );
     }
 
     #[test]
@@ -652,6 +695,76 @@ mod tests {
             Err(err) => err,
         };
         assert!(err.to_string().contains("fpe profile is invalid"));
+    }
+
+    #[test]
+    fn fpe_key_derivation_keeps_legacy_aad_format_for_valid_fields() {
+        let ops_symmetric_key_hex = "11".repeat(32);
+        let actual = derive_fpe_key_for_profile(
+            &ops_symmetric_key_hex,
+            FpeKeyDerivationRequest {
+                kid: kid(),
+                profile_name: "patient-id",
+                fpe_version: FPE_VERSION_FF1_2025,
+            },
+        )
+        .expect("valid FPE key derivation must work");
+
+        let ops_symmetric_key = Zeroizing::new(hex::decode(ops_symmetric_key_hex).unwrap());
+        let legacy_info = validation::build_aad(&[
+            ("profile", "patient-id"),
+            ("kid", kid()),
+            ("fpe_version", FPE_VERSION_FF1_2025),
+        ]);
+        let expected = crate::core::crypto::create_hkdf(
+            &ops_symmetric_key,
+            FPE_KEY_SALT,
+            legacy_info.as_bytes(),
+            FPE_KEY_SIZE_BYTES,
+        )
+        .expect("legacy FPE key derivation must work");
+
+        assert_eq!(actual.as_slice(), expected.as_slice());
+    }
+
+    #[test]
+    fn fpe_key_derivation_rejects_aad_delimiters_in_dynamic_fields() {
+        for request in [
+            FpeKeyDerivationRequest {
+                kid: kid(),
+                profile_name: "bad;profile",
+                fpe_version: FPE_VERSION_FF1_2025,
+            },
+            FpeKeyDerivationRequest {
+                kid: kid(),
+                profile_name: "bad=profile",
+                fpe_version: FPE_VERSION_FF1_2025,
+            },
+            FpeKeyDerivationRequest {
+                kid: "bad;kid",
+                profile_name: "patient-id",
+                fpe_version: FPE_VERSION_FF1_2025,
+            },
+            FpeKeyDerivationRequest {
+                kid: "bad=kid",
+                profile_name: "patient-id",
+                fpe_version: FPE_VERSION_FF1_2025,
+            },
+            FpeKeyDerivationRequest {
+                kid: kid(),
+                profile_name: "patient-id",
+                fpe_version: "bad;version",
+            },
+            FpeKeyDerivationRequest {
+                kid: kid(),
+                profile_name: "patient-id",
+                fpe_version: "bad=version",
+            },
+        ] {
+            let err = derive_fpe_key_for_profile(&"11".repeat(32), request)
+                .expect_err("AAD delimiters in FPE HKDF fields must fail");
+            assert!(err.to_string().contains("must not contain ';' or '='"));
+        }
     }
 
     #[test]

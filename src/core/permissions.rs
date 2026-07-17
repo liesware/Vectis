@@ -283,7 +283,7 @@ pub(crate) fn validate_permission_clients(
     let mut clients = Vec::new();
 
     for client in client_inputs {
-        validation::validate_text_field("permissions.client", &client.client)?;
+        validation::validate_config_name("permissions.client", &client.client)?;
         validation::validate_symmetric_key("permissions.apikey_hash", &client.apikey_hash, 32)?;
         validation::validate_allowed_value(
             "permissions.status",
@@ -537,6 +537,28 @@ mod tests {
             client("dup", &hex64('5'), "active", json!([])),
         ];
         assert!(validate_permission_clients(clients, |_| true).is_err());
+    }
+
+    #[test]
+    fn client_name_is_limited_to_config_name_max_chars() {
+        let max = crate::core::config::CONFIG_NAME_MAX_CHARS;
+        let accepted = vec![client(&"a".repeat(max), &hex64('4'), "active", json!([]))];
+        assert!(validate_permission_clients(accepted, |_| true).is_ok());
+
+        let rejected = vec![client(
+            &"a".repeat(max + 1),
+            &hex64('4'),
+            "active",
+            json!([]),
+        )];
+        let err = match validate_permission_clients(rejected, |_| true) {
+            Ok(_) => panic!("overlong client name must fail validation"),
+            Err(err) => err,
+        };
+        assert_eq!(
+            err.to_string(),
+            "permissions.client exceeds maximum allowed length: 128"
+        );
     }
 
     #[test]

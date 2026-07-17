@@ -55,7 +55,7 @@ enum DefaultValue {
 
 #[derive(Clone, Copy)]
 enum FieldKind {
-    Text,
+    ConfigName,
     Kid,
     RemoteKid,
     HostPort,
@@ -91,7 +91,7 @@ const ROUTES_SECTION: SectionSpec = SectionSpec {
         FieldSpec {
             flag: "--name",
             json_field: "name",
-            kind: FieldKind::Text,
+            kind: FieldKind::ConfigName,
             cardinality: FieldCardinality::One,
             required_on_add: true,
             mutable_on_update: false,
@@ -139,7 +139,7 @@ const REMOTE_ROUTES_SECTION: SectionSpec = SectionSpec {
         FieldSpec {
             flag: "--name",
             json_field: "name",
-            kind: FieldKind::Text,
+            kind: FieldKind::ConfigName,
             cardinality: FieldCardinality::One,
             required_on_add: true,
             mutable_on_update: false,
@@ -217,7 +217,7 @@ const PERMISSIONS_SECTION: SectionSpec = SectionSpec {
         FieldSpec {
             flag: "--client",
             json_field: "client",
-            kind: FieldKind::Text,
+            kind: FieldKind::ConfigName,
             cardinality: FieldCardinality::One,
             required_on_add: true,
             mutable_on_update: false,
@@ -783,8 +783,8 @@ fn parse_fields(
 
 fn parse_field_value(field: &FieldSpec, raw: &str) -> Result<Value, DynError> {
     match field.kind {
-        FieldKind::Text => {
-            validate_text(field.json_field, raw)?;
+        FieldKind::ConfigName => {
+            validation::validate_config_name(field.json_field, raw)?;
             Ok(Value::String(raw.to_string()))
         }
         FieldKind::Kid => Ok(Value::String(validate_kid_value(field.json_field, raw)?)),
@@ -819,7 +819,7 @@ fn parse_field_value(field: &FieldSpec, raw: &str) -> Result<Value, DynError> {
         }
         FieldKind::Usize => Ok(Value::Number(parse_usize_flag(field.flag, raw)?.into())),
         FieldKind::FpeProfileName => {
-            validation::validate_aad_value("fpe_profiles.name", raw)?;
+            validation::validate_aad_config_name("fpe_profiles.name", raw)?;
             Ok(Value::String(raw.to_string()))
         }
         FieldKind::FpeVersion => {
@@ -831,7 +831,11 @@ fn parse_field_value(field: &FieldSpec, raw: &str) -> Result<Value, DynError> {
             Ok(Value::String(raw.to_string()))
         }
         FieldKind::FpeTweakAad => {
-            validate_text(field.json_field, raw)?;
+            validation::validate_labels(
+                "fpe_profiles.tweak_aad",
+                raw,
+                crate::core::config::FPE_TWEAK_AAD_MAX_CHARS,
+            )?;
             Ok(Value::String(raw.to_string()))
         }
         FieldKind::TokenizationVersion => {
@@ -839,7 +843,7 @@ fn parse_field_value(field: &FieldSpec, raw: &str) -> Result<Value, DynError> {
             Ok(Value::String(raw.to_string()))
         }
         FieldKind::TokenProfileName => {
-            validation::validate_aad_value("tokenization_profiles.name", raw)?;
+            validation::validate_aad_config_name("tokenization_profiles.name", raw)?;
             Ok(Value::String(raw.to_string()))
         }
         FieldKind::TokenPrefix => {
@@ -1524,6 +1528,71 @@ mod tests {
     }
 
     #[test]
+    fn config_editor_rejects_overlong_config_names_inline() {
+        let name = "a".repeat(crate::core::config::CONFIG_NAME_MAX_CHARS + 1);
+        let cases = vec![
+            (
+                &ROUTES_SECTION,
+                vec![
+                    String::from("--name"),
+                    name.clone(),
+                    String::from("--kid"),
+                    "a".repeat(64),
+                    String::from("--final-app-addr"),
+                    String::from("localhost:3999"),
+                    String::from("--final-app-path"),
+                    String::from("/message"),
+                ],
+                "name exceeds maximum allowed length: 128",
+            ),
+            (
+                &REMOTE_ROUTES_SECTION,
+                vec![
+                    String::from("--name"),
+                    name.clone(),
+                    String::from("--remote-kid"),
+                    "b".repeat(64),
+                    String::from("--remote-addr"),
+                    String::from("localhost:3001"),
+                    String::from("--allowed-local-kid"),
+                    String::from("*"),
+                ],
+                "name exceeds maximum allowed length: 128",
+            ),
+            (
+                &PERMISSIONS_SECTION,
+                vec![
+                    String::from("--client"),
+                    name.clone(),
+                    String::from("--apikey-hash"),
+                    "c".repeat(64),
+                ],
+                "client exceeds maximum allowed length: 128",
+            ),
+            (
+                &FPE_PROFILES_SECTION,
+                valid_fpe_profile_args(&name, "6", "32"),
+                "fpe_profiles.name exceeds maximum allowed length: 128",
+            ),
+            (
+                &TOKENIZATION_PROFILES_SECTION,
+                {
+                    let mut args = valid_token_profile_args("32", "1024");
+                    args[1] = name;
+                    args
+                },
+                "tokenization_profiles.name exceeds maximum allowed length: 128",
+            ),
+        ];
+
+        for (section, args, expected) in cases {
+            let err = parse_section_add(section, args)
+                .expect_err("overlong config name must fail in parser");
+            assert_eq!(err.to_string(), expected);
+        }
+    }
+
+    #[test]
     fn field_parser_applies_defaults_and_rejects_empty_update() {
         let permission = parse_section_add(
             &PERMISSIONS_SECTION,
@@ -1869,6 +1938,18 @@ mod tests {
     }
 
     #[test]
+    fn token_profile_rejects_overlong_prefix_inline() {
+        let mut args = valid_token_profile_args("32", "1024");
+        args[5] = "a".repeat(crate::core::tokenization::TOKEN_PREFIX_MAX_CHARS + 1);
+        let err = parse_section_add(&TOKENIZATION_PROFILES_SECTION, args)
+            .expect_err("overlong token prefix must fail during parsing");
+        assert_eq!(
+            err.to_string(),
+            "tokenization_profiles.token_prefix exceeds maximum allowed length: 16"
+        );
+    }
+
+    #[test]
     fn token_profile_update_rejects_invalid_lengths_before_mutation() {
         let mut local = local_config();
         let value = parse_section_add(
@@ -1908,6 +1989,34 @@ mod tests {
         assert_eq!(
             invalid_plaintext_len.to_string(),
             "tokenization_profiles.max_plaintext_len must be between 1 and 1024"
+        );
+        assert_eq!(local.value, before);
+    }
+
+    #[test]
+    fn token_profile_update_rejects_overlong_prefix_before_mutation() {
+        let mut local = local_config();
+        let value = parse_section_add(
+            &TOKENIZATION_PROFILES_SECTION,
+            valid_token_profile_args("32", "1024"),
+        )
+        .unwrap();
+        section_add_value(&mut local, &TOKENIZATION_PROFILES_SECTION, value).unwrap();
+
+        let before = local.value.clone();
+        let err = section_update(
+            &mut local,
+            &TOKENIZATION_PROFILES_SECTION,
+            vec![
+                String::from("patient-token"),
+                String::from("--token-prefix"),
+                "a".repeat(crate::core::tokenization::TOKEN_PREFIX_MAX_CHARS + 1),
+            ],
+        )
+        .expect_err("overlong token prefix must fail before mutation");
+        assert_eq!(
+            err.to_string(),
+            "tokenization_profiles.token_prefix exceeds maximum allowed length: 16"
         );
         assert_eq!(local.value, before);
     }
@@ -2007,6 +2116,29 @@ mod tests {
                 ]
             )
             .is_err()
+        );
+
+        let invalid_tweak = parse_section_add(
+            &FPE_PROFILES_SECTION,
+            vec![
+                String::from("--name"),
+                String::from("patient-id"),
+                String::from("--kid"),
+                "a".repeat(64),
+                String::from("--alphabet"),
+                String::from("0123456789"),
+                String::from("--min-len"),
+                String::from("6"),
+                String::from("--max-len"),
+                String::from("32"),
+                String::from("--tweak-aad"),
+                String::from("tenant"),
+            ],
+        )
+        .expect_err("malformed FPE tweak AAD must fail during parsing");
+        assert_eq!(
+            invalid_tweak.to_string(),
+            "fpe_profiles.tweak_aad labels must use key=value format"
         );
     }
 

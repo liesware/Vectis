@@ -1418,7 +1418,7 @@ Top level:
 | `alphabet` | yes | unique characters, no control chars | Domain alphabet for plaintext and ciphertext. |
 | `min_len` | yes | integer >= 6 | Minimum accepted field length. |
 | `max_len` | yes | integer >= `min_len` | Maximum accepted field length. |
-| `tweak_aad` | yes | non-empty text | Literal cryptographic tweak context from signed config. |
+| `tweak_aad` | yes | `key=value;key=value`, max 128 chars | Literal cryptographic tweak context from signed config. Keys must be unique and use `[A-Za-z0-9_.-]+`. |
 | `kid` | yes | loaded local KID | Operational key whose symmetric key derives the FPE key. |
 
 `tokenization_profiles[]` entries:
@@ -1428,7 +1428,7 @@ Top level:
 | `name` | yes | unique non-empty text | Profile selected by tokenization requests. |
 | `tokenization_version` | yes | `token-random-v1` | Tokenization profile version. |
 | `kid` | yes | loaded local KID | Operational key whose symmetric key derives tokenization keys. |
-| `token_prefix` | yes | non-empty visible token prefix, no whitespace/control chars | Prefix used in returned tokens. |
+| `token_prefix` | yes | non-empty visible token prefix, max 16 chars, no whitespace/control chars, no `;` or `=` | Prefix used in returned tokens. |
 | `token_len` | yes | integer >= 32 | Random bytes generated before base64url-no-pad encoding; decode requires this exact decoded byte length. |
 | `max_plaintext_len` | yes | integer 1..1024 | Maximum plaintext length accepted by encode. |
 
