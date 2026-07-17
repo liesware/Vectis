@@ -1,3 +1,4 @@
+use crate::core::validation::{aad_field, parse_aad_fields};
 use crate::core::{blocking, config, crypto, storage::StorageState, validation};
 use crate::error::DynError;
 use crate::ops::internal_keys::InternalDerivedKeysState;
@@ -428,21 +429,13 @@ fn create_ops_key_record(
     properties_key: Zeroizing<Vec<u8>>,
     input: ResolvedKeysInput,
 ) -> Result<CreatedOpsKeyRecord, DynError> {
+    let aad = ops_keys_aad(config, &input)?;
     let keys = Zeroizing::new(create_stored_key_material(&input)?);
     let plaintext = Zeroizing::new(serde_json::to_string_pretty(&*keys)?);
 
     let nonce = Zeroizing::new(crypto::random_bytes(
         config::INTERNAL_KEYS_NONCE_SIZE_BYTES,
     )?);
-    let aad = validation::build_aad(&[
-        ("version", &config.protocol_version),
-        ("hostname", &config.sender_hostname),
-        ("type", "ops-keys"),
-        ("cipher", config::INTERNAL_KEYS_CIPHER),
-        ("tag", &input.tag),
-        ("profile", &input.profile),
-        ("timestamp", &input.timestamp),
-    ]);
     let keys_b64 = encrypt_internal_payload(&plaintext, &db_key, &nonce, &aad)?;
     let nonce_b64 = general_purpose::STANDARD.encode(&*nonce);
     let aad_b64 = general_purpose::STANDARD.encode(aad.as_bytes());
@@ -454,16 +447,7 @@ fn create_ops_key_record(
     let properties_nonce = Zeroizing::new(crypto::random_bytes(
         config::INTERNAL_KEYS_NONCE_SIZE_BYTES,
     )?);
-    let properties_aad = validation::build_aad(&[
-        ("version", &config.protocol_version),
-        ("hostname", &config.sender_hostname),
-        ("type", "ops-key-properties"),
-        ("cipher", config::INTERNAL_KEYS_CIPHER),
-        ("kid", &kid),
-        ("tag", &input.tag),
-        ("profile", &input.properties_profile),
-        ("timestamp", &input.timestamp),
-    ]);
+    let properties_aad = ops_key_properties_aad(config, &input, &kid)?;
     let properties_b64 = encrypt_internal_payload(
         &properties_plaintext,
         &properties_key,
@@ -479,6 +463,35 @@ fn create_ops_key_record(
         keys,
         properties,
     })
+}
+
+fn ops_keys_aad(config: &config::AppConfig, input: &ResolvedKeysInput) -> Result<String, DynError> {
+    validation::build_validated_aad(&[
+        ("version", &config.protocol_version),
+        ("hostname", &config.sender_hostname),
+        ("type", "ops-keys"),
+        ("cipher", config::INTERNAL_KEYS_CIPHER),
+        ("tag", &input.tag),
+        ("profile", &input.profile),
+        ("timestamp", &input.timestamp),
+    ])
+}
+
+fn ops_key_properties_aad(
+    config: &config::AppConfig,
+    input: &ResolvedKeysInput,
+    kid: &str,
+) -> Result<String, DynError> {
+    validation::build_validated_aad(&[
+        ("version", &config.protocol_version),
+        ("hostname", &config.sender_hostname),
+        ("type", "ops-key-properties"),
+        ("cipher", config::INTERNAL_KEYS_CIPHER),
+        ("kid", kid),
+        ("tag", &input.tag),
+        ("profile", &input.properties_profile),
+        ("timestamp", &input.timestamp),
+    ])
 }
 
 fn create_key_id(keys_b64: &str) -> Result<String, DynError> {
@@ -862,33 +875,6 @@ fn validate_loaded_ops_key_binding(
     Ok(())
 }
 
-fn parse_aad_fields(aad: &str) -> Result<Vec<(String, String)>, DynError> {
-    validation::validate_text_field("aad", aad)?;
-    let mut fields = Vec::new();
-
-    for part in aad.split(';') {
-        let Some((key, value)) = part.split_once('=') else {
-            return Err(crate::error::invalid_input(
-                "aad must contain key=value fields",
-            ));
-        };
-
-        validation::validate_text_field("aad key", key)?;
-        validation::validate_text_field("aad value", value)?;
-        fields.push((key.to_string(), value.to_string()));
-    }
-
-    Ok(fields)
-}
-
-fn aad_field<'a>(fields: &'a [(String, String)], key: &str) -> Result<&'a str, DynError> {
-    fields
-        .iter()
-        .find(|(field_key, _)| field_key == key)
-        .map(|(_, value)| value.as_str())
-        .ok_or_else(|| crate::error::invalid_input(format!("aad missing {key}")))
-}
-
 fn validate_aad_field(field: &str, actual: &str, expected: &str) -> Result<(), DynError> {
     if actual != expected {
         return Err(crate::error::invalid_input(format!(
@@ -1250,6 +1236,94 @@ mod tests {
 
     fn empty_keys_state() -> KeysDbState {
         KeysDbState::from_keys(Vec::new())
+    }
+
+    fn resolved_keys_input(tag: &str) -> ResolvedKeysInput {
+        ResolvedKeysInput {
+            tag: tag.to_string(),
+            timestamp: String::from("1782058090"),
+            profile: String::from("hybrid-performance-v1"),
+            properties_profile: String::from("hybrid-performance-v1"),
+            hash_algorithm: String::from("BLAKE2b(256)"),
+            symmetric_algorithm: String::from("ChaCha20Poly1305"),
+            eddsa_algorithm: String::from("Ed25519"),
+            xecdh_algorithm: String::from("X25519"),
+            ml_dsa_variant: String::from("ML-DSA-44"),
+            ml_kem_variant: String::from("ML-KEM-512"),
+        }
+    }
+
+    #[test]
+    fn ops_keys_aad_keeps_legacy_format_for_valid_fields() {
+        let config = config::test_app_config();
+        let input = resolved_keys_input("demo-tag");
+        let actual = ops_keys_aad(&config, &input).expect("valid keys AAD must build");
+        let expected = validation::build_aad(&[
+            ("version", &config.protocol_version),
+            ("hostname", &config.sender_hostname),
+            ("type", "ops-keys"),
+            ("cipher", config::INTERNAL_KEYS_CIPHER),
+            ("tag", &input.tag),
+            ("profile", &input.profile),
+            ("timestamp", &input.timestamp),
+        ]);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn ops_key_properties_aad_keeps_legacy_format_for_valid_fields() {
+        let config = config::test_app_config();
+        let input = resolved_keys_input("demo-tag");
+        let kid = "b".repeat(64);
+        let actual =
+            ops_key_properties_aad(&config, &input, &kid).expect("valid properties AAD must build");
+        let expected = validation::build_aad(&[
+            ("version", &config.protocol_version),
+            ("hostname", &config.sender_hostname),
+            ("type", "ops-key-properties"),
+            ("cipher", config::INTERNAL_KEYS_CIPHER),
+            ("kid", &kid),
+            ("tag", &input.tag),
+            ("profile", &input.properties_profile),
+            ("timestamp", &input.timestamp),
+        ]);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn create_ops_key_record_rejects_aad_delimiters_in_tag() {
+        let config = config::test_app_config();
+        for tag in ["bad;tag", "bad=tag"] {
+            let err = match create_ops_key_record(
+                &config,
+                Zeroizing::new(vec![1u8; config::INTERNAL_KEYS_KEY_SIZE_BYTES]),
+                Zeroizing::new(vec![2u8; config::INTERNAL_KEYS_KEY_SIZE_BYTES]),
+                resolved_keys_input(tag),
+            ) {
+                Ok(_) => panic!("AAD delimiters in tag must fail"),
+                Err(err) => err,
+            };
+            assert!(err.to_string().contains("must not contain ';' or '='"));
+        }
+    }
+
+    #[test]
+    fn parse_aad_fields_enforces_canonical_key_value_parts() {
+        let fields =
+            parse_aad_fields("key=value;evil=field").expect("canonical multi-field AAD must parse");
+        assert_eq!(aad_field(&fields, "key").unwrap(), "value");
+        assert_eq!(aad_field(&fields, "evil").unwrap(), "field");
+
+        for aad in [
+            "key=value=extra",
+            "bad key=value",
+            "key=value;badpart",
+            "key=value;bad=value=extra",
+        ] {
+            assert!(parse_aad_fields(aad).is_err());
+        }
     }
 
     #[test]

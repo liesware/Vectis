@@ -283,7 +283,7 @@ pub fn validate_encode_input(
     input: TokenEncodeInput,
 ) -> Result<ValidatedTokenEncodeInput, DynError> {
     let ref_id = validation::validate_ref(&input.ref_id)?;
-    validation::validate_text_field("profile", &input.profile)?;
+    validation::validate_aad_config_name("profile", &input.profile)?;
     validation::validate_text_field("plaintext", &input.plaintext)?;
     if let Some(metadata) = &input.metadata {
         validate_metadata(metadata)?;
@@ -302,7 +302,7 @@ pub fn validate_decode_input(
 ) -> Result<ValidatedTokenDecodeInput, DynError> {
     let ref_id = validation::validate_ref(&input.ref_id)?;
     keys::validate_key_id(&input.kid)?;
-    validation::validate_text_field("profile", &input.profile)?;
+    validation::validate_aad_config_name("profile", &input.profile)?;
     validation::validate_text_field("token", &input.token)?;
 
     Ok(ValidatedTokenDecodeInput {
@@ -316,7 +316,7 @@ pub fn validate_decode_input(
 pub fn validate_encode_batch_input(
     input: TokenEncodeBatchInput,
 ) -> Result<ValidatedTokenEncodeBatchInput, DynError> {
-    validation::validate_text_field("profile", &input.profile)?;
+    validation::validate_aad_config_name("profile", &input.profile)?;
     crate::ops::batch::validate_len(
         input.items.len(),
         crate::core::config::INTERNAL_TOKEN_BATCH,
@@ -354,7 +354,7 @@ pub fn validate_decode_batch_input(
     input: TokenDecodeBatchInput,
 ) -> Result<ValidatedTokenDecodeBatchInput, DynError> {
     keys::validate_key_id(&input.kid)?;
-    validation::validate_text_field("profile", &input.profile)?;
+    validation::validate_aad_config_name("profile", &input.profile)?;
     crate::ops::batch::validate_len(
         input.items.len(),
         crate::core::config::INTERNAL_TOKEN_BATCH,
@@ -677,6 +677,15 @@ mod tests {
         }
     }
 
+    fn profile_validation_error(profile: &str) -> String {
+        let mut input = encode_input(None);
+        input.profile = profile.to_string();
+        match validate_encode_input(input) {
+            Ok(_) => panic!("token profile validation unexpectedly passed"),
+            Err(err) => err.to_string(),
+        }
+    }
+
     fn encode_batch_validation_error(input: Value) -> String {
         match parse_encode_batch_input(input).and_then(validate_encode_batch_input) {
             Ok(_) => panic!("token batch validation unexpectedly passed"),
@@ -689,6 +698,40 @@ mod tests {
         validate_encode_input(encode_input(None)).expect("metadata is optional");
         validate_encode_input(encode_input(Some(json!({"tenant": "acme"}))))
             .expect("small metadata object must validate");
+    }
+
+    #[test]
+    fn validates_profile_at_config_name_limit() {
+        let profile = "a".repeat(crate::core::config::CONFIG_NAME_MAX_CHARS);
+        let mut input = encode_input(None);
+        input.profile = profile.clone();
+
+        let validated =
+            validate_encode_input(input).expect("profile at config name limit must pass");
+
+        assert_eq!(validated.profile(), profile);
+    }
+
+    #[test]
+    fn rejects_profile_over_config_name_limit() {
+        let profile = "a".repeat(crate::core::config::CONFIG_NAME_MAX_CHARS + 1);
+
+        assert_eq!(
+            profile_validation_error(&profile),
+            "profile exceeds maximum allowed length: 128"
+        );
+    }
+
+    #[test]
+    fn rejects_profile_aad_delimiters() {
+        assert_eq!(
+            profile_validation_error("bad;profile"),
+            "profile must not contain ';' or '='"
+        );
+        assert_eq!(
+            profile_validation_error("bad=profile"),
+            "profile must not contain ';' or '='"
+        );
     }
 
     #[test]

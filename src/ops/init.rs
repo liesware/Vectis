@@ -59,12 +59,7 @@ pub(crate) fn create_init_output() -> Result<InitOutput, DynError> {
 
 pub fn create_encrypted_init_output_json() -> Result<EncryptedInitJsonOutput, DynError> {
     let config = config::app_config()?;
-    let aad = validation::build_aad(&[
-        ("version", &config.protocol_version),
-        ("hostname", &config.sender_hostname),
-        ("type", "init-keys"),
-        ("cipher", config::INTERNAL_KEYS_CIPHER),
-    ]);
+    let aad = init_keys_aad(&config)?;
     validation::validate_allowed_value(
         "INTERNAL_KEYS_HASH",
         config::INTERNAL_KEYS_HASH,
@@ -106,6 +101,15 @@ pub fn create_encrypted_init_output_json() -> Result<EncryptedInitJsonOutput, Dy
         api_key,
         api_key_hash,
     })
+}
+
+fn init_keys_aad(config: &config::AppConfig) -> Result<String, DynError> {
+    validation::build_validated_aad(&[
+        ("version", &config.protocol_version),
+        ("hostname", &config.sender_hostname),
+        ("type", "init-keys"),
+        ("cipher", config::INTERNAL_KEYS_CIPHER),
+    ])
 }
 
 fn validate_init_output(output: &InitOutput, aad: &str) -> Result<InitValidationOutput, DynError> {
@@ -174,4 +178,36 @@ fn decrypt_encrypted_init_output(
         aad: encrypted_input.aad,
         output: Zeroizing::new(output),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn init_keys_aad_keeps_legacy_format_for_valid_fields() {
+        let config = config::test_app_config();
+        let actual = init_keys_aad(&config).expect("valid init AAD must build");
+        let expected = validation::build_aad(&[
+            ("version", &config.protocol_version),
+            ("hostname", &config.sender_hostname),
+            ("type", "init-keys"),
+            ("cipher", config::INTERNAL_KEYS_CIPHER),
+        ]);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn init_keys_aad_rejects_delimiters_in_dynamic_fields() {
+        let mut config = config::test_app_config();
+        config.protocol_version = String::from("v1;type=evil");
+        let err = init_keys_aad(&config).expect_err("protocol version delimiter must fail");
+        assert!(err.to_string().contains("must not contain ';' or '='"));
+
+        let mut config = config::test_app_config();
+        config.sender_hostname = String::from("node=a");
+        let err = init_keys_aad(&config).expect_err("sender hostname delimiter must fail");
+        assert!(err.to_string().contains("must not contain ';' or '='"));
+    }
 }

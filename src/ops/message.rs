@@ -1,3 +1,4 @@
+use crate::core::validation::{aad_field, parse_aad_fields};
 use crate::core::{
     blocking, canonical, config, crypto, http_client, protocol,
     remote_routes::{PeerPublicKeys, RemoteRoute},
@@ -544,13 +545,7 @@ pub fn encrypt_internal_message(
 
     let key = Zeroizing::new(hex::decode(prepared.key.keys().symmetric().key_hex())?);
     let nonce = Zeroizing::new(crypto::random_bytes(cipher.nonce_size_bytes)?);
-    let aad = validation::build_aad(&[
-        ("version", protocol::PROTOCOL_VERSION_V1),
-        ("type", "internal-message"),
-        ("kid", prepared.key.id()),
-        ("timestamp", &timestamp),
-        ("cipher_alg", cipher.algorithm),
-    ]);
+    let aad = build_internal_message_aad(prepared.key.id(), &timestamp, cipher.algorithm)?;
     let ciphertext = crypto::encrypt_symmetric(
         cipher.algorithm,
         &prepared.input.plaintext,
@@ -746,32 +741,6 @@ fn validate_internal_decrypt_message_input(
     Ok(ValidatedInternalDecryptMessageInput { input })
 }
 
-fn parse_aad_fields(aad: &str) -> Result<Vec<(String, String)>, DynError> {
-    validation::validate_text_field("aad", aad)?;
-
-    let mut fields = Vec::new();
-    for part in aad.split(';') {
-        let Some((key, value)) = part.split_once('=') else {
-            return Err(crate::error::invalid_input(
-                "aad must contain key=value fields",
-            ));
-        };
-        validation::validate_text_field("aad key", key)?;
-        validation::validate_text_field("aad value", value)?;
-        fields.push((key.to_string(), value.to_string()));
-    }
-
-    Ok(fields)
-}
-
-fn aad_field<'a>(fields: &'a [(String, String)], key: &str) -> Result<&'a str, DynError> {
-    fields
-        .iter()
-        .find(|(field_key, _)| field_key == key)
-        .map(|(_, value)| value.as_str())
-        .ok_or_else(|| crate::error::invalid_input(format!("aad missing {key}")))
-}
-
 fn build_send_message_output(
     sender_key: &LoadedOpsKey,
     input: &ValidatedSendMessageInput,
@@ -835,7 +804,7 @@ fn create_message_envelope(
         recipient_public_keys.kid(),
         &kem_alg,
         &cipher_alg,
-    );
+    )?;
 
     let ephemeral_private_key = crypto::create_x_key_agreement_private_key_with_rng(
         &mut rng,
@@ -1000,14 +969,13 @@ fn encrypt_local_message(
 
     let key = Zeroizing::new(hex::decode(recipient_key.keys().symmetric().key_hex())?);
     let nonce = Zeroizing::new(crypto::random_bytes(cipher.nonce_size_bytes)?);
-    let aad = validation::build_aad(&[
-        ("version", &envelope.version),
-        ("type", "stored-protected-message"),
-        ("sender_kid", envelope.sender_kid()),
-        ("recipient_kid", recipient_key.id()),
-        ("source_created_at", &envelope.payload.created_at),
-        ("cipher_alg", cipher.algorithm),
-    ]);
+    let aad = build_stored_protected_message_aad(
+        &envelope.version,
+        envelope.sender_kid(),
+        recipient_key.id(),
+        &envelope.payload.created_at,
+        cipher.algorithm,
+    )?;
     let ciphertext =
         crypto::encrypt_symmetric(cipher.algorithm, plaintext, &key, &nonce, aad.as_bytes())?;
 
@@ -1187,7 +1155,7 @@ fn validate_message_envelope(envelope: &ProtectedMessageToken) -> Result<(), Dyn
         &envelope.payload.recipient.kid,
         &envelope.payload.kem.alg,
         &envelope.payload.cipher.alg,
-    );
+    )?;
     if envelope.payload.cipher.aad != expected_aad {
         return Err(crate::error::invalid_input(
             "payload.cipher.aad does not match protected message metadata",
@@ -1328,8 +1296,8 @@ fn build_message_aad(
     recipient_kid: &str,
     kem_alg: &str,
     cipher_alg: &str,
-) -> String {
-    validation::build_aad(&[
+) -> Result<String, DynError> {
+    validation::build_validated_aad(&[
         ("version", version),
         ("type", PROTECTED_MESSAGE_TYPE),
         ("created_at", created_at),
@@ -1338,6 +1306,45 @@ fn build_message_aad(
         ("recipient_kid", recipient_kid),
         ("kem_alg", kem_alg),
         ("cipher_alg", cipher_alg),
+    ])
+}
+
+fn build_internal_message_aad(
+    kid: &str,
+    timestamp: &str,
+    cipher_alg: &str,
+) -> Result<String, DynError> {
+    validation::build_validated_aad(&[
+        ("version", protocol::PROTOCOL_VERSION_V1),
+        ("type", "internal-message"),
+        ("kid", kid),
+        ("timestamp", timestamp),
+        ("cipher_alg", cipher_alg),
+    ])
+}
+
+fn build_stored_protected_message_aad(
+    version: &str,
+    sender_kid: &str,
+    recipient_kid: &str,
+    source_created_at: &str,
+    cipher_alg: &str,
+) -> Result<String, DynError> {
+    validation::build_validated_aad(&[
+        ("version", version),
+        ("type", "stored-protected-message"),
+        ("sender_kid", sender_kid),
+        ("recipient_kid", recipient_kid),
+        ("source_created_at", source_created_at),
+        ("cipher_alg", cipher_alg),
+    ])
+}
+
+fn peer_public_keys_info(kid: &str) -> Result<String, DynError> {
+    validation::build_validated_aad(&[
+        ("version", protocol::PROTOCOL_VERSION_V1),
+        ("type", "peer-public-keys"),
+        ("kid", kid),
     ])
 }
 
@@ -1350,11 +1357,7 @@ pub fn remote_public_keys_from_peer(
     kid: &str,
     peer: &PeerPublicKeys,
 ) -> Result<RemotePublicKeys, DynError> {
-    let info = validation::build_aad(&[
-        ("version", protocol::PROTOCOL_VERSION_V1),
-        ("type", "peer-public-keys"),
-        ("kid", kid),
-    ]);
+    let info = peer_public_keys_info(kid)?;
     let keys = PublicKeysOutput {
         info: info.clone(),
         keys: PublicKeys {
@@ -1456,7 +1459,7 @@ mod tests {
                         recipient_kid,
                         kem_alg,
                         cipher_alg,
-                    ),
+                    ).expect("protected message AAD fixture must build"),
                     "ct": "aa",
                 },
             },
@@ -1471,6 +1474,160 @@ mod tests {
                 },
             },
         })
+    }
+
+    #[test]
+    fn internal_message_aad_keeps_legacy_format_for_valid_fields() {
+        let kid = "a".repeat(64);
+        let actual = build_internal_message_aad(&kid, "123456", "AES-256/GCM")
+            .expect("valid internal message AAD must build");
+        let expected = validation::build_aad(&[
+            ("version", protocol::PROTOCOL_VERSION_V1),
+            ("type", "internal-message"),
+            ("kid", &kid),
+            ("timestamp", "123456"),
+            ("cipher_alg", "AES-256/GCM"),
+        ]);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn stored_protected_message_aad_keeps_legacy_format_for_valid_fields() {
+        let sender_kid = "a".repeat(64);
+        let recipient_kid = "b".repeat(64);
+        let actual = build_stored_protected_message_aad(
+            protocol::PROTOCOL_VERSION_V1,
+            &sender_kid,
+            &recipient_kid,
+            "123456",
+            "AES-256/GCM",
+        )
+        .expect("valid stored protected message AAD must build");
+        let expected = validation::build_aad(&[
+            ("version", protocol::PROTOCOL_VERSION_V1),
+            ("type", "stored-protected-message"),
+            ("sender_kid", &sender_kid),
+            ("recipient_kid", &recipient_kid),
+            ("source_created_at", "123456"),
+            ("cipher_alg", "AES-256/GCM"),
+        ]);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn protected_message_aad_keeps_legacy_format_for_valid_fields() {
+        let sender_kid = "a".repeat(64);
+        let recipient_kid = "b".repeat(64);
+        let actual = build_message_aad(
+            protocol::PROTOCOL_VERSION_V1,
+            "123456",
+            "localhost:3000",
+            &sender_kid,
+            &recipient_kid,
+            "X25519+ML-KEM-512",
+            "AES-256/GCM",
+        )
+        .expect("valid protected message AAD must build");
+        let expected = validation::build_aad(&[
+            ("version", protocol::PROTOCOL_VERSION_V1),
+            ("type", PROTECTED_MESSAGE_TYPE),
+            ("created_at", "123456"),
+            ("sender_host", "localhost:3000"),
+            ("sender_kid", &sender_kid),
+            ("recipient_kid", &recipient_kid),
+            ("kem_alg", "X25519+ML-KEM-512"),
+            ("cipher_alg", "AES-256/GCM"),
+        ]);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn peer_public_keys_info_keeps_legacy_format_for_valid_fields() {
+        let kid = "a".repeat(64);
+        let actual = peer_public_keys_info(&kid).expect("valid peer public keys info must build");
+        let expected = validation::build_aad(&[
+            ("version", protocol::PROTOCOL_VERSION_V1),
+            ("type", "peer-public-keys"),
+            ("kid", &kid),
+        ]);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn build_message_aad_rejects_delimiters_in_dynamic_fields() {
+        let sender_kid = "a".repeat(64);
+        let recipient_kid = "b".repeat(64);
+        for result in [
+            build_message_aad(
+                protocol::PROTOCOL_VERSION_V1,
+                "123456",
+                "localhost;3000",
+                &sender_kid,
+                &recipient_kid,
+                "X25519+ML-KEM-512",
+                "AES-256/GCM",
+            ),
+            build_message_aad(
+                protocol::PROTOCOL_VERSION_V1,
+                "123456",
+                "localhost:3000",
+                "bad=sender",
+                &recipient_kid,
+                "X25519+ML-KEM-512",
+                "AES-256/GCM",
+            ),
+            build_message_aad(
+                protocol::PROTOCOL_VERSION_V1,
+                "123456",
+                "localhost:3000",
+                &sender_kid,
+                "bad;recipient",
+                "X25519+ML-KEM-512",
+                "AES-256/GCM",
+            ),
+            build_message_aad(
+                protocol::PROTOCOL_VERSION_V1,
+                "123456",
+                "localhost:3000",
+                &sender_kid,
+                &recipient_kid,
+                "X25519;ML-KEM-512",
+                "AES-256/GCM",
+            ),
+            build_message_aad(
+                protocol::PROTOCOL_VERSION_V1,
+                "123456",
+                "localhost:3000",
+                &sender_kid,
+                &recipient_kid,
+                "X25519+ML-KEM-512",
+                "AES-256=GCM",
+            ),
+        ] {
+            let err = result.expect_err("AAD delimiters in message fields must fail");
+            assert!(err.to_string().contains("must not contain ';' or '='"));
+        }
+    }
+
+    #[test]
+    fn message_aad_parser_enforces_canonical_key_value_parts() {
+        let fields =
+            parse_aad_fields("key=value;evil=field").expect("canonical multi-field AAD must parse");
+        assert_eq!(aad_field(&fields, "key").unwrap(), "value");
+        assert_eq!(aad_field(&fields, "evil").unwrap(), "field");
+
+        for aad in [
+            "key=value=extra",
+            "bad key=value",
+            "key=value;badpart",
+            "key=value;bad=value=extra",
+        ] {
+            assert!(parse_aad_fields(aad).is_err());
+        }
     }
 
     proptest! {

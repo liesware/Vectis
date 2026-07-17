@@ -232,7 +232,7 @@ pub fn validate_encrypt_input(
     input: FpeEncryptInput,
 ) -> Result<ValidatedFpeEncryptInput, DynError> {
     let ref_id = validation::validate_ref(&input.ref_id)?;
-    validation::validate_text_field("profile", &input.profile)?;
+    validation::validate_aad_config_name("profile", &input.profile)?;
     validation::validate_text_field("plaintext", &input.plaintext)?;
 
     Ok(ValidatedFpeEncryptInput {
@@ -247,7 +247,7 @@ pub fn validate_decrypt_input(
 ) -> Result<ValidatedFpeDecryptInput, DynError> {
     let ref_id = validation::validate_ref(&input.ref_id)?;
     keys::validate_key_id(&input.kid)?;
-    validation::validate_text_field("profile", &input.profile)?;
+    validation::validate_aad_config_name("profile", &input.profile)?;
     validation::validate_text_field("ciphertext", &input.ciphertext)?;
 
     Ok(ValidatedFpeDecryptInput {
@@ -261,7 +261,7 @@ pub fn validate_decrypt_input(
 pub fn validate_encrypt_batch_input(
     input: FpeEncryptBatchInput,
 ) -> Result<ValidatedFpeEncryptBatchInput, DynError> {
-    validation::validate_text_field("profile", &input.profile)?;
+    validation::validate_aad_config_name("profile", &input.profile)?;
     crate::ops::batch::validate_len(
         input.items.len(),
         crate::core::config::INTERNAL_FPE_BATCH,
@@ -290,7 +290,7 @@ pub fn validate_decrypt_batch_input(
     input: FpeDecryptBatchInput,
 ) -> Result<ValidatedFpeDecryptBatchInput, DynError> {
     keys::validate_key_id(&input.kid)?;
-    validation::validate_text_field("profile", &input.profile)?;
+    validation::validate_aad_config_name("profile", &input.profile)?;
     crate::ops::batch::validate_len(
         input.items.len(),
         crate::core::config::INTERNAL_FPE_BATCH,
@@ -485,6 +485,58 @@ mod tests {
 
     fn hex64(seed: char) -> String {
         String::from(seed).repeat(64)
+    }
+
+    fn encrypt_validation_error(profile: &str) -> String {
+        match parse_encrypt_input(json!({
+            "ref": "reg1",
+            "profile": profile,
+            "plaintext": "123456"
+        }))
+        .and_then(validate_encrypt_input)
+        {
+            Ok(_) => panic!("fpe encrypt validation unexpectedly passed"),
+            Err(err) => err.to_string(),
+        }
+    }
+
+    #[test]
+    fn validates_profile_at_config_name_limit() {
+        let profile = "a".repeat(crate::core::config::CONFIG_NAME_MAX_CHARS);
+        let input = parse_encrypt_input(json!({
+            "ref": "reg1",
+            "profile": profile,
+            "plaintext": "123456"
+        }))
+        .and_then(validate_encrypt_input)
+        .expect("profile at config name limit must pass validation");
+
+        assert_eq!(
+            input.profile(),
+            "a".repeat(crate::core::config::CONFIG_NAME_MAX_CHARS)
+        );
+    }
+
+    #[test]
+    fn rejects_profile_over_config_name_limit() {
+        let profile = "a".repeat(crate::core::config::CONFIG_NAME_MAX_CHARS + 1);
+
+        assert_eq!(
+            encrypt_validation_error(&profile),
+            "profile exceeds maximum allowed length: 128"
+        );
+    }
+
+    #[test]
+    fn rejects_profile_aad_delimiters() {
+        assert_eq!(
+            encrypt_validation_error("bad;profile"),
+            "profile must not contain ';' or '='"
+        );
+        assert_eq!(
+            encrypt_validation_error("bad=profile"),
+            "profile must not contain ';' or '='"
+        );
     }
 
     #[test]

@@ -114,12 +114,7 @@ fn validate_symmetric_encryption(
 
     let key = Zeroizing::new(hex::decode(keys.key_hex())?);
     let nonce = Zeroizing::new(crypto::random_bytes(cipher.nonce_size_bytes)?);
-    let aad = validation::build_aad(&[
-        ("type", "key-material-symmetric-validation"),
-        ("sender_hostname", &config.sender_hostname),
-        ("receiver_hostname", &config.receiver_hostname),
-        ("cipher", cipher.algorithm),
-    ]);
+    let aad = key_material_symmetric_validation_aad(config, cipher.algorithm)?;
     let ciphertext =
         crypto::encrypt_symmetric(cipher.algorithm, message, &key, &nonce, aad.as_bytes())?;
     let plaintext = Zeroizing::new(crypto::decrypt_symmetric(
@@ -131,6 +126,18 @@ fn validate_symmetric_encryption(
     )?);
 
     Ok(plaintext.as_slice() == message.as_bytes())
+}
+
+fn key_material_symmetric_validation_aad(
+    config: &config::AppConfig,
+    cipher_alg: &str,
+) -> Result<String, DynError> {
+    validation::build_validated_aad(&[
+        ("type", "key-material-symmetric-validation"),
+        ("sender_hostname", &config.sender_hostname),
+        ("receiver_hostname", &config.receiver_hostname),
+        ("cipher", cipher_alg),
+    ])
 }
 
 fn symmetric_cipher(algorithm: &str) -> Result<crypto::SymmetricCipherSpec, DynError> {
@@ -248,5 +255,45 @@ fn ensure_valid(name: &str, valid: bool) -> Result<(), DynError> {
         Err(crate::error::internal(format!(
             "{name} key validation failed"
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_material_symmetric_validation_aad_keeps_legacy_format_for_valid_fields() {
+        let config = config::test_app_config();
+        let actual = key_material_symmetric_validation_aad(&config, "AES-256/GCM")
+            .expect("valid key validation AAD must build");
+        let expected = validation::build_aad(&[
+            ("type", "key-material-symmetric-validation"),
+            ("sender_hostname", &config.sender_hostname),
+            ("receiver_hostname", &config.receiver_hostname),
+            ("cipher", "AES-256/GCM"),
+        ]);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn key_material_symmetric_validation_aad_rejects_delimiters_in_dynamic_fields() {
+        let mut config = config::test_app_config();
+        config.sender_hostname = String::from("sender;evil");
+        let err = key_material_symmetric_validation_aad(&config, "AES-256/GCM")
+            .expect_err("sender hostname delimiter must fail");
+        assert!(err.to_string().contains("must not contain ';' or '='"));
+
+        let mut config = config::test_app_config();
+        config.receiver_hostname = String::from("receiver=evil");
+        let err = key_material_symmetric_validation_aad(&config, "AES-256/GCM")
+            .expect_err("receiver hostname delimiter must fail");
+        assert!(err.to_string().contains("must not contain ';' or '='"));
+
+        let config = config::test_app_config();
+        let err = key_material_symmetric_validation_aad(&config, "AES-256=GCM")
+            .expect_err("cipher delimiter must fail");
+        assert!(err.to_string().contains("must not contain ';' or '='"));
     }
 }

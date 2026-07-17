@@ -63,6 +63,36 @@ pub struct AppConfig {
     pub metrics_enabled: bool,
 }
 
+#[cfg(test)]
+pub(crate) fn test_app_config() -> AppConfig {
+    AppConfig {
+        http_bind_addr: "127.0.0.1:0".parse().unwrap(),
+        mode: String::from("dev"),
+        server_scheme: String::from("http"),
+        remote_scheme: String::from("http"),
+        final_app_scheme: String::from("http"),
+        public_addr: String::from("127.0.0.1:3000"),
+        final_app_addr: String::from("localhost:3999"),
+        final_app_path: String::from("/message"),
+        tls_cert_path: None,
+        tls_key_path: None,
+        tls_skip_verify: false,
+        config_path: PathBuf::from("config.json"),
+        config_sign_path: PathBuf::from("config.json.sig"),
+        api_key_hash: "a".repeat(64),
+        protocol_version: String::from("v1"),
+        storage_type: String::from("sqlite"),
+        sqlite_path: PathBuf::from("vectis.db"),
+        postgres_dsn: String::new(),
+        sender_hostname: String::from("node-a"),
+        receiver_hostname: String::from("node-b"),
+        default_crypto_profile: String::from("hybrid-performance-v1"),
+        crypto_policy: String::from("profile-only"),
+        plaintext_message: String::from("hello"),
+        metrics_enabled: true,
+    }
+}
+
 pub fn app_config() -> Result<AppConfig, DynError> {
     let env_file = load_env_file(".env")?;
     let http_bind_addr = validation::validate_socket_addr(

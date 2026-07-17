@@ -91,7 +91,7 @@ pub fn sign_config_file(
     };
     let created_at = validation::current_timestamp()?;
     let mut rng = crypto::new_rng()?;
-    let info = config_token_info();
+    let info = config_token_info()?;
     let payload = TimestampPayload {
         version: protocol::PROTOCOL_VERSION_V1.to_string(),
         token_type: String::from(CONFIG_TOKEN_TYPE),
@@ -125,7 +125,7 @@ pub fn verify_config_file_signature(
         crate::error::invalid_input(format!("config signature must be valid JSON: {err}"))
     })?)?;
     validate_signed_payload_token(&token, CONFIG_TOKEN_TYPE, INIT_KEYS_KID)?;
-    let expected_info = config_token_info();
+    let expected_info = config_token_info()?;
     if token.payload.info != expected_info {
         return Err(crate::error::invalid_input(
             "config signature payload.info does not match config token",
@@ -160,8 +160,8 @@ pub fn verify_config_file_signature(
     Ok(())
 }
 
-fn config_token_info() -> String {
-    validation::build_aad(&[
+fn config_token_info() -> Result<String, DynError> {
+    validation::build_validated_aad(&[
         ("version", protocol::PROTOCOL_VERSION_V1),
         ("type", CONFIG_TOKEN_TYPE),
     ])
@@ -615,6 +615,17 @@ mod tests {
     fn verify_timestamp_with_peer_keys_rejects_ml_dsa_alg_mismatch() {
         let token = token("Ed25519", "ML-DSA-44", "v1");
         assert!(verify_timestamp_with_peer_keys(&token, &peer("Ed25519", "ML-DSA-65")).is_err());
+    }
+
+    #[test]
+    fn config_token_info_keeps_legacy_format() {
+        let actual = config_token_info().expect("config token info must build");
+        let expected = validation::build_aad(&[
+            ("version", protocol::PROTOCOL_VERSION_V1),
+            ("type", CONFIG_TOKEN_TYPE),
+        ]);
+
+        assert_eq!(actual, expected);
     }
 
     #[test]

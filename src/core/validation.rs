@@ -15,6 +15,7 @@ pub fn build_aad(fields: &[(&str, &str)]) -> String {
 
 pub fn build_validated_aad(fields: &[(&str, &str)]) -> Result<String, DynError> {
     for (key, value) in fields {
+        validate_aad_key("aad key", key)?;
         validate_aad_value(&format!("aad.{key}"), value)?;
     }
 
@@ -34,6 +35,50 @@ fn reject_aad_delimiters(field: &str, value: &str) -> Result<(), DynError> {
 pub fn validate_aad_value(field: &str, value: &str) -> Result<(), DynError> {
     validate_text_field(field, value)?;
     reject_aad_delimiters(field, value)
+}
+
+pub fn validate_aad_key(field: &str, key: &str) -> Result<(), DynError> {
+    validate_text_field(field, key)?;
+    if key
+        .chars()
+        .all(|item| item.is_ascii_alphanumeric() || matches!(item, '_' | '.' | '-'))
+    {
+        return Ok(());
+    }
+
+    Err(crate::error::invalid_input(format!(
+        "{field} contains invalid characters"
+    )))
+}
+
+pub(crate) fn parse_aad_fields(aad: &str) -> Result<Vec<(String, String)>, DynError> {
+    validate_text_field("aad", aad)?;
+
+    let mut fields = Vec::new();
+    for part in aad.split(';') {
+        let mut pieces = part.split('=');
+        let (Some(key), Some(value), None) = (pieces.next(), pieces.next(), pieces.next()) else {
+            return Err(crate::error::invalid_input(
+                "aad must contain key=value fields",
+            ));
+        };
+        validate_aad_key("aad key", key)?;
+        validate_aad_value("aad value", value)?;
+        fields.push((key.to_string(), value.to_string()));
+    }
+
+    Ok(fields)
+}
+
+pub(crate) fn aad_field<'a>(
+    fields: &'a [(String, String)],
+    key: &str,
+) -> Result<&'a str, DynError> {
+    fields
+        .iter()
+        .find(|(field_key, _)| field_key == key)
+        .map(|(_, value)| value.as_str())
+        .ok_or_else(|| crate::error::invalid_input(format!("aad missing {key}")))
 }
 
 pub fn validate_symmetric_key(
@@ -553,6 +598,16 @@ mod tests {
             build_validated_aad(&fields).expect("expected key chars must be valid"),
             "tokenization_version=token-random-v1;cipher_alg=AES-256/GCM;profile.name-1=patient-id-token-v1"
         );
+    }
+
+    #[test]
+    fn build_validated_aad_rejects_invalid_keys() {
+        for key in ["", "bad key", "bad/key", "bad;key", "bad=key", "bad\nkey"] {
+            assert!(
+                build_validated_aad(&[(key, "value")]).is_err(),
+                "must reject {key:?}"
+            );
+        }
     }
 
     #[test]
