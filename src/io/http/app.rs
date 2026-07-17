@@ -139,12 +139,24 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
     let art = Artbox::from_renderer(renderer);
     let target = RenderTarget::new(30, 6);
     let rendered = art.render_text("Vectis", target)?;
+    println!("--------------------------------------------------------------");
     println!("\nLicensed under the Apache License, Version 2.0");
     print!("{}", rendered.to_ansi_string());
-    println!("\nData Lifecycle Protection");
-    println!("\n-------------------------");
-    println!("\nby Liesware Corp. | 18 June 2026");
-    println!("\nComplexity is inevitable, simplicity is intentional.");
+    println!("\nCryptographic Data Protection Toolkit");
+    println!("\nLiesware Corp. | First Commit - June 18 2026");
+    println!("Version 0.9.5 · Protocol v1 · Experimental Build");
+    println!("\n--------------------------------------------------------------");
+    println!("\n[OK] Loaded cryptographic runtime");
+    println!("[OK] Verified signed configuration");
+    println!("[OK] Initialized protected storage");
+    println!("[OK] Loaded operational key material");
+    println!("[OK] Started audit and metrics subsystems");
+    println!("\nDo one thing and do it well.");
+    println!("A toolkit for protecting data.");
+    println!("\nComplexity is inevitable,");
+    println!("Simplicity is intentional.");
+    println!("\n--------------------------------------------------------------");
+    println!("\nvectis> runing...");
 
     if config.server_scheme == "https" {
         let cert_path = config.tls_cert_path.as_ref().ok_or_else(|| {

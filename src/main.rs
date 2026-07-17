@@ -153,7 +153,7 @@ async fn run_serve_command(args: Vec<String>) -> Result<(), DynError> {
 async fn run_serve() -> Result<(), DynError> {
     info!("validating encrypted init file before starting http service");
     let init_state = io::cli::init::load_init_state()?;
-    println!("Key status: Validated");
+    println!("[OK] Boot");
     info!("starting http service");
 
     if let Err(err) = io::http::run(init_state).await {

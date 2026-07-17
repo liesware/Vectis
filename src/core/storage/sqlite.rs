@@ -576,7 +576,7 @@ mod tests {
         assert_eq!(found.len(), 2);
         assert_eq!(found.get("hash-1").map(String::as_str), Some("data-1"));
         assert_eq!(found.get("hash-2").map(String::as_str), Some("data-2"));
-        assert!(found.get("hash-missing").is_none());
+        assert!(!found.contains_key("hash-missing"));
 
         cleanup(path).await;
     }
