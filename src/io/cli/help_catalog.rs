@@ -20,6 +20,7 @@ pub(crate) const EXECUTABLE_COMMANDS: &[&str] = &[
     "sign",
     "fpe",
     "token",
+    "mac",
     "message",
 ];
 
@@ -36,6 +37,7 @@ pub(crate) const HTTP_COMMANDS: &[&str] = &[
     "sign",
     "fpe",
     "token",
+    "mac",
     "message",
 ];
 
@@ -50,6 +52,7 @@ pub(crate) const CONFIG_COMMANDS: &[&str] = &[
     "permissions",
     "fpe",
     "token",
+    "mac",
 ];
 
 #[cfg(test)]
@@ -231,6 +234,7 @@ const ROOT_HELP: CommandHelp = CommandHelp {
                 "  sign                  Create or verify timestamp signatures through HTTP",
                 "  fpe                   Encrypt or decrypt field values through HTTP",
                 "  token                 Encode or decode reversible random tokens through HTTP",
+                "  mac                   Create or verify MAC digests through HTTP",
                 "  message               Send, receive, encrypt, or decrypt messages through HTTP",
             ],
         },
@@ -664,6 +668,11 @@ const CONFIG_HELP: CommandHelp = CommandHelp {
         "vectis config token get <name>",
         "vectis config token update <name> [--kid <kid>] [--token-prefix <prefix>] [--token-len <n>] [--max-plaintext-len <n>] [--tokenization-version token-random-v1]",
         "vectis config token delete <name>",
+        "vectis config mac list",
+        "vectis config mac add --name <name> --kid <kid> --context <labels>",
+        "vectis config mac get <name>",
+        "vectis config mac update <name> [--kid <kid>] [--context <labels>]",
+        "vectis config mac delete <name>",
     ],
     summary: Some("Validates, signs, prints, reloads, or edits the unified signed config file."),
     sections: &[
@@ -680,6 +689,7 @@ const CONFIG_HELP: CommandHelp = CommandHelp {
                 "  permissions           Edits local config permissions by unique client",
                 "  fpe                   Edits local config FPE profiles by unique name",
                 "  token                 Edits local config tokenization profiles by unique name",
+                "  mac                   Edits local config MAC profiles by unique name",
             ],
         },
         HelpSection {
@@ -696,6 +706,7 @@ const CONFIG_HELP: CommandHelp = CommandHelp {
                 "  section list commands print one local config array only",
                 "  config fpe edits signed FPE field profiles; min_len must be at least 6",
                 "  config token edits signed reversible tokenization profiles",
+                "  config mac edits signed MAC profiles; context uses key=value labels",
                 "  edit commands do not sign or reload automatically",
             ],
         },
@@ -882,6 +893,36 @@ const CONFIG_TOKEN_HELP: CommandHelp = CommandHelp {
     output: true,
 };
 
+const CONFIG_MAC_HELP: CommandHelp = CommandHelp {
+    key: "config mac",
+    heading: "Usage:",
+    usage: &[
+        "vectis config mac list",
+        "vectis config mac add --name <name> --kid <kid> --context <labels>",
+        "vectis config mac get <name>",
+        "vectis config mac update <name> [--kid <kid>] [--context <labels>]",
+        "vectis config mac delete <name>",
+    ],
+    summary: Some("Lists or edits local config MAC profiles by unique name."),
+    sections: &[
+        HelpSection {
+            title: "Behavior:",
+            lines: &[
+                "  edits mac_profiles in VECTIS_CONFIG_PATH only",
+                "  context must use key=value;key=value labels and is limited to 128 characters",
+                "  run `vectis config sign`, then `vectis config reload` after edits",
+            ],
+        },
+        HelpSection {
+            title: "Example:",
+            lines: &[
+                "  vectis config mac add --name pan-blind-index-v1 --kid <kid> --context tenant=mx\\;field=pan\\;purpose=blind-index\\;version=1",
+            ],
+        },
+    ],
+    output: true,
+};
+
 const PUB_HELP: CommandHelp = CommandHelp {
     key: "pub",
     heading: "Usage:",
@@ -1015,6 +1056,45 @@ const TOKEN_HELP: CommandHelp = CommandHelp {
     output: true,
 };
 
+const MAC_HELP: CommandHelp = CommandHelp {
+    key: "mac",
+    heading: "Usage:",
+    usage: &[
+        "vectis mac create <kid> --json '<json>'",
+        "vectis mac create <kid> --file mac-create.json",
+        "vectis mac verify <kid> --json '<json>'",
+        "vectis mac verify <kid> --file mac-verify.json",
+    ],
+    summary: Some("Creates or verifies MAC digests with signed-config MAC profiles."),
+    sections: &[
+        HelpSection {
+            title: "Create request JSON:",
+            lines: &[r#"  {"profile":"pan-blind-index-v1","plaintext":"4111111111111111"}"#],
+        },
+        HelpSection {
+            title: "Verify request JSON:",
+            lines: &[
+                r#"  {"profile":"pan-blind-index-v1","plaintext":"4111111111111111","digest":"<hex>"}"#,
+            ],
+        },
+        HelpSection {
+            title: "Endpoints:",
+            lines: &[
+                "  create <kid>          POST /mac/{kid}, requires VECTIS_APIKEY",
+                "  verify <kid>          POST /mac/verify/{kid}, requires VECTIS_APIKEY",
+            ],
+        },
+        HelpSection {
+            title: "Input options:",
+            lines: &[
+                "  --json <json>         JSON object as a shell argument",
+                "  --file <path>         Path to a JSON file",
+            ],
+        },
+    ],
+    output: true,
+};
+
 const MESSAGE_HELP: CommandHelp = CommandHelp {
     key: "message",
     heading: "Usage:",
@@ -1080,10 +1160,12 @@ const COMMAND_HELPS: &[CommandHelp] = &[
     CONFIG_PERMISSIONS_HELP,
     CONFIG_FPE_HELP,
     CONFIG_TOKEN_HELP,
+    CONFIG_MAC_HELP,
     PUB_HELP,
     SIGN_HELP,
     FPE_HELP,
     TOKEN_HELP,
+    MAC_HELP,
     MESSAGE_HELP,
 ];
 

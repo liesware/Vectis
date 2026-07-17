@@ -15,6 +15,7 @@ pub struct ReloadConfigResponse {
     clients_loaded: usize,
     fpe_profiles_loaded: usize,
     tokenization_profiles_loaded: usize,
+    mac_profiles_loaded: usize,
 }
 
 pub async fn reload_endpoint(
@@ -51,6 +52,7 @@ pub async fn reload_endpoint(
     let clients_loaded = state.permissions_loaded().await;
     let fpe_profiles_loaded = state.fpe_profiles_loaded().await;
     let tokenization_profiles_loaded = state.tokenization_profiles_loaded().await;
+    let mac_profiles_loaded = state.mac_profiles_loaded().await;
     state.refresh_loaded_gauges().await;
     metrics::record_config_reload("success");
     record_config_reload_timestamp("success");
@@ -61,6 +63,7 @@ pub async fn reload_endpoint(
         clients_loaded,
         fpe_profiles_loaded,
         tokenization_profiles_loaded,
+        mac_profiles_loaded,
         "config reload response ready"
     );
     audit::operation_success(
@@ -78,6 +81,7 @@ pub async fn reload_endpoint(
         clients_loaded,
         fpe_profiles_loaded,
         tokenization_profiles_loaded,
+        mac_profiles_loaded,
     }))
 }
 

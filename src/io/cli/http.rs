@@ -49,6 +49,7 @@ const HTTP_COMMANDS: &[HttpCommand] = &[
     HttpCommand::new("sign", command_sign),
     HttpCommand::new("fpe", command_fpe),
     HttpCommand::new("token", command_token),
+    HttpCommand::new("mac", command_mac),
     HttpCommand::new("message", command_message),
 ];
 
@@ -63,6 +64,7 @@ const CONFIG_COMMANDS: &[ConfigCommand] = &[
     ConfigCommand::new("permissions", config_command_permissions),
     ConfigCommand::new("fpe", config_command_fpe),
     ConfigCommand::new("token", config_command_token),
+    ConfigCommand::new("mac", config_command_mac),
 ];
 
 impl HttpCommand {
@@ -146,6 +148,7 @@ boxed_command!(command_pub, run_pub);
 boxed_command!(command_sign, run_sign);
 boxed_command!(command_fpe, run_fpe);
 boxed_command!(command_token, run_token);
+boxed_command!(command_mac, run_mac);
 boxed_command!(command_message, run_message);
 
 fn config_command_init(args: Vec<String>, output: OutputFormat) -> CommandFuture {
@@ -194,6 +197,7 @@ boxed_command!(
 boxed_command!(config_command_permissions, config_editor::run_permissions);
 boxed_command!(config_command_fpe, config_editor::run_config_fpe);
 boxed_command!(config_command_token, config_editor::run_config_token);
+boxed_command!(config_command_mac, config_editor::run_config_mac);
 
 async fn run_health(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let target = expect_one(args, "health target")?;
@@ -341,6 +345,7 @@ struct ConfigValidationOutput {
     clients_loaded: usize,
     fpe_profiles_loaded: usize,
     tokenization_profiles_loaded: usize,
+    mac_profiles_loaded: usize,
 }
 
 async fn validate_config_for_local_node() -> Result<
@@ -393,6 +398,26 @@ async fn validate_config_for_local_node() -> Result<
                 request,
             )
         },
+        |kid| {
+            let loaded_key = keys_db_state.get(kid).ok_or_else(|| {
+                invalid_input(format!(
+                    "mac profile references kid not loaded in memory: {kid}"
+                ))
+            })?;
+            Ok(loaded_key.key_material().hash_variant().to_string())
+        },
+        |request| {
+            let loaded_key = keys_db_state.get(request.kid).ok_or_else(|| {
+                invalid_input(format!(
+                    "mac profile references kid not loaded in memory: {}",
+                    request.kid
+                ))
+            })?;
+            crate::core::mac::derive_mac_key_for_profile(
+                loaded_key.keys().symmetric().key_hex(),
+                request,
+            )
+        },
     )?;
     let output = ConfigValidationOutput {
         status: "valid",
@@ -403,6 +428,7 @@ async fn validate_config_for_local_node() -> Result<
         clients_loaded: config_state.permissions.len(),
         fpe_profiles_loaded: config_state.fpe_profiles.len(),
         tokenization_profiles_loaded: config_state.tokenization_profiles.len(),
+        mac_profiles_loaded: config_state.mac_profiles.len(),
     };
 
     Ok((config, init_state, config_content, output))
@@ -435,6 +461,7 @@ async fn run_config_sign(output: OutputFormat) -> Result<(), DynError> {
             "clients_loaded": validation.clients_loaded,
             "fpe_profiles_loaded": validation.fpe_profiles_loaded,
             "tokenization_profiles_loaded": validation.tokenization_profiles_loaded,
+            "mac_profiles_loaded": validation.mac_profiles_loaded,
         }))?,
         output,
     )
@@ -552,6 +579,40 @@ async fn run_token(args: Vec<String>, output: OutputFormat) -> Result<(), DynErr
         _ => Err(invalid_input(format!(
             "unknown token command: {subcommand}"
         ))),
+    }
+}
+
+async fn run_mac(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+    let (subcommand, rest) = split_subcommand(args, "mac command")?;
+    let (kid, rest) = split_subcommand(rest, "kid")?;
+    validate_kid("kid", &kid)?;
+    let body = parse_json_source(rest)?;
+    let client = CliHttpClient::from_env()?;
+
+    match subcommand.as_str() {
+        "create" => {
+            client
+                .send(
+                    Method::POST,
+                    &format!("/mac/{kid}"),
+                    true,
+                    Some(body),
+                    output,
+                )
+                .await
+        }
+        "verify" => {
+            client
+                .send(
+                    Method::POST,
+                    &format!("/mac/verify/{kid}"),
+                    true,
+                    Some(body),
+                    output,
+                )
+                .await
+        }
+        _ => Err(invalid_input(format!("unknown mac command: {subcommand}"))),
     }
 }
 

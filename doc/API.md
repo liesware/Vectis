@@ -189,12 +189,13 @@ Exposed metrics:
 - `vectis_permission_clients`
 - `vectis_fpe_profiles_loaded`
 - `vectis_tokenization_profiles_loaded`
+- `vectis_mac_profiles_loaded`
 - `vectis_permission_total{result}` (`allow` or `deny`)
 - `vectis_config_reload_total{result}` (`success` or `failed`)
 - `vectis_config_last_reload_timestamp_seconds{result}` (`success` or `failed`)
 - `vectis_keys_reload_total{result}` (`success` or `failed`)
 - `vectis_message_total{operation,result}` (`send`, `receive`, or `decrypt`; `success`, `denied`, or `failed`)
-- `vectis_crypto_operation_total{operation,result}` (`sign`, `verify`, `encrypt`, `decrypt`, `fpe_encrypt`, `fpe_decrypt`, `fpe_encrypt_batch`, `fpe_decrypt_batch`, `token_encode`, `token_decode`, `token_encode_batch`, or `token_decode_batch`; `success` or `failed`)
+- `vectis_crypto_operation_total{operation,result}` (`sign`, `verify`, `encrypt`, `decrypt`, `fpe_encrypt`, `fpe_decrypt`, `fpe_encrypt_batch`, `fpe_decrypt_batch`, `token_encode`, `token_decode`, `token_encode_batch`, `token_decode_batch`, `mac_create`, or `mac_verify`; `success` or `failed`)
 
 ### GET /self-test/init
 
@@ -515,7 +516,8 @@ Response:
   "remote_routes_loaded": 1,
   "clients_loaded": 1,
   "fpe_profiles_loaded": 1,
-  "tokenization_profiles_loaded": 1
+  "tokenization_profiles_loaded": 1,
+  "mac_profiles_loaded": 1
 }
 ```
 
@@ -598,6 +600,8 @@ Allowed actions:
 - `fpe-decrypt`
 - `token-encode`
 - `token-decode`
+- `mac-create`
+- `mac-verify`
 - `metrics`
 
 Permission mapping:
@@ -614,9 +618,11 @@ Permission mapping:
 | `fpe-decrypt` | `POST /fpe/decrypt`, `POST /fpe/decrypt/batch` |
 | `token-encode` | `POST /token/encode/{kid}`, `POST /token/encode/batch/{kid}` |
 | `token-decode` | `POST /token/decode`, `POST /token/decode/batch` |
+| `mac-create` | `POST /mac/{kid}` |
+| `mac-verify` | `POST /mac/verify/{kid}` |
 | `metrics` | `GET /metrics` with `kid: "*"` |
 
-Root always passes permission checks. Routes operations require root or `admin`; there is no granular `routes` action. FPE and tokenization actions require explicit KID-scoped grants; `kid: "*"` is rejected for those actions.
+Root always passes permission checks. Routes operations require root or `admin`; there is no granular `routes` action. FPE, tokenization, and MAC actions require explicit KID-scoped grants; `kid: "*"` is rejected for those actions.
 
 Permissions file shape:
 
@@ -1269,6 +1275,65 @@ Response:
 }
 ```
 
+## MAC
+
+MAC profiles live in signed config under `mac_profiles`. Requests select a
+profile by name; `kid` and `context` come from signed config and must match the
+request KID. Context uses `key=value;key=value` labels and is limited to 128
+characters. MAC create requires an `active` key. MAC verify allows `active` or
+`retired` keys.
+
+If the operational key hash algorithm is `SHA-3(N)`, Vectis uses `KMAC-N` and
+returns an `N`-bit digest; otherwise it uses HMAC with the operational key hash
+algorithm. In both cases Vectis derives a MAC key from the operational
+symmetric key and applies the signed context.
+
+### POST /mac/{kid}
+
+Requires auth and `mac-create` permission for the path KID.
+
+Request:
+
+```json
+{
+  "profile": "pan-blind-index-v1",
+  "plaintext": "4111111111111111"
+}
+```
+
+Response:
+
+```json
+{
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "profile": "pan-blind-index-v1",
+  "algorithm": "KMAC-256",
+  "digest": "hex..."
+}
+```
+
+### POST /mac/verify/{kid}
+
+Requires auth and `mac-verify` permission for the path KID.
+
+Request:
+
+```json
+{
+  "profile": "pan-blind-index-v1",
+  "plaintext": "4111111111111111",
+  "digest": "hex..."
+}
+```
+
+Response:
+
+```json
+{
+  "valid": true
+}
+```
+
 ## Final App Delivery
 
 When `POST /message` receives and validates a protected message, it delivers this JSON to the final app:
@@ -1291,7 +1356,7 @@ The final app can call `POST /message/decrypt` to recover the plaintext.
 
 ## Configuration File (`config.json`)
 
-Vectis loads a single signed config file (`config.json`) with `routes`, `remote_routes`, `permissions`, and optional `fpe_profiles` sections plus a top-level `version`. It is loaded when `vectis serve` starts and can be reloaded at runtime with `POST /config/reload`. Create/update its signature with `vectis config sign`; inspect it with `vectis config list`.
+Vectis loads a single signed config file (`config.json`) with `routes`, `remote_routes`, `permissions`, and optional `fpe_profiles`, `tokenization_profiles`, and `mac_profiles` sections plus a top-level `version`. It is loaded when `vectis serve` starts and can be reloaded at runtime with `POST /config/reload`. Create/update its signature with `vectis config sign`; inspect it with `vectis config list`.
 
 Default paths:
 
@@ -1363,6 +1428,13 @@ Expected file shape:
       "token_len": 32,
       "max_plaintext_len": 1024
     }
+  ],
+  "mac_profiles": [
+    {
+      "name": "pan-blind-index-v1",
+      "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+      "context": "tenant=mx;field=pan;purpose=blind-index;version=1"
+    }
   ]
 }
 ```
@@ -1377,6 +1449,7 @@ Top level:
 | `permissions` | yes (may be `[]`) | array | Non-root API key clients and their allowed actions. |
 | `fpe_profiles` | no (defaults to `[]`) | array | Signed local FPE field profiles. |
 | `tokenization_profiles` | no (defaults to `[]`) | array | Signed local reversible tokenization profiles. |
+| `mac_profiles` | no (defaults to `[]`) | array | Signed local MAC profiles. |
 
 `routes[]` entries:
 
@@ -1431,6 +1504,14 @@ Top level:
 | `token_prefix` | yes | non-empty visible token prefix, max 16 chars, no whitespace/control chars, no `;` or `=` | Prefix used in returned tokens. |
 | `token_len` | yes | integer >= 32 | Random bytes generated before base64url-no-pad encoding; decode requires this exact decoded byte length. |
 | `max_plaintext_len` | yes | integer 1..1024 | Maximum plaintext length accepted by encode. |
+
+`mac_profiles[]` entries:
+
+| Field | Required | Value | Meaning |
+| --- | --- | --- | --- |
+| `name` | yes | unique AAD-safe text, max 128 chars | Profile selected by MAC requests. |
+| `kid` | yes | loaded local KID | Operational key whose symmetric key derives the MAC key. |
+| `context` | yes | `key=value;key=value`, max 128 chars | Signed MAC domain context. Keys must be unique and use `[A-Za-z0-9_.-]+`. |
 
 Routing behavior:
 

@@ -38,7 +38,7 @@ Important `core` responsibilities:
 - cryptographic helper functions;
 - external input validators;
 - signed config loading;
-- routes, remote routes, permissions, FPE profiles, and tokenization profiles;
+- routes, remote routes, permissions, FPE profiles, tokenization profiles, and MAC profiles;
 - storage abstraction and SQLite/PostgreSQL backends;
 - HTTP client construction;
 - operational logs, audit logs, and metrics;
@@ -129,7 +129,7 @@ Reload boundaries are explicit:
 
 - `POST /keys/reload` refreshes loaded key state from storage.
 - `POST /config/reload` refreshes signed routes, remote routes, permissions,
-  FPE profiles, and tokenization profiles.
+  FPE profiles, tokenization profiles, and MAC profiles.
 - missing-key lazy-load loads one key from storage if a request references a
   valid `kid` not present in memory.
 
@@ -284,6 +284,19 @@ parameters come from signed config:
 Config loading derives and stores tokenization hash/data keys from the loaded
 key's symmetric key. The derivation binds profile name, KID, and
 `tokenization_version`; `tokens.data` AAD also binds `tokenization_version`.
+
+### MAC Flow
+
+MAC profiles are loaded from signed config. Each profile binds `name`, `kid`,
+and structured `context` labels. Config loading derives a MAC key from the
+loaded key's symmetric key with `INTERNAL_KEYS_HKDF`; the HKDF info binds
+profile, KID, context, and the resolved MAC algorithm.
+
+If the operational key hash algorithm is `SHA-3(N)`, MAC uses `KMAC-N` with an
+`N`-bit digest and validated customization context. Otherwise MAC uses HMAC
+with the operational key hash algorithm and a canonical context-prefixed message.
+Create requires an `active` key. Verify allows `active` and `retired` and uses
+constant-time digest comparison.
 Encode generates a random visible token, hashes it to a storage `hashid`,
 encrypts plaintext plus optional metadata, and stores the row in `tokens`.
 Decode hashes the presented token, loads `tokens.data`, decrypts the payload,
@@ -307,6 +320,7 @@ The signed config contains:
 - API key permission clients.
 - FPE field profiles.
 - tokenization profiles.
+- MAC profiles.
 
 The signing flow uses canonical JSON. Vectis signs the canonical config hash
 inside a timestamp token using init keys. The signature is not bound to the local

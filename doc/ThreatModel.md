@@ -31,10 +31,10 @@ decrypt it.
 
 The diagram above covers only the inter-instance path. Vectis also provides
 **local, single-instance field protection** that never involves a peer or a
-protected message: format-preserving encryption (FPE) over field values and
-reversible random tokenization. These operations are governed by the same signed
+protected message: format-preserving encryption (FPE) over field values,
+reversible random tokenization, and MAC create/verify. These operations are governed by the same signed
 config, the same `kid` binding, and the same lifecycle enforcement as the
-messaging path (`ops/fpe.rs`, `ops/tokenization.rs`).
+messaging path (`ops/fpe.rs`, `ops/tokenization.rs`, `ops/mac.rs`).
 
 ## Assets
 
@@ -46,10 +46,10 @@ In order of importance:
    rest. The database only ever sees `kid`, `hashid`, and the encrypted `data`.
 3. **Key material**: encrypted init keys (`init.json`), operational keys
    (encrypted at rest in storage), HKDF-derived internal keys, and the per-profile
-   keys derived from an operational key for FPE (the field key) and tokenization
-   (the `hash_key` and `data_key`).
+   keys derived from an operational key for FPE (the field key), tokenization
+   (the `hash_key` and `data_key`), and MAC (the MAC key).
 4. **Signed configuration**: routes, remote routes, peer public keys, API-key
-   permissions, and the `fpe_profiles` and `tokenization_profiles` in
+   permissions, and the `fpe_profiles`, `tokenization_profiles`, and `mac_profiles` in
    `config.json`.
 5. **Credentials**: the root API key and per-client API keys.
 
@@ -79,7 +79,7 @@ In order of importance:
 | --- | --- | --- |
 | Payload exposure beyond the TLS session (queues, logs, intermediate storage) | Object-level protection independent of transport | Hybrid XECDH + ML-KEM key establishment, AEAD encryption, local re-encryption before final delivery (`ops/message.rs`) |
 | Sender impersonation between instances | Dual signatures verified before decryption | EdDSA and ML-DSA over the canonical JSON payload; both must verify (`verify_message_signatures`, verify-then-decrypt order) |
-| Cross-protocol and cross-context confusion (token/message type mixing, version downgrade) | Context binding and versioning inside the signed material | For messages, AAD binds `version`, `type`, `created_at`, `sender_host`, `sender_kid`, `recipient_kid`, `kem_alg`, `cipher_alg`, and the protocol version is inside the signed payload and must match the envelope. Each local subsystem binds its own context too: FPE keys derive from `profile`/`kid`/`fpe_version` and the FF1 tweak is `tweak_aad`; the tokenization `tokens.data` AAD binds `version`, `type`, `kid`, `profile`, `tokenization_version`, `hashid`, and `cipher` |
+| Cross-protocol and cross-context confusion (token/message type mixing, version downgrade) | Context binding and versioning inside the signed material | For messages, AAD binds `version`, `type`, `created_at`, `sender_host`, `sender_kid`, `recipient_kid`, `kem_alg`, `cipher_alg`, and the protocol version is inside the signed payload and must match the envelope. Each local subsystem binds its own context too: FPE keys derive from `profile`/`kid`/`fpe_version` and the FF1 tweak is `tweak_aad`; the tokenization `tokens.data` AAD binds `version`, `type`, `kid`, `profile`, `tokenization_version`, `hashid`, and `cipher`; MAC derives per profile/KID/context and applies signed context |
 | "Harvest now, decrypt later" quantum adversary | Hybrid post-quantum cryptography | ML-KEM alongside XECDH for key establishment; ML-DSA alongside EdDSA for signatures; security holds if either component holds |
 | Nonce reuse under a long-lived key | Fresh key per message | Ephemeral XECDH key and fresh ML-KEM encapsulation per message; the HKDF-derived message key is used once |
 | Configuration tampering (routes, permissions, peer keys) | Mandatory config signature | `vectis-config` timestamp token over canonical JSON, verified on load and on every reload (`ops/sign.rs`, `core/config_file.rs`) |
@@ -136,7 +136,7 @@ Vectis is not, and does not replace:
 - protection against a malicious operator (the operator is the root of trust);
 - protection against compromise of the host or the process memory;
 - a secure channel or a message-encryption substitute for the local field
-  operations: FPE and reversible tokenization protect field values within a single
+  operations: FPE, reversible tokenization, and MAC protect field values within a single
   instance, not data in transit between instances. Tokenization additionally
   persists a reversible token-to-plaintext mapping (FPE stores nothing), so an
   attacker holding both the `tokens` table and the operational key could recover
@@ -162,5 +162,5 @@ Vectis is not, and does not replace:
 ## Revision
 
 This document reflects the design of protocol `v1` as of 2026-07-16, including the
-local FPE and reversible tokenization operations. Update it whenever the protocol
+local FPE, reversible tokenization, and MAC operations. Update it whenever the protocol
 version, trust model, or any explicit assumption changes.

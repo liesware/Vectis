@@ -5,6 +5,7 @@ operations over HTTP:
 
 - format-preserving encryption;
 - reversible tokenization;
+- MAC create/verify;
 - internal message encrypt/decrypt;
 - sign and verification.
 
@@ -25,9 +26,10 @@ The demo creates profiles for several synthetic sensitive data categories:
 - insurance policies.
 
 FPE profiles preserve alphabet and length. Tokenization profiles return visible
-random tokens and store encrypted plaintext in SQLite. The internal message and
-sign examples read `personaldata.json` and use a compact JSON representation of
-that file as the message body.
+random tokens and store encrypted plaintext in SQLite. MAC profiles produce
+deterministic keyed digests scoped by signed profile context. The internal
+message and sign examples read `personaldata.json` and use a compact JSON
+representation of that file as the message body.
 
 This demo prints synthetic values in full so the transformation and round-trip
 are easy to inspect. Do not use real sensitive data.
@@ -43,7 +45,9 @@ bash demo/local/configure-config.sh
 ```
 
 The scripts create local state under `demo/local/site`, including SQLite
-storage, `init.json`, `.unseal_key`, an app API key, and signed config profiles.
+storage, `init.json`, `.unseal_key`, an app API key, and signed FPE,
+tokenization, and MAC config profiles. The operational key is created with the
+`hybrid-standard-v1` crypto profile.
 
 ## Run The Demo
 
@@ -131,6 +135,60 @@ response:
 input: 4111111111111111
 output: 5555555555554444
 decode: 4111111111111111
+status: OK
+```
+
+MAC profiles use the same detailed request/response pattern:
+
+```text
+[credit-card-pan-mac-v1]
+
+create
+url: http://127.0.0.1:3010/mac/<kid>
+request:
+{
+  "body": {
+    "plaintext": "4111111111111111",
+    "profile": "credit-card-pan-mac-v1"
+  },
+  "headers": {
+    "Content-Type": "application/json",
+    "X-API-Key": "..."
+  },
+  "method": "POST"
+}
+response:
+{
+  "algorithm": "HMAC(BLAKE2b(256))",
+  "digest": "hex...",
+  "kid": "<kid>",
+  "profile": "credit-card-pan-mac-v1"
+}
+
+verify
+url: http://127.0.0.1:3010/mac/verify/<kid>
+request:
+{
+  "body": {
+    "digest": "hex...",
+    "plaintext": "4111111111111111",
+    "profile": "credit-card-pan-mac-v1"
+  },
+  "headers": {
+    "Content-Type": "application/json",
+    "X-API-Key": "..."
+  },
+  "method": "POST"
+}
+response:
+{
+  "valid": true
+}
+
+input: 4111111111111111
+algorithm: HMAC(BLAKE2b(256))
+digest: hex...
+verify: true
 status: OK
 ```
 

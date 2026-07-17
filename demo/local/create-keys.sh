@@ -113,7 +113,7 @@ trap 'stop_vectis "${pid}"' EXIT
 wait_ready "http://127.0.0.1:3010/healthz/ready"
 
 local_kid="$(
-  (cd "${SITE_DIR}" && ../bin/vectis keys create --tag local-data-protection --profile hybrid-performance-v1 --output json) \
+  (cd "${SITE_DIR}" && ../bin/vectis keys create --tag local-data-protection --profile hybrid-standard-v1 --output json) \
     | json_field "kid"
 )"
 app_api_output="$(cd "${SITE_DIR}" && ../bin/vectis apikey create --output json)"

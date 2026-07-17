@@ -25,6 +25,7 @@ tags:
   - name: Messages
   - name: FPE
   - name: Tokenization
+  - name: MAC
   - name: Observability
 security: []
 
@@ -281,7 +282,7 @@ paths:
     post:
       tags: [Config]
       summary: Reload the unified signed config
-      description: Administrative endpoint requiring root or an admin client. Reloads the unified config (routes, remote_routes, permissions, fpe_profiles, tokenization_profiles) only after VECTIS_CONFIG_PATH and VECTIS_CONFIG_SIGN_PATH are successfully read, verified, and validated. Every route, FPE profile, and tokenization profile kid must exist in the keys currently loaded in memory. A missing config reloads to empty sections; an invalid signature, invalid file, or unloaded kid returns an error and keeps the previous in-memory config.
+      description: Administrative endpoint requiring root or an admin client. Reloads the unified config (routes, remote_routes, permissions, fpe_profiles, tokenization_profiles, mac_profiles) only after VECTIS_CONFIG_PATH and VECTIS_CONFIG_SIGN_PATH are successfully read, verified, and validated. Every route, FPE profile, tokenization profile, and MAC profile kid must exist in the keys currently loaded in memory. A missing config reloads to empty sections; an invalid signature, invalid file, or unloaded kid returns an error and keeps the previous in-memory config.
       security:
         - ApiKeyAuth: []
       responses:
@@ -730,6 +731,62 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
+  /mac/{kid}:
+    post:
+      tags: [MAC]
+      summary: Create a keyed MAC digest
+      description: >
+        Creates a deterministic MAC digest using a MAC profile loaded from
+        signed config. The profile binds name, KID, and a structured context.
+        SHA-3(N) operational keys use KMAC-N with an N-bit digest; other keys
+        use HMAC with the key hash algorithm. Create requires an active key.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MacCreateInput"
+      responses:
+        "200":
+          description: MAC digest
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MacCreateOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /mac/verify/{kid}:
+    post:
+      tags: [MAC]
+      summary: Verify a keyed MAC digest
+      description: >
+        Verifies a MAC digest using the selected signed MAC profile. Verify
+        permits active and retired keys and compares digests in constant time.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MacVerifyInput"
+      responses:
+        "200":
+          description: MAC verification result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MacVerifyOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
 components:
   securitySchemes:
     ApiKeyAuth:
@@ -1022,13 +1079,13 @@ components:
           type: array
           items:
             type: string
-            enum: [admin, keys, lifecycle, self-test, sign, message, fpe-encrypt, fpe-decrypt, token-encode, token-decode, metrics]
+            enum: [admin, keys, lifecycle, self-test, sign, message, fpe-encrypt, fpe-decrypt, token-encode, token-decode, mac-create, mac-verify, metrics]
           example:
             - message
 
     ReloadConfigResponse:
       type: object
-      required: [status, routes_loaded, remote_routes_loaded, clients_loaded, fpe_profiles_loaded, tokenization_profiles_loaded]
+      required: [status, routes_loaded, remote_routes_loaded, clients_loaded, fpe_profiles_loaded, tokenization_profiles_loaded, mac_profiles_loaded]
       properties:
         status:
           const: reloaded
@@ -1045,6 +1102,9 @@ components:
           type: integer
           minimum: 0
         tokenization_profiles_loaded:
+          type: integer
+          minimum: 0
+        mac_profiles_loaded:
           type: integer
           minimum: 0
 
@@ -1836,6 +1896,56 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/TokenDecodeBatchOutputItem"
+
+    MacCreateInput:
+      type: object
+      additionalProperties: false
+      required: [profile, plaintext]
+      properties:
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+          example: pan-blind-index-v1
+        plaintext:
+          $ref: "#/components/schemas/TextField"
+          example: "4111111111111111"
+
+    MacCreateOutput:
+      type: object
+      required: [kid, profile, algorithm, digest]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+          example: pan-blind-index-v1
+        algorithm:
+          type: string
+          description: HMAC(<ops-key-hash>) or KMAC-224/256/384/512 for SHA-3 keys.
+          example: KMAC-256
+        digest:
+          $ref: "#/components/schemas/HexString"
+
+    MacVerifyInput:
+      type: object
+      additionalProperties: false
+      required: [profile, plaintext, digest]
+      properties:
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+          example: pan-blind-index-v1
+        plaintext:
+          $ref: "#/components/schemas/TextField"
+          example: "4111111111111111"
+        digest:
+          $ref: "#/components/schemas/HexString"
+
+    MacVerifyOutput:
+      type: object
+      required: [valid]
+      properties:
+        valid:
+          type: boolean
+          example: true
 
     MessageCipher:
       type: object

@@ -1,5 +1,5 @@
 use crate::core::{
-    canonical, config, fpe, permissions, protocol, remote_routes, routes, tokenization,
+    canonical, config, fpe, mac, permissions, protocol, remote_routes, routes, tokenization,
 };
 use crate::error::DynError;
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,8 @@ pub struct ConfigFile {
     fpe_profiles: Vec<fpe::FpeProfileInput>,
     #[serde(default)]
     tokenization_profiles: Vec<tokenization::TokenizationProfileInput>,
+    #[serde(default)]
+    mac_profiles: Vec<mac::MacProfileInput>,
 }
 
 pub struct ConfigState {
@@ -30,6 +32,7 @@ pub struct ConfigState {
     pub permissions: permissions::PermissionsState,
     pub fpe_profiles: fpe::FpeProfilesState,
     pub tokenization_profiles: tokenization::TokenizationProfilesState,
+    pub mac_profiles: mac::MacProfilesState,
 }
 
 impl Zeroize for ConfigState {
@@ -37,6 +40,7 @@ impl Zeroize for ConfigState {
         self.permissions.zeroize();
         self.fpe_profiles.zeroize();
         self.tokenization_profiles.zeroize();
+        self.mac_profiles.zeroize();
     }
 }
 
@@ -50,6 +54,21 @@ pub fn config_signature_path(path: &Path, configured_path: &Path) -> PathBuf {
     } else {
         configured_path.to_path_buf()
     }
+}
+
+struct ConfigValidationHooks<
+    'a,
+    IsLoadedKid,
+    DeriveFpeKey,
+    DeriveTokenizationKeys,
+    HashAlgorithmForKid,
+    DeriveMacKey,
+> {
+    is_loaded_kid: &'a IsLoadedKid,
+    derive_fpe_key: &'a DeriveFpeKey,
+    derive_tokenization_keys: &'a DeriveTokenizationKeys,
+    hash_algorithm_for_kid: &'a HashAlgorithmForKid,
+    derive_mac_key: &'a DeriveMacKey,
 }
 
 pub fn canonical_config_json(content: &str) -> Result<String, DynError> {
@@ -71,17 +90,20 @@ pub fn validate_config_content(
     derive_tokenization_keys: impl Fn(
         tokenization::TokenizationKeyDerivationRequest<'_>,
     ) -> Result<tokenization::DerivedTokenizationKeys, DynError>,
+    hash_algorithm_for_kid: impl Fn(&str) -> Result<String, DynError>,
+    derive_mac_key: impl Fn(mac::MacKeyDerivationRequest<'_>) -> Result<mac::DerivedMacKey, DynError>,
 ) -> Result<ConfigState, DynError> {
     let config_file: ConfigFile = serde_json::from_str(content).map_err(|err| {
         crate::error::invalid_input(format!("config file must be valid JSON: {err}"))
     })?;
-    validate_config_file(
-        config_file,
-        config,
-        &is_loaded_kid,
-        &derive_fpe_key,
-        &derive_tokenization_keys,
-    )
+    let hooks = ConfigValidationHooks {
+        is_loaded_kid: &is_loaded_kid,
+        derive_fpe_key: &derive_fpe_key,
+        derive_tokenization_keys: &derive_tokenization_keys,
+        hash_algorithm_for_kid: &hash_algorithm_for_kid,
+        derive_mac_key: &derive_mac_key,
+    };
+    validate_config_file(config_file, config, &hooks)
 }
 
 pub fn read_config_file(path: &Path) -> Result<String, DynError> {
@@ -104,15 +126,17 @@ pub fn load_config_state(
     derive_tokenization_keys: impl Fn(
         tokenization::TokenizationKeyDerivationRequest<'_>,
     ) -> Result<tokenization::DerivedTokenizationKeys, DynError>,
+    hash_algorithm_for_kid: impl Fn(&str) -> Result<String, DynError>,
+    derive_mac_key: impl Fn(mac::MacKeyDerivationRequest<'_>) -> Result<mac::DerivedMacKey, DynError>,
 ) -> Result<ConfigState, DynError> {
-    match load_config_file(
-        &config.config_path,
-        verify_config,
-        config,
-        &is_loaded_kid,
-        &derive_fpe_key,
-        &derive_tokenization_keys,
-    ) {
+    let hooks = ConfigValidationHooks {
+        is_loaded_kid: &is_loaded_kid,
+        derive_fpe_key: &derive_fpe_key,
+        derive_tokenization_keys: &derive_tokenization_keys,
+        hash_algorithm_for_kid: &hash_algorithm_for_kid,
+        derive_mac_key: &derive_mac_key,
+    };
+    match load_config_file(&config.config_path, verify_config, config, &hooks) {
         Ok(state) => {
             info!(
                 config_path = %config.config_path.display(),
@@ -143,15 +167,17 @@ pub fn reload_config_state(
     derive_tokenization_keys: impl Fn(
         tokenization::TokenizationKeyDerivationRequest<'_>,
     ) -> Result<tokenization::DerivedTokenizationKeys, DynError>,
+    hash_algorithm_for_kid: impl Fn(&str) -> Result<String, DynError>,
+    derive_mac_key: impl Fn(mac::MacKeyDerivationRequest<'_>) -> Result<mac::DerivedMacKey, DynError>,
 ) -> Result<ConfigState, DynError> {
-    match load_config_file(
-        &config.config_path,
-        verify_config,
-        config,
-        &is_loaded_kid,
-        &derive_fpe_key,
-        &derive_tokenization_keys,
-    ) {
+    let hooks = ConfigValidationHooks {
+        is_loaded_kid: &is_loaded_kid,
+        derive_fpe_key: &derive_fpe_key,
+        derive_tokenization_keys: &derive_tokenization_keys,
+        hash_algorithm_for_kid: &hash_algorithm_for_kid,
+        derive_mac_key: &derive_mac_key,
+    };
+    match load_config_file(&config.config_path, verify_config, config, &hooks) {
         Ok(state) => Ok(state),
         Err(err) if crate::error::is_not_found(err.as_ref()) => Ok(empty_config_state(config)),
         Err(err) => Err(err),
@@ -162,48 +188,61 @@ fn load_config_file(
     path: &Path,
     verify_config: impl Fn(&Path, &str) -> Result<(), DynError>,
     config: &config::AppConfig,
-    is_loaded_kid: &impl Fn(&str) -> bool,
-    derive_fpe_key: &impl Fn(fpe::FpeKeyDerivationRequest<'_>) -> Result<Zeroizing<Vec<u8>>, DynError>,
-    derive_tokenization_keys: &impl Fn(
-        tokenization::TokenizationKeyDerivationRequest<'_>,
-    ) -> Result<tokenization::DerivedTokenizationKeys, DynError>,
+    hooks: &ConfigValidationHooks<
+        '_,
+        impl Fn(&str) -> bool,
+        impl Fn(fpe::FpeKeyDerivationRequest<'_>) -> Result<Zeroizing<Vec<u8>>, DynError>,
+        impl Fn(
+            tokenization::TokenizationKeyDerivationRequest<'_>,
+        ) -> Result<tokenization::DerivedTokenizationKeys, DynError>,
+        impl Fn(&str) -> Result<String, DynError>,
+        impl Fn(mac::MacKeyDerivationRequest<'_>) -> Result<mac::DerivedMacKey, DynError>,
+    >,
 ) -> Result<ConfigState, DynError> {
     let content = read_config_file(path)?;
     verify_config(path, &content)?;
     let config_file: ConfigFile = serde_json::from_str(&content).map_err(|err| {
         crate::error::invalid_input(format!("config file must be valid JSON: {err}"))
     })?;
-    validate_config_file(
-        config_file,
-        config,
-        is_loaded_kid,
-        derive_fpe_key,
-        derive_tokenization_keys,
-    )
+    validate_config_file(config_file, config, hooks)
 }
 
 fn validate_config_file(
     config_file: ConfigFile,
     config: &config::AppConfig,
-    is_loaded_kid: &impl Fn(&str) -> bool,
-    derive_fpe_key: &impl Fn(fpe::FpeKeyDerivationRequest<'_>) -> Result<Zeroizing<Vec<u8>>, DynError>,
-    derive_tokenization_keys: &impl Fn(
-        tokenization::TokenizationKeyDerivationRequest<'_>,
-    ) -> Result<tokenization::DerivedTokenizationKeys, DynError>,
+    hooks: &ConfigValidationHooks<
+        '_,
+        impl Fn(&str) -> bool,
+        impl Fn(fpe::FpeKeyDerivationRequest<'_>) -> Result<Zeroizing<Vec<u8>>, DynError>,
+        impl Fn(
+            tokenization::TokenizationKeyDerivationRequest<'_>,
+        ) -> Result<tokenization::DerivedTokenizationKeys, DynError>,
+        impl Fn(&str) -> Result<String, DynError>,
+        impl Fn(mac::MacKeyDerivationRequest<'_>) -> Result<mac::DerivedMacKey, DynError>,
+    >,
 ) -> Result<ConfigState, DynError> {
     protocol::validate_protocol_version("config.version", &config_file.version)?;
 
-    let validated_routes = routes::validate_routes(config_file.routes, is_loaded_kid)?;
+    let validated_routes = routes::validate_routes(config_file.routes, hooks.is_loaded_kid)?;
     let validated_remote_routes =
-        remote_routes::validate_remote_routes(config_file.remote_routes, is_loaded_kid)?;
+        remote_routes::validate_remote_routes(config_file.remote_routes, hooks.is_loaded_kid)?;
     let validated_permissions =
-        permissions::validate_permission_clients(config_file.permissions, is_loaded_kid)?;
-    let validated_fpe_profiles =
-        fpe::validate_fpe_profiles(config_file.fpe_profiles, is_loaded_kid, derive_fpe_key)?;
+        permissions::validate_permission_clients(config_file.permissions, hooks.is_loaded_kid)?;
+    let validated_fpe_profiles = fpe::validate_fpe_profiles(
+        config_file.fpe_profiles,
+        hooks.is_loaded_kid,
+        hooks.derive_fpe_key,
+    )?;
     let validated_tokenization_profiles = tokenization::validate_tokenization_profiles(
         config_file.tokenization_profiles,
-        is_loaded_kid,
-        derive_tokenization_keys,
+        hooks.is_loaded_kid,
+        hooks.derive_tokenization_keys,
+    )?;
+    let validated_mac_profiles = mac::validate_mac_profiles(
+        config_file.mac_profiles,
+        hooks.is_loaded_kid,
+        hooks.hash_algorithm_for_kid,
+        hooks.derive_mac_key,
     )?;
 
     Ok(ConfigState {
@@ -216,6 +255,7 @@ fn validate_config_file(
         permissions: validated_permissions,
         fpe_profiles: validated_fpe_profiles,
         tokenization_profiles: validated_tokenization_profiles,
+        mac_profiles: validated_mac_profiles,
     })
 }
 
@@ -230,6 +270,7 @@ fn empty_config_state(config: &config::AppConfig) -> ConfigState {
         permissions: permissions::PermissionsState::default(),
         fpe_profiles: fpe::FpeProfilesState::default(),
         tokenization_profiles: tokenization::TokenizationProfilesState::default(),
+        mac_profiles: mac::MacProfilesState::default(),
     }
 }
 
@@ -295,6 +336,18 @@ mod tests {
         }
     }
 
+    fn dummy_hash_algorithm(_: &str) -> Result<String, DynError> {
+        Ok(String::from("BLAKE2b(256)"))
+    }
+
+    fn dummy_mac_key(_: mac::MacKeyDerivationRequest<'_>) -> Result<mac::DerivedMacKey, DynError> {
+        Ok(mac::DerivedMacKey {
+            public_algorithm: String::from("HMAC(BLAKE2b(256))"),
+            botan_algorithm: String::from("HMAC(BLAKE2b(256))"),
+            mac_key: Zeroizing::new(vec![0u8; mac::MAC_KEY_SIZE_BYTES]),
+        })
+    }
+
     fn test_config(config_path: PathBuf) -> config::AppConfig {
         config::AppConfig {
             http_bind_addr: "127.0.0.1:3000".parse().unwrap(),
@@ -354,6 +407,8 @@ mod tests {
             |_| true,
             |_| Ok(dummy_fpe_key()),
             |_| Ok(dummy_tokenization_keys()),
+            dummy_hash_algorithm,
+            dummy_mac_key,
         )
         .unwrap();
         assert_eq!(state.routes.len(), 0);
@@ -376,6 +431,8 @@ mod tests {
             |_| true,
             |_| Ok(dummy_fpe_key()),
             |_| Ok(dummy_tokenization_keys()),
+            dummy_hash_algorithm,
+            dummy_mac_key,
         );
         let _ = fs::remove_file(&path);
         assert!(result.is_err());
@@ -392,6 +449,8 @@ mod tests {
             |_| true,
             |_| Ok(dummy_fpe_key()),
             |_| Ok(dummy_tokenization_keys()),
+            dummy_hash_algorithm,
+            dummy_mac_key,
         );
         let _ = fs::remove_file(&path);
         let err = match result {
@@ -416,6 +475,8 @@ mod tests {
             |_| true,
             |_| Ok(dummy_fpe_key()),
             |_| Ok(dummy_tokenization_keys()),
+            dummy_hash_algorithm,
+            dummy_mac_key,
         );
 
         let _ = fs::remove_file(&path);
@@ -435,6 +496,8 @@ mod tests {
             |_| true,
             |_| Ok(dummy_fpe_key()),
             |_| Ok(dummy_tokenization_keys()),
+            dummy_hash_algorithm,
+            dummy_mac_key,
         )
         .unwrap();
         assert_eq!(state.routes.len(), 0);
@@ -455,6 +518,8 @@ mod tests {
             |_| true,
             |_| Ok(dummy_fpe_key()),
             |_| Ok(dummy_tokenization_keys()),
+            dummy_hash_algorithm,
+            dummy_mac_key,
         );
         let _ = fs::remove_file(&path);
         assert!(result.is_err());
@@ -475,6 +540,8 @@ mod tests {
             |_| true,
             |_| Ok(dummy_fpe_key()),
             |_| Ok(dummy_tokenization_keys()),
+            dummy_hash_algorithm,
+            dummy_mac_key,
         );
 
         let _ = fs::remove_file(&path);
@@ -567,6 +634,8 @@ mod tests {
             |_| true,
             |_| Ok(dummy_fpe_key()),
             |_| Ok(dummy_tokenization_keys()),
+            dummy_hash_algorithm,
+            dummy_mac_key,
         )
         .unwrap();
 
@@ -586,6 +655,8 @@ mod tests {
                 |_| true,
                 |_| { Ok(dummy_fpe_key()) },
                 |_| Ok(dummy_tokenization_keys()),
+                dummy_hash_algorithm,
+                dummy_mac_key,
             )
             .is_err()
         );
@@ -596,6 +667,8 @@ mod tests {
                 |_| true,
                 |_| Ok(dummy_fpe_key()),
                 |_| Ok(dummy_tokenization_keys()),
+                dummy_hash_algorithm,
+                dummy_mac_key,
             )
             .is_err()
         );
@@ -606,6 +679,8 @@ mod tests {
                 |_| true,
                 |_| Ok(dummy_fpe_key()),
                 |_| Ok(dummy_tokenization_keys()),
+                dummy_hash_algorithm,
+                dummy_mac_key,
             )
             .is_err()
         );
@@ -616,6 +691,8 @@ mod tests {
                 |_| true,
                 |_| Ok(dummy_fpe_key()),
                 |_| Ok(dummy_tokenization_keys()),
+                dummy_hash_algorithm,
+                dummy_mac_key,
             )
             .is_err()
         );

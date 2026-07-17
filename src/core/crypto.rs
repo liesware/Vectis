@@ -8,7 +8,6 @@ use botan::{
 use zeroize::Zeroizing;
 
 pub type CryptoRng = RandomNumberGenerator;
-const INTERNAL_KEYS_KMAC_OUTPUT_BITS: usize = 256;
 
 pub fn new_rng() -> Result<CryptoRng, botan::Error> {
     RandomNumberGenerator::new()
@@ -69,23 +68,28 @@ pub fn create_hkdf(
 }
 
 pub fn create_hmac(key: &[u8], message: &[u8]) -> Result<Vec<u8>, botan::Error> {
-    let mut mac = MsgAuthCode::new(config::INTERNAL_KEYS_HMAC)?;
+    create_hmac_with_algorithm(config::INTERNAL_KEYS_HMAC, key, message)
+}
+
+pub fn create_hmac_with_algorithm(
+    algorithm: &str,
+    key: &[u8],
+    message: &[u8],
+) -> Result<Vec<u8>, botan::Error> {
+    let mut mac = MsgAuthCode::new(algorithm)?;
     mac.set_key(key)?;
     mac.update(message)?;
 
     mac.finish()
 }
 
-pub fn create_kmac(
+pub fn create_kmac_with_algorithm(
+    algorithm: &str,
     key: &[u8],
     customization: &[u8],
     message: &[u8],
 ) -> Result<Vec<u8>, botan::Error> {
-    let algorithm = format!(
-        "{}({INTERNAL_KEYS_KMAC_OUTPUT_BITS})",
-        config::INTERNAL_KEYS_KMAC
-    );
-    let mut mac = MsgAuthCode::new(&algorithm)?;
+    let mut mac = MsgAuthCode::new(algorithm)?;
     mac.set_key(key)?;
     mac.set_nonce(customization)?;
     mac.update(message)?;
@@ -534,18 +538,16 @@ mod tests {
     }
 
     #[test]
-    fn create_kmac_uses_internal_kmac_constant_and_customization() {
+    fn create_kmac_with_algorithm_uses_supplied_algorithm_and_customization() {
         let key = b"0123456789abcdef0123456789abcdef";
         let customization = b"vectis:test:kmac:v1";
         let message = b"message";
-        let actual = create_kmac(key, customization, message).expect("kmac must sign");
-        assert_eq!(actual.len(), 32);
+        let algorithm = "KMAC-256(384)";
+        let actual = create_kmac_with_algorithm(algorithm, key, customization, message)
+            .expect("kmac must sign");
+        assert_eq!(actual.len(), 48);
 
-        let algorithm = format!(
-            "{}({INTERNAL_KEYS_KMAC_OUTPUT_BITS})",
-            config::INTERNAL_KEYS_KMAC
-        );
-        let mut mac = MsgAuthCode::new(&algorithm).expect("kmac must create");
+        let mut mac = MsgAuthCode::new(algorithm).expect("kmac must create");
         mac.set_key(key).expect("kmac key must set");
         mac.set_nonce(customization)
             .expect("kmac customization must set");
@@ -556,17 +558,36 @@ mod tests {
     }
 
     #[test]
-    fn create_kmac_binds_customization_and_message() {
+    fn create_kmac_supports_requested_output_sizes() {
         let key = b"0123456789abcdef0123456789abcdef";
         let customization = b"vectis:test:kmac:v1";
         let message = b"message";
 
-        let baseline = create_kmac(key, customization, message).expect("kmac must sign");
-        let repeated = create_kmac(key, customization, message).expect("kmac must sign");
+        for (output_bits, output_bytes) in [(224, 28), (256, 32), (384, 48), (512, 64)] {
+            let algorithm = format!("KMAC-256({output_bits})");
+            let actual = create_kmac_with_algorithm(&algorithm, key, customization, message)
+                .expect("kmac must sign");
+            assert_eq!(actual.len(), output_bytes);
+        }
+    }
+
+    #[test]
+    fn create_kmac_binds_customization_and_message() {
+        let key = b"0123456789abcdef0123456789abcdef";
+        let customization = b"vectis:test:kmac:v1";
+        let message = b"message";
+        let algorithm = "KMAC-256(256)";
+
+        let baseline = create_kmac_with_algorithm(algorithm, key, customization, message)
+            .expect("kmac must sign");
+        let repeated = create_kmac_with_algorithm(algorithm, key, customization, message)
+            .expect("kmac must sign");
         let different_customization =
-            create_kmac(key, b"vectis:test:other:v1", message).expect("kmac must sign");
+            create_kmac_with_algorithm(algorithm, key, b"vectis:test:other:v1", message)
+                .expect("kmac must sign");
         let different_message =
-            create_kmac(key, customization, b"other message").expect("kmac must sign");
+            create_kmac_with_algorithm(algorithm, key, customization, b"other message")
+                .expect("kmac must sign");
 
         assert_eq!(baseline, repeated);
         assert_ne!(baseline, different_customization);

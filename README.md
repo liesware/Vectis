@@ -13,7 +13,7 @@ and final systems after the transport session is over. Vectis explores how to
 protect the data object or payload itself after it leaves the transport layer.
 
 Today it provides hybrid encryption, hybrid signatures, protected messages,
-FF1 format-preserving encryption, reversible random tokenization, signed
+FF1 format-preserving encryption, reversible random tokenization, MAC profiles, signed
 configuration, API-key permissions, encrypted storage, health probes, metrics,
 structured logs, and a dedicated audit log stream through a consistent HTTP and
 CLI interface.
@@ -86,7 +86,7 @@ cryptographic data protection primitives and workflows.
 
 - protected messages between Vectis instances, verified before decryption;
 - one operator-signed config file (routes, remote routes, permissions, FPE profiles,
-  and tokenization profiles); its registered `remote_routes` are the only source of
+  tokenization profiles, and MAC profiles); its registered `remote_routes` are the only source of
   peer public keys — no trust-on-first-use path;
 - local re-encryption before final app delivery: the receiving application
   never gets remote plaintext directly;
@@ -94,6 +94,7 @@ cryptographic data protection primitives and workflows.
 - internal encrypt/decrypt endpoints for local protected data;
 - local FF1 format-preserving encryption for signed field profiles;
 - local reversible random tokenization for signed token profiles.
+- local MAC create/verify for signed MAC profiles.
 
 **Key management**
 
@@ -274,10 +275,10 @@ See the full API documentation in [doc/API.md](doc/API.md).
 
 ## Configuration
 
-Runtime routing, remote peers, API-key permissions, FPE profiles, and
-tokenization profiles live in a single **signed config file** (`config.json`,
+Runtime routing, remote peers, API-key permissions, FPE profiles,
+tokenization profiles, and MAC profiles live in a single **signed config file** (`config.json`,
 default path `VECTIS_CONFIG_PATH`) with `version`, `routes`, `remote_routes`,
-`permissions`, optional `fpe_profiles`, and optional `tokenization_profiles`
+`permissions`, optional `fpe_profiles`, optional `tokenization_profiles`, and optional `mac_profiles`
 sections. Edit it, then sign it with `vectis config sign`. The full schema
 (every field, allowed values, and the optional peer `public_keys`) is documented
 under **Configuration File (`config.json`)** in [doc/API.md](doc/API.md).
@@ -323,9 +324,9 @@ In development and tests, individual algorithm overrides can be enabled with:
 VECTIS_CRYPTO_POLICY=allow-overrides
 ```
 
-## FPE And Tokenization
+## FPE, Tokenization, And MAC
 
-FPE and tokenization are profile-driven. Profiles are loaded only from signed
+FPE, tokenization, and MAC are profile-driven. Profiles are loaded only from signed
 config, and requests select a profile by name.
 
 FPE currently supports:
@@ -340,11 +341,16 @@ Tokenization currently supports:
 token-random-v1
 ```
 
-The CLI can edit both profile sections locally:
+MAC currently supports HMAC with the operational key hash algorithm, or
+`KMAC-224`, `KMAC-256`, `KMAC-384`, and `KMAC-512` when the operational key
+uses the corresponding SHA-3 hash size.
+
+The CLI can edit these profile sections locally:
 
 ```sh
 vectis config fpe add --name patient-id-decimal-v1 --kid <kid> --alphabet 0123456789 --min-len 6 --max-len 32 --tweak-aad 'tenant=acme;field=patient_id;version=1'
 vectis config token add --name patient-id-token-v1 --kid <kid> --token-prefix tok_patient --token-len 32 --max-plaintext-len 1024
+vectis config mac add --name pan-blind-index-v1 --kid <kid> --context 'tenant=mx;field=pan;purpose=blind-index;version=1'
 vectis config sign
 vectis config reload
 ```

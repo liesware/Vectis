@@ -35,6 +35,7 @@ def config_init_case(env):
             "permissions": [],
             "fpe_profiles": [],
             "tokenization_profiles": [],
+            "mac_profiles": [],
         },
         "config init must write the minimal skeleton",
     )
@@ -54,6 +55,7 @@ def config_validate_case(env):
         response["tokenization_profiles_loaded"] == 0,
         "empty config must have no tokenization profiles",
     )
+    require(response["mac_profiles_loaded"] == 0, "empty config must have no MAC profiles")
 
 
 def version_case(env):
@@ -92,6 +94,14 @@ def version_case(env):
         "token-random-v1" in algorithms["tokenization"],
         "version must include supported tokenization versions",
     )
+    require(
+        "HMAC(<ops-key-hash>)" in algorithms["mac"],
+        "version must include HMAC MAC algorithm",
+    )
+    require("KMAC-224" in algorithms["mac"], "version must include KMAC-224")
+    require("KMAC-256" in algorithms["mac"], "version must include supported MAC algorithms")
+    require("KMAC-384" in algorithms["mac"], "version must include KMAC-384")
+    require("KMAC-512" in algorithms["mac"], "version must include KMAC-512")
 
 
 def route_cases(env):
@@ -375,6 +385,57 @@ def token_profile_cases(env):
     )
 
 
+def mac_profile_cases(env):
+    response = run_cli_json(
+        [
+            "config",
+            "mac",
+            "add",
+            "--name",
+            "pan-blind-index-v1",
+            "--kid",
+            KID_A,
+            "--context",
+            "tenant=mx;field=pan;purpose=blind-index;version=1",
+        ],
+        env,
+    )
+    require(response["status"] == "added", "mac profile add must report added")
+    require_next(response)
+
+    profile = read_config(env)["mac_profiles"][0]
+    require(profile["name"] == "pan-blind-index-v1", "mac profile name must be stored")
+    require(profile["kid"] == KID_A, "mac profile kid must be stored")
+
+    response = run_cli_json(["config", "mac", "get", "pan-blind-index-v1"], env)
+    require(response["context"].startswith("tenant=mx"), "mac profile get must return profile")
+
+    response = run_cli_json(["config", "mac", "list"], env)
+    require(isinstance(response, list), "mac profile list must return an array")
+    require(response[0]["name"] == "pan-blind-index-v1", "mac profile list must include profile")
+
+    response = run_cli_json(
+        [
+            "config",
+            "mac",
+            "update",
+            "pan-blind-index-v1",
+            "--context",
+            "tenant=mx;field=pan;purpose=blind-index;version=2",
+        ],
+        env,
+    )
+    require(response["status"] == "updated", "mac profile update must report updated")
+    require_next(response)
+    profile = read_config(env)["mac_profiles"][0]
+    require(profile["context"].endswith("version=2"), "mac profile update must persist context")
+
+    response = run_cli_json(["config", "mac", "delete", "pan-blind-index-v1"], env)
+    require(response["status"] == "deleted", "mac profile delete must report deleted")
+    require_next(response)
+    require(read_config(env)["mac_profiles"] == [], "mac profile delete must remove profile")
+
+
 def config_list_case(env):
     response = run_cli_json(
         [
@@ -466,6 +527,11 @@ def main():
             counters,
             "config token add/get/update/delete",
             lambda: token_profile_cases(env),
+        )
+        run_case(
+            counters,
+            "config mac add/get/update/delete",
+            lambda: mac_profile_cases(env),
         )
         run_case(counters, "config list reads edited config", lambda: config_list_case(env))
 

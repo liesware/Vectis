@@ -40,7 +40,7 @@ At the current stage, Vectis provides:
 - authenticated encryption for protected messages;
 - local re-encryption before final application delivery;
 - a hybrid timestamp/signature protocol;
-- signed runtime configuration for routes, remote routes, permissions, FPE profiles, and tokenization profiles;
+- signed runtime configuration for routes, remote routes, permissions, FPE profiles, tokenization profiles, and MAC profiles;
 - local format-preserving encryption for signed field profiles;
 - local reversible random tokenization for signed token profiles;
 - SQLite/PostgreSQL-backed storage behind a storage abstraction;
@@ -85,6 +85,7 @@ The signed config controls:
 - non-root API key permissions.
 - local FPE field profiles.
 - local tokenization profiles.
+- local MAC profiles.
 
 ### Cryptographic Material Has Lifecycle
 
@@ -350,7 +351,8 @@ Runtime policy lives in one signed JSON file:
   "remote_routes": [],
   "permissions": [],
   "fpe_profiles": [],
-  "tokenization_profiles": []
+  "tokenization_profiles": [],
+  "mac_profiles": []
 }
 ```
 
@@ -374,6 +376,7 @@ empty config sections:
 - no non-root permission clients;
 - no FPE profiles.
 - no tokenization profiles.
+- no MAC profiles.
 
 If the config file exists, it must be valid and its signature must verify.
 Invalid existing config is fatal at startup.
@@ -561,6 +564,20 @@ payload, decrypts it, and returns the original plaintext plus optional metadata.
 Tokenization hash/data keys are derived per profile, KID, and
 `tokenization_version`; the encrypted token payload AAD also binds
 `tokenization_version`.
+
+## MAC Profiles
+
+Vectis exposes local MAC create/verify endpoints for deterministic blind indexes
+or integrity tags scoped to signed profile context:
+
+- `POST /mac/{kid}`;
+- `POST /mac/verify/{kid}`.
+
+MAC profiles live in signed config under `mac_profiles`. Requests select a
+profile by name; the bound KID and `context` labels come from signed config.
+If the operational key hash algorithm is `SHA-3(N)`, Vectis uses `KMAC-N` with
+an `N`-bit digest; otherwise it uses HMAC with the operational key hash
+algorithm.
 Encode metadata must be a JSON object and is capped at 128 characters after
 compact JSON serialization.
 
@@ -727,6 +744,7 @@ Vectis exposes these major endpoint groups:
   `/message/internal/decrypt`;
 - FPE: `/fpe/encrypt/{kid}`, `/fpe/decrypt`;
 - tokenization: `/token/encode/{kid}`, `/token/decode`;
+- MAC: `/mac/{kid}`, `/mac/verify/{kid}`;
 - self-test: `/self-test/init`, `/self-test/keys/{kid}`.
 
 Public endpoints are intentionally limited. Protected endpoints require

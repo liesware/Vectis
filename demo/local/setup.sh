@@ -45,11 +45,10 @@ VECTIS_STORAGE=sqlite
 VECTIS_SQLITE_PATH=db/data.db
 VECTIS_SENDER_HOSTNAME=local-demo
 VECTIS_RECEIVER_HOSTNAME=local-demo
-VECTIS_DEFAULT_CRYPTO_PROFILE=hybrid-performance-v1
+VECTIS_DEFAULT_CRYPTO_PROFILE=hybrid-standard-v1
 VECTIS_CRYPTO_POLICY=profile-only
 VECTIS_PLAINTEXT_MESSAGE="hello vectis local demo"
 ENV
 
 echo "Local demo workspace ready."
 echo "Next: bash demo/local/create-keys.sh"
-

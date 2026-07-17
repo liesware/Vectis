@@ -32,6 +32,7 @@ from http_support import (
     write_config,
     write_permissions,
     write_fpe_profiles,
+    write_mac_profiles,
     write_tokenization_profiles,
     write_test_remote_routes,
     write_test_routes,
@@ -183,6 +184,10 @@ def validate_metrics(client):
     require(
         "vectis_tokenization_profiles_loaded" in metrics,
         "metrics must include vectis_tokenization_profiles_loaded",
+    )
+    require(
+        "vectis_mac_profiles_loaded" in metrics,
+        "metrics must include vectis_mac_profiles_loaded",
     )
 
 
@@ -814,6 +819,49 @@ def token_batch_round_trip(client, key_id):
     return profile, [token[:16] + "..." for token in tokens], plaintexts
 
 
+def mac_round_trip(client, key_id):
+    profile = "pan-blind-index-v1"
+    plaintext = "4111111111111111"
+    created = client.post(
+        f"/mac/{key_id}",
+        {"profile": profile, "plaintext": plaintext},
+        auth=True,
+    )
+    require(created.get("kid") == key_id, "mac create kid mismatch")
+    require(created.get("profile") == profile, "mac create profile mismatch")
+    algorithm = created.get("algorithm")
+    expected_digest_hex_lengths = {
+        "HMAC(BLAKE2b(256))": 64,
+        "KMAC-224": 56,
+        "KMAC-256": 64,
+        "KMAC-384": 96,
+        "KMAC-512": 128,
+    }
+    require(algorithm in expected_digest_hex_lengths, "mac algorithm mismatch")
+    digest = created.get("digest")
+    require_hex(digest, "mac digest")
+    require(
+        len(digest) == expected_digest_hex_lengths[algorithm],
+        "mac digest length mismatch",
+    )
+
+    verified = client.post(
+        f"/mac/verify/{key_id}",
+        {"profile": profile, "plaintext": plaintext, "digest": digest},
+        auth=True,
+    )
+    require(verified.get("valid") is True, "mac verify must accept matching digest")
+
+    rejected = client.post(
+        f"/mac/verify/{key_id}",
+        {"profile": profile, "plaintext": plaintext + "0", "digest": digest},
+        auth=True,
+    )
+    require(rejected.get("valid") is False, "mac verify must reject changed plaintext")
+
+    return profile, algorithm, digest[:16] + "..."
+
+
 def validate_permissions_flow(base_url, root_client, key_id, case):
     limited_key, limited_hash = create_api_key_pair()
     admin_key, admin_hash = create_api_key_pair()
@@ -1123,10 +1171,28 @@ def main():
             *token_batch_round_trip(client, created[0][0]),
         )
     ]
+    write_mac_profiles(
+        [
+            {
+                "name": "pan-blind-index-v1",
+                "kid": created[0][0],
+                "context": "tenant=mx;field=pan;purpose=blind-index;version=1",
+            }
+        ]
+    )
+    mac_reload = reload_config(client)
+    require(
+        mac_reload.get("mac_profiles_loaded") == 1,
+        "config reload must report loaded mac profile",
+    )
+    mac_profile, mac_algorithm, mac_digest = mac_round_trip(client, created[0][0])
+    mac_rows = [(f"{mac_profile} {mac_algorithm} {mac_digest}", "OK")]
 
     permission_rows = validate_permissions_flow(args.base_url, client, created[0][0], created[0][1])
     print_section("permissions", permission_rows)
     passed_count += len(permission_rows)
+    print_section("mac", mac_rows)
+    passed_count += len(mac_rows)
 
     test_rows = []
     pub_rows = []
@@ -1232,6 +1298,7 @@ def main():
     _CONFIG["permissions"] = []
     _CONFIG["fpe_profiles"] = []
     _CONFIG["tokenization_profiles"] = []
+    _CONFIG["mac_profiles"] = []
     write_config()
     reload_config(client)
     restore_config_file(config_backup)

@@ -211,19 +211,19 @@ pub(crate) fn validate_tokenization_profiles(
             kid: &profile.kid,
             tokenization_version: &profile.tokenization_version,
         })?;
-        if derived.hash_key.len() != TOKEN_KEY_SIZE_BYTES
-            || derived.data_key.len() != TOKEN_KEY_SIZE_BYTES
-        {
-            return Err(crate::error::internal(
-                "derived tokenization key has invalid length",
-            ));
-        }
-        crypto::symmetric_cipher(&derived.cipher_algorithm).ok_or_else(|| {
+        let cipher = crypto::symmetric_cipher(&derived.cipher_algorithm).ok_or_else(|| {
             crate::error::invalid_input(format!(
                 "tokenization profile symmetric algorithm is not supported: {}",
                 derived.cipher_algorithm
             ))
         })?;
+        if derived.hash_key.len() != TOKEN_KEY_SIZE_BYTES
+            || derived.data_key.len() != cipher.key_size_bytes
+        {
+            return Err(crate::error::internal(
+                "derived tokenization key has invalid length",
+            ));
+        }
 
         profiles.push(TokenizationProfile {
             name: profile.name,
@@ -311,6 +311,11 @@ pub(crate) fn derive_tokenization_keys(
     cipher_algorithm: &str,
     request: TokenizationKeyDerivationRequest<'_>,
 ) -> Result<DerivedTokenizationKeys, DynError> {
+    let cipher = crypto::symmetric_cipher(cipher_algorithm).ok_or_else(|| {
+        crate::error::invalid_input(format!(
+            "tokenization profile symmetric algorithm is not supported: {cipher_algorithm}"
+        ))
+    })?;
     let ops_symmetric_key = Zeroizing::new(hex::decode(ops_symmetric_key_hex)?);
     let hash_info = tokenization_key_info(
         TOKEN_HASH_KEY_PURPOSE,
@@ -334,7 +339,7 @@ pub(crate) fn derive_tokenization_keys(
         &ops_symmetric_key,
         TOKENIZATION_HKDF_SALT,
         data_info.as_bytes(),
-        TOKEN_KEY_SIZE_BYTES,
+        cipher.key_size_bytes,
     )?;
 
     Ok(DerivedTokenizationKeys {
@@ -565,6 +570,46 @@ mod tests {
     }
 
     #[test]
+    fn derives_data_key_with_cipher_key_size() {
+        let ops_key = "11".repeat(32);
+        let aes128 = derive_tokenization_keys(
+            &ops_key,
+            "AES-128/GCM",
+            TokenizationKeyDerivationRequest {
+                profile_name: "patient-id-token-v1",
+                kid: kid(),
+                tokenization_version: TOKENIZATION_VERSION_RANDOM_V1,
+            },
+        )
+        .expect("AES-128 tokenization keys must derive");
+        let aes192 = derive_tokenization_keys(
+            &ops_key,
+            "AES-192/GCM",
+            TokenizationKeyDerivationRequest {
+                profile_name: "patient-id-token-v1",
+                kid: kid(),
+                tokenization_version: TOKENIZATION_VERSION_RANDOM_V1,
+            },
+        )
+        .expect("AES-192 tokenization keys must derive");
+        let aes256 = derive_tokenization_keys(
+            &ops_key,
+            "AES-256/GCM",
+            TokenizationKeyDerivationRequest {
+                profile_name: "patient-id-token-v1",
+                kid: kid(),
+                tokenization_version: TOKENIZATION_VERSION_RANDOM_V1,
+            },
+        )
+        .expect("AES-256 tokenization keys must derive");
+
+        assert_eq!(aes128.hash_key.len(), TOKEN_KEY_SIZE_BYTES);
+        assert_eq!(aes128.data_key.len(), 16);
+        assert_eq!(aes192.data_key.len(), 24);
+        assert_eq!(aes256.data_key.len(), 32);
+    }
+
+    #[test]
     fn derived_keys_are_bound_to_profile_and_version() {
         let ops_key = "11".repeat(32);
         let first = derive_tokenization_keys(
@@ -653,7 +698,9 @@ mod tests {
             &ops_symmetric_key,
             TOKENIZATION_HKDF_SALT,
             legacy_data_info.as_bytes(),
-            TOKEN_KEY_SIZE_BYTES,
+            crypto::symmetric_cipher("AES-256/GCM")
+                .expect("AES-256/GCM must be supported")
+                .key_size_bytes,
         )
         .expect("legacy data key must derive");
 

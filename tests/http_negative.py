@@ -34,6 +34,7 @@ _CONFIG = {
     "permissions": [],
     "fpe_profiles": [],
     "tokenization_profiles": [],
+    "mac_profiles": [],
 }
 
 
@@ -158,6 +159,7 @@ def write_permissions(clients, sign=True):
     _CONFIG["permissions"] = clients
     _CONFIG["fpe_profiles"] = []
     _CONFIG["tokenization_profiles"] = []
+    _CONFIG["mac_profiles"] = []
     write_config(sign=sign)
 
 
@@ -167,6 +169,7 @@ def write_fpe_profiles(profiles, sign=True):
     _CONFIG["permissions"] = []
     _CONFIG["fpe_profiles"] = profiles
     _CONFIG["tokenization_profiles"] = []
+    _CONFIG["mac_profiles"] = []
     write_config(sign=sign)
 
 
@@ -176,6 +179,17 @@ def write_tokenization_profiles(profiles, sign=True):
     _CONFIG["permissions"] = []
     _CONFIG["fpe_profiles"] = []
     _CONFIG["tokenization_profiles"] = profiles
+    _CONFIG["mac_profiles"] = []
+    write_config(sign=sign)
+
+
+def write_mac_profiles(profiles, sign=True):
+    _CONFIG["routes"] = []
+    _CONFIG["remote_routes"] = []
+    _CONFIG["permissions"] = []
+    _CONFIG["fpe_profiles"] = []
+    _CONFIG["tokenization_profiles"] = []
+    _CONFIG["mac_profiles"] = profiles
     write_config(sign=sign)
 
 
@@ -185,6 +199,7 @@ def write_remote_routes(routes, sign=True):
     _CONFIG["remote_routes"] = routes
     _CONFIG["fpe_profiles"] = []
     _CONFIG["tokenization_profiles"] = []
+    _CONFIG["mac_profiles"] = []
     write_config(sign=sign)
 
 
@@ -194,6 +209,7 @@ def write_routes(routes, sign=True):
     _CONFIG["permissions"] = []
     _CONFIG["fpe_profiles"] = []
     _CONFIG["tokenization_profiles"] = []
+    _CONFIG["mac_profiles"] = []
     write_config(sign=sign)
 
 
@@ -214,6 +230,10 @@ def reload_config(client):
     require(
         isinstance(response.get("tokenization_profiles_loaded"), int),
         "config tokenization_profiles_loaded must be int",
+    )
+    require(
+        isinstance(response.get("mac_profiles_loaded"), int),
+        "config mac_profiles_loaded must be int",
     )
     return response
 
@@ -277,6 +297,14 @@ def valid_tokenization_profile(key_id):
         "token_prefix": "tok_patient",
         "token_len": 32,
         "max_plaintext_len": 1024,
+    }
+
+
+def valid_mac_profile(key_id):
+    return {
+        "name": "pan-blind-index-v1",
+        "kid": key_id,
+        "context": "tenant=mx;field=pan;purpose=blind-index;version=1",
     }
 
 
@@ -591,6 +619,7 @@ def main():
     )
     _CONFIG["fpe_profiles"] = [valid_fpe_profile(key_id)]
     _CONFIG["tokenization_profiles"] = [valid_tokenization_profile(key_id)]
+    _CONFIG["mac_profiles"] = [valid_mac_profile(key_id)]
     write_config()
     reload_config(client)
     limited_client = Client(args.base_url, limited_api_key)
@@ -726,6 +755,26 @@ def main():
         )
         require_status("limited client blocks token decode batch", status, 403)
 
+    def limited_blocks_mac_create():
+        status, _ = limited_client.post(
+            f"/mac/{key_id}",
+            {"profile": "pan-blind-index-v1", "plaintext": "4111111111111111"},
+            auth=True,
+        )
+        require_status("limited client blocks mac create", status, 403)
+
+    def limited_blocks_mac_verify():
+        status, _ = limited_client.post(
+            f"/mac/verify/{key_id}",
+            {
+                "profile": "pan-blind-index-v1",
+                "plaintext": "4111111111111111",
+                "digest": "00" * 32,
+            },
+            auth=True,
+        )
+        require_status("limited client blocks mac verify", status, 403)
+
     def metrics_client_allows_metrics():
         status, _ = metrics_client.get("/metrics", auth=True)
         require_status("metrics client allows metrics", status, 200)
@@ -790,6 +839,8 @@ def main():
         ("limited client blocks token encode batch", limited_blocks_token_encode_batch),
         ("limited client blocks token decode", limited_blocks_token_decode),
         ("limited client blocks token decode batch", limited_blocks_token_decode_batch),
+        ("limited client blocks mac create", limited_blocks_mac_create),
+        ("limited client blocks mac verify", limited_blocks_mac_verify),
         ("metrics client allows metrics", metrics_client_allows_metrics),
         ("metrics client blocks admin", metrics_client_blocks_admin),
         ("limited client blocks permissions list", limited_blocks_permissions_list),
@@ -948,6 +999,20 @@ def main():
         )
         require_config_sign_fails("permissions wildcard token encode")
 
+    def permissions_wildcard_mac_create():
+        write_permissions(
+            [
+                {
+                    "client": "bad-wildcard-mac",
+                    "apikey_hash": limited_api_key_hash,
+                    "status": "active",
+                    "permissions": [{"kid": "*", "actions": ["mac-create"]}],
+                }
+            ],
+            sign=False,
+        )
+        require_config_sign_fails("permissions wildcard mac create")
+
     def fpe_profile_duplicate_name():
         profile = valid_fpe_profile(key_id)
         write_fpe_profiles([profile, dict(profile, kid=key_id)], sign=False)
@@ -1004,6 +1069,22 @@ def main():
         profile = valid_tokenization_profile("00" * 32)
         write_tokenization_profiles([profile], sign=False)
         require_config_sign_fails("token profile unloaded kid")
+
+    def mac_profile_duplicate_name():
+        profile = valid_mac_profile(key_id)
+        write_mac_profiles([profile, dict(profile, kid=key_id)], sign=False)
+        require_config_sign_fails("mac profile duplicate name")
+
+    def mac_profile_invalid_context():
+        profile = valid_mac_profile(key_id)
+        profile["context"] = "tenant"
+        write_mac_profiles([profile], sign=False)
+        require_config_sign_fails("mac profile invalid context")
+
+    def mac_profile_unloaded_kid():
+        profile = valid_mac_profile("00" * 32)
+        write_mac_profiles([profile], sign=False)
+        require_config_sign_fails("mac profile unloaded kid")
 
     def routes_missing_name():
         write_routes(
@@ -1282,6 +1363,7 @@ def main():
         ("permissions wildcard non-global action", permissions_wildcard_non_global_action),
         ("permissions wildcard fpe encrypt", permissions_wildcard_fpe_encrypt),
         ("permissions wildcard token encode", permissions_wildcard_token_encode),
+        ("permissions wildcard mac create", permissions_wildcard_mac_create),
         ("fpe profile duplicate name", fpe_profile_duplicate_name),
         ("fpe profile invalid version", fpe_profile_invalid_version),
         ("fpe profile duplicate alphabet", fpe_profile_duplicate_alphabet),
@@ -1292,6 +1374,9 @@ def main():
         ("token profile invalid version", token_profile_invalid_version),
         ("token profile invalid lengths", token_profile_invalid_lengths),
         ("token profile unloaded kid", token_profile_unloaded_kid),
+        ("mac profile duplicate name", mac_profile_duplicate_name),
+        ("mac profile invalid context", mac_profile_invalid_context),
+        ("mac profile unloaded kid", mac_profile_unloaded_kid),
         ("routes missing name", routes_missing_name),
         ("routes invalid name", routes_invalid_name),
         ("remote routes invalid kid", remote_routes_invalid_kid),
@@ -2141,11 +2226,59 @@ def main():
             "token decode batch duplicate ref must fail",
         )
 
+    def mac_create_unknown_profile():
+        status, body = client.post(
+            f"/mac/{key_id}",
+            {"profile": "missing-profile", "plaintext": "4111111111111111"},
+            auth=True,
+        )
+        require_status("POST /mac/{kid} unknown profile", status, 400)
+        require(body.get("error") == "mac profile not found", "MAC unknown profile must fail")
+
+    def mac_create_wrong_kid():
+        status, body = client.post(
+            f"/mac/{retired_key_id}",
+            {"profile": "pan-blind-index-v1", "plaintext": "4111111111111111"},
+            auth=True,
+        )
+        require_status("POST /mac/{kid} wrong kid", status, 400)
+        require(
+            body.get("error") == "mac profile kid does not match request kid",
+            "MAC wrong KID must fail",
+        )
+
+    def mac_verify_digest_not_hex():
+        status, body = client.post(
+            f"/mac/verify/{key_id}",
+            {
+                "profile": "pan-blind-index-v1",
+                "plaintext": "4111111111111111",
+                "digest": "not-hex",
+            },
+            auth=True,
+        )
+        require_status("POST /mac/verify/{kid} digest not hex", status, 400)
+        require("digest" in body.get("error", ""), "MAC invalid digest must mention digest")
+
+    def mac_verify_wrong_digest():
+        status, body = client.post(
+            f"/mac/verify/{key_id}",
+            {
+                "profile": "pan-blind-index-v1",
+                "plaintext": "4111111111111111",
+                "digest": "00" * 32,
+            },
+            auth=True,
+        )
+        require_status("POST /mac/verify/{kid} wrong digest", status, 200)
+        require(body.get("valid") is False, "MAC wrong digest must return valid false")
+
     _CONFIG["routes"] = []
     _CONFIG["remote_routes"] = []
     _CONFIG["permissions"] = []
     _CONFIG["fpe_profiles"] = [valid_fpe_profile(key_id)]
     _CONFIG["tokenization_profiles"] = [valid_tokenization_profile(key_id)]
+    _CONFIG["mac_profiles"] = [valid_mac_profile(key_id)]
     write_config()
     reload_config(client)
     encoded_token = create_valid_encoded_token(client, key_id)
@@ -2200,6 +2333,10 @@ def main():
         ("POST /token/decode/batch empty items", token_decode_batch_empty_items),
         ("POST /token/decode/batch not found", token_decode_batch_not_found),
         ("POST /token/decode/batch duplicate ref", token_decode_batch_duplicate_ref),
+        ("POST /mac/{kid} unknown profile", mac_create_unknown_profile),
+        ("POST /mac/{kid} wrong kid", mac_create_wrong_kid),
+        ("POST /mac/verify/{kid} digest not hex", mac_verify_digest_not_hex),
+        ("POST /mac/verify/{kid} wrong digest", mac_verify_wrong_digest),
     ):
         run_case(rows, name, func)
 
@@ -2364,6 +2501,7 @@ def main():
     _CONFIG["permissions"] = []
     _CONFIG["fpe_profiles"] = []
     _CONFIG["tokenization_profiles"] = []
+    _CONFIG["mac_profiles"] = []
     write_config()
     status, _ = client.post("/config/reload", {}, auth=True)
     require_status("restore config reload", status, 200)

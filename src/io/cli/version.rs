@@ -1,4 +1,4 @@
-use crate::core::{config, crypto, fpe, protocol, tokenization, validation};
+use crate::core::{config, crypto, fpe, mac, protocol, tokenization, validation};
 use crate::error::DynError;
 use crate::io::cli::{
     help_catalog,
@@ -14,6 +14,13 @@ pub const ML_DSA_VARIANTS: &[&str] = &["ML-DSA-44", "ML-DSA-65", "ML-DSA-87"];
 pub const ML_KEM_VARIANTS: &[&str] = &["ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"];
 pub const FPE_VERSIONS: &[&str] = &[fpe::FPE_VERSION_FF1_2025];
 pub const TOKENIZATION_VERSIONS: &[&str] = &[tokenization::TOKENIZATION_VERSION_RANDOM_V1];
+pub const MAC_ALGORITHMS: &[&str] = &[
+    "HMAC(<ops-key-hash>)",
+    mac::MAC_ALGORITHM_KMAC_224,
+    mac::MAC_ALGORITHM_KMAC_256,
+    mac::MAC_ALGORITHM_KMAC_384,
+    mac::MAC_ALGORITHM_KMAC_512,
+];
 
 pub fn run(args: Vec<String>) -> Result<(), DynError> {
     let (output, rest) = parse_output_option(args)?;
@@ -48,6 +55,7 @@ pub fn version_payload() -> Value {
             "ml_kem": ML_KEM_VARIANTS,
             "fpe": FPE_VERSIONS,
             "tokenization": TOKENIZATION_VERSIONS,
+            "mac": MAC_ALGORITHMS,
         }
     })
 }
@@ -179,6 +187,24 @@ mod tests {
         assert_eq!(
             payload["algorithms"]["tokenization"][0],
             tokenization::TOKENIZATION_VERSION_RANDOM_V1
+        );
+        assert!(
+            payload["algorithms"]["mac"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(mac::MAC_ALGORITHM_KMAC_256))
+        );
+        assert!(
+            payload["algorithms"]["mac"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(mac::MAC_ALGORITHM_KMAC_384))
+        );
+        assert!(
+            payload["algorithms"]["mac"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(mac::MAC_ALGORITHM_KMAC_512))
         );
     }
 }

@@ -145,4 +145,5 @@ def empty_config():
         "permissions": [],
         "fpe_profiles": [],
         "tokenization_profiles": [],
+        "mac_profiles": [],
     }

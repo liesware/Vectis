@@ -428,6 +428,7 @@ CONFIG_LOADED_COUNTS = (
     "clients_loaded",
     "fpe_profiles_loaded",
     "tokenization_profiles_loaded",
+    "mac_profiles_loaded",
 )
 
 
@@ -780,6 +781,7 @@ def empty_config():
         "permissions": [],
         "fpe_profiles": [],
         "tokenization_profiles": [],
+        "mac_profiles": [],
     }
 
 
@@ -791,7 +793,14 @@ def read_config_or_empty():
         return empty_config()
     config = empty_config()
     config.update(parsed)
-    for key in ("routes", "remote_routes", "permissions", "fpe_profiles", "tokenization_profiles"):
+    for key in (
+        "routes",
+        "remote_routes",
+        "permissions",
+        "fpe_profiles",
+        "tokenization_profiles",
+        "mac_profiles",
+    ):
         if not isinstance(config.get(key), list):
             config[key] = []
     return config
@@ -1254,8 +1263,8 @@ def self_check():
         "internal encrypt ignores plausible body",
     )
 
-    loaded_body = '{"status":"reloaded","routes_loaded":1,"remote_routes_loaded":0,"clients_loaded":0,"fpe_profiles_loaded":0,"tokenization_profiles_loaded":0}'
-    empty_body = '{"status":"reloaded","routes_loaded":0,"remote_routes_loaded":0,"clients_loaded":0,"fpe_profiles_loaded":0,"tokenization_profiles_loaded":0}'
+    loaded_body = '{"status":"reloaded","routes_loaded":1,"remote_routes_loaded":0,"clients_loaded":0,"fpe_profiles_loaded":0,"tokenization_profiles_loaded":0,"mac_profiles_loaded":0}'
+    empty_body = '{"status":"reloaded","routes_loaded":0,"remote_routes_loaded":0,"clients_loaded":0,"fpe_profiles_loaded":0,"tokenization_profiles_loaded":0,"mac_profiles_loaded":0}'
     expect(config_semantic(200, loaded_body), "config flags integrity bypass")
     expect(not config_semantic(200, empty_body), "config ignores empty reload")
     expect(not config_semantic(400, '{"error":"x"}'), "config ignores rejected")

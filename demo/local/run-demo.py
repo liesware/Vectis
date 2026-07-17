@@ -33,6 +33,16 @@ TOKEN_SAMPLES = [
     ("insurance-policy-token-v1", "POLICY123456"),
 ]
 
+MAC_SAMPLES = [
+    ("credit-card-pan-mac-v1", "4111111111111111"),
+    ("ssn-mac-v1", "123456789"),
+    ("identity-document-mac-v1", "ACME123456"),
+    ("driver-license-mac-v1", "D1234567"),
+    ("bank-account-mac-v1", "987654321012"),
+    ("payroll-number-mac-v1", "PAY123456"),
+    ("insurance-policy-mac-v1", "POLICY123456"),
+]
+
 
 def load_env(path):
     values = {}
@@ -204,6 +214,40 @@ def run_tokenization(base_url, kid, api_key):
             raise RuntimeError(f"Token round-trip failed for {profile}")
 
 
+def run_mac(base_url, kid, api_key):
+    print("== MAC Profiles ==", flush=True)
+    for profile, plaintext in MAC_SAMPLES:
+        created = post_json(
+            base_url,
+            f"/mac/{kid}",
+            {"profile": profile, "plaintext": plaintext},
+            api_key,
+        )
+        digest = created["response"]["digest"]
+        verified = post_json(
+            base_url,
+            f"/mac/verify/{kid}",
+            {"profile": profile, "plaintext": plaintext, "digest": digest},
+            api_key,
+        )
+        valid = verified["response"].get("valid")
+        status = "OK" if valid is True else "FAILED"
+        print_section(profile)
+        print_http_step("create", created)
+        print_http_step("verify", verified)
+        print_summary(
+            [
+                ("input", plaintext),
+                ("algorithm", created["response"].get("algorithm")),
+                ("digest", digest),
+                ("verify", str(valid).lower()),
+                ("status", status),
+            ],
+        )
+        if status != "OK":
+            raise RuntimeError(f"MAC verification failed for {profile}")
+
+
 def run_internal_message(base_url, kid, api_key, plaintext):
     print("== Internal Message ==", flush=True)
     encrypted = post_json(
@@ -287,6 +331,7 @@ def main():
 
     run_fpe(base_url, kid, api_key)
     run_tokenization(base_url, kid, api_key)
+    run_mac(base_url, kid, api_key)
     print_yaml_block("personaldata.json", personaldata)
     run_internal_message(base_url, kid, api_key, plaintext)
     print_yaml_block("personaldata.json", personaldata)

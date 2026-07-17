@@ -135,6 +135,23 @@ def seed_token_profile(env):
     )
 
 
+def seed_mac_profile(env):
+    run_cli_json(
+        [
+            "config",
+            "mac",
+            "add",
+            "--name",
+            "pan-blind-index-v1",
+            "--kid",
+            KID_A,
+            "--context",
+            "tenant=mx;field=pan;purpose=blind-index;version=1",
+        ],
+        env,
+    )
+
+
 def seed_binary_fpe_profile(env):
     config = empty_config()
     config["fpe_profiles"] = [
@@ -249,6 +266,22 @@ def main():
                 ],
             )
 
+        def mac_profile_add_missing_config():
+            expect_unchanged_failure(
+                env,
+                [
+                    "config",
+                    "mac",
+                    "add",
+                    "--name",
+                    "missing-config-mac",
+                    "--kid",
+                    KID_A,
+                    "--context",
+                    "tenant=mx;field=pan;purpose=blind-index;version=1",
+                ],
+            )
+
         def route_list_missing_config():
             run_cli(["config", "routes", "list"], env, expect_success=False)
 
@@ -263,6 +296,9 @@ def main():
 
         def token_profile_list_missing_config():
             run_cli(["config", "token", "list"], env, expect_success=False)
+
+        def mac_profile_list_missing_config():
+            run_cli(["config", "mac", "list"], env, expect_success=False)
 
         def config_json_error_goes_to_stderr():
             payload = expect_json_error(env, ["config", "routes", "add"])
@@ -398,6 +434,23 @@ def main():
                 ],
             )
 
+        def duplicate_mac_profile_name():
+            seed_mac_profile(env)
+            expect_unchanged_failure(
+                env,
+                [
+                    "config",
+                    "mac",
+                    "add",
+                    "--name",
+                    "pan-blind-index-v1",
+                    "--kid",
+                    KID_B,
+                    "--context",
+                    "tenant=mx;field=pan;purpose=blind-index;version=2",
+                ],
+            )
+
         def binary_fpe_profile_update_invalid_domain():
             seed_binary_fpe_profile(env)
             expect_unchanged_failure(
@@ -423,6 +476,10 @@ def main():
                 "config token add fails when config is missing",
                 token_profile_add_missing_config,
             ),
+            (
+                "config mac add fails when config is missing",
+                mac_profile_add_missing_config,
+            ),
             ("config routes list fails when config is missing", route_list_missing_config),
             (
                 "config permissions list fails when config is missing",
@@ -434,6 +491,7 @@ def main():
             ),
             ("config fpe list fails when config is missing", fpe_profile_list_missing_config),
             ("config token list fails when config is missing", token_profile_list_missing_config),
+            ("config mac list fails when config is missing", mac_profile_list_missing_config),
             ("config --output json errors are machine readable", config_json_error_goes_to_stderr),
             ("apikey --output json errors are machine readable", apikey_json_error_goes_to_stderr),
             (
@@ -464,6 +522,24 @@ def main():
             (
                 "duplicate tokenization_profiles.name fails without rewrite",
                 duplicate_token_profile_name,
+            ),
+            ("duplicate mac_profiles.name fails without rewrite", duplicate_mac_profile_name),
+            (
+                "invalid mac context fails without rewrite",
+                lambda: expect_unchanged_failure(
+                    env,
+                    [
+                        "config",
+                        "mac",
+                        "add",
+                        "--name",
+                        "bad-mac-context",
+                        "--kid",
+                        KID_A,
+                        "--context",
+                        "tenant",
+                    ],
+                ),
             ),
             (
                 "oversized tokenization token_prefix fails without rewrite",

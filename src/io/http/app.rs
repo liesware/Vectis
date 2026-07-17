@@ -68,6 +68,26 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
                 request,
             )
         },
+        |kid| {
+            let loaded_key = keys_db_state.get(kid).ok_or_else(|| {
+                crate::error::invalid_input(format!(
+                    "mac profile references kid not loaded in memory: {kid}"
+                ))
+            })?;
+            Ok(loaded_key.key_material().hash_variant().to_string())
+        },
+        |request| {
+            let loaded_key = keys_db_state.get(request.kid).ok_or_else(|| {
+                crate::error::invalid_input(format!(
+                    "mac profile references kid not loaded in memory: {}",
+                    request.kid
+                ))
+            })?;
+            crate::core::mac::derive_mac_key_for_profile(
+                loaded_key.keys().symmetric().key_hex(),
+                request,
+            )
+        },
     )?;
     let started_at = validation::current_timestamp()?;
     info!(
@@ -101,6 +121,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         loaded_permission_clients = config_state.permissions.len(),
         loaded_fpe_profiles = config_state.fpe_profiles.len(),
         loaded_tokenization_profiles = config_state.tokenization_profiles.len(),
+        loaded_mac_profiles = config_state.mac_profiles.len(),
         "signed config loaded into http state"
     );
     if metrics_handle.is_some() {
@@ -112,6 +133,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
             config_state.permissions.len(),
             config_state.fpe_profiles.len(),
             config_state.tokenization_profiles.len(),
+            config_state.mac_profiles.len(),
         );
     }
     let app = super::router(super::HttpState::new(super::HttpStateInput {

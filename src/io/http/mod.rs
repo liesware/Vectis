@@ -14,6 +14,7 @@ mod extract;
 mod fpe;
 mod health;
 mod keys;
+mod mac;
 mod message;
 mod metrics;
 mod middleware;
@@ -28,6 +29,7 @@ mod token;
 use crate::core::config::AppConfig;
 use crate::core::config_file::ConfigState;
 use crate::core::fpe::FpeProfile;
+use crate::core::mac::MacProfile;
 use crate::core::permissions::AuthenticatedClient;
 use crate::core::remote_routes::{PeerPublicKeys, RemoteRoute};
 use crate::core::routes::FinalAppRoute;
@@ -48,6 +50,7 @@ struct ConfigKeySource {
     kid: String,
     symmetric_key_hex: String,
     symmetric_algorithm: String,
+    hash_algorithm: String,
 }
 
 impl Zeroize for ConfigKeySource {
@@ -55,6 +58,7 @@ impl Zeroize for ConfigKeySource {
         self.kid.zeroize();
         self.symmetric_key_hex.zeroize();
         self.symmetric_algorithm.zeroize();
+        self.hash_algorithm.zeroize();
     }
 }
 
@@ -221,6 +225,12 @@ impl HttpState {
         config_state.tokenization_profiles.len()
     }
 
+    async fn mac_profiles_loaded(&self) -> usize {
+        let config_state = self.config_state.read().await;
+
+        config_state.mac_profiles.len()
+    }
+
     async fn routes_output(&self) -> crate::core::routes::ListRoutesOutput {
         let config_state = self.config_state.read().await;
 
@@ -251,6 +261,12 @@ impl HttpState {
         config_state.tokenization_profiles.get(name).cloned()
     }
 
+    async fn mac_profile(&self, name: &str) -> Option<MacProfile> {
+        let config_state = self.config_state.read().await;
+
+        config_state.mac_profiles.get(name).cloned()
+    }
+
     async fn reload_config_state(&self) -> Result<(), DynError> {
         let config_key_sources = {
             let keys_db_state = self.keys_db_state.read().await;
@@ -262,6 +278,7 @@ impl HttpState {
                         kid,
                         symmetric_key_hex: loaded_key.keys().symmetric().key_hex().to_string(),
                         symmetric_algorithm: loaded_key.keys().symmetric().variant().to_string(),
+                        hash_algorithm: loaded_key.key_material().hash_variant().to_string(),
                     })
                 })
                 .collect::<Vec<_>>()
@@ -315,6 +332,29 @@ impl HttpState {
                         request,
                     )
                 },
+                |kid| {
+                    let source = config_key_sources
+                        .iter()
+                        .find(|source| source.kid == kid)
+                        .ok_or_else(|| {
+                            crate::error::invalid_input(format!(
+                                "mac profile references kid not loaded in memory: {kid}"
+                            ))
+                        })?;
+                    Ok(source.hash_algorithm.clone())
+                },
+                |request| {
+                    let source = config_key_sources
+                        .iter()
+                        .find(|source| source.kid == request.kid)
+                        .ok_or_else(|| {
+                            crate::error::invalid_input(format!(
+                                "mac profile references kid not loaded in memory: {}",
+                                request.kid
+                            ))
+                        })?;
+                    crate::core::mac::derive_mac_key_for_profile(&source.symmetric_key_hex, request)
+                },
             )
         })
         .await?;
@@ -332,6 +372,7 @@ impl HttpState {
             self.permissions_loaded().await,
             self.fpe_profiles_loaded().await,
             self.tokenization_profiles_loaded().await,
+            self.mac_profiles_loaded().await,
         );
     }
 
@@ -413,6 +454,8 @@ fn record_operation_denied_metric(event_name: &str) {
         "token.decode.denied" => core_metrics::record_crypto_operation("token_decode", "failed"),
         "token.encode.batch.denied" => record_crypto_failed("token_encode_batch"),
         "token.decode.batch.denied" => record_crypto_failed("token_decode_batch"),
+        "mac.create.denied" => record_crypto_failed("mac_create"),
+        "mac.verify.denied" => record_crypto_failed("mac_verify"),
         "sign.denied" => core_metrics::record_crypto_operation("sign", "failed"),
         "self_test.denied" => {}
         _ => {}
@@ -458,6 +501,8 @@ pub fn router(state: HttpState) -> Router {
         .route("/token/decode/batch", post(token::decode_batch_endpoint))
         .route("/token/encode/{kid}", post(token::encode_endpoint))
         .route("/token/decode", post(token::decode_endpoint))
+        .route("/mac/verify/{kid}", post(mac::verify_endpoint))
+        .route("/mac/{kid}", post(mac::create_endpoint))
         .route("/pub/{kid}", get(pubkey::pub_endpoint))
         .route(
             "/message/internal/encrypt/{kid}",

@@ -35,6 +35,7 @@ const ROOT_COMMANDS: &[RootCommand] = &[
     RootCommand::new("sign", RootCommandKind::Http),
     RootCommand::new("fpe", RootCommandKind::Http),
     RootCommand::new("token", RootCommandKind::Http),
+    RootCommand::new("mac", RootCommandKind::Http),
     RootCommand::new("message", RootCommandKind::Http),
 ];
 

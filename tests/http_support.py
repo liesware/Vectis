@@ -23,6 +23,7 @@ _CONFIG = {
     "permissions": [],
     "fpe_profiles": [],
     "tokenization_profiles": [],
+    "mac_profiles": [],
 }
 
 KEY_CASES = [
@@ -411,6 +412,11 @@ def write_tokenization_profiles(profiles):
     write_config()
 
 
+def write_mac_profiles(profiles):
+    _CONFIG["mac_profiles"] = profiles
+    write_config()
+
+
 def reload_config(client):
     response = client.post("/config/reload", {}, auth=True)
     require(response.get("status") == "reloaded", "config reload status must be reloaded")
@@ -433,6 +439,10 @@ def reload_config(client):
     require(
         isinstance(response.get("tokenization_profiles_loaded"), int),
         "config reload tokenization_profiles_loaded must be an integer",
+    )
+    require(
+        isinstance(response.get("mac_profiles_loaded"), int),
+        "config reload mac_profiles_loaded must be an integer",
     )
     return response
 

@@ -289,6 +289,24 @@ characters, `;`, or `=`. The CLI validates field shape but does not check
 whether the KID is loaded in a running server. That check happens when Vectis
 loads the signed config.
 
+### `vectis config mac`
+
+Edits the local `mac_profiles` section in `VECTIS_CONFIG_PATH`. The lookup key
+is `name`. Names must be unique.
+
+```sh
+vectis config mac list
+vectis config mac add --name pan-blind-index-v1 --kid <kid> --context 'tenant=mx;field=pan;purpose=blind-index;version=1'
+vectis config mac get pan-blind-index-v1
+vectis config mac update pan-blind-index-v1 --context 'tenant=mx;field=pan;purpose=blind-index;version=2'
+vectis config mac delete pan-blind-index-v1
+```
+
+`context` must use `key=value;key=value` labels, is limited to 128 characters,
+and comes only from signed config. The CLI validates field shape but does not
+check whether the KID is loaded in a running server. That check happens when
+Vectis loads the signed config.
+
 Section `list` commands print only the local array from `config.json`. Runtime
 commands such as `vectis routes list` read the server's loaded state instead.
 
@@ -474,6 +492,20 @@ vectis token decode --json '{"ref":"reg1","kid":"<kid>","profile":"patient-id-to
 keys. Metadata is optional, must be a JSON object when present, and its compact
 serialized JSON representation must be at most 128 characters. `ref` is a
 required client correlation value and is echoed in the response.
+
+### `vectis mac`
+
+Calls local MAC create/verify endpoints. MAC profiles are not defined in the
+request; they are loaded from signed `config.json`.
+
+```sh
+vectis mac create <kid> --json '{"profile":"pan-blind-index-v1","plaintext":"4111111111111111"}'
+vectis mac verify <kid> --json '{"profile":"pan-blind-index-v1","plaintext":"4111111111111111","digest":"<hex>"}'
+```
+
+`create` requires `mac-create` permission for the KID and an `active` key.
+`verify` requires `mac-verify` permission and allows `active` or `retired`
+keys. The response reports the resolved MAC algorithm and digest.
 
 ## Authentication
 

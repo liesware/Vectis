@@ -1,5 +1,5 @@
 use super::http::{OutputFormat, invalid_input, print_response};
-use crate::core::{config, config_file, fpe, permissions, tokenization, validation};
+use crate::core::{config, config_file, fpe, mac, permissions, tokenization, validation};
 use crate::error::DynError;
 use serde_json::{Map, Value, json};
 use std::collections::HashSet;
@@ -73,6 +73,8 @@ enum FieldKind {
     TokenizationVersion,
     TokenProfileName,
     TokenPrefix,
+    MacProfileName,
+    MacContext,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -392,6 +394,45 @@ const TOKENIZATION_PROFILES_SECTION: SectionSpec = SectionSpec {
     parsed_validator: Some(validate_tokenization_profile_parsed_fields),
 };
 
+const MAC_PROFILES_SECTION: SectionSpec = SectionSpec {
+    cli_name: "mac",
+    json_section: "mac_profiles",
+    key_field: "name",
+    item_name: "mac profile name",
+    command_context: "config mac",
+    fields: &[
+        FieldSpec {
+            flag: "--name",
+            json_field: "name",
+            kind: FieldKind::MacProfileName,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: false,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--kid",
+            json_field: "kid",
+            kind: FieldKind::Kid,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--context",
+            json_field: "context",
+            kind: FieldKind::MacContext,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+    ],
+    add_defaults: &[],
+    parsed_validator: None,
+};
+
 pub fn init_config(output: OutputFormat) -> Result<(), DynError> {
     let app = config::app_config()?;
     match fs::metadata(&app.config_path) {
@@ -455,6 +496,11 @@ pub async fn run_config_fpe(args: Vec<String>, output: OutputFormat) -> Result<(
 pub async fn run_config_token(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let (command, rest) = split_command(args, "config token command")?;
     run_basic_section_command(&TOKENIZATION_PROFILES_SECTION, &command, rest, output).await
+}
+
+pub async fn run_config_mac(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+    let (command, rest) = split_command(args, "config mac command")?;
+    run_basic_section_command(&MAC_PROFILES_SECTION, &command, rest, output).await
 }
 
 async fn read_config(
@@ -850,6 +896,14 @@ fn parse_field_value(field: &FieldSpec, raw: &str) -> Result<Value, DynError> {
             tokenization::validate_token_prefix(raw)?;
             Ok(Value::String(raw.to_string()))
         }
+        FieldKind::MacProfileName => {
+            validation::validate_aad_config_name("mac_profiles.name", raw)?;
+            Ok(Value::String(raw.to_string()))
+        }
+        FieldKind::MacContext => {
+            validation::validate_labels("mac_profiles.context", raw, mac::MAC_CONTEXT_MAX_CHARS)?;
+            Ok(Value::String(raw.to_string()))
+        }
     }
 }
 
@@ -1052,6 +1106,7 @@ fn empty_config() -> Value {
         "permissions": [],
         "fpe_profiles": [],
         "tokenization_profiles": [],
+        "mac_profiles": [],
     })
 }
 
@@ -1065,6 +1120,7 @@ fn ensure_config_shape(value: &mut Value) -> Result<(), DynError> {
     ensure_section_array(object, "permissions")?;
     ensure_section_array(object, "fpe_profiles")?;
     ensure_section_array(object, "tokenization_profiles")?;
+    ensure_section_array(object, "mac_profiles")?;
     Ok(())
 }
 
@@ -1102,6 +1158,14 @@ fn validate_local_config(local: &LocalConfig) -> Result<(), DynError> {
                     crate::core::tokenization::TOKEN_KEY_SIZE_BYTES
                 ]),
                 cipher_algorithm: String::from("AES-256/GCM"),
+            })
+        },
+        |_| Ok(String::from("BLAKE2b(256)")),
+        |_| {
+            Ok(crate::core::mac::DerivedMacKey {
+                public_algorithm: String::from("HMAC(BLAKE2b(256))"),
+                botan_algorithm: String::from("HMAC(BLAKE2b(256))"),
+                mac_key: zeroize::Zeroizing::new(vec![0u8; crate::core::mac::MAC_KEY_SIZE_BYTES]),
             })
         },
     )?;
@@ -1455,6 +1519,17 @@ mod tests {
             String::from(token_len),
             String::from("--max-plaintext-len"),
             String::from(max_plaintext_len),
+        ]
+    }
+
+    fn valid_mac_profile_args(name: &str) -> Vec<String> {
+        vec![
+            String::from("--name"),
+            String::from(name),
+            String::from("--kid"),
+            "a".repeat(64),
+            String::from("--context"),
+            String::from("tenant=mx;field=pan;purpose=blind-index;version=1"),
         ]
     }
 
@@ -2019,6 +2094,55 @@ mod tests {
             "tokenization_profiles.token_prefix exceeds maximum allowed length: 16"
         );
         assert_eq!(local.value, before);
+    }
+
+    #[test]
+    fn mac_profile_add_get_update_and_delete_use_name() {
+        let mut local = local_config();
+        let value =
+            parse_section_add(&MAC_PROFILES_SECTION, valid_mac_profile_args("pan-mac")).unwrap();
+        section_add_value(&mut local, &MAC_PROFILES_SECTION, value).unwrap();
+
+        let profile =
+            section_get(&local, &MAC_PROFILES_SECTION, vec![String::from("pan-mac")]).unwrap();
+        assert_eq!(profile["kid"], "a".repeat(64));
+
+        section_update(
+            &mut local,
+            &MAC_PROFILES_SECTION,
+            vec![
+                String::from("pan-mac"),
+                String::from("--context"),
+                String::from("tenant=mx;field=pan;purpose=blind-index;version=2"),
+            ],
+        )
+        .unwrap();
+        let profile =
+            section_get(&local, &MAC_PROFILES_SECTION, vec![String::from("pan-mac")]).unwrap();
+        assert_eq!(
+            profile["context"],
+            "tenant=mx;field=pan;purpose=blind-index;version=2"
+        );
+
+        section_delete(
+            &mut local,
+            &MAC_PROFILES_SECTION,
+            vec![String::from("pan-mac")],
+        )
+        .unwrap();
+        assert!(array_ref(&local.value, "mac_profiles").unwrap().is_empty());
+    }
+
+    #[test]
+    fn mac_profile_rejects_invalid_context_inline() {
+        let mut args = valid_mac_profile_args("pan-mac");
+        args[5] = String::from("tenant");
+        let err = parse_section_add(&MAC_PROFILES_SECTION, args)
+            .expect_err("malformed MAC context must fail during parsing");
+        assert_eq!(
+            err.to_string(),
+            "mac_profiles.context labels must use key=value format"
+        );
     }
 
     #[test]

@@ -7,6 +7,7 @@ pub mod crypto;
 pub mod fpe;
 pub mod http_client;
 pub mod logging;
+pub mod mac;
 pub mod metrics;
 pub mod permissions;
 pub mod protocol;

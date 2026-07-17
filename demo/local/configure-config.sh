@@ -37,6 +37,8 @@ cat > "${SITE_DIR}/config.json" <<JSON
             "fpe-decrypt",
             "token-encode",
             "token-decode",
+            "mac-create",
+            "mac-verify",
             "message",
             "sign"
           ]
@@ -166,6 +168,43 @@ cat > "${SITE_DIR}/config.json" <<JSON
       "token_len": 32,
       "max_plaintext_len": 128
     }
+  ],
+  "mac_profiles": [
+    {
+      "name": "credit-card-pan-mac-v1",
+      "kid": "${LOCAL_KID}",
+      "context": "tenant=demo;field=credit_card_pan;purpose=blind_index;version=1"
+    },
+    {
+      "name": "ssn-mac-v1",
+      "kid": "${LOCAL_KID}",
+      "context": "tenant=demo;field=ssn;purpose=blind_index;version=1"
+    },
+    {
+      "name": "identity-document-mac-v1",
+      "kid": "${LOCAL_KID}",
+      "context": "tenant=demo;field=identity_document;purpose=blind_index;version=1"
+    },
+    {
+      "name": "driver-license-mac-v1",
+      "kid": "${LOCAL_KID}",
+      "context": "tenant=demo;field=driver_license;purpose=blind_index;version=1"
+    },
+    {
+      "name": "bank-account-mac-v1",
+      "kid": "${LOCAL_KID}",
+      "context": "tenant=demo;field=bank_account;purpose=blind_index;version=1"
+    },
+    {
+      "name": "payroll-number-mac-v1",
+      "kid": "${LOCAL_KID}",
+      "context": "tenant=demo;field=payroll_number;purpose=blind_index;version=1"
+    },
+    {
+      "name": "insurance-policy-mac-v1",
+      "kid": "${LOCAL_KID}",
+      "context": "tenant=demo;field=insurance_policy;purpose=blind_index;version=1"
+    }
   ]
 }
 JSON
@@ -176,5 +215,5 @@ echo "Signed local demo config:"
 echo "  kid: ${LOCAL_KID}"
 echo "  FPE profiles: 7"
 echo "  tokenization profiles: 7"
+echo "  MAC profiles: 7"
 echo "Next: bash demo/local/start-vectis.sh"
-
