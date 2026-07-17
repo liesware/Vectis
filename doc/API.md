@@ -1016,6 +1016,8 @@ FPE is a local field operation. It preserves an alphabet and length range define
 
 FPE profiles live in `config.json` under `fpe_profiles`. Requests cannot provide `alphabet`, `tweak_aad`, `min_len`, `max_len`, or `fpe_version`; those values come only from signed config.
 
+All FPE requests include a client-defined `ref`. It is required, non-empty, at most 128 characters, and echoed in the response. Batch requests require every item `ref` to be unique within the request.
+
 The FPE key is derived from the operational key's symmetric key:
 
 ```text
@@ -1035,6 +1037,7 @@ Request:
 
 ```json
 {
+  "ref": "reg1",
   "profile": "patient-id-decimal-v1",
   "plaintext": "123456"
 }
@@ -1044,6 +1047,7 @@ Response:
 
 ```json
 {
+  "ref": "reg1",
   "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
   "profile": "patient-id-decimal-v1",
   "ciphertext": "839201"
@@ -1056,7 +1060,7 @@ The response intentionally does not include `fpe_version`.
 
 Requires auth and `fpe-encrypt` permission for the path `kid`. The key must be `active`.
 
-The batch uses one profile and is all-or-nothing. `items` must contain between `1` and `128` entries. Response order matches request order. If any item is invalid, the whole request fails and no partial `items` are returned.
+The batch uses one profile and is all-or-nothing. `items` must contain between `1` and `128` entries. Each item must include a unique `ref`. Response order matches request order. If any item is invalid, the whole request fails and no partial `items` are returned.
 
 Request:
 
@@ -1064,8 +1068,8 @@ Request:
 {
   "profile": "patient-id-decimal-v1",
   "items": [
-    { "plaintext": "123456" },
-    { "plaintext": "654321" }
+    { "ref": "reg1", "plaintext": "123456" },
+    { "ref": "reg2", "plaintext": "654321" }
   ]
 }
 ```
@@ -1077,8 +1081,8 @@ Response:
   "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
   "profile": "patient-id-decimal-v1",
   "items": [
-    { "ciphertext": "839201" },
-    { "ciphertext": "102938" }
+    { "ref": "reg1", "ciphertext": "839201" },
+    { "ref": "reg2", "ciphertext": "102938" }
   ]
 }
 ```
@@ -1091,6 +1095,7 @@ Request:
 
 ```json
 {
+  "ref": "reg1",
   "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
   "profile": "patient-id-decimal-v1",
   "ciphertext": "839201"
@@ -1101,6 +1106,7 @@ Response:
 
 ```json
 {
+  "ref": "reg1",
   "plaintext": "123456"
 }
 ```
@@ -1109,7 +1115,7 @@ Response:
 
 Requires auth and `fpe-decrypt` permission for the request `kid`. The key may be `active` or `retired`.
 
-The batch uses one profile and is all-or-nothing. `items` must contain between `1` and `128` entries. Response order matches request order. If any item is invalid, the whole request fails and no partial `items` are returned.
+The batch uses one profile and is all-or-nothing. `items` must contain between `1` and `128` entries. Each item must include a unique `ref`. Response order matches request order. If any item is invalid, the whole request fails and no partial `items` are returned.
 
 Request:
 
@@ -1118,8 +1124,8 @@ Request:
   "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
   "profile": "patient-id-decimal-v1",
   "items": [
-    { "ciphertext": "839201" },
-    { "ciphertext": "102938" }
+    { "ref": "reg1", "ciphertext": "839201" },
+    { "ref": "reg2", "ciphertext": "102938" }
   ]
 }
 ```
@@ -1131,8 +1137,8 @@ Response:
   "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
   "profile": "patient-id-decimal-v1",
   "items": [
-    { "plaintext": "123456" },
-    { "plaintext": "654321" }
+    { "ref": "reg1", "plaintext": "123456" },
+    { "ref": "reg2", "plaintext": "654321" }
   ]
 }
 ```
@@ -1142,6 +1148,8 @@ Response:
 Tokenization is a local reversible random-token operation. It returns a visible random token and stores the original plaintext plus optional metadata encrypted in storage. The database only sees `kid`, `hashid`, and encrypted `data`; it never sees plaintext, metadata, profile name as a column, or the visible token.
 
 Tokenization profiles live in `config.json` under `tokenization_profiles`. Requests cannot provide `token_prefix`, `token_len`, `max_plaintext_len`, or `tokenization_version`; those values come only from signed config.
+
+All tokenization requests include a client-defined `ref`. It is required, non-empty, at most 128 characters, and echoed in the response. Batch requests require every item `ref` to be unique within the request.
 
 `hash_key` and `data_key` are derived from the operational key's symmetric key with `INTERNAL_KEYS_HKDF` and are prepared when config is loaded. The derivation binds the profile name, KID, and `tokenization_version`. `tokens.data` AAD also binds `tokenization_version`. Tokens are random and are not deterministic for the same plaintext.
 
@@ -1159,6 +1167,7 @@ Request:
 
 ```json
 {
+  "ref": "reg1",
   "profile": "patient-id-token-v1",
   "plaintext": "123456",
   "metadata": { "tenant": "acme" }
@@ -1169,6 +1178,7 @@ Response:
 
 ```json
 {
+  "ref": "reg1",
   "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
   "profile": "patient-id-token-v1",
   "token": "tok_patient_vGqyEeXKcKz5QK1jwBQTyQ"
@@ -1183,9 +1193,20 @@ Request:
 
 ```json
 {
+  "ref": "reg1",
   "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
   "profile": "patient-id-token-v1",
   "token": "tok_patient_vGqyEeXKcKz5QK1jwBQTyQ"
+}
+```
+
+Response:
+
+```json
+{
+  "ref": "reg1",
+  "plaintext": "123456",
+  "metadata": { "tenant": "acme" }
 }
 ```
 
@@ -1199,8 +1220,8 @@ Request:
 {
   "profile": "patient-id-token-v1",
   "items": [
-    { "plaintext": "123456", "metadata": { "tenant": "acme" } },
-    { "plaintext": "654321" }
+    { "ref": "reg1", "plaintext": "123456", "metadata": { "tenant": "acme" } },
+    { "ref": "reg2", "plaintext": "654321" }
   ]
 }
 ```
@@ -1212,8 +1233,8 @@ Response:
   "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
   "profile": "patient-id-token-v1",
   "items": [
-    { "token": "tok_patient_vGqyEeXKcKz5QK1jwBQTyQ" },
-    { "token": "tok_patient_j43sAUddCPYAaHwvA6Yoww" }
+    { "ref": "reg1", "token": "tok_patient_vGqyEeXKcKz5QK1jwBQTyQ" },
+    { "ref": "reg2", "token": "tok_patient_j43sAUddCPYAaHwvA6Yoww" }
   ]
 }
 ```
@@ -1229,8 +1250,8 @@ Request:
   "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
   "profile": "patient-id-token-v1",
   "items": [
-    { "token": "tok_patient_vGqyEeXKcKz5QK1jwBQTyQ" },
-    { "token": "tok_patient_j43sAUddCPYAaHwvA6Yoww" }
+    { "ref": "reg1", "token": "tok_patient_vGqyEeXKcKz5QK1jwBQTyQ" },
+    { "ref": "reg2", "token": "tok_patient_j43sAUddCPYAaHwvA6Yoww" }
   ]
 }
 ```
@@ -1242,18 +1263,9 @@ Response:
   "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
   "profile": "patient-id-token-v1",
   "items": [
-    { "plaintext": "123456", "metadata": { "tenant": "acme" } },
-    { "plaintext": "654321" }
+    { "ref": "reg1", "plaintext": "123456", "metadata": { "tenant": "acme" } },
+    { "ref": "reg2", "plaintext": "654321" }
   ]
-}
-```
-
-Response:
-
-```json
-{
-  "plaintext": "123456",
-  "metadata": { "tenant": "acme" }
 }
 ```
 

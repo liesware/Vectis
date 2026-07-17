@@ -512,8 +512,9 @@ paths:
       summary: Format-preserving encrypt a local field
       description: >
         Encrypts a field using an FPE profile loaded from signed config. The
-        request supplies only the profile name and plaintext; alphabet, length
-        bounds, tweak AAD, FPE version, and bound KID come from config.json.
+        request supplies only ref, profile name, and plaintext; alphabet,
+        length bounds, tweak AAD, FPE version, and bound KID come from
+        config.json. The client ref is echoed in the response.
       security:
         - ApiKeyAuth: []
       parameters:
@@ -539,9 +540,10 @@ paths:
       tags: [FPE]
       summary: Format-preserving encrypt a batch of local fields
       description: >
-        Encrypts a batch with one FPE profile. Results preserve request item
-        order. The operation is all-or-nothing: if any item is invalid, the
-        request fails and no partial results are returned.
+        Encrypts a batch with one FPE profile. Each item must include a unique
+        client ref, which is echoed in the corresponding response item. Results
+        preserve request item order. The operation is all-or-nothing: if any
+        item is invalid, the request fails and no partial results are returned.
       security:
         - ApiKeyAuth: []
       parameters:
@@ -569,7 +571,7 @@ paths:
       description: >
         Decrypts a field using an FPE profile loaded from signed config. The
         KID in the request must match the profile KID. FPE decrypt permits
-        active and retired keys.
+        active and retired keys. The client ref is echoed in the response.
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -593,9 +595,10 @@ paths:
       tags: [FPE]
       summary: Format-preserving decrypt a batch of local fields
       description: >
-        Decrypts a batch with one FPE profile. Results preserve request item
-        order. The operation is all-or-nothing: if any item is invalid, the
-        request fails and no partial results are returned.
+        Decrypts a batch with one FPE profile. Each item must include a unique
+        client ref, which is echoed in the corresponding response item. Results
+        preserve request item order. The operation is all-or-nothing: if any
+        item is invalid, the request fails and no partial results are returned.
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -621,7 +624,7 @@ paths:
       description: >
         Creates a random visible token using a tokenization profile loaded from
         signed config. The database stores only kid, hashid, and encrypted data.
-        The key must be active.
+        The key must be active. The client ref is echoed in the response.
       security:
         - ApiKeyAuth: []
       parameters:
@@ -649,8 +652,10 @@ paths:
       description: >
         Creates random visible tokens using one tokenization profile loaded from
         signed config. The database stores only kid, hashid, and encrypted data.
-        The key must be active. All token rows are inserted in one storage
-        transaction; any item failure returns one error and no partial items.
+        Each item must include a unique client ref, which is echoed in the
+        corresponding response item. The key must be active. All token rows are
+        inserted in one storage transaction; any item failure returns one error
+        and no partial items.
       security:
         - ApiKeyAuth: []
       parameters:
@@ -677,7 +682,8 @@ paths:
       summary: Resolve a reversible random token
       description: >
         Resolves a token by HMAC-derived hashid and decrypts the stored payload.
-        Decode permits active and retired keys.
+        Decode permits active and retired keys. The client ref is echoed in the
+        response.
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -702,8 +708,10 @@ paths:
       summary: Resolve reversible random tokens as an all-or-nothing batch
       description: >
         Resolves tokens by HMAC-derived hashid and decrypts the stored payloads.
-        Decode permits active and retired keys. If any item fails, the response
-        is one error and no partial items are returned.
+        Each item must include a unique client ref, which is echoed in the
+        corresponding response item. Decode permits active and retired keys. If
+        any item fails, the response is one error and no partial items are
+        returned.
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -759,6 +767,14 @@ components:
       type: string
       minLength: 1
       pattern: '^[^\x00-\x1F\x7F-\x9F]+$'
+
+    ClientRef:
+      type: string
+      minLength: 1
+      maxLength: 128
+      pattern: '^[^\x00-\x1F\x7F-\x9F]+$'
+      description: Client-defined correlation reference. Echoed in FPE and tokenization responses; not used for cryptographic derivation, storage lookup, audit, or metrics.
+      example: reg1
 
     AadSafeText:
       type: string
@@ -1496,8 +1512,10 @@ components:
     FpeEncryptInput:
       type: object
       additionalProperties: false
-      required: [profile, plaintext]
+      required: [ref, profile, plaintext]
       properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
         profile:
           $ref: "#/components/schemas/TextField"
           example: patient-id-decimal-v1
@@ -1507,8 +1525,10 @@ components:
 
     FpeEncryptOutput:
       type: object
-      required: [kid, profile, ciphertext]
+      required: [ref, kid, profile, ciphertext]
       properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
         kid:
           $ref: "#/components/schemas/Kid"
         profile:
@@ -1533,8 +1553,10 @@ components:
           items:
             type: object
             additionalProperties: false
-            required: [plaintext]
+            required: [ref, plaintext]
             properties:
+              ref:
+                $ref: "#/components/schemas/ClientRef"
               plaintext:
                 $ref: "#/components/schemas/TextField"
                 example: "123456"
@@ -1552,8 +1574,10 @@ components:
           type: array
           items:
             type: object
-            required: [ciphertext]
+            required: [ref, ciphertext]
             properties:
+              ref:
+                $ref: "#/components/schemas/ClientRef"
               ciphertext:
                 $ref: "#/components/schemas/TextField"
                 example: "839201"
@@ -1561,8 +1585,10 @@ components:
     FpeDecryptInput:
       type: object
       additionalProperties: false
-      required: [kid, profile, ciphertext]
+      required: [ref, kid, profile, ciphertext]
       properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
         kid:
           $ref: "#/components/schemas/Kid"
         profile:
@@ -1574,8 +1600,10 @@ components:
 
     FpeDecryptOutput:
       type: object
-      required: [plaintext]
+      required: [ref, plaintext]
       properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
         plaintext:
           $ref: "#/components/schemas/TextField"
           example: "123456"
@@ -1597,8 +1625,10 @@ components:
           items:
             type: object
             additionalProperties: false
-            required: [ciphertext]
+            required: [ref, ciphertext]
             properties:
+              ref:
+                $ref: "#/components/schemas/ClientRef"
               ciphertext:
                 $ref: "#/components/schemas/TextField"
                 example: "839201"
@@ -1616,8 +1646,10 @@ components:
           type: array
           items:
             type: object
-            required: [plaintext]
+            required: [ref, plaintext]
             properties:
+              ref:
+                $ref: "#/components/schemas/ClientRef"
               plaintext:
                 $ref: "#/components/schemas/TextField"
                 example: "123456"
@@ -1625,8 +1657,10 @@ components:
     TokenEncodeInput:
       type: object
       additionalProperties: false
-      required: [profile, plaintext]
+      required: [ref, profile, plaintext]
       properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
         profile:
           $ref: "#/components/schemas/TextField"
           example: patient-id-token-v1
@@ -1642,8 +1676,10 @@ components:
 
     TokenEncodeOutput:
       type: object
-      required: [kid, profile, token]
+      required: [ref, kid, profile, token]
       properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
         kid:
           $ref: "#/components/schemas/Kid"
         profile:
@@ -1657,8 +1693,10 @@ components:
     TokenEncodeBatchItemInput:
       type: object
       additionalProperties: false
-      required: [plaintext]
+      required: [ref, plaintext]
       properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
         plaintext:
           $ref: "#/components/schemas/TextField"
           example: "123456"
@@ -1686,8 +1724,10 @@ components:
 
     TokenEncodeBatchOutputItem:
       type: object
-      required: [token]
+      required: [ref, token]
       properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
         token:
           $ref: "#/components/schemas/TextField"
           description: Visible token in the form <token_prefix>_<base64url-no-pad random bytes>. The decoded random byte length equals the signed profile token_len.
@@ -1710,8 +1750,10 @@ components:
     TokenDecodeInput:
       type: object
       additionalProperties: false
-      required: [kid, profile, token]
+      required: [ref, kid, profile, token]
       properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
         kid:
           $ref: "#/components/schemas/Kid"
         profile:
@@ -1724,8 +1766,10 @@ components:
 
     TokenDecodeOutput:
       type: object
-      required: [plaintext]
+      required: [ref, plaintext]
       properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
         plaintext:
           $ref: "#/components/schemas/TextField"
           example: "123456"
@@ -1738,8 +1782,10 @@ components:
     TokenDecodeBatchItemInput:
       type: object
       additionalProperties: false
-      required: [token]
+      required: [ref, token]
       properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
         token:
           $ref: "#/components/schemas/TextField"
           description: Visible token in the form <token_prefix>_<base64url-no-pad random bytes>. Decode validates the configured prefix and decoded byte length before lookup.
@@ -1764,8 +1810,10 @@ components:
 
     TokenDecodeBatchOutputItem:
       type: object
-      required: [plaintext]
+      required: [ref, plaintext]
       properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
         plaintext:
           $ref: "#/components/schemas/TextField"
           example: "123456"

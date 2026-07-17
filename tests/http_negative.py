@@ -284,6 +284,7 @@ def create_valid_encoded_token(client, key_id):
     status, response = client.post(
         f"/token/encode/{key_id}",
         {
+            "ref": "token-valid",
             "profile": "patient-id-token-v1",
             "plaintext": "123456",
             "metadata": {"suite": "negative"},
@@ -460,7 +461,7 @@ def main():
     def fpe_encrypt_without_auth():
         status, _, headers = client.post_with_headers(
             f"/fpe/encrypt/{key_id}",
-            {"profile": "patient-id-decimal-v1", "plaintext": "123456"},
+            {"ref": "fpe-auth", "profile": "patient-id-decimal-v1", "plaintext": "123456"},
         )
         require_status("POST /fpe/encrypt/{kid} without auth", status, 401)
         require_request_id(headers)
@@ -468,14 +469,19 @@ def main():
     def fpe_decrypt_without_auth():
         status, _ = client.post(
             "/fpe/decrypt",
-            {"kid": key_id, "profile": "patient-id-decimal-v1", "ciphertext": "123456"},
+            {
+                "ref": "fpe-auth",
+                "kid": key_id,
+                "profile": "patient-id-decimal-v1",
+                "ciphertext": "123456",
+            },
         )
         require_status("POST /fpe/decrypt without auth", status, 401)
 
     def fpe_encrypt_invalid_auth():
         status, _ = client.post(
             f"/fpe/encrypt/{key_id}",
-            {"profile": "patient-id-decimal-v1", "plaintext": "123456"},
+            {"ref": "fpe-auth", "profile": "patient-id-decimal-v1", "plaintext": "123456"},
             headers={"X-API-Key": "00" * 32},
         )
         require_status("POST /fpe/encrypt/{kid} invalid auth", status, 401)
@@ -483,7 +489,12 @@ def main():
     def fpe_decrypt_invalid_auth():
         status, _ = client.post(
             "/fpe/decrypt",
-            {"kid": key_id, "profile": "patient-id-decimal-v1", "ciphertext": "123456"},
+            {
+                "ref": "fpe-auth",
+                "kid": key_id,
+                "profile": "patient-id-decimal-v1",
+                "ciphertext": "123456",
+            },
             headers={"X-API-Key": "00" * 32},
         )
         require_status("POST /fpe/decrypt invalid auth", status, 401)
@@ -630,7 +641,7 @@ def main():
     def limited_blocks_fpe_encrypt():
         status, _ = limited_client.post(
             f"/fpe/encrypt/{key_id}",
-            {"profile": "patient-id-decimal-v1", "plaintext": "123456"},
+            {"ref": "fpe-limited", "profile": "patient-id-decimal-v1", "plaintext": "123456"},
             auth=True,
         )
         require_status("limited client blocks fpe encrypt", status, 403)
@@ -638,7 +649,12 @@ def main():
     def limited_blocks_fpe_decrypt():
         status, _ = limited_client.post(
             "/fpe/decrypt",
-            {"kid": key_id, "profile": "patient-id-decimal-v1", "ciphertext": "123456"},
+            {
+                "ref": "fpe-limited",
+                "kid": key_id,
+                "profile": "patient-id-decimal-v1",
+                "ciphertext": "123456",
+            },
             auth=True,
         )
         require_status("limited client blocks fpe decrypt", status, 403)
@@ -646,7 +662,10 @@ def main():
     def limited_blocks_fpe_encrypt_batch():
         status, _ = limited_client.post(
             f"/fpe/encrypt/batch/{key_id}",
-            {"profile": "patient-id-decimal-v1", "items": [{"plaintext": "123456"}]},
+            {
+                "profile": "patient-id-decimal-v1",
+                "items": [{"ref": "fpe-limited", "plaintext": "123456"}],
+            },
             auth=True,
         )
         require_status("limited client blocks fpe encrypt batch", status, 403)
@@ -657,7 +676,7 @@ def main():
             {
                 "kid": key_id,
                 "profile": "patient-id-decimal-v1",
-                "items": [{"ciphertext": "123456"}],
+                "items": [{"ref": "fpe-limited", "ciphertext": "123456"}],
             },
             auth=True,
         )
@@ -666,7 +685,7 @@ def main():
     def limited_blocks_token_encode():
         status, _ = limited_client.post(
             f"/token/encode/{key_id}",
-            {"profile": "patient-id-token-v1", "plaintext": "123456"},
+            {"ref": "token-limited", "profile": "patient-id-token-v1", "plaintext": "123456"},
             auth=True,
         )
         require_status("limited client blocks token encode", status, 403)
@@ -674,7 +693,10 @@ def main():
     def limited_blocks_token_encode_batch():
         status, _ = limited_client.post(
             f"/token/encode/batch/{key_id}",
-            {"profile": "patient-id-token-v1", "items": [{"plaintext": "123456"}]},
+            {
+                "profile": "patient-id-token-v1",
+                "items": [{"ref": "token-limited", "plaintext": "123456"}],
+            },
             auth=True,
         )
         require_status("limited client blocks token encode batch", status, 403)
@@ -682,7 +704,12 @@ def main():
     def limited_blocks_token_decode():
         status, _ = limited_client.post(
             "/token/decode",
-            {"kid": key_id, "profile": "patient-id-token-v1", "token": "tok_patient_missing"},
+            {
+                "ref": "token-limited",
+                "kid": key_id,
+                "profile": "patient-id-token-v1",
+                "token": "tok_patient_missing",
+            },
             auth=True,
         )
         require_status("limited client blocks token decode", status, 403)
@@ -693,7 +720,7 @@ def main():
             {
                 "kid": key_id,
                 "profile": "patient-id-token-v1",
-                "items": [{"token": "tok_patient_missing"}],
+                "items": [{"ref": "token-limited", "token": "tok_patient_missing"}],
             },
             auth=True,
         )
@@ -729,7 +756,7 @@ def main():
     def admin_allows_fpe_round_trip():
         status, encrypted = admin_client.post(
             f"/fpe/encrypt/{key_id}",
-            {"profile": "patient-id-decimal-v1", "plaintext": "123456"},
+            {"ref": "fpe-admin", "profile": "patient-id-decimal-v1", "plaintext": "123456"},
             auth=True,
         )
         require_status("admin client allows fpe encrypt", status, 200)
@@ -737,6 +764,7 @@ def main():
         status, decrypted = admin_client.post(
             "/fpe/decrypt",
             {
+                "ref": "fpe-admin",
                 "kid": key_id,
                 "profile": "patient-id-decimal-v1",
                 "ciphertext": encrypted.get("ciphertext"),
@@ -1616,7 +1644,7 @@ def main():
     def fpe_encrypt_plaintext_outside_alphabet():
         status, body = client.post(
             f"/fpe/encrypt/{key_id}",
-            {"profile": "patient-id-decimal-v1", "plaintext": "abc123"},
+            {"ref": "fpe-bad-alpha", "profile": "patient-id-decimal-v1", "plaintext": "abc123"},
             auth=True,
         )
         require_status("POST /fpe/encrypt/{kid} plaintext outside alphabet", status, 400)
@@ -1628,7 +1656,7 @@ def main():
     def fpe_encrypt_plaintext_too_short():
         status, body = client.post(
             f"/fpe/encrypt/{key_id}",
-            {"profile": "patient-id-decimal-v1", "plaintext": "123"},
+            {"ref": "fpe-short", "profile": "patient-id-decimal-v1", "plaintext": "123"},
             auth=True,
         )
         require_status("POST /fpe/encrypt/{kid} plaintext too short", status, 400)
@@ -1640,7 +1668,7 @@ def main():
     def fpe_encrypt_unknown_profile():
         status, body = client.post(
             f"/fpe/encrypt/{key_id}",
-            {"profile": "missing-profile", "plaintext": "123456"},
+            {"ref": "fpe-missing", "profile": "missing-profile", "plaintext": "123456"},
             auth=True,
         )
         require_status("POST /fpe/encrypt/{kid} unknown profile", status, 400)
@@ -1652,7 +1680,12 @@ def main():
     def fpe_decrypt_ciphertext_outside_alphabet():
         status, body = client.post(
             "/fpe/decrypt",
-            {"kid": key_id, "profile": "patient-id-decimal-v1", "ciphertext": "abc123"},
+            {
+                "ref": "fpe-bad-alpha",
+                "kid": key_id,
+                "profile": "patient-id-decimal-v1",
+                "ciphertext": "abc123",
+            },
             auth=True,
         )
         require_status("POST /fpe/decrypt ciphertext outside alphabet", status, 400)
@@ -1666,7 +1699,10 @@ def main():
             f"/fpe/encrypt/batch/{key_id}",
             {
                 "profile": "patient-id-decimal-v1",
-                "items": [{"plaintext": "123456"}, {"plaintext": "abc123"}],
+                "items": [
+                    {"ref": "fpe-batch-1", "plaintext": "123456"},
+                    {"ref": "fpe-batch-2", "plaintext": "abc123"},
+                ],
             },
             auth=True,
         )
@@ -1695,7 +1731,10 @@ def main():
             f"/fpe/encrypt/batch/{key_id}",
             {
                 "profile": "patient-id-decimal-v1",
-                "items": [{"plaintext": "123456"} for _ in range(129)],
+                "items": [
+                    {"ref": f"fpe-batch-{index}", "plaintext": "123456"}
+                    for index in range(129)
+                ],
             },
             auth=True,
         )
@@ -1705,13 +1744,59 @@ def main():
             "FPE batch too many items must fail",
         )
 
+    def fpe_encrypt_ref_empty():
+        status, body = client.post(
+            f"/fpe/encrypt/{key_id}",
+            {"ref": "", "profile": "patient-id-decimal-v1", "plaintext": "123456"},
+            auth=True,
+        )
+        require_status("POST /fpe/encrypt/{kid} empty ref", status, 400)
+        require(body.get("error") == "ref must not be empty", "FPE empty ref must fail")
+
+    def fpe_encrypt_ref_too_long():
+        status, body = client.post(
+            f"/fpe/encrypt/{key_id}",
+            {
+                "ref": "r" * 129,
+                "profile": "patient-id-decimal-v1",
+                "plaintext": "123456",
+            },
+            auth=True,
+        )
+        require_status("POST /fpe/encrypt/{kid} long ref", status, 400)
+        require(
+            body.get("error") == "ref exceeds maximum allowed length: 128",
+            "FPE long ref must fail",
+        )
+
+    def fpe_encrypt_batch_duplicate_ref():
+        status, body = client.post(
+            f"/fpe/encrypt/batch/{key_id}",
+            {
+                "profile": "patient-id-decimal-v1",
+                "items": [
+                    {"ref": "dup", "plaintext": "123456"},
+                    {"ref": "dup", "plaintext": "654321"},
+                ],
+            },
+            auth=True,
+        )
+        require_status("POST /fpe/encrypt/batch/{kid} duplicate ref", status, 400)
+        require(
+            body.get("error") == "batch item 1 failed: fpe batch ref must be unique",
+            "FPE batch duplicate ref must fail",
+        )
+
     def fpe_decrypt_batch_ciphertext_outside_alphabet():
         status, body = client.post(
             "/fpe/decrypt/batch",
             {
                 "kid": key_id,
                 "profile": "patient-id-decimal-v1",
-                "items": [{"ciphertext": "123456"}, {"ciphertext": "abc123"}],
+                "items": [
+                    {"ref": "fpe-batch-1", "ciphertext": "123456"},
+                    {"ref": "fpe-batch-2", "ciphertext": "abc123"},
+                ],
             },
             auth=True,
         )
@@ -1723,10 +1808,29 @@ def main():
             "FPE decrypt batch invalid item must fail all-or-nothing with item position",
         )
 
+    def fpe_decrypt_batch_duplicate_ref():
+        status, body = client.post(
+            "/fpe/decrypt/batch",
+            {
+                "kid": key_id,
+                "profile": "patient-id-decimal-v1",
+                "items": [
+                    {"ref": "dup", "ciphertext": "123456"},
+                    {"ref": "dup", "ciphertext": "654321"},
+                ],
+            },
+            auth=True,
+        )
+        require_status("POST /fpe/decrypt/batch duplicate ref", status, 400)
+        require(
+            body.get("error") == "batch item 1 failed: fpe batch ref must be unique",
+            "FPE decrypt batch duplicate ref must fail",
+        )
+
     def token_encode_unknown_profile():
         status, body = client.post(
             f"/token/encode/{key_id}",
-            {"profile": "missing-profile", "plaintext": "123456"},
+            {"ref": "token-missing", "profile": "missing-profile", "plaintext": "123456"},
             auth=True,
         )
         require_status("POST /token/encode/{kid} unknown profile", status, 400)
@@ -1738,7 +1842,7 @@ def main():
     def token_encode_plaintext_too_long():
         status, body = client.post(
             f"/token/encode/{key_id}",
-            {"profile": "patient-id-token-v1", "plaintext": "x" * 1025},
+            {"ref": "token-long", "profile": "patient-id-token-v1", "plaintext": "x" * 1025},
             auth=True,
         )
         require_status("POST /token/encode/{kid} plaintext too long", status, 400)
@@ -1751,6 +1855,7 @@ def main():
         status, body = client.post(
             f"/token/encode/{key_id}",
             {
+                "ref": "token-metadata",
                 "profile": "patient-id-token-v1",
                 "plaintext": "123456",
                 "metadata": {"a": "x" * 129},
@@ -1776,12 +1881,40 @@ def main():
             "token encode batch empty items must fail by batch bounds",
         )
 
+    def token_encode_ref_empty():
+        status, body = client.post(
+            f"/token/encode/{key_id}",
+            {"ref": "", "profile": "patient-id-token-v1", "plaintext": "123456"},
+            auth=True,
+        )
+        require_status("POST /token/encode/{kid} empty ref", status, 400)
+        require(body.get("error") == "ref must not be empty", "token empty ref must fail")
+
+    def token_encode_ref_too_long():
+        status, body = client.post(
+            f"/token/encode/{key_id}",
+            {
+                "ref": "r" * 129,
+                "profile": "patient-id-token-v1",
+                "plaintext": "123456",
+            },
+            auth=True,
+        )
+        require_status("POST /token/encode/{kid} long ref", status, 400)
+        require(
+            body.get("error") == "ref exceeds maximum allowed length: 128",
+            "token long ref must fail",
+        )
+
     def token_encode_batch_too_many_items():
         status, body = client.post(
             f"/token/encode/batch/{key_id}",
             {
                 "profile": "patient-id-token-v1",
-                "items": [{"plaintext": "123456"} for _ in range(129)],
+                "items": [
+                    {"ref": f"token-batch-{index}", "plaintext": "123456"}
+                    for index in range(129)
+                ],
             },
             auth=True,
         )
@@ -1792,14 +1925,36 @@ def main():
             "token encode batch oversized request must fail by batch bounds",
         )
 
+    def token_encode_batch_duplicate_ref():
+        status, body = client.post(
+            f"/token/encode/batch/{key_id}",
+            {
+                "profile": "patient-id-token-v1",
+                "items": [
+                    {"ref": "dup", "plaintext": "123456"},
+                    {"ref": "dup", "plaintext": "654321"},
+                ],
+            },
+            auth=True,
+        )
+        require_status("POST /token/encode/batch/{kid} duplicate ref", status, 400)
+        require(
+            body.get("error") == "batch item 1 failed: token batch ref must be unique",
+            "token batch duplicate ref must fail",
+        )
+
     def token_encode_batch_metadata_too_long():
         status, body = client.post(
             f"/token/encode/batch/{key_id}",
             {
                 "profile": "patient-id-token-v1",
                 "items": [
-                    {"plaintext": "123456"},
-                    {"plaintext": "654321", "metadata": {"a": "x" * 129}},
+                    {"ref": "token-batch-1", "plaintext": "123456"},
+                    {
+                        "ref": "token-batch-2",
+                        "plaintext": "654321",
+                        "metadata": {"a": "x" * 129},
+                    },
                 ],
             },
             auth=True,
@@ -1818,8 +1973,8 @@ def main():
             {
                 "profile": "patient-id-token-v1",
                 "items": [
-                    {"plaintext": "123456"},
-                    {"plaintext": "x" * 1025},
+                    {"ref": "token-batch-1", "plaintext": "123456"},
+                    {"ref": "token-batch-2", "plaintext": "x" * 1025},
                 ],
             },
             auth=True,
@@ -1835,7 +1990,7 @@ def main():
     def token_decode_unknown_profile():
         status, body = client.post(
             "/token/decode",
-            {"kid": key_id, "profile": "missing-profile", "token": encoded_token},
+            {"ref": "token-missing", "kid": key_id, "profile": "missing-profile", "token": encoded_token},
             auth=True,
         )
         require_status("POST /token/decode unknown profile", status, 400)
@@ -1847,7 +2002,12 @@ def main():
     def token_decode_invalid_prefix():
         status, body = client.post(
             "/token/decode",
-            {"kid": key_id, "profile": "patient-id-token-v1", "token": "wrong_prefix"},
+            {
+                "ref": "token-prefix",
+                "kid": key_id,
+                "profile": "patient-id-token-v1",
+                "token": "wrong_prefix",
+            },
             auth=True,
         )
         require_status("POST /token/decode invalid prefix", status, 400)
@@ -1860,6 +2020,7 @@ def main():
         status, body = client.post(
             "/token/decode",
             {
+                "ref": "token-encoding",
                 "kid": key_id,
                 "profile": "patient-id-token-v1",
                 "token": "tok_patient_abc;def",
@@ -1876,6 +2037,7 @@ def main():
         status, body = client.post(
             "/token/decode",
             {
+                "ref": "token-length",
                 "kid": key_id,
                 "profile": "patient-id-token-v1",
                 "token": "tok_patient_AA",
@@ -1892,6 +2054,7 @@ def main():
         status, body = client.post(
             "/token/decode",
             {
+                "ref": "token-not-found",
                 "kid": key_id,
                 "profile": "patient-id-token-v1",
                 "token": "tok_patient_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -1907,7 +2070,10 @@ def main():
             {
                 "kid": key_id,
                 "profile": "patient-id-token-v1",
-                "items": [{"token": encoded_token}, {"token": "wrong_prefix"}],
+                "items": [
+                    {"ref": "token-batch-1", "token": encoded_token},
+                    {"ref": "token-batch-2", "token": "wrong_prefix"},
+                ],
             },
             auth=True,
         )
@@ -1939,8 +2105,11 @@ def main():
                 "kid": key_id,
                 "profile": "patient-id-token-v1",
                 "items": [
-                    {"token": encoded_token},
-                    {"token": "tok_patient_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
+                    {"ref": "token-batch-1", "token": encoded_token},
+                    {
+                        "ref": "token-batch-2",
+                        "token": "tok_patient_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                    },
                 ],
             },
             auth=True,
@@ -1950,6 +2119,26 @@ def main():
         require(
             body.get("error") == "batch item 1 failed: token not found",
             "token decode batch missing token must fail all-or-nothing with item position",
+        )
+
+    def token_decode_batch_duplicate_ref():
+        status, body = client.post(
+            "/token/decode/batch",
+            {
+                "kid": key_id,
+                "profile": "patient-id-token-v1",
+                "items": [
+                    {"ref": "dup", "token": encoded_token},
+                    {"ref": "dup", "token": "tok_patient_missing"},
+                ],
+            },
+            auth=True,
+        )
+        require_status("POST /token/decode/batch duplicate ref", status, 400)
+        require("items" not in body, "token decode batch error must not return partial items")
+        require(
+            body.get("error") == "batch item 1 failed: token batch ref must be unique",
+            "token decode batch duplicate ref must fail",
         )
 
     _CONFIG["routes"] = []
@@ -1978,15 +2167,22 @@ def main():
         ),
         ("POST /fpe/encrypt/batch/{kid} empty items", fpe_encrypt_batch_empty_items),
         ("POST /fpe/encrypt/batch/{kid} too many items", fpe_encrypt_batch_too_many_items),
+        ("POST /fpe/encrypt/{kid} empty ref", fpe_encrypt_ref_empty),
+        ("POST /fpe/encrypt/{kid} long ref", fpe_encrypt_ref_too_long),
+        ("POST /fpe/encrypt/batch/{kid} duplicate ref", fpe_encrypt_batch_duplicate_ref),
         (
             "POST /fpe/decrypt/batch ciphertext outside alphabet",
             fpe_decrypt_batch_ciphertext_outside_alphabet,
         ),
+        ("POST /fpe/decrypt/batch duplicate ref", fpe_decrypt_batch_duplicate_ref),
         ("POST /token/encode/{kid} unknown profile", token_encode_unknown_profile),
         ("POST /token/encode/{kid} plaintext too long", token_encode_plaintext_too_long),
         ("POST /token/encode/{kid} metadata too long", token_encode_metadata_too_long),
         ("POST /token/encode/batch/{kid} empty items", token_encode_batch_empty_items),
+        ("POST /token/encode/{kid} empty ref", token_encode_ref_empty),
+        ("POST /token/encode/{kid} long ref", token_encode_ref_too_long),
         ("POST /token/encode/batch/{kid} too many items", token_encode_batch_too_many_items),
+        ("POST /token/encode/batch/{kid} duplicate ref", token_encode_batch_duplicate_ref),
         (
             "POST /token/encode/batch/{kid} metadata too long",
             token_encode_batch_metadata_too_long,
@@ -2003,6 +2199,7 @@ def main():
         ("POST /token/decode/batch invalid prefix", token_decode_batch_invalid_prefix),
         ("POST /token/decode/batch empty items", token_decode_batch_empty_items),
         ("POST /token/decode/batch not found", token_decode_batch_not_found),
+        ("POST /token/decode/batch duplicate ref", token_decode_batch_duplicate_ref),
     ):
         run_case(rows, name, func)
 

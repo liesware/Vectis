@@ -133,17 +133,18 @@ def print_summary(rows):
 def run_fpe(base_url, kid, api_key):
     print("== FPE Profiles ==", flush=True)
     for profile, plaintext in FPE_SAMPLES:
+        ref = f"{profile}-sample"
         encrypted = post_json(
             base_url,
             f"/fpe/encrypt/{kid}",
-            {"profile": profile, "plaintext": plaintext},
+            {"ref": ref, "profile": profile, "plaintext": plaintext},
             api_key,
         )
         ciphertext = encrypted["response"]["ciphertext"]
         decrypted = post_json(
             base_url,
             "/fpe/decrypt",
-            {"kid": kid, "profile": profile, "ciphertext": ciphertext},
+            {"ref": ref, "kid": kid, "profile": profile, "ciphertext": ciphertext},
             api_key,
         )
         recovered = decrypted["response"]["plaintext"]
@@ -166,10 +167,12 @@ def run_fpe(base_url, kid, api_key):
 def run_tokenization(base_url, kid, api_key):
     print("== Tokenization Profiles ==", flush=True)
     for profile, plaintext in TOKEN_SAMPLES:
+        ref = f"{profile}-sample"
         encoded = post_json(
             base_url,
             f"/token/encode/{kid}",
             {
+                "ref": ref,
                 "profile": profile,
                 "plaintext": plaintext,
                 "metadata": {"demo": "local"},
@@ -180,7 +183,7 @@ def run_tokenization(base_url, kid, api_key):
         decoded = post_json(
             base_url,
             "/token/decode",
-            {"kid": kid, "profile": profile, "token": token},
+            {"ref": ref, "kid": kid, "profile": profile, "token": token},
             api_key,
         )
         recovered = decoded["response"]["plaintext"]

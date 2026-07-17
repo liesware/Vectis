@@ -94,6 +94,18 @@ pub fn validate_text_field(field: &str, value: &str) -> Result<(), DynError> {
     Ok(())
 }
 
+pub fn validate_ref(value: &str) -> Result<String, DynError> {
+    validate_text_field("ref", value)?;
+    let max = crate::core::config::INTERNAL_REF_MAX_CHARS;
+    if value.chars().count() > max {
+        return Err(crate::error::invalid_input(format!(
+            "ref exceeds maximum allowed length: {max}"
+        )));
+    }
+
+    Ok(value.to_string())
+}
+
 pub fn validate_socket_addr(field: &str, value: &str) -> Result<SocketAddr, DynError> {
     validate_text_field(field, value)?;
 

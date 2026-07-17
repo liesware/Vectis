@@ -946,12 +946,12 @@ const FPE_HELP: CommandHelp = CommandHelp {
     sections: &[
         HelpSection {
             title: "Encrypt request JSON:",
-            lines: &[r#"  {"profile":"patient-id-decimal-v1","plaintext":"123456"}"#],
+            lines: &[r#"  {"ref":"reg1","profile":"patient-id-decimal-v1","plaintext":"123456"}"#],
         },
         HelpSection {
             title: "Decrypt request JSON:",
             lines: &[
-                r#"  {"kid":"<kid>","profile":"patient-id-decimal-v1","ciphertext":"<value>"}"#,
+                r#"  {"ref":"reg1","kid":"<kid>","profile":"patient-id-decimal-v1","ciphertext":"<value>"}"#,
             ],
         },
         HelpSection {
@@ -987,12 +987,14 @@ const TOKEN_HELP: CommandHelp = CommandHelp {
     sections: &[
         HelpSection {
             title: "Encode request JSON:",
-            lines: &[r#"  {"profile":"patient-id-token-v1","plaintext":"123456","metadata":{}}"#],
+            lines: &[
+                r#"  {"ref":"reg1","profile":"patient-id-token-v1","plaintext":"123456","metadata":{}}"#,
+            ],
         },
         HelpSection {
             title: "Decode request JSON:",
             lines: &[
-                r#"  {"kid":"<kid>","profile":"patient-id-token-v1","token":"tok_patient_..."}"#,
+                r#"  {"ref":"reg1","kid":"<kid>","profile":"patient-id-token-v1","token":"tok_patient_..."}"#,
             ],
         },
         HelpSection {

@@ -9,6 +9,8 @@ use zeroize::Zeroizing;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TokenEncodeInput {
+    #[serde(rename = "ref")]
+    ref_id: String,
     profile: String,
     plaintext: String,
     #[serde(default)]
@@ -18,6 +20,8 @@ pub struct TokenEncodeInput {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TokenDecodeInput {
+    #[serde(rename = "ref")]
+    ref_id: String,
     kid: String,
     profile: String,
     token: String,
@@ -26,6 +30,8 @@ pub struct TokenDecodeInput {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TokenEncodeBatchItemInput {
+    #[serde(rename = "ref")]
+    ref_id: String,
     plaintext: String,
     #[serde(default)]
     metadata: Option<Value>,
@@ -41,6 +47,8 @@ pub struct TokenEncodeBatchInput {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TokenDecodeBatchItemInput {
+    #[serde(rename = "ref")]
+    ref_id: String,
     token: String,
 }
 
@@ -54,6 +62,8 @@ pub struct TokenDecodeBatchInput {
 
 #[derive(Serialize)]
 pub struct TokenEncodeOutput {
+    #[serde(rename = "ref")]
+    ref_id: String,
     kid: String,
     profile: String,
     token: String,
@@ -61,13 +71,17 @@ pub struct TokenEncodeOutput {
 
 #[derive(Serialize)]
 pub struct TokenDecodeOutput {
-    plaintext: String,
+    #[serde(rename = "ref")]
+    ref_id: String,
+    plaintext: SensitiveString,
     #[serde(skip_serializing_if = "Option::is_none")]
     metadata: Option<Value>,
 }
 
 #[derive(Serialize)]
 pub struct TokenEncodeBatchOutputItem {
+    #[serde(rename = "ref")]
+    ref_id: String,
     token: String,
 }
 
@@ -80,6 +94,8 @@ pub struct TokenEncodeBatchOutput {
 
 #[derive(Serialize)]
 pub struct TokenDecodeBatchOutputItem {
+    #[serde(rename = "ref")]
+    ref_id: String,
     plaintext: SensitiveString,
     #[serde(skip_serializing_if = "Option::is_none")]
     metadata: Option<Value>,
@@ -93,18 +109,21 @@ pub struct TokenDecodeBatchOutput {
 }
 
 pub struct ValidatedTokenEncodeInput {
+    ref_id: String,
     profile: String,
     plaintext: Zeroizing<String>,
     metadata: Option<Value>,
 }
 
 pub struct ValidatedTokenDecodeInput {
+    ref_id: String,
     kid: String,
     profile: String,
     token: Zeroizing<String>,
 }
 
 pub struct ValidatedTokenEncodeBatchItem {
+    ref_id: String,
     plaintext: Zeroizing<String>,
     metadata: Option<Value>,
 }
@@ -115,6 +134,7 @@ pub struct ValidatedTokenEncodeBatchInput {
 }
 
 pub struct ValidatedTokenDecodeBatchItem {
+    ref_id: String,
     token: Zeroizing<String>,
 }
 
@@ -144,6 +164,7 @@ pub struct PreparedTokenEncodeBatch {
 }
 
 pub struct PreparedTokenDecodeBatchItem {
+    ref_id: String,
     hashid: String,
     data: String,
 }
@@ -210,6 +231,10 @@ impl ValidatedTokenDecodeBatchInput {
     pub fn tokens(&self) -> impl Iterator<Item = &str> {
         self.items.iter().map(|item| item.token.as_str())
     }
+
+    pub fn refs(&self) -> impl Iterator<Item = &str> {
+        self.items.iter().map(|item| item.ref_id.as_str())
+    }
 }
 
 impl TokenEncodeBatchOutput {
@@ -257,6 +282,7 @@ pub fn parse_decode_batch_input(request: Value) -> Result<TokenDecodeBatchInput,
 pub fn validate_encode_input(
     input: TokenEncodeInput,
 ) -> Result<ValidatedTokenEncodeInput, DynError> {
+    let ref_id = validation::validate_ref(&input.ref_id)?;
     validation::validate_text_field("profile", &input.profile)?;
     validation::validate_text_field("plaintext", &input.plaintext)?;
     if let Some(metadata) = &input.metadata {
@@ -264,6 +290,7 @@ pub fn validate_encode_input(
     }
 
     Ok(ValidatedTokenEncodeInput {
+        ref_id,
         profile: input.profile,
         plaintext: Zeroizing::new(input.plaintext),
         metadata: input.metadata,
@@ -273,11 +300,13 @@ pub fn validate_encode_input(
 pub fn validate_decode_input(
     input: TokenDecodeInput,
 ) -> Result<ValidatedTokenDecodeInput, DynError> {
+    let ref_id = validation::validate_ref(&input.ref_id)?;
     keys::validate_key_id(&input.kid)?;
     validation::validate_text_field("profile", &input.profile)?;
     validation::validate_text_field("token", &input.token)?;
 
     Ok(ValidatedTokenDecodeInput {
+        ref_id,
         kid: input.kid,
         profile: input.profile,
         token: Zeroizing::new(input.token),
@@ -295,6 +324,8 @@ pub fn validate_encode_batch_input(
     )?;
     let mut items = Vec::with_capacity(input.items.len());
     for (index, item) in input.items.into_iter().enumerate() {
+        let ref_id = validation::validate_ref(&item.ref_id)
+            .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
         validation::validate_text_field("plaintext", &item.plaintext)
             .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
         if let Some(metadata) = &item.metadata {
@@ -303,10 +334,15 @@ pub fn validate_encode_batch_input(
             })?;
         }
         items.push(ValidatedTokenEncodeBatchItem {
+            ref_id,
             plaintext: Zeroizing::new(item.plaintext),
             metadata: item.metadata,
         });
     }
+    crate::ops::batch::validate_unique_refs(
+        items.iter().map(|item| item.ref_id.as_str()),
+        "token",
+    )?;
 
     Ok(ValidatedTokenEncodeBatchInput {
         profile: input.profile,
@@ -326,12 +362,19 @@ pub fn validate_decode_batch_input(
     )?;
     let mut items = Vec::with_capacity(input.items.len());
     for (index, item) in input.items.into_iter().enumerate() {
+        let ref_id = validation::validate_ref(&item.ref_id)
+            .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
         validation::validate_text_field("token", &item.token)
             .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
         items.push(ValidatedTokenDecodeBatchItem {
+            ref_id,
             token: Zeroizing::new(item.token),
         });
     }
+    crate::ops::batch::validate_unique_refs(
+        items.iter().map(|item| item.ref_id.as_str()),
+        "token",
+    )?;
 
     Ok(ValidatedTokenDecodeBatchInput {
         kid: input.kid,
@@ -435,6 +478,7 @@ pub fn authorize_decode_batch(
 pub fn prepare_decode_batch(
     profile: tokenization::TokenizationProfile,
     kid: String,
+    refs: Vec<String>,
     hashids: Vec<String>,
     rows: Vec<String>,
 ) -> Result<PreparedTokenDecodeBatch, DynError> {
@@ -443,10 +487,20 @@ pub fn prepare_decode_batch(
             "token decode batch row count does not match hashid count",
         ));
     }
-    let items = hashids
+    if refs.len() != hashids.len() {
+        return Err(crate::error::internal(
+            "token decode batch ref count does not match hashid count",
+        ));
+    }
+    let items = refs
         .into_iter()
+        .zip(hashids)
         .zip(rows)
-        .map(|(hashid, data)| PreparedTokenDecodeBatchItem { hashid, data })
+        .map(|((ref_id, hashid), data)| PreparedTokenDecodeBatchItem {
+            ref_id,
+            hashid,
+            data,
+        })
         .collect();
 
     Ok(PreparedTokenDecodeBatch {
@@ -478,6 +532,7 @@ pub fn encode(prepared: PreparedTokenEncode) -> Result<EncodedTokenRecord, DynEr
         hashid,
         data,
         output: TokenEncodeOutput {
+            ref_id: prepared.input.ref_id,
             kid: prepared.kid,
             profile: prepared.profile.name().to_string(),
             token: (*token).clone(),
@@ -510,6 +565,7 @@ pub fn encode_batch(prepared: PreparedTokenEncodeBatch) -> Result<EncodedTokenBa
             data,
         });
         items.push(TokenEncodeBatchOutputItem {
+            ref_id: item.ref_id,
             token: (*token).clone(),
         });
     }
@@ -541,7 +597,8 @@ pub fn decode(prepared: PreparedTokenDecode) -> Result<TokenDecodeOutput, DynErr
     );
 
     Ok(TokenDecodeOutput {
-        plaintext: payload.plaintext,
+        ref_id: prepared.input.ref_id,
+        plaintext: SensitiveString::from(payload.plaintext),
         metadata: payload.metadata,
     })
 }
@@ -554,6 +611,7 @@ pub fn decode_batch(
         let payload = tokenization::decrypt_token_data(&prepared.profile, &item.hashid, &item.data)
             .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
         items.push(TokenDecodeBatchOutputItem {
+            ref_id: item.ref_id,
             plaintext: SensitiveString::from(payload.plaintext),
             metadata: payload.metadata,
         });
@@ -595,6 +653,7 @@ mod tests {
 
     fn encode_input(metadata: Option<Value>) -> TokenEncodeInput {
         TokenEncodeInput {
+            ref_id: String::from("reg1"),
             profile: String::from("patient-id-token-v1"),
             plaintext: String::from("123456"),
             metadata,
@@ -661,8 +720,8 @@ mod tests {
         let input = parse_encode_batch_input(json!({
             "profile": "patient-id-token-v1",
             "items": [
-                {"plaintext": "123456"},
-                {"plaintext": "654321", "metadata": {"tenant": "acme"}}
+                {"ref": "reg1", "plaintext": "123456"},
+                {"ref": "reg2", "plaintext": "654321", "metadata": {"tenant": "acme"}}
             ]
         }))
         .and_then(validate_encode_batch_input)
@@ -678,8 +737,8 @@ mod tests {
             "kid": "a".repeat(64),
             "profile": "patient-id-token-v1",
             "items": [
-                {"token": "tok_patient_abc"},
-                {"token": "tok_patient_def"}
+                {"ref": "reg1", "token": "tok_patient_abc"},
+                {"ref": "reg2", "token": "tok_patient_def"}
             ]
         }))
         .and_then(validate_decode_batch_input)
@@ -703,7 +762,7 @@ mod tests {
     #[test]
     fn rejects_oversized_token_batch() {
         let items = (0..=crate::core::config::INTERNAL_TOKEN_BATCH)
-            .map(|_| json!({"plaintext": "123456"}))
+            .map(|index| json!({"ref": format!("reg{index}"), "plaintext": "123456"}))
             .collect::<Vec<_>>();
         let err = encode_batch_validation_error(json!({
             "profile": "patient-id-token-v1",
@@ -718,7 +777,7 @@ mod tests {
         let metadata = metadata_with_serialized_len(tokenization::TOKEN_METADATA_MAX_CHARS + 1);
         let err = encode_batch_validation_error(json!({
             "profile": "patient-id-token-v1",
-            "items": [{"plaintext": "123456", "metadata": metadata}]
+            "items": [{"ref": "reg1", "plaintext": "123456", "metadata": metadata}]
         }));
 
         assert_eq!(
@@ -734,10 +793,12 @@ mod tests {
             profile: String::from("patient-id-token-v1"),
             items: vec![
                 TokenDecodeBatchOutputItem {
+                    ref_id: String::from("reg1"),
                     plaintext: SensitiveString::from(String::from("123456")),
                     metadata: None,
                 },
                 TokenDecodeBatchOutputItem {
+                    ref_id: String::from("reg2"),
                     plaintext: SensitiveString::from(String::from("654321")),
                     metadata: Some(json!({"tenant": "acme"})),
                 },
@@ -751,8 +812,8 @@ mod tests {
                 "kid": "a".repeat(64),
                 "profile": "patient-id-token-v1",
                 "items": [
-                    {"plaintext": "123456"},
-                    {"plaintext": "654321", "metadata": {"tenant": "acme"}}
+                    {"ref": "reg1", "plaintext": "123456"},
+                    {"ref": "reg2", "plaintext": "654321", "metadata": {"tenant": "acme"}}
                 ]
             })
         );

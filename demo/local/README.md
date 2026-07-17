@@ -88,6 +88,7 @@ url: http://127.0.0.1:3010/fpe/encrypt/<kid>
 request:
 {
   "body": {
+    "ref": "credit-card-pan-v1-sample",
     "plaintext": "4111111111111111",
     "profile": "credit-card-pan-v1"
   },
@@ -101,7 +102,8 @@ response:
 {
   "ciphertext": "5555555555554444",
   "kid": "<kid>",
-  "profile": "credit-card-pan-v1"
+  "profile": "credit-card-pan-v1",
+  "ref": "credit-card-pan-v1-sample"
 }
 
 decode
@@ -111,7 +113,8 @@ request:
   "body": {
     "ciphertext": "5555555555554444",
     "kid": "<kid>",
-    "profile": "credit-card-pan-v1"
+    "profile": "credit-card-pan-v1",
+    "ref": "credit-card-pan-v1-sample"
   },
   "headers": {
     "Content-Type": "application/json",
@@ -121,7 +124,8 @@ request:
 }
 response:
 {
-  "plaintext": "4111111111111111"
+  "plaintext": "4111111111111111",
+  "ref": "credit-card-pan-v1-sample"
 }
 
 input: 4111111111111111

@@ -445,14 +445,15 @@ Calls local format-preserving encryption endpoints. FPE profiles are not
 defined in the request; they are loaded from signed `config.json`.
 
 ```sh
-vectis fpe encrypt <kid> --json '{"profile":"patient-id-decimal-v1","plaintext":"123456"}'
-vectis fpe decrypt --json '{"kid":"<kid>","profile":"patient-id-decimal-v1","ciphertext":"839201"}'
+vectis fpe encrypt <kid> --json '{"ref":"reg1","profile":"patient-id-decimal-v1","plaintext":"123456"}'
+vectis fpe decrypt --json '{"ref":"reg1","kid":"<kid>","profile":"patient-id-decimal-v1","ciphertext":"839201"}'
 ```
 
 `encrypt` requires `fpe-encrypt` permission for the KID and an `active` key.
 `decrypt` requires `fpe-decrypt` permission and allows `active` or `retired`
 keys. The CLI does not print or accept `fpe_version`; that value is part of the
-signed profile.
+signed profile. `ref` is a required client correlation value and is echoed in
+the response.
 
 ### `vectis token`
 
@@ -460,14 +461,15 @@ Calls local reversible tokenization endpoints. Tokenization profiles are not
 defined in the request; they are loaded from signed `config.json`.
 
 ```sh
-vectis token encode <kid> --json '{"profile":"patient-id-token-v1","plaintext":"123456","metadata":{}}'
-vectis token decode --json '{"kid":"<kid>","profile":"patient-id-token-v1","token":"tok_patient_..."}'
+vectis token encode <kid> --json '{"ref":"reg1","profile":"patient-id-token-v1","plaintext":"123456","metadata":{}}'
+vectis token decode --json '{"ref":"reg1","kid":"<kid>","profile":"patient-id-token-v1","token":"tok_patient_..."}'
 ```
 
 `encode` requires `token-encode` permission for the KID and an `active` key.
 `decode` requires `token-decode` permission and allows `active` or `retired`
 keys. Metadata is optional, must be a JSON object when present, and its compact
-serialized JSON representation must be at most 128 characters.
+serialized JSON representation must be at most 128 characters. `ref` is a
+required client correlation value and is echoed in the response.
 
 ## Authentication
 

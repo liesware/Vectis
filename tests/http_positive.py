@@ -633,12 +633,14 @@ def encrypt_internal_message(client, message_number, key_id, case):
 
 def fpe_round_trip(client, key_id):
     profile = "patient-id-decimal-v1"
+    ref = "fpe-single"
     plaintext = "123456789"
     encrypted = client.post(
         f"/fpe/encrypt/{key_id}",
-        {"profile": profile, "plaintext": plaintext},
+        {"ref": ref, "profile": profile, "plaintext": plaintext},
         auth=True,
     )
+    require(encrypted.get("ref") == ref, "fpe encrypt ref mismatch")
     require(encrypted.get("kid") == key_id, "fpe encrypt kid mismatch")
     require(encrypted.get("profile") == profile, "fpe encrypt profile mismatch")
     require("fpe_version" not in encrypted, "fpe encrypt response must not include fpe_version")
@@ -649,9 +651,10 @@ def fpe_round_trip(client, key_id):
 
     decrypted = client.post(
         "/fpe/decrypt",
-        {"kid": key_id, "profile": profile, "ciphertext": ciphertext},
+        {"ref": ref, "kid": key_id, "profile": profile, "ciphertext": ciphertext},
         auth=True,
     )
+    require(decrypted.get("ref") == ref, "fpe decrypt ref mismatch")
     require(decrypted.get("plaintext") == plaintext, "fpe decrypt plaintext mismatch")
 
     return profile, ciphertext, plaintext
@@ -660,9 +663,16 @@ def fpe_round_trip(client, key_id):
 def fpe_batch_round_trip(client, key_id):
     profile = "patient-id-decimal-v1"
     plaintexts = ["123456789", "987654321"]
+    refs = ["fpe-batch-1", "fpe-batch-2"]
     encrypted = client.post(
         f"/fpe/encrypt/batch/{key_id}",
-        {"profile": profile, "items": [{"plaintext": item} for item in plaintexts]},
+        {
+            "profile": profile,
+            "items": [
+                {"ref": ref, "plaintext": item}
+                for ref, item in zip(refs, plaintexts)
+            ],
+        },
         auth=True,
     )
     require(encrypted.get("kid") == key_id, "fpe batch encrypt kid mismatch")
@@ -671,9 +681,10 @@ def fpe_batch_round_trip(client, key_id):
     require(isinstance(encrypted_items, list), "fpe batch encrypt items must be a list")
     require(len(encrypted_items) == len(plaintexts), "fpe batch encrypt item count mismatch")
     require(
-        all(set(item.keys()) == {"ciphertext"} for item in encrypted_items),
-        "fpe batch encrypt items must only include ciphertext",
+        all(set(item.keys()) == {"ref", "ciphertext"} for item in encrypted_items),
+        "fpe batch encrypt items must only include ref and ciphertext",
     )
+    require([item.get("ref") for item in encrypted_items] == refs, "fpe batch encrypt ref mismatch")
     ciphertexts = [item["ciphertext"] for item in encrypted_items]
     require(ciphertexts[0] != ciphertexts[1], "fpe batch ciphertexts should differ")
     require(all(item.isdigit() for item in ciphertexts), "fpe batch must preserve decimal alphabet")
@@ -683,7 +694,10 @@ def fpe_batch_round_trip(client, key_id):
         {
             "kid": key_id,
             "profile": profile,
-            "items": [{"ciphertext": item} for item in ciphertexts],
+            "items": [
+                {"ref": ref, "ciphertext": item}
+                for ref, item in zip(refs, ciphertexts)
+            ],
         },
         auth=True,
     )
@@ -691,6 +705,7 @@ def fpe_batch_round_trip(client, key_id):
     require(decrypted.get("profile") == profile, "fpe batch decrypt profile mismatch")
     decrypted_items = decrypted.get("items")
     require(isinstance(decrypted_items, list), "fpe batch decrypt items must be a list")
+    require([item.get("ref") for item in decrypted_items] == refs, "fpe batch decrypt ref mismatch")
     require(
         [item.get("plaintext") for item in decrypted_items] == plaintexts,
         "fpe batch decrypt plaintext order mismatch",
@@ -701,13 +716,15 @@ def fpe_batch_round_trip(client, key_id):
 
 def token_round_trip(client, key_id):
     profile = "patient-id-token-v1"
+    ref = "token-single"
     plaintext = "123456789"
     metadata = {"tenant": "acme", "field": "patient_id"}
     encoded = client.post(
         f"/token/encode/{key_id}",
-        {"profile": profile, "plaintext": plaintext, "metadata": metadata},
+        {"ref": ref, "profile": profile, "plaintext": plaintext, "metadata": metadata},
         auth=True,
     )
+    require(encoded.get("ref") == ref, "token encode ref mismatch")
     require(encoded.get("kid") == key_id, "token encode kid mismatch")
     require(encoded.get("profile") == profile, "token encode profile mismatch")
     token = encoded.get("token")
@@ -716,15 +733,16 @@ def token_round_trip(client, key_id):
 
     decoded = client.post(
         "/token/decode",
-        {"kid": key_id, "profile": profile, "token": token},
+        {"ref": ref, "kid": key_id, "profile": profile, "token": token},
         auth=True,
     )
+    require(decoded.get("ref") == ref, "token decode ref mismatch")
     require(decoded.get("plaintext") == plaintext, "token decode plaintext mismatch")
     require(decoded.get("metadata") == metadata, "token decode metadata mismatch")
 
     second = client.post(
         f"/token/encode/{key_id}",
-        {"profile": profile, "plaintext": plaintext, "metadata": metadata},
+        {"ref": "token-single-2", "profile": profile, "plaintext": plaintext, "metadata": metadata},
         auth=True,
     )
     require(second.get("token") != token, "token encode must generate random tokens")
@@ -735,6 +753,7 @@ def token_round_trip(client, key_id):
 def token_batch_round_trip(client, key_id):
     profile = "patient-id-token-v1"
     plaintexts = ["123456789", "987654321"]
+    refs = ["token-batch-1", "token-batch-2"]
     metadata = [
         {"tenant": "acme", "field": "patient_id", "item": "one"},
         {"tenant": "acme", "field": "patient_id", "item": "two"},
@@ -744,8 +763,8 @@ def token_batch_round_trip(client, key_id):
         {
             "profile": profile,
             "items": [
-                {"plaintext": plaintexts[0], "metadata": metadata[0]},
-                {"plaintext": plaintexts[1], "metadata": metadata[1]},
+                {"ref": refs[0], "plaintext": plaintexts[0], "metadata": metadata[0]},
+                {"ref": refs[1], "plaintext": plaintexts[1], "metadata": metadata[1]},
             ],
         },
         auth=True,
@@ -754,6 +773,7 @@ def token_batch_round_trip(client, key_id):
     require(encoded.get("profile") == profile, "token batch encode profile mismatch")
     encoded_items = encoded.get("items")
     require(isinstance(encoded_items, list), "token batch encode items must be a list")
+    require([item.get("ref") for item in encoded_items] == refs, "token batch encode ref mismatch")
     tokens = [item.get("token") for item in encoded_items]
     require(
         all(isinstance(token, str) and token.startswith("tok_patient_") for token in tokens),
@@ -770,7 +790,10 @@ def token_batch_round_trip(client, key_id):
         {
             "kid": key_id,
             "profile": profile,
-            "items": [{"token": token} for token in tokens],
+            "items": [
+                {"ref": ref, "token": token}
+                for ref, token in zip(refs, tokens)
+            ],
         },
         auth=True,
     )
@@ -778,6 +801,7 @@ def token_batch_round_trip(client, key_id):
     require(decoded.get("profile") == profile, "token batch decode profile mismatch")
     decoded_items = decoded.get("items")
     require(isinstance(decoded_items, list), "token batch decode items must be a list")
+    require([item.get("ref") for item in decoded_items] == refs, "token batch decode ref mismatch")
     require(
         [item.get("plaintext") for item in decoded_items] == plaintexts,
         "token batch decode plaintext order mismatch",

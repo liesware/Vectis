@@ -475,6 +475,7 @@ pub async fn decode_batch_endpoint(
             }
         }
     }
+    let refs = input.refs().map(str::to_string).collect::<Vec<_>>();
     let found = match state.storage().get_tokens_batch(&kid, &hashids).await {
         Ok(found) => found,
         Err(err) => {
@@ -507,7 +508,7 @@ pub async fn decode_batch_endpoint(
         rows.push(data.clone());
     }
     let prepared =
-        match ops::tokenization::prepare_decode_batch(profile, kid.clone(), hashids, rows) {
+        match ops::tokenization::prepare_decode_batch(profile, kid.clone(), refs, hashids, rows) {
             Ok(prepared) => prepared,
             Err(err) => {
                 return Err(token_failed_response(

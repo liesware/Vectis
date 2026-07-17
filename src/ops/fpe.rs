@@ -9,6 +9,8 @@ use zeroize::Zeroizing;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FpeEncryptInput {
+    #[serde(rename = "ref")]
+    ref_id: String,
     profile: String,
     plaintext: String,
 }
@@ -16,6 +18,8 @@ pub struct FpeEncryptInput {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FpeDecryptInput {
+    #[serde(rename = "ref")]
+    ref_id: String,
     kid: String,
     profile: String,
     ciphertext: String,
@@ -24,6 +28,8 @@ pub struct FpeDecryptInput {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FpeEncryptBatchItemInput {
+    #[serde(rename = "ref")]
+    ref_id: String,
     plaintext: String,
 }
 
@@ -37,6 +43,8 @@ pub struct FpeEncryptBatchInput {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FpeDecryptBatchItemInput {
+    #[serde(rename = "ref")]
+    ref_id: String,
     ciphertext: String,
 }
 
@@ -50,6 +58,8 @@ pub struct FpeDecryptBatchInput {
 
 #[derive(Serialize)]
 pub struct FpeEncryptOutput {
+    #[serde(rename = "ref")]
+    ref_id: String,
     kid: String,
     profile: String,
     ciphertext: String,
@@ -57,11 +67,15 @@ pub struct FpeEncryptOutput {
 
 #[derive(Serialize)]
 pub struct FpeDecryptOutput {
+    #[serde(rename = "ref")]
+    ref_id: String,
     plaintext: SensitiveString,
 }
 
 #[derive(Serialize)]
 pub struct FpeEncryptBatchOutputItem {
+    #[serde(rename = "ref")]
+    ref_id: String,
     ciphertext: String,
 }
 
@@ -74,6 +88,8 @@ pub struct FpeEncryptBatchOutput {
 
 #[derive(Serialize)]
 pub struct FpeDecryptBatchOutputItem {
+    #[serde(rename = "ref")]
+    ref_id: String,
     plaintext: SensitiveString,
 }
 
@@ -97,17 +113,20 @@ impl FpeDecryptBatchOutput {
 }
 
 pub struct ValidatedFpeEncryptInput {
+    ref_id: String,
     profile: String,
     plaintext: Zeroizing<String>,
 }
 
 pub struct ValidatedFpeDecryptInput {
+    ref_id: String,
     kid: String,
     profile: String,
     ciphertext: Zeroizing<String>,
 }
 
 pub struct ValidatedFpeEncryptBatchItem {
+    ref_id: String,
     plaintext: Zeroizing<String>,
 }
 
@@ -117,6 +136,7 @@ pub struct ValidatedFpeEncryptBatchInput {
 }
 
 pub struct ValidatedFpeDecryptBatchItem {
+    ref_id: String,
     ciphertext: Zeroizing<String>,
 }
 
@@ -211,10 +231,12 @@ pub fn parse_decrypt_batch_input(request: Value) -> Result<FpeDecryptBatchInput,
 pub fn validate_encrypt_input(
     input: FpeEncryptInput,
 ) -> Result<ValidatedFpeEncryptInput, DynError> {
+    let ref_id = validation::validate_ref(&input.ref_id)?;
     validation::validate_text_field("profile", &input.profile)?;
     validation::validate_text_field("plaintext", &input.plaintext)?;
 
     Ok(ValidatedFpeEncryptInput {
+        ref_id,
         profile: input.profile,
         plaintext: Zeroizing::new(input.plaintext),
     })
@@ -223,11 +245,13 @@ pub fn validate_encrypt_input(
 pub fn validate_decrypt_input(
     input: FpeDecryptInput,
 ) -> Result<ValidatedFpeDecryptInput, DynError> {
+    let ref_id = validation::validate_ref(&input.ref_id)?;
     keys::validate_key_id(&input.kid)?;
     validation::validate_text_field("profile", &input.profile)?;
     validation::validate_text_field("ciphertext", &input.ciphertext)?;
 
     Ok(ValidatedFpeDecryptInput {
+        ref_id,
         kid: input.kid,
         profile: input.profile,
         ciphertext: Zeroizing::new(input.ciphertext),
@@ -244,12 +268,17 @@ pub fn validate_encrypt_batch_input(
         "fpe",
     )?;
     let mut items = Vec::with_capacity(input.items.len());
-    for item in input.items {
-        validation::validate_text_field("plaintext", &item.plaintext)?;
+    for (index, item) in input.items.into_iter().enumerate() {
+        let ref_id = validation::validate_ref(&item.ref_id)
+            .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
+        validation::validate_text_field("plaintext", &item.plaintext)
+            .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
         items.push(ValidatedFpeEncryptBatchItem {
+            ref_id,
             plaintext: Zeroizing::new(item.plaintext),
         });
     }
+    crate::ops::batch::validate_unique_refs(items.iter().map(|item| item.ref_id.as_str()), "fpe")?;
 
     Ok(ValidatedFpeEncryptBatchInput {
         profile: input.profile,
@@ -268,12 +297,17 @@ pub fn validate_decrypt_batch_input(
         "fpe",
     )?;
     let mut items = Vec::with_capacity(input.items.len());
-    for item in input.items {
-        validation::validate_text_field("ciphertext", &item.ciphertext)?;
+    for (index, item) in input.items.into_iter().enumerate() {
+        let ref_id = validation::validate_ref(&item.ref_id)
+            .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
+        validation::validate_text_field("ciphertext", &item.ciphertext)
+            .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
         items.push(ValidatedFpeDecryptBatchItem {
+            ref_id,
             ciphertext: Zeroizing::new(item.ciphertext),
         });
     }
+    crate::ops::batch::validate_unique_refs(items.iter().map(|item| item.ref_id.as_str()), "fpe")?;
 
     Ok(ValidatedFpeDecryptBatchInput {
         kid: input.kid,
@@ -374,6 +408,7 @@ pub fn encrypt(prepared: PreparedFpeEncrypt) -> Result<FpeEncryptOutput, DynErro
     );
 
     Ok(FpeEncryptOutput {
+        ref_id: prepared.input.ref_id,
         kid: prepared.kid,
         profile: prepared.profile.name().to_string(),
         ciphertext,
@@ -390,6 +425,7 @@ pub fn decrypt(prepared: PreparedFpeDecrypt) -> Result<FpeDecryptOutput, DynErro
     );
 
     Ok(FpeDecryptOutput {
+        ref_id: prepared.input.ref_id,
         plaintext: SensitiveString::from(plaintext),
     })
 }
@@ -399,7 +435,10 @@ pub fn encrypt_batch(prepared: PreparedFpeEncryptBatch) -> Result<FpeEncryptBatc
     for (index, item) in prepared.input.items.iter().enumerate() {
         let ciphertext = fpe::fpe_encrypt(&prepared.profile, &item.plaintext)
             .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
-        items.push(FpeEncryptBatchOutputItem { ciphertext });
+        items.push(FpeEncryptBatchOutputItem {
+            ref_id: item.ref_id.clone(),
+            ciphertext,
+        });
     }
     info!(
         kid = %prepared.kid,
@@ -421,6 +460,7 @@ pub fn decrypt_batch(prepared: PreparedFpeDecryptBatch) -> Result<FpeDecryptBatc
         let plaintext = fpe::fpe_decrypt(&prepared.profile, &item.ciphertext)
             .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
         items.push(FpeDecryptBatchOutputItem {
+            ref_id: item.ref_id.clone(),
             plaintext: SensitiveString::from(plaintext),
         });
     }
@@ -451,7 +491,10 @@ mod tests {
     fn validates_encrypt_batch_input() {
         let input = parse_encrypt_batch_input(json!({
             "profile": "patient-id-decimal-v1",
-            "items": [{"plaintext": "123456"}, {"plaintext": "654321"}]
+            "items": [
+                {"ref": "reg1", "plaintext": "123456"},
+                {"ref": "reg2", "plaintext": "654321"}
+            ]
         }))
         .and_then(validate_encrypt_batch_input)
         .expect("valid batch input must pass");
@@ -478,7 +521,7 @@ mod tests {
     #[test]
     fn rejects_oversized_batch() {
         let items = (0..=crate::core::config::INTERNAL_FPE_BATCH)
-            .map(|_| json!({"plaintext": "123456"}))
+            .map(|index| json!({"ref": format!("reg{index}"), "plaintext": "123456"}))
             .collect::<Vec<_>>();
         let result = parse_encrypt_batch_input(json!({
             "profile": "patient-id-decimal-v1",
@@ -502,7 +545,10 @@ mod tests {
         let input = parse_decrypt_batch_input(json!({
             "kid": kid,
             "profile": "patient-id-decimal-v1",
-            "items": [{"ciphertext": "123456"}, {"ciphertext": "654321"}]
+            "items": [
+                {"ref": "reg1", "ciphertext": "123456"},
+                {"ref": "reg2", "ciphertext": "654321"}
+            ]
         }))
         .and_then(validate_decrypt_batch_input)
         .expect("valid decrypt batch input must pass");
@@ -515,11 +561,12 @@ mod tests {
     #[test]
     fn decrypt_output_serializes_plaintext() {
         let output = FpeDecryptOutput {
+            ref_id: String::from("reg1"),
             plaintext: SensitiveString::from(String::from("123456")),
         };
         let serialized = serde_json::to_value(output).expect("decrypt output must serialize");
 
-        assert_eq!(serialized, json!({"plaintext": "123456"}));
+        assert_eq!(serialized, json!({"ref": "reg1", "plaintext": "123456"}));
     }
 
     #[test]
@@ -529,9 +576,11 @@ mod tests {
             profile: String::from("patient-id-decimal-v1"),
             items: vec![
                 FpeDecryptBatchOutputItem {
+                    ref_id: String::from("reg1"),
                     plaintext: SensitiveString::from(String::from("123456")),
                 },
                 FpeDecryptBatchOutputItem {
+                    ref_id: String::from("reg2"),
                     plaintext: SensitiveString::from(String::from("654321")),
                 },
             ],
@@ -544,8 +593,8 @@ mod tests {
                 "kid": hex64('a'),
                 "profile": "patient-id-decimal-v1",
                 "items": [
-                    {"plaintext": "123456"},
-                    {"plaintext": "654321"}
+                    {"ref": "reg1", "plaintext": "123456"},
+                    {"ref": "reg2", "plaintext": "654321"}
                 ]
             })
         );
