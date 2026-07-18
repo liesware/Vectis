@@ -13,10 +13,10 @@ and final systems after the transport session is over. Vectis explores how to
 protect the data object or payload itself after it leaves the transport layer.
 
 Today it provides hybrid encryption, hybrid signatures, protected messages,
-FF1 format-preserving encryption, reversible random tokenization, MAC profiles, signed
-configuration, API-key permissions, encrypted storage, health probes, metrics,
-structured logs, and a dedicated audit log stream through a consistent HTTP and
-CLI interface.
+FF1 format-preserving encryption, reversible random tokenization, MAC profiles,
+blind indexes, signed configuration, API-key permissions, encrypted storage,
+health probes, metrics, structured logs, and a dedicated audit log stream
+through a consistent HTTP and CLI interface.
 
 > In Latin, *vectis* can mean a lever, crowbar, fastening bar, or carrying pole:
 > a simple tool used to move something heavy with controlled force.
@@ -85,16 +85,19 @@ cryptographic data protection primitives and workflows.
 **Protocol and trust**
 
 - protected messages between Vectis instances, verified before decryption;
-- one operator-signed config file (routes, remote routes, permissions, FPE profiles,
-  tokenization profiles, and MAC profiles); its registered `remote_routes` are the only source of
-  peer public keys — no trust-on-first-use path;
+- one operator-signed config file (routes, remote routes, permissions, FPE
+  profiles, tokenization profiles, and MAC profiles); its registered
+  `remote_routes` are the only source of peer public keys — no trust-on-first-use
+  path;
 - local re-encryption before final app delivery: the receiving application
   never gets remote plaintext directly;
 - public key publication by `kid`;
 - internal encrypt/decrypt endpoints for local protected data;
 - local FF1 format-preserving encryption for signed field profiles;
-- local reversible random tokenization for signed token profiles.
-- local MAC create/verify for signed MAC profiles.
+- local reversible random tokenization for signed token profiles;
+- local MAC create/verify for signed MAC profiles;
+- local blind indexes that reuse signed MAC profiles and persist deterministic
+  membership digests.
 
 **Key management**
 
@@ -102,8 +105,8 @@ cryptographic data protection primitives and workflows.
 - HKDF-derived internal keys for storage encryption and API key verification;
 - operational key creation and validation;
 - encrypted key lifecycle metadata and runtime lifecycle enforcement;
-- SQLite/PostgreSQL-backed storage for encrypted operational keys and encrypted
-  tokenization payloads behind a storage abstraction.
+- SQLite/PostgreSQL-backed storage for encrypted operational keys, encrypted
+  tokenization payloads, and blind index digests behind a storage abstraction.
 
 **Operations and observability**
 
@@ -173,6 +176,38 @@ In the Clinic A terminal:
 clinic-a file: ../personaldata.json
 ```
 
+## Local Data Protection Demo
+
+The repository also includes a single-node local demo over SQLite and HTTP. It
+shows field-level protection with three synthetic categories: credit card PAN,
+SSN, and bank account values.
+
+The demo exercises:
+
+- FPE encrypt/decrypt;
+- reversible token encode/decode;
+- MAC create/verify;
+- blind index create/verify;
+- `/message/internal` encrypt/decrypt;
+- sign and verification.
+
+See [demo/local/README.md](demo/local/README.md).
+
+Quick local demo setup:
+
+```sh
+bash demo/local/setup.sh
+bash demo/local/create-keys.sh
+bash demo/local/configure-config.sh
+```
+
+Then run the local Vectis instance and demo runner:
+
+```sh
+bash demo/local/start-vectis.sh
+uv run demo/local/run-demo.py
+```
+
 ## Architecture
 
 Vectis follows a simple three-layer structure:
@@ -209,7 +244,8 @@ The command prints:
 
 - `VECTIS_UNSEAL_KEY`: used to decrypt the configured init keys file;
 - `VECTIS_INIT_KEYS_FILE`: encrypted init key material path, default `init.json`;
-- `VECTIS_APIKEY`: client secret generated with a cryptographic random number generator and sent as `X-API-Key`;
+- `VECTIS_APIKEY`: client secret generated with a cryptographic random number
+  generator and sent as `X-API-Key`;
 - `VECTIS_APIKEY_HASH`: server-side verifier for protected HTTP endpoints.
 
 For local development, save the unseal key in `.unseal_key`:
@@ -265,6 +301,8 @@ vectis keys list
 vectis pub <kid>
 vectis fpe encrypt <kid> --file fpe-encrypt.json
 vectis token encode <kid> --file token-encode.json
+vectis mac create <kid> --file mac-create.json
+vectis mac verify --file mac-verify.json
 vectis message send <sender_kid> --file send-message.json
 vectis message decrypt --file encrypted-message.json
 vectis config sign
@@ -275,11 +313,13 @@ See the full API documentation in [doc/API.md](doc/API.md).
 
 ## Configuration
 
-Runtime routing, remote peers, API-key permissions, FPE profiles,
-tokenization profiles, and MAC profiles live in a single **signed config file** (`config.json`,
+Runtime routing, remote peers, API-key permissions, FPE profiles, tokenization
+profiles, and MAC profiles live in a single **signed config file** (`config.json`,
 default path `VECTIS_CONFIG_PATH`) with `version`, `routes`, `remote_routes`,
-`permissions`, optional `fpe_profiles`, optional `tokenization_profiles`, and optional `mac_profiles`
-sections. Edit it, then sign it with `vectis config sign`. The full schema
+`permissions`, optional `fpe_profiles`, optional `tokenization_profiles`, and
+optional `mac_profiles` sections. Blind indexes reuse `mac_profiles`; there is
+no separate `index_profiles` section. Edit it, then sign it with
+`vectis config sign`. The full schema
 (every field, allowed values, and the optional peer `public_keys`) is documented
 under **Configuration File (`config.json`)** in [doc/API.md](doc/API.md).
 
@@ -324,10 +364,11 @@ In development and tests, individual algorithm overrides can be enabled with:
 VECTIS_CRYPTO_POLICY=allow-overrides
 ```
 
-## FPE, Tokenization, And MAC
+## FPE, Tokenization, MAC, And Blind Indexes
 
-FPE, tokenization, and MAC are profile-driven. Profiles are loaded only from signed
-config, and requests select a profile by name.
+FPE, tokenization, MAC, and blind indexes are profile-driven. Profiles are
+loaded only from signed config, and requests select a profile by name. Blind
+indexes reuse MAC profiles and persist the resulting deterministic digest.
 
 FPE currently supports:
 
@@ -343,7 +384,8 @@ token-random-v1
 
 MAC currently supports HMAC with the operational key hash algorithm, or
 `KMAC-224`, `KMAC-256`, `KMAC-384`, and `KMAC-512` when the operational key
-uses the corresponding SHA-3 hash size.
+uses the corresponding SHA-3 hash size. MAC profile `context` values use
+structured labels such as `tenant=mx;field=pan;purpose=blind-index;version=1`.
 
 The CLI can edit these profile sections locally:
 
@@ -367,15 +409,19 @@ native `cargo-fuzz` targets.
 - [doc/CLI.md](doc/CLI.md): CLI behavior, commands, output, and environment.
 - [doc/ENV.md](doc/ENV.md): environment variables and expected values.
 - [doc/Test.md](doc/Test.md): testing strategy and test commands.
-- [doc/Clustering.md](doc/Clustering.md): multi-node behavior and shared storage model.
-- [doc/HA_DR.md](doc/HA_DR.md): high availability, backups, restore, and recovery limits.
+- [doc/Clustering.md](doc/Clustering.md): multi-node behavior and shared
+  storage model.
+- [doc/HA_DR.md](doc/HA_DR.md): high availability, backups, restore, and
+  recovery limits.
 - [doc/openapi.yaml](doc/openapi.yaml): OpenAPI specification.
-- [doc/ThreatModel.md](doc/ThreatModel.md): threat model, explicit assumptions, and limitations.
+- [doc/ThreatModel.md](doc/ThreatModel.md): threat model, explicit assumptions,
+  and limitations.
 - [doc/Reference.md](doc/Reference.md): architecture and design reference.
 - [doc/Internal.md](doc/Internal.md): implementation flows and internal invariants.
 - [doc/Design.md](doc/Design.md): reusable design principles distilled from this project.
 - [demo/message/README.md](demo/message/README.md): clinical data exchange demo.
-- [demo/local/README.md](demo/local/README.md): local FPE, tokenization, internal message, and sign demo.
+- [demo/local/README.md](demo/local/README.md): local FPE, tokenization, MAC,
+  blind indexes, internal message, and sign demo.
 - [charts/vectis/README.md](charts/vectis/README.md): Kubernetes Helm chart.
 
 ## What Vectis Is Not
@@ -390,8 +436,8 @@ Vectis is not a replacement for:
 - access control;
 - traditional DLP products.
 
-Vectis does not currently provide masking, commitments, Merkle proofs,
-tamper-evident audit chains, SLH-DSA, Vault/KMS/HSM auto-unseal, or mTLS.
+Vectis does not currently provide masking, Merkle proofs, tamper-evident audit
+chains, SLH-DSA, Vault/KMS/HSM auto-unseal, or mTLS.
 
 Vectis is intended to complement existing security controls by exploring
 cryptographic protection for sensitive data workflows. It should work with
