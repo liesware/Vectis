@@ -2,6 +2,7 @@ pub mod apikey;
 pub mod batch;
 pub mod contracts;
 pub mod fpe;
+pub mod indexes;
 pub mod init;
 pub mod internal_keys;
 pub mod key_material;

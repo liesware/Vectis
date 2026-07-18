@@ -776,9 +776,10 @@ def main():
 
     def limited_blocks_mac_verify():
         status, _ = limited_client.post(
-            f"/mac/verify/{key_id}",
+            "/mac/verify",
             {
                 "ref": "mac-limited",
+                "kid": key_id,
                 "profile": "pan-blind-index-v1",
                 "plaintext": "4111111111111111",
                 "digest": "00" * 32,
@@ -789,8 +790,9 @@ def main():
 
     def limited_blocks_mac_verify_batch():
         status, _ = limited_client.post(
-            f"/mac/verify/batch/{key_id}",
+            "/mac/verify/batch",
             {
+                "kid": key_id,
                 "profile": "pan-blind-index-v1",
                 "items": [
                     {
@@ -803,6 +805,45 @@ def main():
             auth=True,
         )
         require_status("limited client blocks mac verify batch", status, 403)
+
+    def limited_blocks_index_create():
+        status, _ = limited_client.post(
+            f"/index/{key_id}",
+            {"ref": "index-limited", "profile": "pan-blind-index-v1", "plaintext": "4111111111111111"},
+            auth=True,
+        )
+        require_status("limited client blocks index create", status, 403)
+
+    def limited_blocks_index_create_batch():
+        status, _ = limited_client.post(
+            f"/index/batch/{key_id}",
+            {
+                "profile": "pan-blind-index-v1",
+                "items": [{"ref": "index-limited", "plaintext": "4111111111111111"}],
+            },
+            auth=True,
+        )
+        require_status("limited client blocks index create batch", status, 403)
+
+    def limited_blocks_index_verify():
+        status, _ = limited_client.post(
+            "/index/verify",
+            {"ref": "index-limited", "kid": key_id, "profile": "pan-blind-index-v1", "plaintext": "4111111111111111"},
+            auth=True,
+        )
+        require_status("limited client blocks index verify", status, 403)
+
+    def limited_blocks_index_verify_batch():
+        status, _ = limited_client.post(
+            "/index/verify/batch",
+            {
+                "kid": key_id,
+                "profile": "pan-blind-index-v1",
+                "items": [{"ref": "index-limited", "plaintext": "4111111111111111"}],
+            },
+            auth=True,
+        )
+        require_status("limited client blocks index verify batch", status, 403)
 
     def metrics_client_allows_metrics():
         status, _ = metrics_client.get("/metrics", auth=True)
@@ -872,6 +913,10 @@ def main():
         ("limited client blocks mac create batch", limited_blocks_mac_create_batch),
         ("limited client blocks mac verify", limited_blocks_mac_verify),
         ("limited client blocks mac verify batch", limited_blocks_mac_verify_batch),
+        ("limited client blocks index create", limited_blocks_index_create),
+        ("limited client blocks index create batch", limited_blocks_index_create_batch),
+        ("limited client blocks index verify", limited_blocks_index_verify),
+        ("limited client blocks index verify batch", limited_blocks_index_verify_batch),
         ("metrics client allows metrics", metrics_client_allows_metrics),
         ("metrics client blocks admin", metrics_client_blocks_admin),
         ("limited client blocks permissions list", limited_blocks_permissions_list),
@@ -1043,6 +1088,20 @@ def main():
             sign=False,
         )
         require_config_sign_fails("permissions wildcard mac create")
+
+    def permissions_wildcard_index_create():
+        write_permissions(
+            [
+                {
+                    "client": "bad-wildcard-index",
+                    "apikey_hash": limited_api_key_hash,
+                    "status": "active",
+                    "permissions": [{"kid": "*", "actions": ["index-create"]}],
+                }
+            ],
+            sign=False,
+        )
+        require_config_sign_fails("permissions wildcard index create")
 
     def fpe_profile_duplicate_name():
         profile = valid_fpe_profile(key_id)
@@ -1395,6 +1454,7 @@ def main():
         ("permissions wildcard fpe encrypt", permissions_wildcard_fpe_encrypt),
         ("permissions wildcard token encode", permissions_wildcard_token_encode),
         ("permissions wildcard mac create", permissions_wildcard_mac_create),
+        ("permissions wildcard index create", permissions_wildcard_index_create),
         ("fpe profile duplicate name", fpe_profile_duplicate_name),
         ("fpe profile invalid version", fpe_profile_invalid_version),
         ("fpe profile duplicate alphabet", fpe_profile_duplicate_alphabet),
@@ -2280,30 +2340,32 @@ def main():
 
     def mac_verify_digest_not_hex():
         status, body = client.post(
-            f"/mac/verify/{key_id}",
+            "/mac/verify",
             {
                 "ref": "mac-digest",
+                "kid": key_id,
                 "profile": "pan-blind-index-v1",
                 "plaintext": "4111111111111111",
                 "digest": "not-hex",
             },
             auth=True,
         )
-        require_status("POST /mac/verify/{kid} digest not hex", status, 400)
+        require_status("POST /mac/verify digest not hex", status, 400)
         require("digest" in body.get("error", ""), "MAC invalid digest must mention digest")
 
     def mac_verify_wrong_digest():
         status, body = client.post(
-            f"/mac/verify/{key_id}",
+            "/mac/verify",
             {
                 "ref": "mac-wrong-digest",
+                "kid": key_id,
                 "profile": "pan-blind-index-v1",
                 "plaintext": "4111111111111111",
                 "digest": "00" * 32,
             },
             auth=True,
         )
-        require_status("POST /mac/verify/{kid} wrong digest", status, 200)
+        require_status("POST /mac/verify wrong digest", status, 200)
         require(body.get("ref") == "mac-wrong-digest", "MAC wrong digest must echo ref")
         require(body.get("valid") is False, "MAC wrong digest must return valid false")
 
@@ -2326,16 +2388,17 @@ def main():
 
     def mac_verify_ref_too_long():
         status, body = client.post(
-            f"/mac/verify/{key_id}",
+            "/mac/verify",
             {
                 "ref": "r" * 129,
+                "kid": key_id,
                 "profile": "pan-blind-index-v1",
                 "plaintext": "4111111111111111",
                 "digest": "00" * 32,
             },
             auth=True,
         )
-        require_status("POST /mac/verify/{kid} long ref", status, 400)
+        require_status("POST /mac/verify long ref", status, 400)
         require(
             body.get("error") == "ref exceeds maximum allowed length: 128",
             "MAC long ref must fail",
@@ -2420,8 +2483,9 @@ def main():
 
     def mac_verify_batch_digest_not_hex():
         status, body = client.post(
-            f"/mac/verify/batch/{key_id}",
+            "/mac/verify/batch",
             {
+                "kid": key_id,
                 "profile": "pan-blind-index-v1",
                 "items": [
                     {
@@ -2433,14 +2497,15 @@ def main():
             },
             auth=True,
         )
-        require_status("POST /mac/verify/batch/{kid} digest not hex", status, 400)
+        require_status("POST /mac/verify/batch digest not hex", status, 400)
         require("items" not in body, "MAC verify batch error must not return partial items")
         require("batch item 0 failed: digest" in body.get("error", ""), "MAC batch invalid digest must mention item")
 
     def mac_verify_batch_duplicate_ref():
         status, body = client.post(
-            f"/mac/verify/batch/{key_id}",
+            "/mac/verify/batch",
             {
+                "kid": key_id,
                 "profile": "pan-blind-index-v1",
                 "items": [
                     {"ref": "dup", "plaintext": "4111111111111111", "digest": "00" * 32},
@@ -2449,11 +2514,109 @@ def main():
             },
             auth=True,
         )
-        require_status("POST /mac/verify/batch/{kid} duplicate ref", status, 400)
+        require_status("POST /mac/verify/batch duplicate ref", status, 400)
         require("items" not in body, "MAC verify batch error must not return partial items")
         require(
             body.get("error") == "batch item 1 failed: mac batch ref must be unique",
             "MAC verify batch duplicate ref must fail",
+        )
+
+    def index_create_unknown_profile():
+        status, body = client.post(
+            f"/index/{key_id}",
+            {"ref": "index-missing", "profile": "missing-profile", "plaintext": "4111111111111111"},
+            auth=True,
+        )
+        require_status("POST /index/{kid} unknown profile", status, 400)
+        require(body.get("error") == "mac profile not found", "index unknown profile must fail")
+
+    def index_create_wrong_kid():
+        status, body = client.post(
+            f"/index/{retired_key_id}",
+            {"ref": "index-wrong-kid", "profile": "pan-blind-index-v1", "plaintext": "4111111111111111"},
+            auth=True,
+        )
+        require_status("POST /index/{kid} wrong kid", status, 400)
+        require(
+            body.get("error") == "mac profile kid does not match request kid",
+            "index wrong KID must fail",
+        )
+
+    def index_create_empty_ref():
+        status, body = client.post(
+            f"/index/{key_id}",
+            {"ref": "", "profile": "pan-blind-index-v1", "plaintext": "4111111111111111"},
+            auth=True,
+        )
+        require_status("POST /index/{kid} empty ref", status, 400)
+        require(body.get("error") == "ref must not be empty", "index empty ref must fail")
+
+    def index_create_batch_empty_items():
+        status, body = client.post(
+            f"/index/batch/{key_id}",
+            {"profile": "pan-blind-index-v1", "items": []},
+            auth=True,
+        )
+        require_status("POST /index/batch/{kid} empty items", status, 400)
+        require("items" not in body, "index create batch error must not return partial items")
+        require(body.get("error") == "index batch items must not be empty", "index batch empty items must fail")
+
+    def index_create_batch_too_many_items():
+        status, body = client.post(
+            f"/index/batch/{key_id}",
+            {
+                "profile": "pan-blind-index-v1",
+                "items": [
+                    {"ref": f"index-batch-{index}", "plaintext": "4111111111111111"}
+                    for index in range(129)
+                ],
+            },
+            auth=True,
+        )
+        require_status("POST /index/batch/{kid} too many items", status, 400)
+        require("items" not in body, "index create batch error must not return partial items")
+        require(
+            body.get("error") == "index batch items exceeds maximum allowed value: 128",
+            "index batch too many items must fail",
+        )
+
+    def index_create_batch_duplicate_ref():
+        status, body = client.post(
+            f"/index/batch/{key_id}",
+            {
+                "profile": "pan-blind-index-v1",
+                "items": [
+                    {"ref": "dup", "plaintext": "4111111111111111"},
+                    {"ref": "dup", "plaintext": "5555555555554444"},
+                ],
+            },
+            auth=True,
+        )
+        require_status("POST /index/batch/{kid} duplicate ref", status, 400)
+        require("items" not in body, "index create batch error must not return partial items")
+        require(
+            body.get("error") == "batch item 1 failed: index batch ref must be unique",
+            "index create batch duplicate ref must fail",
+        )
+
+    def index_verify_batch_duplicate_ref():
+        status, body = client.post(
+            "/index/verify/batch",
+            {
+                "kid": key_id,
+                "profile": "pan-blind-index-v1",
+                "items": [
+                    {"ref": "dup", "plaintext": "4111111111111111"},
+                    {"ref": "dup", "plaintext": "5555555555554444"},
+                ],
+            },
+            auth=True,
+        )
+        require_status("POST /index/verify/batch duplicate ref", status, 400)
+        require("items" not in body, "index verify batch error must not return partial items")
+        require(
+            body.get("error") == "batch item 1 failed: index batch ref must be unique",
+            "index verify batch duplicate ref must fail",
         )
 
     _CONFIG["routes"] = []
@@ -2520,16 +2683,23 @@ def main():
         ("POST /mac/{kid} wrong kid", mac_create_wrong_kid),
         ("POST /mac/{kid} missing ref", mac_create_ref_missing),
         ("POST /mac/{kid} empty ref", mac_create_ref_empty),
-        ("POST /mac/verify/{kid} digest not hex", mac_verify_digest_not_hex),
-        ("POST /mac/verify/{kid} wrong digest", mac_verify_wrong_digest),
-        ("POST /mac/verify/{kid} long ref", mac_verify_ref_too_long),
+        ("POST /mac/verify digest not hex", mac_verify_digest_not_hex),
+        ("POST /mac/verify wrong digest", mac_verify_wrong_digest),
+        ("POST /mac/verify long ref", mac_verify_ref_too_long),
         ("POST /mac/batch/{kid} unknown profile", mac_create_batch_unknown_profile),
         ("POST /mac/batch/{kid} wrong kid", mac_create_batch_wrong_kid),
         ("POST /mac/batch/{kid} empty items", mac_create_batch_empty_items),
         ("POST /mac/batch/{kid} too many items", mac_create_batch_too_many_items),
         ("POST /mac/batch/{kid} duplicate ref", mac_create_batch_duplicate_ref),
-        ("POST /mac/verify/batch/{kid} digest not hex", mac_verify_batch_digest_not_hex),
-        ("POST /mac/verify/batch/{kid} duplicate ref", mac_verify_batch_duplicate_ref),
+        ("POST /mac/verify/batch digest not hex", mac_verify_batch_digest_not_hex),
+        ("POST /mac/verify/batch duplicate ref", mac_verify_batch_duplicate_ref),
+        ("POST /index/{kid} unknown profile", index_create_unknown_profile),
+        ("POST /index/{kid} wrong kid", index_create_wrong_kid),
+        ("POST /index/{kid} empty ref", index_create_empty_ref),
+        ("POST /index/batch/{kid} empty items", index_create_batch_empty_items),
+        ("POST /index/batch/{kid} too many items", index_create_batch_too_many_items),
+        ("POST /index/batch/{kid} duplicate ref", index_create_batch_duplicate_ref),
+        ("POST /index/verify/batch duplicate ref", index_verify_batch_duplicate_ref),
     ):
         run_case(rows, name, func)
 

@@ -190,6 +190,29 @@ pub(crate) fn get_loaded_key(
     })
 }
 
+pub(crate) enum ProfileUse {
+    NewUse,
+    Verify,
+}
+
+pub(crate) fn prepare_profile_use(
+    keys_db_state: &KeysDbState,
+    kid: &str,
+    profile_kid: &str,
+    use_kind: ProfileUse,
+) -> Result<(), DynError> {
+    if profile_kid != kid {
+        return Err(crate::error::invalid_input(
+            "mac profile kid does not match request kid",
+        ));
+    }
+    let loaded_key = get_loaded_key(keys_db_state, kid)?;
+    match use_kind {
+        ProfileUse::NewUse => require_lifecycle_for_new_use(&loaded_key),
+        ProfileUse::Verify => require_lifecycle_for_decrypt_or_verify(&loaded_key),
+    }
+}
+
 pub fn list_keys_from_state(keys_db_state: &KeysDbState) -> ListKeysOutput {
     let keys = keys_db_state
         .keys_db

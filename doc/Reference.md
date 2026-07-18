@@ -572,8 +572,12 @@ or integrity tags scoped to signed profile context:
 
 - `POST /mac/{kid}`;
 - `POST /mac/batch/{kid}`;
-- `POST /mac/verify/{kid}`;
-- `POST /mac/verify/batch/{kid}`.
+- `POST /mac/verify`;
+- `POST /mac/verify/batch`.
+- `POST /index/{kid}`;
+- `POST /index/batch/{kid}`;
+- `POST /index/verify`;
+- `POST /index/verify/batch`.
 
 MAC profiles live in signed config under `mac_profiles`. Requests select a
 profile by name; the bound KID and `context` labels come from signed config.
@@ -674,6 +678,12 @@ CREATE TABLE IF NOT EXISTS tokens (
     data VARCHAR(10240) NOT NULL,
     PRIMARY KEY (kid, hashid)
 );
+
+CREATE TABLE IF NOT EXISTS indexes (
+    kid VARCHAR(128) NOT NULL,
+    digest VARCHAR(128) NOT NULL,
+    PRIMARY KEY (kid, digest)
+);
 ```
 
 Current PostgreSQL table:
@@ -690,6 +700,12 @@ CREATE TABLE tokens (
     hashid VARCHAR(128) NOT NULL,
     data TEXT NOT NULL,
     PRIMARY KEY (kid, hashid)
+);
+
+CREATE TABLE indexes (
+    kid VARCHAR(128) NOT NULL,
+    digest VARCHAR(128) NOT NULL,
+    PRIMARY KEY (kid, digest)
 );
 ```
 
@@ -746,8 +762,10 @@ Vectis exposes these major endpoint groups:
   `/message/internal/decrypt`;
 - FPE: `/fpe/encrypt/{kid}`, `/fpe/decrypt`;
 - tokenization: `/token/encode/{kid}`, `/token/decode`;
-- MAC: `/mac/{kid}`, `/mac/batch/{kid}`, `/mac/verify/{kid}`,
-  `/mac/verify/batch/{kid}`;
+- MAC: `/mac/{kid}`, `/mac/batch/{kid}`, `/mac/verify`,
+  `/mac/verify/batch`;
+- blind index: `/index/{kid}`, `/index/batch/{kid}`,
+  `/index/verify`, `/index/verify/batch`;
 - self-test: `/self-test/init`, `/self-test/keys/{kid}`.
 
 Public endpoints are intentionally limited. Protected endpoints require

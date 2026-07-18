@@ -1,3 +1,4 @@
+use crate::core::{audit, metrics};
 use crate::error::VectisError;
 use axum::Json;
 use axum::http::StatusCode;
@@ -32,6 +33,19 @@ fn sanitize_error_message(message: &str) -> String {
     } else {
         sanitized
     }
+}
+
+pub fn crypto_failed_response(
+    event: &str,
+    actor: Option<&audit::Actor<'_>>,
+    kid: Option<&str>,
+    action: Option<&str>,
+    operation: &str,
+    err: &(dyn std::error::Error + Send + Sync + 'static),
+) -> (StatusCode, Json<ErrorResponse>) {
+    audit::operation_failed(event, actor, kid, None, action, &err.to_string());
+    metrics::record_crypto_operation(operation, "failed");
+    error_response(err)
 }
 
 pub fn error_response(

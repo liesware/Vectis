@@ -1,8 +1,8 @@
-use crate::core::storage::{OpsKeyRow, TokenRow};
+use crate::core::storage::{IndexRow, OpsKeyRow, TokenRow};
 use crate::error::DynError;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::{Postgres, Row, Transaction};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tracing::info;
 
 pub struct PostgresStorage {
@@ -24,6 +24,8 @@ impl PostgresStorage {
         info!("validated opskeys postgres schema");
         validate_tokens_schema(&pool).await?;
         info!("validated tokens postgres schema");
+        validate_indexes_schema(&pool).await?;
+        info!("validated indexes postgres schema");
 
         Ok(Self { pool })
     }
@@ -182,6 +184,94 @@ impl PostgresStorage {
             hashid: row.get("hashid"),
             data: row.get("data"),
         })
+    }
+
+    pub async fn save_index(&self, kid: &str, digest: &str) -> Result<IndexRow, DynError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "
+            INSERT INTO indexes (kid, digest)
+            VALUES ($1, $2)
+            ON CONFLICT (kid, digest) DO NOTHING
+            ",
+        )
+        .bind(kid)
+        .bind(digest)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        info!(kid, "inserted index");
+
+        Ok(IndexRow {
+            kid: kid.to_string(),
+            digest: digest.to_string(),
+        })
+    }
+
+    pub async fn save_indexes_batch(&self, records: &[IndexRow]) -> Result<(), DynError> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        let kids: Vec<&str> = records.iter().map(|record| record.kid.as_str()).collect();
+        let digests: Vec<&str> = records
+            .iter()
+            .map(|record| record.digest.as_str())
+            .collect();
+        sqlx::query(
+            "
+            INSERT INTO indexes (kid, digest)
+            SELECT * FROM UNNEST($1::text[], $2::text[])
+            ON CONFLICT (kid, digest) DO NOTHING
+            ",
+        )
+        .bind(&kids)
+        .bind(&digests)
+        .execute(&self.pool)
+        .await?;
+        info!(items_count = records.len(), "inserted index batch");
+
+        Ok(())
+    }
+
+    pub async fn index_exists(&self, kid: &str, digest: &str) -> Result<bool, DynError> {
+        let row = sqlx::query(
+            "
+            SELECT 1
+            FROM indexes
+            WHERE kid = $1
+              AND digest = $2
+            ",
+        )
+        .bind(kid)
+        .bind(digest)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.is_some())
+    }
+
+    pub async fn indexes_matching(
+        &self,
+        kid: &str,
+        digests: &[String],
+    ) -> Result<HashSet<String>, DynError> {
+        if digests.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let rows = sqlx::query(
+            "
+            SELECT digest
+            FROM indexes
+            WHERE kid = $1
+              AND digest = ANY($2)
+            ",
+        )
+        .bind(kid)
+        .bind(digests)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(|row| row.get("digest")).collect())
     }
 
     pub async fn update_ops_key_properties(
@@ -365,6 +455,36 @@ async fn validate_tokens_schema(pool: &PgPool) -> Result<(), DynError> {
     validate_varchar_column(&hashid, "tokens", "hashid", 128, false)?;
     validate_text_column(&data, "tokens", "data", false)?;
     validate_primary_key(pool, "tokens", &["kid", "hashid"]).await?;
+
+    Ok(())
+}
+
+async fn validate_indexes_schema(pool: &PgPool) -> Result<(), DynError> {
+    let columns = sqlx::query(
+        "
+        SELECT column_name, data_type, character_maximum_length, is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'indexes'
+        ",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    if columns.is_empty() {
+        return Err(crate::error::storage(
+            "postgres schema is missing indexes table",
+        ));
+    }
+
+    let kid = find_column(&columns, "kid")
+        .ok_or_else(|| crate::error::storage("postgres schema is missing indexes.kid column"))?;
+    let digest = find_column(&columns, "digest")
+        .ok_or_else(|| crate::error::storage("postgres schema is missing indexes.digest column"))?;
+
+    validate_varchar_column(&kid, "indexes", "kid", 128, false)?;
+    validate_varchar_column(&digest, "indexes", "digest", 128, false)?;
+    validate_primary_key(pool, "indexes", &["kid", "digest"]).await?;
 
     Ok(())
 }

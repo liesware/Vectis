@@ -46,7 +46,7 @@ It is not a cluster-wide cache and it is not automatically synchronized.
 
 PostgreSQL is the shared durable backend for clustered deployments. It stores
 encrypted operational key material in `opskeys` and encrypted reversible
-tokenization payloads in `tokens`.
+tokenization payloads in `tokens`, and blind index digests in `indexes`.
 
 PostgreSQL is durable storage. It is not automatic live state.
 
@@ -69,10 +69,17 @@ CREATE TABLE tokens (
     data TEXT NOT NULL,
     PRIMARY KEY (kid, hashid)
 );
+
+CREATE TABLE indexes (
+    kid VARCHAR(128) NOT NULL,
+    digest VARCHAR(128) NOT NULL,
+    PRIMARY KEY (kid, digest)
+);
 ```
 
 `keys`, `properties`, and `tokens.data` are encrypted by Vectis before storage.
-PostgreSQL does not need to understand their contents.
+`indexes.digest` is deterministic blind-index material and PostgreSQL does not
+need to understand its contents.
 
 ## Key Loading
 
@@ -162,8 +169,8 @@ Vectis owns:
 - reporting storage readiness.
 
 For runtime access, Vectis needs `SELECT`, `INSERT`, and `UPDATE` on
-`public.opskeys`, plus `SELECT` and `INSERT` on `public.tokens`. It does not
-need schema creation privileges.
+`public.opskeys`, plus `SELECT` and `INSERT` on `public.tokens` and
+`public.indexes`. It does not need schema creation privileges.
 
 ## Failure Modes
 
@@ -202,6 +209,8 @@ Runtime PostgreSQL grants should be limited to:
 ```sql
 GRANT USAGE ON SCHEMA public TO vectis_usr;
 GRANT SELECT, INSERT, UPDATE ON TABLE public.opskeys TO vectis_usr;
+GRANT SELECT, INSERT ON TABLE public.tokens TO vectis_usr;
+GRANT SELECT, INSERT ON TABLE public.indexes TO vectis_usr;
 ```
 
 ## Future Work

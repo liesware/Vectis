@@ -16,32 +16,22 @@ PERSONALDATA_PATH = SCRIPT_DIR / "personaldata.json"
 FPE_SAMPLES = [
     ("credit-card-pan-v1", "4111111111111111"),
     ("ssn-decimal-v1", "123456789"),
-    ("identity-document-v1", "ACME123456"),
-    ("driver-license-v1", "D1234567"),
     ("bank-account-v1", "987654321012"),
-    ("payroll-number-v1", "PAY123456"),
-    ("insurance-policy-v1", "POLICY123456"),
 ]
 
 TOKEN_SAMPLES = [
     ("credit-card-token-v1", "4111111111111111"),
     ("ssn-token-v1", "123456789"),
-    ("identity-document-token-v1", "ACME123456"),
-    ("driver-license-token-v1", "D1234567"),
     ("bank-account-token-v1", "987654321012"),
-    ("payroll-number-token-v1", "PAY123456"),
-    ("insurance-policy-token-v1", "POLICY123456"),
 ]
 
 MAC_SAMPLES = [
     ("credit-card-pan-mac-v1", "4111111111111111"),
     ("ssn-mac-v1", "123456789"),
-    ("identity-document-mac-v1", "ACME123456"),
-    ("driver-license-mac-v1", "D1234567"),
     ("bank-account-mac-v1", "987654321012"),
-    ("payroll-number-mac-v1", "PAY123456"),
-    ("insurance-policy-mac-v1", "POLICY123456"),
 ]
+
+INDEX_SAMPLES = MAC_SAMPLES
 
 
 def load_env(path):
@@ -227,8 +217,14 @@ def run_mac(base_url, kid, api_key):
         digest = created["response"]["digest"]
         verified = post_json(
             base_url,
-            f"/mac/verify/{kid}",
-            {"ref": ref, "profile": profile, "plaintext": plaintext, "digest": digest},
+            "/mac/verify",
+            {
+                "ref": ref,
+                "kid": kid,
+                "profile": profile,
+                "plaintext": plaintext,
+                "digest": digest,
+            },
             api_key,
         )
         valid = verified["response"].get("valid")
@@ -247,6 +243,49 @@ def run_mac(base_url, kid, api_key):
         )
         if status != "OK":
             raise RuntimeError(f"MAC verification failed for {profile}")
+
+
+def run_indexes(base_url, kid, api_key):
+    print("== Blind Index Profiles ==", flush=True)
+    for profile, plaintext in INDEX_SAMPLES:
+        ref = f"{profile}-index-sample"
+        created = post_json(
+            base_url,
+            f"/index/{kid}",
+            {"ref": ref, "profile": profile, "plaintext": plaintext},
+            api_key,
+        )
+        index = created["response"]["index"]
+        verified = post_json(
+            base_url,
+            "/index/verify",
+            {
+                "ref": ref,
+                "kid": kid,
+                "profile": profile,
+                "plaintext": plaintext,
+            },
+            api_key,
+        )
+        matched = verified["response"].get("matched")
+        status = (
+            "OK"
+            if matched is True and verified["response"].get("index") == index
+            else "FAILED"
+        )
+        print_section(profile)
+        print_http_step("create", created)
+        print_http_step("verify", verified)
+        print_summary(
+            [
+                ("input", plaintext),
+                ("index", index),
+                ("matched", str(matched).lower()),
+                ("status", status),
+            ],
+        )
+        if status != "OK":
+            raise RuntimeError(f"Blind index verification failed for {profile}")
 
 
 def run_internal_message(base_url, kid, api_key, plaintext):
@@ -333,6 +372,7 @@ def main():
     run_fpe(base_url, kid, api_key)
     run_tokenization(base_url, kid, api_key)
     run_mac(base_url, kid, api_key)
+    run_indexes(base_url, kid, api_key)
     print_yaml_block("personaldata.json", personaldata)
     run_internal_message(base_url, kid, api_key, plaintext)
     print_yaml_block("personaldata.json", personaldata)

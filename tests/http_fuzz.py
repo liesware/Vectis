@@ -1207,13 +1207,14 @@ def mac_seeds(client):
     digest = json.loads(body)["digest"]
     verify_seed = {
         "ref": "mac-fuzz",
+        "kid": kid,
         "profile": MAC_PROFILE,
         "plaintext": MAC_PLAINTEXTS[0],
         "digest": digest,
     }
     return [
         (f"/mac/{kid}", create_seed),
-        (f"/mac/verify/{kid}", verify_seed),
+        ("/mac/verify", verify_seed),
     ]
 
 
@@ -1232,6 +1233,7 @@ def mac_batch_seeds(client):
         raise RuntimeError(f"could not create mac batch seed: HTTP {status}: {body}")
     parsed = json.loads(body)
     verify_seed = {
+        "kid": kid,
         "profile": MAC_PROFILE,
         "items": [
             {
@@ -1244,7 +1246,53 @@ def mac_batch_seeds(client):
     }
     return [
         (f"/mac/batch/{kid}", create_seed),
-        (f"/mac/verify/batch/{kid}", verify_seed),
+        ("/mac/verify/batch", verify_seed),
+    ]
+
+
+def index_seeds(client):
+    kid = _create_key(client, {"tag": "fuzz-index", "profile": "hybrid-standard-v1"})
+    configure_mac_profile(client, kid)
+    create_seed = {"ref": "index-fuzz", "profile": MAC_PROFILE, "plaintext": MAC_PLAINTEXTS[0]}
+    status, body = client.post_json(f"/index/{kid}", create_seed, auth=True)
+    if status != 200:
+        raise RuntimeError(f"could not create index seed: HTTP {status}: {body}")
+    verify_seed = {
+        "ref": "index-fuzz",
+        "kid": kid,
+        "profile": MAC_PROFILE,
+        "plaintext": MAC_PLAINTEXTS[0],
+    }
+    return [
+        (f"/index/{kid}", create_seed),
+        ("/index/verify", verify_seed),
+    ]
+
+
+def index_batch_seeds(client):
+    kid = _create_key(client, {"tag": "fuzz-index-batch", "profile": "hybrid-standard-v1"})
+    configure_mac_profile(client, kid)
+    create_seed = {
+        "profile": MAC_PROFILE,
+        "items": [
+            {"ref": f"index-fuzz-{index}", "plaintext": plaintext}
+            for index, plaintext in enumerate(MAC_PLAINTEXTS)
+        ],
+    }
+    status, body = client.post_json(f"/index/batch/{kid}", create_seed, auth=True)
+    if status != 200:
+        raise RuntimeError(f"could not create index batch seed: HTTP {status}: {body}")
+    verify_seed = {
+        "kid": kid,
+        "profile": MAC_PROFILE,
+        "items": [
+            {"ref": f"index-fuzz-{index}", "plaintext": plaintext}
+            for index, plaintext in enumerate(MAC_PLAINTEXTS)
+        ],
+    }
+    return [
+        (f"/index/batch/{kid}", create_seed),
+        ("/index/verify/batch", verify_seed),
     ]
 
 
@@ -1274,6 +1322,8 @@ TARGETS = [
      "auth": True, "semantic": tokenization_batch_semantic},
     {"name": "mac", "runner": run_body, "seed_factory": mac_seeds, "auth": True},
     {"name": "mac_batch", "runner": run_body, "seed_factory": mac_batch_seeds, "auth": True},
+    {"name": "index", "runner": run_body, "seed_factory": index_seeds, "auth": True},
+    {"name": "index_batch", "runner": run_body, "seed_factory": index_batch_seeds, "auth": True},
     {"name": "pubkid", "runner": run_path_param, "require_json_error": False, "endpoints": [
         ("/pub/{}", False),
         ("/keys/properties/{}", True),

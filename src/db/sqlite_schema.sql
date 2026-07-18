@@ -10,3 +10,9 @@ CREATE TABLE IF NOT EXISTS tokens (
     data VARCHAR(10240) NOT NULL,
     PRIMARY KEY (kid, hashid)
 );
+
+CREATE TABLE IF NOT EXISTS indexes (
+    kid VARCHAR(128) NOT NULL,
+    digest VARCHAR(128) NOT NULL,
+    PRIMARY KEY (kid, digest)
+);

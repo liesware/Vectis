@@ -83,7 +83,7 @@ In order of importance:
 | "Harvest now, decrypt later" quantum adversary | Hybrid post-quantum cryptography | ML-KEM alongside XECDH for key establishment; ML-DSA alongside EdDSA for signatures; security holds if either component holds |
 | Nonce reuse under a long-lived key | Fresh key per message | Ephemeral XECDH key and fresh ML-KEM encapsulation per message; the HKDF-derived message key is used once |
 | Configuration tampering (routes, permissions, peer keys) | Mandatory config signature | `vectis-config` timestamp token over canonical JSON, verified on load and on every reload (`ops/sign.rs`, `core/config_file.rs`) |
-| Storage theft or row substitution in the database | Encryption at rest with identity binding | Operational keys encrypted with an HKDF-derived key and AAD; the `kid` is re-verified against the hash of the encrypted payload on load (`validate_key_id_matches_keys`). Token vault rows are protected separately: `tokens.data` is AEAD-encrypted with AAD binding `kid`, `profile`, and `hashid`, so a stolen or substituted row cannot decrypt outside its own `(kid, profile, hashid)` context |
+| Storage theft or row substitution in the database | Encryption at rest with identity binding | Operational keys encrypted with an HKDF-derived key and AAD; the `kid` is re-verified against the hash of the encrypted payload on load (`validate_key_id_matches_keys`). Token vault rows are protected separately: `tokens.data` is AEAD-encrypted with AAD binding `kid`, `profile`, and `hashid`, so a stolen or substituted row cannot decrypt outside its own `(kid, profile, hashid)` context. Blind indexes store only deterministic MAC digests in `indexes` for membership checks |
 | API key brute force and timing attacks | Hashed verification with constant-time comparison where credentials are compared | Server stores keyed hashes; root verification compares in constant time, and permission clients are indexed by hash for lookup (`core/permissions.rs`, `crypto::constant_time_eq`) |
 | Information leakage through errors and telemetry | Typed error boundary and disciplined observability | `VectisError` variants decide HTTP status and public messages (no internal detail on 5xx); logs and metrics avoid secrets and high-cardinality labels; dedicated audit stream with request ids |
 | Use of retired or destroyed keys | Runtime lifecycle enforcement | Lifecycle states (`active`, `disabled`, `retired`, `compromised`, `destroyed`) gate every operation class (`ops/keys.rs`) |
@@ -136,9 +136,10 @@ Vectis is not, and does not replace:
 - protection against a malicious operator (the operator is the root of trust);
 - protection against compromise of the host or the process memory;
 - a secure channel or a message-encryption substitute for the local field
-  operations: FPE, reversible tokenization, and MAC protect field values within a single
-  instance, not data in transit between instances. Tokenization additionally
-  persists a reversible token-to-plaintext mapping (FPE stores nothing), so an
+  operations: FPE, reversible tokenization, MAC, and blind indexes protect field
+  values within a single instance, not data in transit between instances.
+  Tokenization additionally persists a reversible token-to-plaintext mapping
+  (FPE and MAC store nothing; blind indexes store deterministic digests), so an
   attacker holding both the `tokens` table and the operational key could recover
   plaintexts — the host and operator boundary above applies;
 - automatic runtime state propagation between nodes; clustered instances share

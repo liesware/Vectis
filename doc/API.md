@@ -83,8 +83,12 @@ Endpoints requiring auth:
 - `POST /token/decode/batch`
 - `POST /mac/{kid}`
 - `POST /mac/batch/{kid}`
-- `POST /mac/verify/{kid}`
-- `POST /mac/verify/batch/{kid}`
+- `POST /mac/verify`
+- `POST /mac/verify/batch`
+- `POST /index/{kid}`
+- `POST /index/batch/{kid}`
+- `POST /index/verify`
+- `POST /index/verify/batch`
 
 Endpoints without auth:
 
@@ -199,7 +203,7 @@ Exposed metrics:
 - `vectis_config_last_reload_timestamp_seconds{result}` (`success` or `failed`)
 - `vectis_keys_reload_total{result}` (`success` or `failed`)
 - `vectis_message_total{operation,result}` (`send`, `receive`, or `decrypt`; `success`, `denied`, or `failed`)
-- `vectis_crypto_operation_total{operation,result}` (`sign`, `verify`, `encrypt`, `decrypt`, `fpe_encrypt`, `fpe_decrypt`, `fpe_encrypt_batch`, `fpe_decrypt_batch`, `token_encode`, `token_decode`, `token_encode_batch`, `token_decode_batch`, `mac_create`, `mac_verify`, `mac_create_batch`, or `mac_verify_batch`; `success` or `failed`)
+- `vectis_crypto_operation_total{operation,result}` (`sign`, `verify`, `encrypt`, `decrypt`, `fpe_encrypt`, `fpe_decrypt`, `fpe_encrypt_batch`, `fpe_decrypt_batch`, `token_encode`, `token_decode`, `token_encode_batch`, `token_decode_batch`, `mac_create`, `mac_verify`, `mac_create_batch`, `mac_verify_batch`, `index_create`, `index_verify`, `index_create_batch`, or `index_verify_batch`; `success` or `failed`)
 
 ### GET /self-test/init
 
@@ -606,6 +610,8 @@ Allowed actions:
 - `token-decode`
 - `mac-create`
 - `mac-verify`
+- `index-create`
+- `index-verify`
 - `metrics`
 
 Permission mapping:
@@ -623,10 +629,12 @@ Permission mapping:
 | `token-encode` | `POST /token/encode/{kid}`, `POST /token/encode/batch/{kid}` |
 | `token-decode` | `POST /token/decode`, `POST /token/decode/batch` |
 | `mac-create` | `POST /mac/{kid}`, `POST /mac/batch/{kid}` |
-| `mac-verify` | `POST /mac/verify/{kid}`, `POST /mac/verify/batch/{kid}` |
+| `mac-verify` | `POST /mac/verify`, `POST /mac/verify/batch` |
+| `index-create` | `POST /index/{kid}`, `POST /index/batch/{kid}` |
+| `index-verify` | `POST /index/verify`, `POST /index/verify/batch` |
 | `metrics` | `GET /metrics` with `kid: "*"` |
 
-Root always passes permission checks. Routes operations require root or `admin`; there is no granular `routes` action. FPE, tokenization, and MAC actions require explicit KID-scoped grants; `kid: "*"` is rejected for those actions.
+Root always passes permission checks. Routes operations require root or `admin`; there is no granular `routes` action. FPE, tokenization, MAC, and blind-index actions require explicit KID-scoped grants; `kid: "*"` is rejected for those actions.
 
 Permissions file shape:
 
@@ -1321,15 +1329,16 @@ Response:
 }
 ```
 
-### POST /mac/verify/{kid}
+### POST /mac/verify
 
-Requires auth and `mac-verify` permission for the path KID.
+Requires auth and `mac-verify` permission for the request body KID.
 
 Request:
 
 ```json
 {
   "ref": "reg1",
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
   "profile": "pan-blind-index-v1",
   "plaintext": "4111111111111111",
   "digest": "hex..."
@@ -1380,9 +1389,9 @@ Response:
 }
 ```
 
-### POST /mac/verify/batch/{kid}
+### POST /mac/verify/batch
 
-Requires auth and `mac-verify` permission for the path KID.
+Requires auth and `mac-verify` permission for the request body KID.
 
 The batch uses one profile and is all-or-nothing for request validation and
 execution errors. A digest mismatch is not an error; it returns `valid: false`
@@ -1392,6 +1401,7 @@ Request:
 
 ```json
 {
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
   "profile": "pan-blind-index-v1",
   "items": [
     { "ref": "reg1", "plaintext": "4111111111111111", "digest": "hex..." },
@@ -1409,6 +1419,132 @@ Response:
   "items": [
     { "ref": "reg1", "valid": true },
     { "ref": "reg2", "valid": false }
+  ]
+}
+```
+
+## Blind Index
+
+Blind indexes reuse signed `mac_profiles`. `/mac` computes a deterministic
+digest; `/index` computes the same deterministic digest and stores or verifies
+membership in the local `indexes` table. Storage keeps only `kid` and digest;
+it never stores profile, plaintext, metadata, or client `ref`.
+
+Use a MAC profile context with a clear indexing purpose, for example
+`tenant=mx;field=pan;purpose=index;version=1`.
+
+### POST /index/{kid}
+
+Requires auth and `index-create` permission for the path KID. Create requires
+an `active` key. Re-creating the same index is idempotent.
+
+Request:
+
+```json
+{
+  "ref": "reg1",
+  "profile": "pan-index-v1",
+  "plaintext": "4111111111111111"
+}
+```
+
+Response:
+
+```json
+{
+  "ref": "reg1",
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "profile": "pan-index-v1",
+  "index": "hex..."
+}
+```
+
+### POST /index/verify
+
+Requires auth and `index-verify` permission for the request body KID. Verify allows
+`active` or `retired` keys.
+
+Request:
+
+```json
+{
+  "ref": "reg1",
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "profile": "pan-index-v1",
+  "plaintext": "4111111111111111"
+}
+```
+
+Response:
+
+```json
+{
+  "ref": "reg1",
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "profile": "pan-index-v1",
+  "matched": true,
+  "index": "hex..."
+}
+```
+
+### POST /index/batch/{kid}
+
+Requires auth and `index-create` permission for the path KID. The batch uses
+one profile and is all-or-nothing. `items` must contain between `1` and `128`
+entries, and every `ref` must be unique. The storage write is transactional.
+
+Request:
+
+```json
+{
+  "profile": "pan-index-v1",
+  "items": [
+    { "ref": "row1", "plaintext": "4111111111111111" },
+    { "ref": "row2", "plaintext": "5555555555554444" }
+  ]
+}
+```
+
+Response:
+
+```json
+{
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "profile": "pan-index-v1",
+  "items": [
+    { "ref": "row1", "index": "hex..." },
+    { "ref": "row2", "index": "hex..." }
+  ]
+}
+```
+
+### POST /index/verify/batch
+
+Requires auth and `index-verify` permission for the request body KID. Request errors
+fail the whole batch; a missing index returns `matched: false` for that item.
+
+Request:
+
+```json
+{
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "profile": "pan-index-v1",
+  "items": [
+    { "ref": "row1", "plaintext": "4111111111111111" },
+    { "ref": "row2", "plaintext": "5555555555554444" }
+  ]
+}
+```
+
+Response:
+
+```json
+{
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "profile": "pan-index-v1",
+  "items": [
+    { "ref": "row1", "matched": true, "index": "hex..." },
+    { "ref": "row2", "matched": false, "index": "hex..." }
   ]
 }
 ```
@@ -1559,7 +1695,7 @@ Top level:
 | `client` | yes | text, unique | Client label. |
 | `apikey_hash` | yes | 64 hex (32 bytes) | Server-side verifier for this client's `X-API-Key`. |
 | `status` | yes | `active` \| `disabled` \| `revoked` | Only `active` clients are authorized. |
-| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `fpe-encrypt`, `fpe-decrypt`, `token-encode`, `token-decode`, `metrics`. `kid: "*"` is allowed with global actions such as `admin` and `metrics`; FPE and tokenization actions require explicit KIDs. An `admin` action grants all endpoints and ignores kid-scoped grants. |
+| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `fpe-encrypt`, `fpe-decrypt`, `token-encode`, `token-decode`, `mac-create`, `mac-verify`, `index-create`, `index-verify`, `metrics`. `kid: "*"` is allowed with global actions such as `admin` and `metrics`; FPE, tokenization, MAC, and blind-index actions require explicit KIDs. An `admin` action grants all endpoints and ignores kid-scoped grants. |
 
 `fpe_profiles[]` entries:
 

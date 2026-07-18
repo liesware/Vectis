@@ -1,5 +1,5 @@
 use super::HttpState;
-use super::error::{ErrorResponse, error_response};
+use super::error::{ErrorResponse, crypto_failed_response};
 use super::extract::JsonBody;
 use crate::core::{audit, blocking, metrics};
 use crate::ops;
@@ -21,7 +21,7 @@ pub async fn create_endpoint(
     let actor = audit::actor_from_client(&client);
 
     if let Err(err) = ops::keys::validate_key_id(&kid) {
-        return Err(mac_failed_response(
+        return Err(crypto_failed_response(
             "mac.create.failed",
             Some(&actor),
             Some(&kid),
@@ -31,7 +31,7 @@ pub async fn create_endpoint(
         ));
     }
     if let Err(err) = state.ensure_keys_db_entry(&kid).await {
-        return Err(mac_failed_response(
+        return Err(crypto_failed_response(
             "mac.create.failed",
             Some(&actor),
             Some(&kid),
@@ -44,7 +44,7 @@ pub async fn create_endpoint(
         match ops::mac::parse_create_input(request).and_then(ops::mac::validate_create_input) {
             Ok(input) => input,
             Err(err) => {
-                return Err(mac_failed_response(
+                return Err(crypto_failed_response(
                     "mac.create.failed",
                     Some(&actor),
                     Some(&kid),
@@ -56,7 +56,7 @@ pub async fn create_endpoint(
         };
     let Some(profile) = state.mac_profile(input.profile()).await else {
         let err = crate::error::invalid_input("mac profile not found");
-        return Err(mac_failed_response(
+        return Err(crypto_failed_response(
             "mac.create.failed",
             Some(&actor),
             Some(&kid),
@@ -73,7 +73,7 @@ pub async fn create_endpoint(
     {
         Ok(prepared) => prepared,
         Err(err) => {
-            return Err(mac_failed_response(
+            return Err(crypto_failed_response(
                 "mac.create.failed",
                 Some(&actor),
                 Some(&kid),
@@ -99,7 +99,7 @@ pub async fn create_endpoint(
         }
         Err(err) => {
             error!(error = %err, kid = %kid, "mac create endpoint failed");
-            Err(mac_failed_response(
+            Err(crypto_failed_response(
                 "mac.create.failed",
                 Some(&actor),
                 Some(&kid),
@@ -129,7 +129,7 @@ pub async fn create_batch_endpoint(
     let actor = audit::actor_from_client(&client);
 
     if let Err(err) = ops::keys::validate_key_id(&kid) {
-        return Err(mac_failed_response(
+        return Err(crypto_failed_response(
             "mac.create.batch.failed",
             Some(&actor),
             Some(&kid),
@@ -139,7 +139,7 @@ pub async fn create_batch_endpoint(
         ));
     }
     if let Err(err) = state.ensure_keys_db_entry(&kid).await {
-        return Err(mac_failed_response(
+        return Err(crypto_failed_response(
             "mac.create.batch.failed",
             Some(&actor),
             Some(&kid),
@@ -153,7 +153,7 @@ pub async fn create_batch_endpoint(
     {
         Ok(input) => input,
         Err(err) => {
-            return Err(mac_failed_response(
+            return Err(crypto_failed_response(
                 "mac.create.batch.failed",
                 Some(&actor),
                 Some(&kid),
@@ -165,7 +165,7 @@ pub async fn create_batch_endpoint(
     };
     let Some(profile) = state.mac_profile(input.profile()).await else {
         let err = crate::error::invalid_input("mac profile not found");
-        return Err(mac_failed_response(
+        return Err(crypto_failed_response(
             "mac.create.batch.failed",
             Some(&actor),
             Some(&kid),
@@ -182,7 +182,7 @@ pub async fn create_batch_endpoint(
     {
         Ok(prepared) => prepared,
         Err(err) => {
-            return Err(mac_failed_response(
+            return Err(crypto_failed_response(
                 "mac.create.batch.failed",
                 Some(&actor),
                 Some(&kid),
@@ -208,7 +208,7 @@ pub async fn create_batch_endpoint(
         }
         Err(err) => {
             error!(error = %err, kid = %kid, "mac create batch endpoint failed");
-            Err(mac_failed_response(
+            Err(crypto_failed_response(
                 "mac.create.batch.failed",
                 Some(&actor),
                 Some(&kid),
@@ -222,53 +222,43 @@ pub async fn create_batch_endpoint(
 
 pub async fn verify_endpoint(
     State(state): State<HttpState>,
-    Path(kid): Path<String>,
     headers: HeaderMap,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::mac::MacVerifyOutput>, (StatusCode, Json<ErrorResponse>)> {
     let client = state.authorize_api_key(&headers).await?;
-    state
-        .require_permission_for(&client, Some(&kid), "mac-verify", Some("mac.verify.denied"))
-        .await?;
     let actor = audit::actor_from_client(&client);
-
-    if let Err(err) = ops::keys::validate_key_id(&kid) {
-        return Err(mac_failed_response(
-            "mac.verify.failed",
-            Some(&actor),
-            Some(&kid),
-            Some("mac-verify"),
-            "mac_verify",
-            err.as_ref(),
-        ));
-    }
-    if let Err(err) = state.ensure_keys_db_entry(&kid).await {
-        return Err(mac_failed_response(
-            "mac.verify.failed",
-            Some(&actor),
-            Some(&kid),
-            Some("mac-verify"),
-            "mac_verify",
-            err.as_ref(),
-        ));
-    }
     let input =
         match ops::mac::parse_verify_input(request).and_then(ops::mac::validate_verify_input) {
             Ok(input) => input,
             Err(err) => {
-                return Err(mac_failed_response(
+                return Err(crypto_failed_response(
                     "mac.verify.failed",
                     Some(&actor),
-                    Some(&kid),
+                    None,
                     Some("mac-verify"),
                     "mac_verify",
                     err.as_ref(),
                 ));
             }
         };
+    let kid = input.kid().to_string();
+    state
+        .require_permission_for(&client, Some(&kid), "mac-verify", Some("mac.verify.denied"))
+        .await?;
+
+    if let Err(err) = state.ensure_keys_db_entry(&kid).await {
+        return Err(crypto_failed_response(
+            "mac.verify.failed",
+            Some(&actor),
+            Some(&kid),
+            Some("mac-verify"),
+            "mac_verify",
+            err.as_ref(),
+        ));
+    }
     let Some(profile) = state.mac_profile(input.profile()).await else {
         let err = crate::error::invalid_input("mac profile not found");
-        return Err(mac_failed_response(
+        return Err(crypto_failed_response(
             "mac.verify.failed",
             Some(&actor),
             Some(&kid),
@@ -278,14 +268,12 @@ pub async fn verify_endpoint(
         ));
     };
     let prepared = match state
-        .with_keys_db_state(|keys_db_state| {
-            ops::mac::prepare_verify(keys_db_state, &kid, profile, input)
-        })
+        .with_keys_db_state(|keys_db_state| ops::mac::prepare_verify(keys_db_state, profile, input))
         .await
     {
         Ok(prepared) => prepared,
         Err(err) => {
-            return Err(mac_failed_response(
+            return Err(crypto_failed_response(
                 "mac.verify.failed",
                 Some(&actor),
                 Some(&kid),
@@ -311,7 +299,7 @@ pub async fn verify_endpoint(
         }
         Err(err) => {
             error!(error = %err, kid = %kid, "mac verify endpoint failed");
-            Err(mac_failed_response(
+            Err(crypto_failed_response(
                 "mac.verify.failed",
                 Some(&actor),
                 Some(&kid),
@@ -325,11 +313,27 @@ pub async fn verify_endpoint(
 
 pub async fn verify_batch_endpoint(
     State(state): State<HttpState>,
-    Path(kid): Path<String>,
     headers: HeaderMap,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::mac::MacVerifyBatchOutput>, (StatusCode, Json<ErrorResponse>)> {
     let client = state.authorize_api_key(&headers).await?;
+    let actor = audit::actor_from_client(&client);
+    let input = match ops::mac::parse_verify_batch_input(request)
+        .and_then(ops::mac::validate_verify_batch_input)
+    {
+        Ok(input) => input,
+        Err(err) => {
+            return Err(crypto_failed_response(
+                "mac.verify.batch.failed",
+                Some(&actor),
+                None,
+                Some("mac-verify"),
+                "mac_verify_batch",
+                err.as_ref(),
+            ));
+        }
+    };
+    let kid = input.kid().to_string();
     state
         .require_permission_for(
             &client,
@@ -338,20 +342,9 @@ pub async fn verify_batch_endpoint(
             Some("mac.verify.batch.denied"),
         )
         .await?;
-    let actor = audit::actor_from_client(&client);
 
-    if let Err(err) = ops::keys::validate_key_id(&kid) {
-        return Err(mac_failed_response(
-            "mac.verify.batch.failed",
-            Some(&actor),
-            Some(&kid),
-            Some("mac-verify"),
-            "mac_verify_batch",
-            err.as_ref(),
-        ));
-    }
     if let Err(err) = state.ensure_keys_db_entry(&kid).await {
-        return Err(mac_failed_response(
+        return Err(crypto_failed_response(
             "mac.verify.batch.failed",
             Some(&actor),
             Some(&kid),
@@ -360,24 +353,9 @@ pub async fn verify_batch_endpoint(
             err.as_ref(),
         ));
     }
-    let input = match ops::mac::parse_verify_batch_input(request)
-        .and_then(ops::mac::validate_verify_batch_input)
-    {
-        Ok(input) => input,
-        Err(err) => {
-            return Err(mac_failed_response(
-                "mac.verify.batch.failed",
-                Some(&actor),
-                Some(&kid),
-                Some("mac-verify"),
-                "mac_verify_batch",
-                err.as_ref(),
-            ));
-        }
-    };
     let Some(profile) = state.mac_profile(input.profile()).await else {
         let err = crate::error::invalid_input("mac profile not found");
-        return Err(mac_failed_response(
+        return Err(crypto_failed_response(
             "mac.verify.batch.failed",
             Some(&actor),
             Some(&kid),
@@ -388,13 +366,13 @@ pub async fn verify_batch_endpoint(
     };
     let prepared = match state
         .with_keys_db_state(|keys_db_state| {
-            ops::mac::prepare_verify_batch(keys_db_state, &kid, profile, input)
+            ops::mac::prepare_verify_batch(keys_db_state, profile, input)
         })
         .await
     {
         Ok(prepared) => prepared,
         Err(err) => {
-            return Err(mac_failed_response(
+            return Err(crypto_failed_response(
                 "mac.verify.batch.failed",
                 Some(&actor),
                 Some(&kid),
@@ -420,7 +398,7 @@ pub async fn verify_batch_endpoint(
         }
         Err(err) => {
             error!(error = %err, kid = %kid, "mac verify batch endpoint failed");
-            Err(mac_failed_response(
+            Err(crypto_failed_response(
                 "mac.verify.batch.failed",
                 Some(&actor),
                 Some(&kid),
@@ -430,17 +408,4 @@ pub async fn verify_batch_endpoint(
             ))
         }
     }
-}
-
-fn mac_failed_response(
-    event_name: &str,
-    actor: Option<&audit::Actor<'_>>,
-    kid: Option<&str>,
-    permission: Option<&str>,
-    metric_operation: &str,
-    err: &(dyn std::error::Error + Send + Sync + 'static),
-) -> (StatusCode, Json<ErrorResponse>) {
-    audit::operation_failed(event_name, actor, kid, None, permission, &err.to_string());
-    metrics::record_crypto_operation(metric_operation, "failed");
-    error_response(err)
 }

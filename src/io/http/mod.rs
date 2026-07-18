@@ -13,6 +13,7 @@ mod error;
 mod extract;
 mod fpe;
 mod health;
+mod indexes;
 mod keys;
 mod mac;
 mod message;
@@ -458,6 +459,10 @@ fn record_operation_denied_metric(event_name: &str) {
         "mac.verify.denied" => record_crypto_failed("mac_verify"),
         "mac.create.batch.denied" => record_crypto_failed("mac_create_batch"),
         "mac.verify.batch.denied" => record_crypto_failed("mac_verify_batch"),
+        "index.create.denied" => record_crypto_failed("index_create"),
+        "index.verify.denied" => record_crypto_failed("index_verify"),
+        "index.create.batch.denied" => record_crypto_failed("index_create_batch"),
+        "index.verify.batch.denied" => record_crypto_failed("index_verify_batch"),
         "sign.denied" => core_metrics::record_crypto_operation("sign", "failed"),
         "self_test.denied" => {}
         _ => {}
@@ -470,6 +475,7 @@ fn record_crypto_failed(operation: &str) {
 
 pub fn router(state: HttpState) -> Router {
     use fpe::encrypt_batch_endpoint as fpe_encrypt_batch;
+    use indexes::verify_batch_endpoint as index_verify_batch;
     use token::encode_batch_endpoint as token_encode_batch;
 
     debug_assert!(state.key_material_loaded());
@@ -504,9 +510,13 @@ pub fn router(state: HttpState) -> Router {
         .route("/token/encode/{kid}", post(token::encode_endpoint))
         .route("/token/decode", post(token::decode_endpoint))
         .route("/mac/batch/{kid}", post(mac::create_batch_endpoint))
-        .route("/mac/verify/batch/{kid}", post(mac::verify_batch_endpoint))
-        .route("/mac/verify/{kid}", post(mac::verify_endpoint))
+        .route("/mac/verify/batch", post(mac::verify_batch_endpoint))
+        .route("/mac/verify", post(mac::verify_endpoint))
         .route("/mac/{kid}", post(mac::create_endpoint))
+        .route("/index/batch/{kid}", post(indexes::create_batch_endpoint))
+        .route("/index/verify/batch", post(index_verify_batch))
+        .route("/index/verify", post(indexes::verify_endpoint))
+        .route("/index/{kid}", post(indexes::create_endpoint))
         .route("/pub/{kid}", get(pubkey::pub_endpoint))
         .route(
             "/message/internal/encrypt/{kid}",

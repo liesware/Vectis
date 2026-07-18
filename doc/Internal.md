@@ -293,10 +293,16 @@ loaded key's symmetric key with `INTERNAL_KEYS_HKDF`; the HKDF info binds
 profile, KID, context, and the resolved MAC algorithm.
 
 If the operational key hash algorithm is `SHA-3(N)`, MAC uses `KMAC-N` with an
-`N`-bit digest and validated customization context. Otherwise MAC uses HMAC
-with the operational key hash algorithm and a canonical context-prefixed message.
+`N`-bit digest and binds the context through the native KMAC customization.
+Otherwise MAC uses HMAC with the operational key hash algorithm over a
+per-context subkey derived from the MAC key with a second HKDF. In both variants
+the MAC covers the plaintext and the digest is bound to the signed context.
 Create requires an `active` key. Verify allows `active` and `retired` and uses
 constant-time digest comparison.
+
+Blind indexes reuse `mac_profiles`: `/index` computes the same deterministic
+MAC digest and persists only `(kid, digest)` in `indexes`. `/index/verify`
+recomputes the digest and checks storage membership.
 Encode generates a random visible token, hashes it to a storage `hashid`,
 encrypts plaintext plus optional metadata, and stores the row in `tokens`.
 Decode hashes the presented token, loads `tokens.data`, decrypts the payload,

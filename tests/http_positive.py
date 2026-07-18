@@ -292,6 +292,22 @@ def validate_runtime_metrics(client):
         'vectis_crypto_operation_total{operation="mac_verify_batch",result="success"}' in metrics,
         "metrics must include successful mac verify batch count",
     )
+    require(
+        'vectis_crypto_operation_total{operation="index_create",result="success"}' in metrics,
+        "metrics must include successful index create count",
+    )
+    require(
+        'vectis_crypto_operation_total{operation="index_verify",result="success"}' in metrics,
+        "metrics must include successful index verify count",
+    )
+    require(
+        'vectis_crypto_operation_total{operation="index_create_batch",result="success"}' in metrics,
+        "metrics must include successful index create batch count",
+    )
+    require(
+        'vectis_crypto_operation_total{operation="index_verify_batch",result="success"}' in metrics,
+        "metrics must include successful index verify batch count",
+    )
 
 
 def validate_test_response(response, case):
@@ -864,16 +880,16 @@ def mac_round_trip(client, key_id):
     )
 
     verified = client.post(
-        f"/mac/verify/{key_id}",
-        {"ref": ref, "profile": profile, "plaintext": plaintext, "digest": digest},
+        "/mac/verify",
+        {"ref": ref, "kid": key_id, "profile": profile, "plaintext": plaintext, "digest": digest},
         auth=True,
     )
     require(verified.get("ref") == ref, "mac verify ref mismatch")
     require(verified.get("valid") is True, "mac verify must accept matching digest")
 
     rejected = client.post(
-        f"/mac/verify/{key_id}",
-        {"ref": ref, "profile": profile, "plaintext": plaintext + "0", "digest": digest},
+        "/mac/verify",
+        {"ref": ref, "kid": key_id, "profile": profile, "plaintext": plaintext + "0", "digest": digest},
         auth=True,
     )
     require(rejected.get("ref") == ref, "mac verify rejection ref mismatch")
@@ -910,8 +926,9 @@ def mac_batch_round_trip(client, key_id):
         require_hex(digest, "mac batch digest")
 
     verified = client.post(
-        f"/mac/verify/batch/{key_id}",
+        "/mac/verify/batch",
         {
+            "kid": key_id,
             "profile": profile,
             "items": [
                 {"ref": refs[0], "plaintext": plaintexts[0], "digest": digests[0]},
@@ -931,6 +948,94 @@ def mac_batch_round_trip(client, key_id):
     )
 
     return profile, algorithm, [digest[:16] + "..." for digest in digests]
+
+
+def index_round_trip(client, key_id):
+    profile = "pan-blind-index-v1"
+    plaintext = "4111111111111111"
+    ref = "index-reg1"
+    created = client.post(
+        f"/index/{key_id}",
+        {"ref": ref, "profile": profile, "plaintext": plaintext},
+        auth=True,
+    )
+    require(created.get("ref") == ref, "index create ref mismatch")
+    require(created.get("kid") == key_id, "index create kid mismatch")
+    require(created.get("profile") == profile, "index create profile mismatch")
+    digest = created.get("index")
+    require_hex(digest, "index digest")
+
+    matched = client.post(
+        "/index/verify",
+        {"ref": ref, "kid": key_id, "profile": profile, "plaintext": plaintext},
+        auth=True,
+    )
+    require(matched.get("ref") == ref, "index verify ref mismatch")
+    require(matched.get("kid") == key_id, "index verify kid mismatch")
+    require(matched.get("profile") == profile, "index verify profile mismatch")
+    require(matched.get("matched") is True, "index verify must match stored digest")
+    require(matched.get("index") == digest, "index verify digest mismatch")
+
+    missing = client.post(
+        "/index/verify",
+        {"ref": "index-reg2", "kid": key_id, "profile": profile, "plaintext": plaintext + "0"},
+        auth=True,
+    )
+    require(missing.get("matched") is False, "index verify must reject missing digest")
+    require_hex(missing.get("index"), "missing index digest")
+
+    return profile, digest[:16] + "..."
+
+
+def index_batch_round_trip(client, key_id):
+    profile = "pan-blind-index-v1"
+    refs = ["index-batch-1", "index-batch-2"]
+    plaintexts = ["4111111111111111", "5555555555554444"]
+    created = client.post(
+        f"/index/batch/{key_id}",
+        {
+            "profile": profile,
+            "items": [
+                {"ref": ref, "plaintext": plaintext}
+                for ref, plaintext in zip(refs, plaintexts)
+            ],
+        },
+        auth=True,
+    )
+    require(created.get("kid") == key_id, "index batch create kid mismatch")
+    require(created.get("profile") == profile, "index batch create profile mismatch")
+    items = created.get("items")
+    require(isinstance(items, list), "index batch create items must be a list")
+    require([item.get("ref") for item in items] == refs, "index batch create ref mismatch")
+    require(all(set(item.keys()) == {"ref", "index"} for item in items), "index batch create item shape mismatch")
+    digests = [item.get("index") for item in items]
+    for digest in digests:
+        require_hex(digest, "index batch digest")
+
+    verified = client.post(
+        "/index/verify/batch",
+        {
+            "kid": key_id,
+            "profile": profile,
+            "items": [
+                {"ref": refs[0], "plaintext": plaintexts[0]},
+                {"ref": refs[1], "plaintext": plaintexts[1] + "0"},
+            ],
+        },
+        auth=True,
+    )
+    require(verified.get("kid") == key_id, "index batch verify kid mismatch")
+    require(verified.get("profile") == profile, "index batch verify profile mismatch")
+    verify_items = verified.get("items")
+    require(isinstance(verify_items, list), "index batch verify items must be a list")
+    require([item.get("ref") for item in verify_items] == refs, "index batch verify ref mismatch")
+    require(
+        [item.get("matched") for item in verify_items] == [True, False],
+        "index batch verify must preserve true/false results",
+    )
+    require(verify_items[0].get("index") == digests[0], "index batch verify digest mismatch")
+
+    return profile, [digest[:16] + "..." for digest in digests]
 
 
 def validate_permissions_flow(base_url, root_client, key_id, case):
@@ -1261,6 +1366,8 @@ def main():
         client,
         created[0][0],
     )
+    index_profile, index_digest = index_round_trip(client, created[0][0])
+    index_batch_profile, index_batch_digests = index_batch_round_trip(client, created[0][0])
     mac_rows = [
         (f"{mac_profile} {mac_algorithm} {mac_digest}", "OK"),
         (
@@ -1268,12 +1375,18 @@ def main():
             "OK",
         ),
     ]
+    index_rows = [
+        (f"{index_profile} {index_digest}", "OK"),
+        (f"{index_batch_profile} batch {','.join(index_batch_digests)}", "OK"),
+    ]
 
     permission_rows = validate_permissions_flow(args.base_url, client, created[0][0], created[0][1])
     print_section("permissions", permission_rows)
     passed_count += len(permission_rows)
     print_section("mac", mac_rows)
     passed_count += len(mac_rows)
+    print_section("index", index_rows)
+    passed_count += len(index_rows)
 
     test_rows = []
     pub_rows = []

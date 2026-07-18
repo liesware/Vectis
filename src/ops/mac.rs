@@ -19,6 +19,7 @@ pub struct MacCreateInput {
 pub struct MacVerifyInput {
     #[serde(rename = "ref")]
     ref_id: String,
+    kid: String,
     profile: String,
     plaintext: String,
     digest: String,
@@ -51,6 +52,7 @@ pub struct MacVerifyBatchItemInput {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MacVerifyBatchInput {
+    kid: String,
     profile: String,
     items: Vec<MacVerifyBatchItemInput>,
 }
@@ -121,6 +123,7 @@ pub struct ValidatedMacCreateInput {
 
 pub struct ValidatedMacVerifyInput {
     ref_id: String,
+    kid: String,
     profile: String,
     plaintext: Zeroizing<String>,
     digest: Zeroizing<String>,
@@ -143,6 +146,7 @@ pub struct ValidatedMacVerifyBatchItem {
 }
 
 pub struct ValidatedMacVerifyBatchInput {
+    kid: String,
     profile: String,
     items: Vec<ValidatedMacVerifyBatchItem>,
 }
@@ -177,6 +181,10 @@ impl ValidatedMacCreateInput {
 }
 
 impl ValidatedMacVerifyInput {
+    pub fn kid(&self) -> &str {
+        &self.kid
+    }
+
     pub fn profile(&self) -> &str {
         &self.profile
     }
@@ -189,6 +197,10 @@ impl ValidatedMacCreateBatchInput {
 }
 
 impl ValidatedMacVerifyBatchInput {
+    pub fn kid(&self) -> &str {
+        &self.kid
+    }
+
     pub fn profile(&self) -> &str {
         &self.profile
     }
@@ -234,12 +246,15 @@ pub fn validate_create_input(input: MacCreateInput) -> Result<ValidatedMacCreate
 
 pub fn validate_verify_input(input: MacVerifyInput) -> Result<ValidatedMacVerifyInput, DynError> {
     let ref_id = validation::validate_ref(&input.ref_id)?;
+    keys::validate_key_id(&input.kid)
+        .map_err(|err| crate::error::invalid_input(format!("kid is invalid: {err}")))?;
     validation::validate_aad_config_name("profile", &input.profile)?;
     validation::validate_text_field("plaintext", &input.plaintext)?;
     validation::validate_hex_field("digest", &input.digest)?;
 
     Ok(ValidatedMacVerifyInput {
         ref_id,
+        kid: input.kid,
         profile: input.profile,
         plaintext: Zeroizing::new(input.plaintext),
         digest: Zeroizing::new(input.digest),
@@ -277,6 +292,8 @@ pub fn validate_create_batch_input(
 pub fn validate_verify_batch_input(
     input: MacVerifyBatchInput,
 ) -> Result<ValidatedMacVerifyBatchInput, DynError> {
+    keys::validate_key_id(&input.kid)
+        .map_err(|err| crate::error::invalid_input(format!("kid is invalid: {err}")))?;
     validation::validate_aad_config_name("profile", &input.profile)?;
     crate::ops::batch::validate_len(
         input.items.len(),
@@ -300,6 +317,7 @@ pub fn validate_verify_batch_input(
     crate::ops::batch::validate_unique_refs(items.iter().map(|item| item.ref_id.as_str()), "mac")?;
 
     Ok(ValidatedMacVerifyBatchInput {
+        kid: input.kid,
         profile: input.profile,
         items,
     })
@@ -311,13 +329,7 @@ pub fn prepare_create(
     profile: mac::MacProfile,
     input: ValidatedMacCreateInput,
 ) -> Result<PreparedMacCreate, DynError> {
-    if profile.kid() != kid {
-        return Err(crate::error::invalid_input(
-            "mac profile kid does not match request kid",
-        ));
-    }
-    let loaded_key = keys::get_loaded_key(keys_db_state, kid)?;
-    keys::require_lifecycle_for_new_use(&loaded_key)?;
+    keys::prepare_profile_use(keys_db_state, kid, profile.kid(), keys::ProfileUse::NewUse)?;
 
     Ok(PreparedMacCreate {
         kid: kid.to_string(),
@@ -328,17 +340,15 @@ pub fn prepare_create(
 
 pub fn prepare_verify(
     keys_db_state: &KeysDbState,
-    kid: &str,
     profile: mac::MacProfile,
     input: ValidatedMacVerifyInput,
 ) -> Result<PreparedMacVerify, DynError> {
-    if profile.kid() != kid {
-        return Err(crate::error::invalid_input(
-            "mac profile kid does not match request kid",
-        ));
-    }
-    let loaded_key = keys::get_loaded_key(keys_db_state, kid)?;
-    keys::require_lifecycle_for_decrypt_or_verify(&loaded_key)?;
+    keys::prepare_profile_use(
+        keys_db_state,
+        input.kid(),
+        profile.kid(),
+        keys::ProfileUse::Verify,
+    )?;
 
     Ok(PreparedMacVerify { profile, input })
 }
@@ -349,13 +359,7 @@ pub fn prepare_create_batch(
     profile: mac::MacProfile,
     input: ValidatedMacCreateBatchInput,
 ) -> Result<PreparedMacCreateBatch, DynError> {
-    if profile.kid() != kid {
-        return Err(crate::error::invalid_input(
-            "mac profile kid does not match request kid",
-        ));
-    }
-    let loaded_key = keys::get_loaded_key(keys_db_state, kid)?;
-    keys::require_lifecycle_for_new_use(&loaded_key)?;
+    keys::prepare_profile_use(keys_db_state, kid, profile.kid(), keys::ProfileUse::NewUse)?;
 
     Ok(PreparedMacCreateBatch {
         kid: kid.to_string(),
@@ -366,20 +370,18 @@ pub fn prepare_create_batch(
 
 pub fn prepare_verify_batch(
     keys_db_state: &KeysDbState,
-    kid: &str,
     profile: mac::MacProfile,
     input: ValidatedMacVerifyBatchInput,
 ) -> Result<PreparedMacVerifyBatch, DynError> {
-    if profile.kid() != kid {
-        return Err(crate::error::invalid_input(
-            "mac profile kid does not match request kid",
-        ));
-    }
-    let loaded_key = keys::get_loaded_key(keys_db_state, kid)?;
-    keys::require_lifecycle_for_decrypt_or_verify(&loaded_key)?;
+    keys::prepare_profile_use(
+        keys_db_state,
+        input.kid(),
+        profile.kid(),
+        keys::ProfileUse::Verify,
+    )?;
 
     Ok(PreparedMacVerifyBatch {
-        kid: kid.to_string(),
+        kid: input.kid.clone(),
         profile,
         input,
     })
@@ -445,7 +447,10 @@ pub fn verify_batch(prepared: PreparedMacVerifyBatch) -> Result<MacVerifyBatchOu
     })
 }
 
-fn compute_digest(profile: &mac::MacProfile, plaintext: &str) -> Result<Vec<u8>, DynError> {
+pub(crate) fn compute_digest(
+    profile: &mac::MacProfile,
+    plaintext: &str,
+) -> Result<Vec<u8>, DynError> {
     if profile.uses_kmac() {
         return Ok(crate::core::crypto::create_kmac_with_algorithm(
             profile.botan_algorithm(),
@@ -455,11 +460,10 @@ fn compute_digest(profile: &mac::MacProfile, plaintext: &str) -> Result<Vec<u8>,
         )?);
     }
 
-    let message = mac::mac_message(profile, plaintext);
     Ok(crate::core::crypto::create_hmac_with_algorithm(
         profile.botan_algorithm(),
         profile.mac_key(),
-        &message,
+        plaintext.as_bytes(),
     )?)
 }
 
@@ -503,6 +507,7 @@ mod tests {
     #[test]
     fn mac_verify_requires_valid_ref() {
         let err = match parse_verify_input(json!({
+            "kid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "profile": "pan-blind-index-v1",
             "plaintext": "4111111111111111",
             "digest": "00"
@@ -514,6 +519,7 @@ mod tests {
 
         let err = match validate_verify_input(MacVerifyInput {
             ref_id: "bad\u{0001}".to_string(),
+            kid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             profile: "pan-blind-index-v1".to_string(),
             plaintext: "4111111111111111".to_string(),
             digest: "00".to_string(),
@@ -562,6 +568,7 @@ mod tests {
     #[test]
     fn validates_verify_batch_input() {
         let input = parse_verify_batch_input(json!({
+            "kid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "profile": "pan-blind-index-v1",
             "items": [
                 {"ref": "reg1", "plaintext": "4111111111111111", "digest": "00"},
@@ -628,6 +635,7 @@ mod tests {
     #[test]
     fn rejects_invalid_verify_batch_digest() {
         let invalid = parse_verify_batch_input(json!({
+            "kid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "profile": "pan-blind-index-v1",
             "items": [
                 {"ref": "reg1", "plaintext": "4111111111111111", "digest": "not-hex"}
@@ -666,5 +674,105 @@ mod tests {
         })
         .unwrap();
         assert_eq!(verified["items"][0], json!({"ref": "reg1", "valid": false}));
+    }
+
+    const TEST_KID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const TEST_OPS_KEY_HEX: &str =
+        "1111111111111111111111111111111111111111111111111111111111111111";
+
+    fn build_profile(name: &str, context: &str, hash: &'static str) -> mac::MacProfile {
+        let inputs: Vec<mac::MacProfileInput> = serde_json::from_value(json!([
+            {"name": name, "kid": TEST_KID, "context": context}
+        ]))
+        .expect("mac profile input must deserialize");
+        let state = mac::validate_mac_profiles(
+            inputs,
+            |_| true,
+            move |_| Ok(hash.to_string()),
+            |req| mac::derive_mac_key_for_profile(TEST_OPS_KEY_HEX, req),
+        )
+        .expect("mac profile must validate");
+
+        state.get(name).expect("profile must be present").clone()
+    }
+
+    #[test]
+    fn kmac_digest_uses_native_customization() {
+        let profile = build_profile("kmac-prof", "tenant=mx;field=pan", "SHA-3(256)");
+        assert!(profile.uses_kmac());
+        let plaintext = "4111111111111111";
+
+        let actual = compute_digest(&profile, plaintext).expect("kmac digest must compute");
+        let expected = crate::core::crypto::create_kmac_with_algorithm(
+            profile.botan_algorithm(),
+            profile.mac_key(),
+            profile.customization().as_bytes(),
+            plaintext.as_bytes(),
+        )
+        .expect("expected kmac must compute");
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn hmac_digest_macs_plaintext_with_baked_subkey() {
+        let profile = build_profile("hmac-prof", "tenant=mx;field=pan", "BLAKE2b(256)");
+        assert!(!profile.uses_kmac());
+        let plaintext = "4111111111111111";
+
+        let actual = compute_digest(&profile, plaintext).expect("hmac digest must compute");
+        let expected = crate::core::crypto::create_hmac_with_algorithm(
+            profile.botan_algorithm(),
+            profile.mac_key(),
+            plaintext.as_bytes(),
+        )
+        .expect("expected hmac must compute");
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn hmac_profile_bakes_customization_into_key() {
+        let profile = build_profile("hmac-prof", "tenant=mx;field=pan", "BLAKE2b(256)");
+        let raw = mac::derive_mac_key_for_profile(
+            TEST_OPS_KEY_HEX,
+            mac::MacKeyDerivationRequest {
+                profile_name: "hmac-prof",
+                kid: TEST_KID,
+                context: "tenant=mx;field=pan",
+                hash_algorithm: "BLAKE2b(256)",
+            },
+        )
+        .expect("raw mac key must derive");
+        let expected = crate::core::crypto::create_hkdf(
+            &raw.mac_key,
+            mac::MAC_HMAC_SUBKEY_SALT,
+            profile.customization().as_bytes(),
+            mac::MAC_KEY_SIZE_BYTES,
+        )
+        .expect("expected hmac subkey must derive");
+
+        assert_eq!(profile.mac_key(), expected.as_slice());
+        assert_ne!(profile.mac_key(), raw.mac_key.as_slice());
+    }
+
+    #[test]
+    fn compute_digest_is_deterministic_and_context_separated() {
+        for hash in ["SHA-3(256)", "BLAKE2b(256)"] {
+            let a = build_profile("prof", "tenant=mx;field=pan", hash);
+            let a_again = build_profile("prof", "tenant=mx;field=pan", hash);
+            let other_context = build_profile("prof", "tenant=mx;field=ssn", hash);
+            let plaintext = "4111111111111111";
+
+            let digest = compute_digest(&a, plaintext).expect("digest must compute");
+            assert_eq!(
+                digest,
+                compute_digest(&a_again, plaintext).expect("digest must compute")
+            );
+            assert_ne!(
+                digest,
+                compute_digest(&other_context, plaintext).expect("digest must compute")
+            );
+        }
     }
 }

@@ -21,6 +21,12 @@ pub struct TokenRow {
     pub data: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct IndexRow {
+    pub kid: String,
+    pub digest: String,
+}
+
 pub struct StorageState {
     backend: StorageBackend,
 }
@@ -109,6 +115,38 @@ impl StorageState {
         match &self.backend {
             StorageBackend::Sqlite(sqlite) => sqlite.get_token(kid, hashid).await,
             StorageBackend::Postgres(postgres) => postgres.get_token(kid, hashid).await,
+        }
+    }
+
+    pub async fn save_index(&self, kid: &str, digest: &str) -> Result<IndexRow, DynError> {
+        match &self.backend {
+            StorageBackend::Sqlite(sqlite) => sqlite.save_index(kid, digest).await,
+            StorageBackend::Postgres(postgres) => postgres.save_index(kid, digest).await,
+        }
+    }
+
+    pub async fn save_indexes_batch(&self, records: &[IndexRow]) -> Result<(), DynError> {
+        match &self.backend {
+            StorageBackend::Sqlite(sqlite) => sqlite.save_indexes_batch(records).await,
+            StorageBackend::Postgres(postgres) => postgres.save_indexes_batch(records).await,
+        }
+    }
+
+    pub async fn index_exists(&self, kid: &str, digest: &str) -> Result<bool, DynError> {
+        match &self.backend {
+            StorageBackend::Sqlite(sqlite) => sqlite.index_exists(kid, digest).await,
+            StorageBackend::Postgres(postgres) => postgres.index_exists(kid, digest).await,
+        }
+    }
+
+    pub async fn indexes_matching(
+        &self,
+        kid: &str,
+        digests: &[String],
+    ) -> Result<std::collections::HashSet<String>, DynError> {
+        match &self.backend {
+            StorageBackend::Sqlite(sqlite) => sqlite.indexes_matching(kid, digests).await,
+            StorageBackend::Postgres(postgres) => postgres.indexes_matching(kid, digests).await,
         }
     }
 

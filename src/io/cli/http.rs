@@ -584,13 +584,13 @@ async fn run_token(args: Vec<String>, output: OutputFormat) -> Result<(), DynErr
 
 async fn run_mac(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "mac command")?;
-    let (kid, rest) = split_subcommand(rest, "kid")?;
-    validate_kid("kid", &kid)?;
-    let body = parse_json_source(rest)?;
     let client = CliHttpClient::from_env()?;
 
     match subcommand.as_str() {
         "create" => {
+            let (kid, rest) = split_subcommand(rest, "kid")?;
+            validate_kid("kid", &kid)?;
+            let body = parse_json_source(rest)?;
             client
                 .send(
                     Method::POST,
@@ -602,14 +602,9 @@ async fn run_mac(args: Vec<String>, output: OutputFormat) -> Result<(), DynError
                 .await
         }
         "verify" => {
+            let body = parse_json_source(rest)?;
             client
-                .send(
-                    Method::POST,
-                    &format!("/mac/verify/{kid}"),
-                    true,
-                    Some(body),
-                    output,
-                )
+                .send(Method::POST, "/mac/verify", true, Some(body), output)
                 .await
         }
         _ => Err(invalid_input(format!("unknown mac command: {subcommand}"))),

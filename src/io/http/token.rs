@@ -1,5 +1,5 @@
 use super::HttpState;
-use super::error::{ErrorResponse, error_response};
+use super::error::{ErrorResponse, crypto_failed_response};
 use super::extract::JsonBody;
 use crate::core::{audit, blocking, metrics, storage::TokenRow};
 use crate::ops;
@@ -26,7 +26,7 @@ pub async fn encode_endpoint(
     let actor = audit::actor_from_client(&client);
 
     if let Err(err) = ops::keys::validate_key_id(&kid) {
-        return Err(token_failed_response(
+        return Err(crypto_failed_response(
             "token.encode.failed",
             Some(&actor),
             Some(&kid),
@@ -36,7 +36,7 @@ pub async fn encode_endpoint(
         ));
     }
     if let Err(err) = state.ensure_keys_db_entry(&kid).await {
-        return Err(token_failed_response(
+        return Err(crypto_failed_response(
             "token.encode.failed",
             Some(&actor),
             Some(&kid),
@@ -50,7 +50,7 @@ pub async fn encode_endpoint(
     {
         Ok(input) => input,
         Err(err) => {
-            return Err(token_failed_response(
+            return Err(crypto_failed_response(
                 "token.encode.failed",
                 Some(&actor),
                 Some(&kid),
@@ -62,7 +62,7 @@ pub async fn encode_endpoint(
     };
     let Some(profile) = state.tokenization_profile(input.profile()).await else {
         let err = crate::error::invalid_input("tokenization profile not found");
-        return Err(token_failed_response(
+        return Err(crypto_failed_response(
             "token.encode.failed",
             Some(&actor),
             Some(&kid),
@@ -79,7 +79,7 @@ pub async fn encode_endpoint(
     {
         Ok(prepared) => prepared,
         Err(err) => {
-            return Err(token_failed_response(
+            return Err(crypto_failed_response(
                 "token.encode.failed",
                 Some(&actor),
                 Some(&kid),
@@ -95,7 +95,7 @@ pub async fn encode_endpoint(
             Ok(record) => record,
             Err(err) => {
                 error!(error = %err, kid = %kid, "token encode endpoint failed");
-                return Err(token_failed_response(
+                return Err(crypto_failed_response(
                     "token.encode.failed",
                     Some(&actor),
                     Some(&kid),
@@ -112,7 +112,7 @@ pub async fn encode_endpoint(
         .await
     {
         error!(error = %err, kid = %kid, "token encode storage insert failed");
-        return Err(token_failed_response(
+        return Err(crypto_failed_response(
             "token.encode.failed",
             Some(&actor),
             Some(&kid),
@@ -152,7 +152,7 @@ pub async fn encode_batch_endpoint(
     let actor = audit::actor_from_client(&client);
 
     if let Err(err) = ops::keys::validate_key_id(&kid) {
-        return Err(token_failed_response(
+        return Err(crypto_failed_response(
             "token.encode.batch.failed",
             Some(&actor),
             Some(&kid),
@@ -162,7 +162,7 @@ pub async fn encode_batch_endpoint(
         ));
     }
     if let Err(err) = state.ensure_keys_db_entry(&kid).await {
-        return Err(token_failed_response(
+        return Err(crypto_failed_response(
             "token.encode.batch.failed",
             Some(&actor),
             Some(&kid),
@@ -176,7 +176,7 @@ pub async fn encode_batch_endpoint(
     {
         Ok(input) => input,
         Err(err) => {
-            return Err(token_failed_response(
+            return Err(crypto_failed_response(
                 "token.encode.batch.failed",
                 Some(&actor),
                 Some(&kid),
@@ -188,7 +188,7 @@ pub async fn encode_batch_endpoint(
     };
     let Some(profile) = state.tokenization_profile(input.profile()).await else {
         let err = crate::error::invalid_input("tokenization profile not found");
-        return Err(token_failed_response(
+        return Err(crypto_failed_response(
             "token.encode.batch.failed",
             Some(&actor),
             Some(&kid),
@@ -205,7 +205,7 @@ pub async fn encode_batch_endpoint(
     {
         Ok(prepared) => prepared,
         Err(err) => {
-            return Err(token_failed_response(
+            return Err(crypto_failed_response(
                 "token.encode.batch.failed",
                 Some(&actor),
                 Some(&kid),
@@ -223,7 +223,7 @@ pub async fn encode_batch_endpoint(
             Ok(batch) => batch,
             Err(err) => {
                 error!(error = %err, kid = %kid, "token encode batch endpoint failed");
-                return Err(token_failed_response(
+                return Err(crypto_failed_response(
                     "token.encode.batch.failed",
                     Some(&actor),
                     Some(&kid),
@@ -245,7 +245,7 @@ pub async fn encode_batch_endpoint(
 
     if let Err(err) = state.storage().save_tokens_batch(&rows).await {
         error!(error = %err, kid = %kid, "token encode batch storage insert failed");
-        return Err(token_failed_response(
+        return Err(crypto_failed_response(
             "token.encode.batch.failed",
             Some(&actor),
             Some(&kid),
@@ -280,7 +280,7 @@ pub async fn decode_endpoint(
     let input = ops::tokenization::parse_decode_input(request)
         .and_then(ops::tokenization::validate_decode_input)
         .map_err(|err| {
-            token_failed_response(
+            crypto_failed_response(
                 "token.decode.failed",
                 None,
                 None,
@@ -301,7 +301,7 @@ pub async fn decode_endpoint(
     let actor = audit::actor_from_client(&client);
 
     if let Err(err) = state.ensure_keys_db_entry(&kid).await {
-        return Err(token_failed_response(
+        return Err(crypto_failed_response(
             "token.decode.failed",
             Some(&actor),
             Some(&kid),
@@ -312,7 +312,7 @@ pub async fn decode_endpoint(
     }
     let Some(profile) = state.tokenization_profile(input.profile()).await else {
         let err = crate::error::invalid_input("tokenization profile not found");
-        return Err(token_failed_response(
+        return Err(crypto_failed_response(
             "token.decode.failed",
             Some(&actor),
             Some(&kid),
@@ -324,7 +324,7 @@ pub async fn decode_endpoint(
     let hashid = match crate::core::tokenization::hash_token(&profile, input.token()) {
         Ok(hashid) => hashid,
         Err(err) => {
-            return Err(token_failed_response(
+            return Err(crypto_failed_response(
                 "token.decode.failed",
                 Some(&actor),
                 Some(&kid),
@@ -337,7 +337,7 @@ pub async fn decode_endpoint(
     let row = match state.storage().get_token(&kid, &hashid).await {
         Ok(row) => row,
         Err(err) => {
-            return Err(token_failed_response(
+            return Err(crypto_failed_response(
                 "token.decode.failed",
                 Some(&actor),
                 Some(&kid),
@@ -355,7 +355,7 @@ pub async fn decode_endpoint(
     {
         Ok(prepared) => prepared,
         Err(err) => {
-            return Err(token_failed_response(
+            return Err(crypto_failed_response(
                 "token.decode.failed",
                 Some(&actor),
                 Some(&kid),
@@ -381,7 +381,7 @@ pub async fn decode_endpoint(
         }
         Err(err) => {
             error!(error = %err, kid = %kid, "token decode endpoint failed");
-            Err(token_failed_response(
+            Err(crypto_failed_response(
                 "token.decode.failed",
                 Some(&actor),
                 Some(&kid),
@@ -402,7 +402,7 @@ pub async fn decode_batch_endpoint(
     let input = ops::tokenization::parse_decode_batch_input(request)
         .and_then(ops::tokenization::validate_decode_batch_input)
         .map_err(|err| {
-            token_failed_response(
+            crypto_failed_response(
                 "token.decode.batch.failed",
                 None,
                 None,
@@ -423,7 +423,7 @@ pub async fn decode_batch_endpoint(
     let actor = audit::actor_from_client(&client);
 
     if let Err(err) = state.ensure_keys_db_entry(&kid).await {
-        return Err(token_failed_response(
+        return Err(crypto_failed_response(
             "token.decode.batch.failed",
             Some(&actor),
             Some(&kid),
@@ -434,7 +434,7 @@ pub async fn decode_batch_endpoint(
     }
     let Some(profile) = state.tokenization_profile(input.profile()).await else {
         let err = crate::error::invalid_input("tokenization profile not found");
-        return Err(token_failed_response(
+        return Err(crypto_failed_response(
             "token.decode.batch.failed",
             Some(&actor),
             Some(&kid),
@@ -449,7 +449,7 @@ pub async fn decode_batch_endpoint(
         })
         .await
     {
-        return Err(token_failed_response(
+        return Err(crypto_failed_response(
             "token.decode.batch.failed",
             Some(&actor),
             Some(&kid),
@@ -464,7 +464,7 @@ pub async fn decode_batch_endpoint(
             Ok(hashid) => hashids.push(hashid),
             Err(err) => {
                 let err = crate::error::with_prefix(&format!("batch item {index} failed"), err);
-                return Err(token_failed_response(
+                return Err(crypto_failed_response(
                     "token.decode.batch.failed",
                     Some(&actor),
                     Some(&kid),
@@ -479,7 +479,7 @@ pub async fn decode_batch_endpoint(
     let found = match state.storage().get_tokens_batch(&kid, &hashids).await {
         Ok(found) => found,
         Err(err) => {
-            return Err(token_failed_response(
+            return Err(crypto_failed_response(
                 "token.decode.batch.failed",
                 Some(&actor),
                 Some(&kid),
@@ -496,7 +496,7 @@ pub async fn decode_batch_endpoint(
                 &format!("batch item {index} failed"),
                 crate::error::not_found("token not found"),
             );
-            return Err(token_failed_response(
+            return Err(crypto_failed_response(
                 "token.decode.batch.failed",
                 Some(&actor),
                 Some(&kid),
@@ -511,7 +511,7 @@ pub async fn decode_batch_endpoint(
         match ops::tokenization::prepare_decode_batch(profile, kid.clone(), refs, hashids, rows) {
             Ok(prepared) => prepared,
             Err(err) => {
-                return Err(token_failed_response(
+                return Err(crypto_failed_response(
                     "token.decode.batch.failed",
                     Some(&actor),
                     Some(&kid),
@@ -541,7 +541,7 @@ pub async fn decode_batch_endpoint(
         }
         Err(err) => {
             error!(error = %err, kid = %kid, "token decode batch endpoint failed");
-            Err(token_failed_response(
+            Err(crypto_failed_response(
                 "token.decode.batch.failed",
                 Some(&actor),
                 Some(&kid),
@@ -551,17 +551,4 @@ pub async fn decode_batch_endpoint(
             ))
         }
     }
-}
-
-fn token_failed_response(
-    event: &str,
-    actor: Option<&audit::Actor<'_>>,
-    kid: Option<&str>,
-    action: Option<&str>,
-    operation: &str,
-    err: &(dyn std::error::Error + Send + Sync + 'static),
-) -> (StatusCode, Json<ErrorResponse>) {
-    audit::operation_failed(event, actor, kid, None, action, &err.to_string());
-    metrics::record_crypto_operation(operation, "failed");
-    error_response(err)
 }

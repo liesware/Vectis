@@ -7,6 +7,7 @@ use std::fmt;
 use zeroize::{Zeroize, Zeroizing};
 
 pub const MAC_KEY_SALT: &[u8] = b"vectis/mac/v1";
+pub const MAC_HMAC_SUBKEY_SALT: &[u8] = b"vectis/mac/hmac/v1";
 pub const MAC_KEY_SIZE_BYTES: usize = 32;
 pub const MAC_CONTEXT_MAX_CHARS: usize = 128;
 pub const MAC_ALGORITHM_KMAC_224: &str = "KMAC-224";
@@ -200,6 +201,17 @@ pub(crate) fn validate_mac_profiles(
             &profile.context,
         )?;
 
+        let mac_key = if derived.public_algorithm.starts_with("KMAC-") {
+            derived.mac_key
+        } else {
+            Zeroizing::new(crypto::create_hkdf(
+                &derived.mac_key,
+                MAC_HMAC_SUBKEY_SALT,
+                customization.as_bytes(),
+                MAC_KEY_SIZE_BYTES,
+            )?)
+        };
+
         profiles.push(MacProfile {
             name: profile.name,
             kid: profile.kid,
@@ -207,7 +219,7 @@ pub(crate) fn validate_mac_profiles(
             public_algorithm: derived.public_algorithm,
             botan_algorithm: derived.botan_algorithm,
             customization,
-            mac_key: derived.mac_key,
+            mac_key,
         });
     }
 
@@ -276,16 +288,6 @@ pub(crate) fn derive_mac_key_for_profile(
         botan_algorithm: resolved.botan_algorithm,
         mac_key,
     })
-}
-
-pub fn mac_message(profile: &MacProfile, plaintext: &str) -> Vec<u8> {
-    let aad = profile.customization();
-    let mut message = Vec::with_capacity(aad.len() + 1 + plaintext.len());
-    message.extend_from_slice(aad.as_bytes());
-    message.push(0);
-    message.extend_from_slice(plaintext.as_bytes());
-
-    message
 }
 
 fn build_mac_domain_aad(base_fields: &[(&str, &str)], context: &str) -> Result<String, DynError> {

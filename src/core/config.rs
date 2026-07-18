@@ -20,6 +20,7 @@ pub const INTERNAL_KEYS_ML_KEM_VARIANT: &str = "ML-KEM-512";
 pub const INTERNAL_FPE_BATCH: usize = 128;
 pub const INTERNAL_TOKEN_BATCH: usize = 128;
 pub const INTERNAL_MAC_BATCH: usize = 128;
+pub const INTERNAL_INDEX_BATCH: usize = 128;
 pub const INTERNAL_REF_MAX_CHARS: usize = 128;
 pub const CONFIG_NAME_MAX_CHARS: usize = 128;
 pub const FPE_TWEAK_AAD_MAX_CHARS: usize = 128;

@@ -254,6 +254,7 @@ For PostgreSQL:
 ```sh
 psql "$VECTIS_POSTGRES_DSN" -c '\d opskeys'
 psql "$VECTIS_POSTGRES_DSN" -c '\d tokens'
+psql "$VECTIS_POSTGRES_DSN" -c '\d indexes'
 ```
 
 ### Recovery
@@ -285,7 +286,7 @@ Vectis reports PostgreSQL connection or schema errors.
 
 - Database is unreachable.
 - User lacks privileges.
-- `opskeys` or `tokens` table does not exist.
+- `opskeys`, `tokens`, or `indexes` table does not exist.
 - Column types or nullability do not match the expected schema.
 - The DSN points to the wrong database.
 
@@ -295,6 +296,7 @@ Vectis reports PostgreSQL connection or schema errors.
 psql "$VECTIS_POSTGRES_DSN" -c 'select 1'
 psql "$VECTIS_POSTGRES_DSN" -c '\d opskeys'
 psql "$VECTIS_POSTGRES_DSN" -c '\d tokens'
+psql "$VECTIS_POSTGRES_DSN" -c '\d indexes'
 ```
 
 Expected table:
@@ -311,6 +313,12 @@ CREATE TABLE tokens (
     hashid VARCHAR(128) NOT NULL,
     data TEXT NOT NULL,
     PRIMARY KEY (kid, hashid)
+);
+
+CREATE TABLE indexes (
+    kid VARCHAR(128) NOT NULL,
+    digest VARCHAR(128) NOT NULL,
+    PRIMARY KEY (kid, digest)
 );
 ```
 

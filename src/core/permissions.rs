@@ -19,6 +19,8 @@ pub const PERMISSION_ACTIONS: &[&str] = &[
     "token-decode",
     "mac-create",
     "mac-verify",
+    "index-create",
+    "index-verify",
     "metrics",
 ];
 const GLOBAL_PERMISSION_ACTIONS: &[&str] = &["metrics"];
@@ -485,7 +487,7 @@ mod tests {
             "fpe",
             &hex64('8'),
             "active",
-            json!([{"kid": hex64('a'), "actions": ["fpe-encrypt", "fpe-decrypt", "token-encode", "token-decode", "mac-create", "mac-verify"]}]),
+            json!([{"kid": hex64('a'), "actions": ["fpe-encrypt", "fpe-decrypt", "token-encode", "token-decode", "mac-create", "mac-verify", "index-create", "index-verify"]}]),
         )];
         let state = validate_permission_clients(clients, |_| true).unwrap();
         let authed = state.authenticate_hash(&hex64('8')).unwrap();
@@ -518,6 +520,16 @@ mod tests {
         assert!(
             state
                 .require_permission(&authed, Some(&hex64('a')), "mac-verify")
+                .is_ok()
+        );
+        assert!(
+            state
+                .require_permission(&authed, Some(&hex64('a')), "index-create")
+                .is_ok()
+        );
+        assert!(
+            state
+                .require_permission(&authed, Some(&hex64('a')), "index-verify")
                 .is_ok()
         );
 

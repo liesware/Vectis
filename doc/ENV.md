@@ -210,6 +210,8 @@ Allowed actions:
 - `token-decode`
 - `mac-create`
 - `mac-verify`
+- `index-create`
+- `index-verify`
 - `metrics`
 
 Permission mapping summary:
@@ -225,7 +227,9 @@ Permission mapping summary:
 - `token-encode`: `POST /token/encode/{kid}`.
 - `token-decode`: `POST /token/decode`.
 - `mac-create`: `POST /mac/{kid}`, `POST /mac/batch/{kid}`.
-- `mac-verify`: `POST /mac/verify/{kid}`, `POST /mac/verify/batch/{kid}`.
+- `mac-verify`: `POST /mac/verify`, `POST /mac/verify/batch`.
+- `index-create`: `POST /index/{kid}`, `POST /index/batch/{kid}`.
+- `index-verify`: `POST /index/verify`, `POST /index/verify/batch`.
 - `metrics`: `GET /metrics` with `kid: "*"`; this is a global permission and does not reference a loaded operational KID.
 
 Routes operations require root or `admin`; there is no granular `routes` action.
@@ -276,6 +280,12 @@ CREATE TABLE IF NOT EXISTS tokens (
     data VARCHAR(10240) NOT NULL,
     PRIMARY KEY (kid, hashid)
 );
+
+CREATE TABLE IF NOT EXISTS indexes (
+    kid VARCHAR(128) NOT NULL,
+    digest VARCHAR(128) NOT NULL,
+    PRIMARY KEY (kid, digest)
+);
 ```
 
 PostgreSQL uses the same storage contract with PostgreSQL-native types. Vectis
@@ -298,6 +308,12 @@ CREATE TABLE tokens (
     hashid VARCHAR(128) NOT NULL,
     data TEXT NOT NULL,
     PRIMARY KEY (kid, hashid)
+);
+
+CREATE TABLE indexes (
+    kid VARCHAR(128) NOT NULL,
+    digest VARCHAR(128) NOT NULL,
+    PRIMARY KEY (kid, digest)
 );
 ```
 

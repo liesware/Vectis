@@ -6,6 +6,7 @@ operations over HTTP:
 - format-preserving encryption;
 - reversible tokenization;
 - MAC create/verify;
+- blind index create/verify;
 - internal message encrypt/decrypt;
 - sign and verification.
 
@@ -19,17 +20,14 @@ The demo creates profiles for several synthetic sensitive data categories:
 
 - credit card numbers;
 - Social Security numbers;
-- identity documents;
-- driver licenses;
-- bank accounts;
-- payroll numbers;
-- insurance policies.
+- bank accounts.
 
 FPE profiles preserve alphabet and length. Tokenization profiles return visible
 random tokens and store encrypted plaintext in SQLite. MAC profiles produce
-deterministic keyed digests scoped by signed profile context. The internal
-message and sign examples read `personaldata.json` and use a compact JSON
-representation of that file as the message body.
+deterministic keyed digests scoped by signed profile context. Blind indexes
+reuse those MAC profiles and persist deterministic indexes in SQLite. The
+internal message and sign examples read `personaldata.json` and use a compact
+JSON representation of that file as the message body.
 
 This demo prints synthetic values in full so the transformation and round-trip
 are easy to inspect. Do not use real sensitive data.
@@ -46,7 +44,8 @@ bash demo/local/configure-config.sh
 
 The scripts create local state under `demo/local/site`, including SQLite
 storage, `init.json`, `.unseal_key`, an app API key, and signed FPE,
-tokenization, and MAC config profiles. The operational key is created with the
+tokenization, and MAC config profiles. Blind indexes reuse the MAC profiles and
+are enabled by the same local config. The operational key is created with the
 `hybrid-standard-v1` crypto profile.
 
 ## Run The Demo
@@ -138,7 +137,7 @@ decode: 4111111111111111
 status: OK
 ```
 
-MAC profiles use the same detailed request/response pattern:
+MAC and blind index profiles use the same detailed request/response pattern:
 
 ```text
 [credit-card-pan-mac-v1]
@@ -168,11 +167,12 @@ response:
 }
 
 verify
-url: http://127.0.0.1:3010/mac/verify/<kid>
+url: http://127.0.0.1:3010/mac/verify
 request:
 {
   "body": {
     "digest": "hex...",
+    "kid": "<kid>",
     "plaintext": "4111111111111111",
     "profile": "credit-card-pan-mac-v1",
     "ref": "credit-card-pan-mac-v1-sample"
@@ -193,6 +193,65 @@ input: 4111111111111111
 algorithm: HMAC(BLAKE2b(256))
 digest: hex...
 verify: true
+status: OK
+```
+
+Blind indexes create and verify storage membership:
+
+```text
+[credit-card-pan-mac-v1]
+
+create
+url: http://127.0.0.1:3010/index/<kid>
+request:
+{
+  "body": {
+    "plaintext": "4111111111111111",
+    "profile": "credit-card-pan-mac-v1",
+    "ref": "credit-card-pan-mac-v1-index-sample"
+  },
+  "headers": {
+    "Content-Type": "application/json",
+    "X-API-Key": "..."
+  },
+  "method": "POST"
+}
+response:
+{
+  "index": "hex...",
+  "kid": "<kid>",
+  "profile": "credit-card-pan-mac-v1",
+  "ref": "credit-card-pan-mac-v1-index-sample"
+}
+
+verify
+url: http://127.0.0.1:3010/index/verify
+request:
+{
+  "body": {
+    "kid": "<kid>",
+    "plaintext": "4111111111111111",
+    "profile": "credit-card-pan-mac-v1",
+    "ref": "credit-card-pan-mac-v1-index-sample"
+  },
+  "headers": {
+    "Content-Type": "application/json",
+    "X-API-Key": "..."
+  },
+  "method": "POST"
+}
+response:
+{
+  "index": "hex...",
+  "kid": "<kid>",
+  "matched": true,
+  "profile": "credit-card-pan-mac-v1",
+  "ref": "credit-card-pan-mac-v1-index-sample"
+}
+
+input: 4111111111111111
+index: hex...
+matched: true
 status: OK
 ```
 

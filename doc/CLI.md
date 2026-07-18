@@ -500,11 +500,11 @@ request; they are loaded from signed `config.json`.
 
 ```sh
 vectis mac create <kid> --json '{"ref":"reg1","profile":"pan-blind-index-v1","plaintext":"4111111111111111"}'
-vectis mac verify <kid> --json '{"ref":"reg1","profile":"pan-blind-index-v1","plaintext":"4111111111111111","digest":"<hex>"}'
+vectis mac verify --json '{"ref":"reg1","kid":"<kid>","profile":"pan-blind-index-v1","plaintext":"4111111111111111","digest":"<hex>"}'
 ```
 
 `create` requires `mac-create` permission for the KID and an `active` key.
-`verify` requires `mac-verify` permission and allows `active` or `retired`
+`verify` requires `mac-verify` permission for the body KID and allows `active` or `retired`
 keys. The response reports the resolved MAC algorithm and digest.
 
 ## Authentication

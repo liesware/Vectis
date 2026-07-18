@@ -39,6 +39,8 @@ cat > "${SITE_DIR}/config.json" <<JSON
             "token-decode",
             "mac-create",
             "mac-verify",
+            "index-create",
+            "index-verify",
             "message",
             "sign"
           ]
@@ -66,48 +68,12 @@ cat > "${SITE_DIR}/config.json" <<JSON
       "kid": "${LOCAL_KID}"
     },
     {
-      "name": "identity-document-v1",
-      "fpe_version": "fpe-ff1-2025",
-      "alphabet": "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-      "min_len": 6,
-      "max_len": 32,
-      "tweak_aad": "tenant=demo;field=identity_document;version=1",
-      "kid": "${LOCAL_KID}"
-    },
-    {
-      "name": "driver-license-v1",
-      "fpe_version": "fpe-ff1-2025",
-      "alphabet": "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-      "min_len": 6,
-      "max_len": 32,
-      "tweak_aad": "tenant=demo;field=driver_license;version=1",
-      "kid": "${LOCAL_KID}"
-    },
-    {
       "name": "bank-account-v1",
       "fpe_version": "fpe-ff1-2025",
       "alphabet": "0123456789",
       "min_len": 6,
       "max_len": 32,
       "tweak_aad": "tenant=demo;field=bank_account;version=1",
-      "kid": "${LOCAL_KID}"
-    },
-    {
-      "name": "payroll-number-v1",
-      "fpe_version": "fpe-ff1-2025",
-      "alphabet": "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-      "min_len": 6,
-      "max_len": 32,
-      "tweak_aad": "tenant=demo;field=payroll_number;version=1",
-      "kid": "${LOCAL_KID}"
-    },
-    {
-      "name": "insurance-policy-v1",
-      "fpe_version": "fpe-ff1-2025",
-      "alphabet": "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-      "min_len": 6,
-      "max_len": 32,
-      "tweak_aad": "tenant=demo;field=insurance_policy;version=1",
       "kid": "${LOCAL_KID}"
     }
   ],
@@ -129,42 +95,10 @@ cat > "${SITE_DIR}/config.json" <<JSON
       "max_plaintext_len": 128
     },
     {
-      "name": "identity-document-token-v1",
-      "tokenization_version": "token-random-v1",
-      "kid": "${LOCAL_KID}",
-      "token_prefix": "tok_identity",
-      "token_len": 32,
-      "max_plaintext_len": 128
-    },
-    {
-      "name": "driver-license-token-v1",
-      "tokenization_version": "token-random-v1",
-      "kid": "${LOCAL_KID}",
-      "token_prefix": "tok_driver",
-      "token_len": 32,
-      "max_plaintext_len": 128
-    },
-    {
       "name": "bank-account-token-v1",
       "tokenization_version": "token-random-v1",
       "kid": "${LOCAL_KID}",
       "token_prefix": "tok_bank",
-      "token_len": 32,
-      "max_plaintext_len": 128
-    },
-    {
-      "name": "payroll-number-token-v1",
-      "tokenization_version": "token-random-v1",
-      "kid": "${LOCAL_KID}",
-      "token_prefix": "tok_payroll",
-      "token_len": 32,
-      "max_plaintext_len": 128
-    },
-    {
-      "name": "insurance-policy-token-v1",
-      "tokenization_version": "token-random-v1",
-      "kid": "${LOCAL_KID}",
-      "token_prefix": "tok_policy",
       "token_len": 32,
       "max_plaintext_len": 128
     }
@@ -181,29 +115,9 @@ cat > "${SITE_DIR}/config.json" <<JSON
       "context": "tenant=demo;field=ssn;purpose=blind_index;version=1"
     },
     {
-      "name": "identity-document-mac-v1",
-      "kid": "${LOCAL_KID}",
-      "context": "tenant=demo;field=identity_document;purpose=blind_index;version=1"
-    },
-    {
-      "name": "driver-license-mac-v1",
-      "kid": "${LOCAL_KID}",
-      "context": "tenant=demo;field=driver_license;purpose=blind_index;version=1"
-    },
-    {
       "name": "bank-account-mac-v1",
       "kid": "${LOCAL_KID}",
       "context": "tenant=demo;field=bank_account;purpose=blind_index;version=1"
-    },
-    {
-      "name": "payroll-number-mac-v1",
-      "kid": "${LOCAL_KID}",
-      "context": "tenant=demo;field=payroll_number;purpose=blind_index;version=1"
-    },
-    {
-      "name": "insurance-policy-mac-v1",
-      "kid": "${LOCAL_KID}",
-      "context": "tenant=demo;field=insurance_policy;purpose=blind_index;version=1"
     }
   ]
 }
@@ -213,7 +127,7 @@ JSON
 
 echo "Signed local demo config:"
 echo "  kid: ${LOCAL_KID}"
-echo "  FPE profiles: 7"
-echo "  tokenization profiles: 7"
-echo "  MAC profiles: 7"
+echo "  FPE profiles: 3"
+echo "  tokenization profiles: 3"
+echo "  MAC profiles: 3"
 echo "Next: bash demo/local/start-vectis.sh"

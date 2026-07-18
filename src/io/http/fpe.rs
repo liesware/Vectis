@@ -1,5 +1,5 @@
 use super::HttpState;
-use super::error::{ErrorResponse, error_response};
+use super::error::{ErrorResponse, crypto_failed_response};
 use super::extract::JsonBody;
 use crate::core::{audit, blocking, metrics};
 use crate::ops;
@@ -26,7 +26,7 @@ pub async fn encrypt_endpoint(
     let actor = audit::actor_from_client(&client);
 
     if let Err(err) = ops::keys::validate_key_id(&kid) {
-        return Err(fpe_failed_response(
+        return Err(crypto_failed_response(
             "fpe.encrypt.failed",
             Some(&actor),
             Some(&kid),
@@ -36,7 +36,7 @@ pub async fn encrypt_endpoint(
         ));
     }
     if let Err(err) = state.ensure_keys_db_entry(&kid).await {
-        return Err(fpe_failed_response(
+        return Err(crypto_failed_response(
             "fpe.encrypt.failed",
             Some(&actor),
             Some(&kid),
@@ -49,7 +49,7 @@ pub async fn encrypt_endpoint(
         match ops::fpe::parse_encrypt_input(request).and_then(ops::fpe::validate_encrypt_input) {
             Ok(input) => input,
             Err(err) => {
-                return Err(fpe_failed_response(
+                return Err(crypto_failed_response(
                     "fpe.encrypt.failed",
                     Some(&actor),
                     Some(&kid),
@@ -61,7 +61,7 @@ pub async fn encrypt_endpoint(
         };
     let Some(profile) = state.fpe_profile(input.profile()).await else {
         let err = crate::error::invalid_input("fpe profile not found");
-        return Err(fpe_failed_response(
+        return Err(crypto_failed_response(
             "fpe.encrypt.failed",
             Some(&actor),
             Some(&kid),
@@ -78,7 +78,7 @@ pub async fn encrypt_endpoint(
     {
         Ok(prepared) => prepared,
         Err(err) => {
-            return Err(fpe_failed_response(
+            return Err(crypto_failed_response(
                 "fpe.encrypt.failed",
                 Some(&actor),
                 Some(&kid),
@@ -104,7 +104,7 @@ pub async fn encrypt_endpoint(
         }
         Err(err) => {
             error!(error = %err, kid = %kid, "fpe encrypt endpoint failed");
-            Err(fpe_failed_response(
+            Err(crypto_failed_response(
                 "fpe.encrypt.failed",
                 Some(&actor),
                 Some(&kid),
@@ -134,7 +134,7 @@ pub async fn encrypt_batch_endpoint(
     let actor = audit::actor_from_client(&client);
 
     if let Err(err) = ops::keys::validate_key_id(&kid) {
-        return Err(fpe_failed_response(
+        return Err(crypto_failed_response(
             "fpe.encrypt.batch.failed",
             Some(&actor),
             Some(&kid),
@@ -144,7 +144,7 @@ pub async fn encrypt_batch_endpoint(
         ));
     }
     if let Err(err) = state.ensure_keys_db_entry(&kid).await {
-        return Err(fpe_failed_response(
+        return Err(crypto_failed_response(
             "fpe.encrypt.batch.failed",
             Some(&actor),
             Some(&kid),
@@ -158,7 +158,7 @@ pub async fn encrypt_batch_endpoint(
     {
         Ok(input) => input,
         Err(err) => {
-            return Err(fpe_failed_response(
+            return Err(crypto_failed_response(
                 "fpe.encrypt.batch.failed",
                 Some(&actor),
                 Some(&kid),
@@ -170,7 +170,7 @@ pub async fn encrypt_batch_endpoint(
     };
     let Some(profile) = state.fpe_profile(input.profile()).await else {
         let err = crate::error::invalid_input("fpe profile not found");
-        return Err(fpe_failed_response(
+        return Err(crypto_failed_response(
             "fpe.encrypt.batch.failed",
             Some(&actor),
             Some(&kid),
@@ -187,7 +187,7 @@ pub async fn encrypt_batch_endpoint(
     {
         Ok(prepared) => prepared,
         Err(err) => {
-            return Err(fpe_failed_response(
+            return Err(crypto_failed_response(
                 "fpe.encrypt.batch.failed",
                 Some(&actor),
                 Some(&kid),
@@ -217,7 +217,7 @@ pub async fn encrypt_batch_endpoint(
         }
         Err(err) => {
             error!(error = %err, kid = %kid, "fpe encrypt batch endpoint failed");
-            Err(fpe_failed_response(
+            Err(crypto_failed_response(
                 "fpe.encrypt.batch.failed",
                 Some(&actor),
                 Some(&kid),
@@ -238,7 +238,7 @@ pub async fn decrypt_endpoint(
     let input = ops::fpe::parse_decrypt_input(request)
         .and_then(ops::fpe::validate_decrypt_input)
         .map_err(|err| {
-            fpe_failed_response(
+            crypto_failed_response(
                 "fpe.decrypt.failed",
                 None,
                 None,
@@ -259,7 +259,7 @@ pub async fn decrypt_endpoint(
     let actor = audit::actor_from_client(&client);
 
     if let Err(err) = state.ensure_keys_db_entry(&kid).await {
-        return Err(fpe_failed_response(
+        return Err(crypto_failed_response(
             "fpe.decrypt.failed",
             Some(&actor),
             Some(&kid),
@@ -270,7 +270,7 @@ pub async fn decrypt_endpoint(
     }
     let Some(profile) = state.fpe_profile(input.profile()).await else {
         let err = crate::error::invalid_input("fpe profile not found");
-        return Err(fpe_failed_response(
+        return Err(crypto_failed_response(
             "fpe.decrypt.failed",
             Some(&actor),
             Some(&kid),
@@ -287,7 +287,7 @@ pub async fn decrypt_endpoint(
     {
         Ok(prepared) => prepared,
         Err(err) => {
-            return Err(fpe_failed_response(
+            return Err(crypto_failed_response(
                 "fpe.decrypt.failed",
                 Some(&actor),
                 Some(&kid),
@@ -313,7 +313,7 @@ pub async fn decrypt_endpoint(
         }
         Err(err) => {
             error!(error = %err, kid = %kid, "fpe decrypt endpoint failed");
-            Err(fpe_failed_response(
+            Err(crypto_failed_response(
                 "fpe.decrypt.failed",
                 Some(&actor),
                 Some(&kid),
@@ -334,7 +334,7 @@ pub async fn decrypt_batch_endpoint(
     let input = ops::fpe::parse_decrypt_batch_input(request)
         .and_then(ops::fpe::validate_decrypt_batch_input)
         .map_err(|err| {
-            fpe_failed_response(
+            crypto_failed_response(
                 "fpe.decrypt.batch.failed",
                 None,
                 None,
@@ -355,7 +355,7 @@ pub async fn decrypt_batch_endpoint(
     let actor = audit::actor_from_client(&client);
 
     if let Err(err) = state.ensure_keys_db_entry(&kid).await {
-        return Err(fpe_failed_response(
+        return Err(crypto_failed_response(
             "fpe.decrypt.batch.failed",
             Some(&actor),
             Some(&kid),
@@ -366,7 +366,7 @@ pub async fn decrypt_batch_endpoint(
     }
     let Some(profile) = state.fpe_profile(input.profile()).await else {
         let err = crate::error::invalid_input("fpe profile not found");
-        return Err(fpe_failed_response(
+        return Err(crypto_failed_response(
             "fpe.decrypt.batch.failed",
             Some(&actor),
             Some(&kid),
@@ -383,7 +383,7 @@ pub async fn decrypt_batch_endpoint(
     {
         Ok(prepared) => prepared,
         Err(err) => {
-            return Err(fpe_failed_response(
+            return Err(crypto_failed_response(
                 "fpe.decrypt.batch.failed",
                 Some(&actor),
                 Some(&kid),
@@ -413,7 +413,7 @@ pub async fn decrypt_batch_endpoint(
         }
         Err(err) => {
             error!(error = %err, kid = %kid, "fpe decrypt batch endpoint failed");
-            Err(fpe_failed_response(
+            Err(crypto_failed_response(
                 "fpe.decrypt.batch.failed",
                 Some(&actor),
                 Some(&kid),
@@ -423,17 +423,4 @@ pub async fn decrypt_batch_endpoint(
             ))
         }
     }
-}
-
-fn fpe_failed_response(
-    event: &str,
-    actor: Option<&audit::Actor<'_>>,
-    kid: Option<&str>,
-    action: Option<&str>,
-    operation: &str,
-    err: &(dyn std::error::Error + Send + Sync + 'static),
-) -> (StatusCode, Json<ErrorResponse>) {
-    audit::operation_failed(event, actor, kid, None, action, &err.to_string());
-    metrics::record_crypto_operation(operation, "failed");
-    error_response(err)
 }

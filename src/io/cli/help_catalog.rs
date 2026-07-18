@@ -1062,8 +1062,8 @@ const MAC_HELP: CommandHelp = CommandHelp {
     usage: &[
         "vectis mac create <kid> --json '<json>'",
         "vectis mac create <kid> --file mac-create.json",
-        "vectis mac verify <kid> --json '<json>'",
-        "vectis mac verify <kid> --file mac-verify.json",
+        "vectis mac verify --json '<json>'",
+        "vectis mac verify --file mac-verify.json",
     ],
     summary: Some("Creates or verifies MAC digests with signed-config MAC profiles."),
     sections: &[
@@ -1076,14 +1076,14 @@ const MAC_HELP: CommandHelp = CommandHelp {
         HelpSection {
             title: "Verify request JSON:",
             lines: &[
-                r#"  {"ref":"reg1","profile":"pan-blind-index-v1","plaintext":"4111111111111111","digest":"<hex>"}"#,
+                r#"  {"ref":"reg1","kid":"<kid>","profile":"pan-blind-index-v1","plaintext":"4111111111111111","digest":"<hex>"}"#,
             ],
         },
         HelpSection {
             title: "Endpoints:",
             lines: &[
                 "  create <kid>          POST /mac/{kid}, requires VECTIS_APIKEY",
-                "  verify <kid>          POST /mac/verify/{kid}, requires VECTIS_APIKEY",
+                "  verify                POST /mac/verify, requires VECTIS_APIKEY",
             ],
         },
         HelpSection {

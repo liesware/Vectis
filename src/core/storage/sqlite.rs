@@ -1,8 +1,8 @@
-use crate::core::storage::{OpsKeyRow, TokenRow};
+use crate::core::storage::{IndexRow, OpsKeyRow, TokenRow};
 use crate::error::DynError;
 use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tracing::info;
 
 pub struct SqliteStorage {
@@ -23,6 +23,8 @@ impl SqliteStorage {
         info!("validated opskeys sqlite schema");
         validate_tokens_schema(&pool).await?;
         info!("validated tokens sqlite schema");
+        validate_indexes_schema(&pool).await?;
+        info!("validated indexes sqlite schema");
 
         Ok(Self { pool })
     }
@@ -197,6 +199,78 @@ impl SqliteStorage {
         })
     }
 
+    pub async fn save_index(&self, kid: &str, digest: &str) -> Result<IndexRow, DynError> {
+        sqlx::query(
+            "
+            INSERT OR IGNORE INTO indexes (kid, digest)
+            VALUES (?, ?)
+            ",
+        )
+        .bind(kid)
+        .bind(digest)
+        .execute(&self.pool)
+        .await?;
+        info!(kid, "inserted index");
+
+        Ok(IndexRow {
+            kid: kid.to_string(),
+            digest: digest.to_string(),
+        })
+    }
+
+    pub async fn save_indexes_batch(&self, records: &[IndexRow]) -> Result<(), DynError> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        let placeholders = vec!["(?, ?)"; records.len()].join(", ");
+        let sql = format!("INSERT OR IGNORE INTO indexes (kid, digest) VALUES {placeholders}");
+        let mut query = sqlx::query(&sql);
+        for record in records {
+            query = query.bind(&record.kid).bind(&record.digest);
+        }
+        query.execute(&self.pool).await?;
+        info!(items_count = records.len(), "inserted index batch");
+
+        Ok(())
+    }
+
+    pub async fn index_exists(&self, kid: &str, digest: &str) -> Result<bool, DynError> {
+        let row = sqlx::query(
+            "
+            SELECT 1
+            FROM indexes
+            WHERE kid = ?
+              AND digest = ?
+            ",
+        )
+        .bind(kid)
+        .bind(digest)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.is_some())
+    }
+
+    pub async fn indexes_matching(
+        &self,
+        kid: &str,
+        digests: &[String],
+    ) -> Result<HashSet<String>, DynError> {
+        if digests.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let placeholders = vec!["?"; digests.len()].join(", ");
+        let sql =
+            format!("SELECT digest FROM indexes WHERE kid = ? AND digest IN ({placeholders})");
+        let mut query = sqlx::query(&sql).bind(kid);
+        for digest in digests {
+            query = query.bind(digest);
+        }
+        let rows = query.fetch_all(&self.pool).await?;
+
+        Ok(rows.into_iter().map(|row| row.get("digest")).collect())
+    }
+
     pub async fn update_ops_key_properties(
         &self,
         kid: &str,
@@ -318,6 +392,28 @@ async fn validate_tokens_schema(db: &SqlitePool) -> Result<(), DynError> {
     Ok(())
 }
 
+async fn validate_indexes_schema(db: &SqlitePool) -> Result<(), DynError> {
+    let rows = sqlx::query("PRAGMA table_info(indexes)")
+        .fetch_all(db)
+        .await?;
+
+    if rows.is_empty() {
+        return Err(crate::error::storage(
+            "sqlite schema is missing indexes table",
+        ));
+    }
+
+    let kid = find_column(&rows, "kid")
+        .ok_or_else(|| crate::error::storage("sqlite schema is missing indexes.kid column"))?;
+    let digest = find_column(&rows, "digest")
+        .ok_or_else(|| crate::error::storage("sqlite schema is missing indexes.digest column"))?;
+
+    validate_column(&kid, "indexes", "kid", "VARCHAR(128)", true, Some(1))?;
+    validate_column(&digest, "indexes", "digest", "VARCHAR(128)", true, Some(2))?;
+
+    Ok(())
+}
+
 struct ColumnInfo {
     name: String,
     column_type: String,
@@ -415,6 +511,18 @@ mod tests {
         .execute(&pool)
         .await
         .expect("test token schema must be created");
+        sqlx::query(
+            "
+            CREATE TABLE indexes (
+                kid VARCHAR(128) NOT NULL,
+                digest VARCHAR(128) NOT NULL,
+                PRIMARY KEY (kid, digest)
+            )
+            ",
+        )
+        .execute(&pool)
+        .await
+        .expect("test index schema must be created");
         pool.close().await;
 
         let storage = SqliteStorage::new(&path)
@@ -577,6 +685,114 @@ mod tests {
         assert_eq!(found.get("hash-1").map(String::as_str), Some("data-1"));
         assert_eq!(found.get("hash-2").map(String::as_str), Some("data-2"));
         assert!(!found.contains_key("hash-missing"));
+
+        cleanup(path).await;
+    }
+
+    #[tokio::test]
+    async fn index_save_is_idempotent_and_exists_checks_membership() {
+        let (storage, path) = test_storage("index").await;
+
+        let saved = storage
+            .save_index("kid-1", "digest-1")
+            .await
+            .expect("index must save");
+        assert_eq!(saved.kid, "kid-1");
+        assert_eq!(saved.digest, "digest-1");
+
+        storage
+            .save_index("kid-1", "digest-1")
+            .await
+            .expect("duplicate index save must be idempotent");
+
+        assert!(
+            storage
+                .index_exists("kid-1", "digest-1")
+                .await
+                .expect("membership check must succeed")
+        );
+        assert!(
+            !storage
+                .index_exists("kid-1", "missing")
+                .await
+                .expect("membership check must succeed")
+        );
+
+        cleanup(path).await;
+    }
+
+    #[tokio::test]
+    async fn index_batch_save_is_idempotent() {
+        let (storage, path) = test_storage("index-batch").await;
+        let records = vec![
+            IndexRow {
+                kid: String::from("kid-1"),
+                digest: String::from("digest-1"),
+            },
+            IndexRow {
+                kid: String::from("kid-1"),
+                digest: String::from("digest-2"),
+            },
+        ];
+
+        storage
+            .save_indexes_batch(&records)
+            .await
+            .expect("index batch must save");
+        storage
+            .save_indexes_batch(&records)
+            .await
+            .expect("duplicate index batch must be idempotent");
+
+        assert!(
+            storage
+                .index_exists("kid-1", "digest-1")
+                .await
+                .expect("membership check must succeed")
+        );
+        assert!(
+            storage
+                .index_exists("kid-1", "digest-2")
+                .await
+                .expect("membership check must succeed")
+        );
+
+        cleanup(path).await;
+    }
+
+    #[tokio::test]
+    async fn indexes_matching_returns_only_present_digests() {
+        let (storage, path) = test_storage("index-matching").await;
+        storage
+            .save_index("kid-1", "digest-1")
+            .await
+            .expect("index must save");
+        storage
+            .save_index("kid-1", "digest-3")
+            .await
+            .expect("index must save");
+
+        let present = storage
+            .indexes_matching(
+                "kid-1",
+                &[
+                    String::from("digest-1"),
+                    String::from("digest-2"),
+                    String::from("digest-3"),
+                ],
+            )
+            .await
+            .expect("batch membership check must succeed");
+        assert_eq!(present.len(), 2);
+        assert!(present.contains("digest-1"));
+        assert!(present.contains("digest-3"));
+        assert!(!present.contains("digest-2"));
+
+        let empty = storage
+            .indexes_matching("kid-1", &[])
+            .await
+            .expect("empty membership check must succeed");
+        assert!(empty.is_empty());
 
         cleanup(path).await;
     }

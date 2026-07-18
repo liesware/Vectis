@@ -788,7 +788,7 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
-  /mac/verify/{kid}:
+  /mac/verify:
     post:
       tags: [MAC]
       summary: Verify a keyed MAC digest
@@ -797,8 +797,6 @@ paths:
         permits active and retired keys and compares digests in constant time.
       security:
         - ApiKeyAuth: []
-      parameters:
-        - $ref: "#/components/parameters/Kid"
       requestBody:
         required: true
         content:
@@ -815,7 +813,7 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
-  /mac/verify/batch/{kid}:
+  /mac/verify/batch:
     post:
       tags: [MAC]
       summary: Verify keyed MAC digests as an all-or-nothing batch
@@ -825,8 +823,6 @@ paths:
         return valid=false for their items.
       security:
         - ApiKeyAuth: []
-      parameters:
-        - $ref: "#/components/parameters/Kid"
       requestBody:
         required: true
         content:
@@ -840,6 +836,112 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MacVerifyBatchOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /index/{kid}:
+    post:
+      tags: [Blind Index]
+      summary: Create and store a deterministic blind index
+      description: >
+        Computes a deterministic digest using the selected signed MAC profile
+        and stores it as a blind index. Create requires an active key.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IndexCreateInput"
+      responses:
+        "200":
+          description: Stored blind index
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexCreateOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /index/verify:
+    post:
+      tags: [Blind Index]
+      summary: Verify blind index membership
+      description: >
+        Computes the deterministic blind index for the plaintext and checks
+        whether it exists in storage. Verify permits active and retired keys.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IndexVerifyInput"
+      responses:
+        "200":
+          description: Blind index membership result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexVerifyOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /index/batch/{kid}:
+    post:
+      tags: [Blind Index]
+      summary: Create and store blind indexes as an all-or-nothing batch
+      description: >
+        Computes and stores blind indexes for a batch using one signed MAC
+        profile. Each item must include a unique client ref. Any validation,
+        execution, or storage error fails the whole batch.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IndexBatchInput"
+      responses:
+        "200":
+          description: Stored blind indexes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexCreateBatchOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /index/verify/batch:
+    post:
+      tags: [Blind Index]
+      summary: Verify blind index membership as a batch
+      description: >
+        Computes blind indexes for a batch using one signed MAC profile and
+        checks storage membership for each item. Request errors fail the whole
+        batch; missing indexes return matched=false per item.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IndexVerifyBatchInput"
+      responses:
+        "200":
+          description: Blind index membership results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexVerifyBatchOutput"
         default:
           $ref: "#/components/responses/Error"
 
@@ -1135,7 +1237,7 @@ components:
           type: array
           items:
             type: string
-            enum: [admin, keys, lifecycle, self-test, sign, message, fpe-encrypt, fpe-decrypt, token-encode, token-decode, mac-create, mac-verify, metrics]
+            enum: [admin, keys, lifecycle, self-test, sign, message, fpe-encrypt, fpe-decrypt, token-encode, token-decode, mac-create, mac-verify, index-create, index-verify, metrics]
           example:
             - message
 
@@ -1988,10 +2090,12 @@ components:
     MacVerifyInput:
       type: object
       additionalProperties: false
-      required: [ref, profile, plaintext, digest]
+      required: [ref, kid, profile, plaintext, digest]
       properties:
         ref:
           $ref: "#/components/schemas/ClientRef"
+        kid:
+          $ref: "#/components/schemas/Kid"
         profile:
           $ref: "#/components/schemas/AadSafeText"
           example: pan-blind-index-v1
@@ -2080,8 +2184,10 @@ components:
     MacVerifyBatchInput:
       type: object
       additionalProperties: false
-      required: [profile, items]
+      required: [kid, profile, items]
       properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
         profile:
           $ref: "#/components/schemas/AadSafeText"
           example: pan-blind-index-v1
@@ -2115,6 +2221,159 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/MacVerifyBatchOutputItem"
+
+    IndexCreateInput:
+      type: object
+      additionalProperties: false
+      required: [ref, profile, plaintext]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+          example: pan-index-v1
+        plaintext:
+          $ref: "#/components/schemas/TextField"
+          example: "4111111111111111"
+
+    IndexCreateOutput:
+      type: object
+      required: [ref, kid, profile, index]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+          example: pan-index-v1
+        index:
+          $ref: "#/components/schemas/HexString"
+
+    IndexVerifyInput:
+      type: object
+      additionalProperties: false
+      required: [ref, kid, profile, plaintext]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+          example: pan-index-v1
+        plaintext:
+          $ref: "#/components/schemas/TextField"
+          example: "4111111111111111"
+
+    IndexVerifyOutput:
+      type: object
+      required: [ref, kid, profile, matched, index]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+          example: pan-index-v1
+        matched:
+          type: boolean
+          example: true
+        index:
+          $ref: "#/components/schemas/HexString"
+
+    IndexBatchItemInput:
+      type: object
+      additionalProperties: false
+      required: [ref, plaintext]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        plaintext:
+          $ref: "#/components/schemas/TextField"
+          example: "4111111111111111"
+
+    IndexBatchInput:
+      type: object
+      additionalProperties: false
+      required: [profile, items]
+      properties:
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+          example: pan-index-v1
+        items:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items:
+            $ref: "#/components/schemas/IndexBatchItemInput"
+
+    IndexVerifyBatchInput:
+      type: object
+      additionalProperties: false
+      required: [kid, profile, items]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+          example: pan-index-v1
+        items:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items:
+            $ref: "#/components/schemas/IndexBatchItemInput"
+
+    IndexCreateBatchOutputItem:
+      type: object
+      required: [ref, index]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        index:
+          $ref: "#/components/schemas/HexString"
+
+    IndexCreateBatchOutput:
+      type: object
+      required: [kid, profile, items]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+          example: pan-index-v1
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/IndexCreateBatchOutputItem"
+
+    IndexVerifyBatchOutputItem:
+      type: object
+      required: [ref, matched, index]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        matched:
+          type: boolean
+          example: true
+        index:
+          $ref: "#/components/schemas/HexString"
+
+    IndexVerifyBatchOutput:
+      type: object
+      required: [kid, profile, items]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+          example: pan-index-v1
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/IndexVerifyBatchOutputItem"
 
     MessageCipher:
       type: object
