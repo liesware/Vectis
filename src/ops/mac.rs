@@ -24,6 +24,37 @@ pub struct MacVerifyInput {
     digest: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MacCreateBatchItemInput {
+    #[serde(rename = "ref")]
+    ref_id: String,
+    plaintext: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MacCreateBatchInput {
+    profile: String,
+    items: Vec<MacCreateBatchItemInput>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MacVerifyBatchItemInput {
+    #[serde(rename = "ref")]
+    ref_id: String,
+    plaintext: String,
+    digest: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MacVerifyBatchInput {
+    profile: String,
+    items: Vec<MacVerifyBatchItemInput>,
+}
+
 #[derive(Serialize)]
 pub struct MacCreateOutput {
     #[serde(rename = "ref")]
@@ -41,6 +72,47 @@ pub struct MacVerifyOutput {
     valid: bool,
 }
 
+#[derive(Serialize)]
+pub struct MacCreateBatchOutputItem {
+    #[serde(rename = "ref")]
+    ref_id: String,
+    digest: String,
+}
+
+#[derive(Serialize)]
+pub struct MacCreateBatchOutput {
+    kid: String,
+    profile: String,
+    algorithm: String,
+    items: Vec<MacCreateBatchOutputItem>,
+}
+
+#[derive(Serialize)]
+pub struct MacVerifyBatchOutputItem {
+    #[serde(rename = "ref")]
+    ref_id: String,
+    valid: bool,
+}
+
+#[derive(Serialize)]
+pub struct MacVerifyBatchOutput {
+    kid: String,
+    profile: String,
+    items: Vec<MacVerifyBatchOutputItem>,
+}
+
+impl MacCreateBatchOutput {
+    pub fn items_len(&self) -> usize {
+        self.items.len()
+    }
+}
+
+impl MacVerifyBatchOutput {
+    pub fn items_len(&self) -> usize {
+        self.items.len()
+    }
+}
+
 pub struct ValidatedMacCreateInput {
     ref_id: String,
     profile: String,
@@ -54,6 +126,27 @@ pub struct ValidatedMacVerifyInput {
     digest: Zeroizing<String>,
 }
 
+pub struct ValidatedMacCreateBatchItem {
+    ref_id: String,
+    plaintext: Zeroizing<String>,
+}
+
+pub struct ValidatedMacCreateBatchInput {
+    profile: String,
+    items: Vec<ValidatedMacCreateBatchItem>,
+}
+
+pub struct ValidatedMacVerifyBatchItem {
+    ref_id: String,
+    plaintext: Zeroizing<String>,
+    digest: Zeroizing<String>,
+}
+
+pub struct ValidatedMacVerifyBatchInput {
+    profile: String,
+    items: Vec<ValidatedMacVerifyBatchItem>,
+}
+
 pub struct PreparedMacCreate {
     kid: String,
     profile: mac::MacProfile,
@@ -63,6 +156,18 @@ pub struct PreparedMacCreate {
 pub struct PreparedMacVerify {
     profile: mac::MacProfile,
     input: ValidatedMacVerifyInput,
+}
+
+pub struct PreparedMacCreateBatch {
+    kid: String,
+    profile: mac::MacProfile,
+    input: ValidatedMacCreateBatchInput,
+}
+
+pub struct PreparedMacVerifyBatch {
+    kid: String,
+    profile: mac::MacProfile,
+    input: ValidatedMacVerifyBatchInput,
 }
 
 impl ValidatedMacCreateInput {
@@ -77,11 +182,41 @@ impl ValidatedMacVerifyInput {
     }
 }
 
+impl ValidatedMacCreateBatchInput {
+    pub fn profile(&self) -> &str {
+        &self.profile
+    }
+}
+
+impl ValidatedMacVerifyBatchInput {
+    pub fn profile(&self) -> &str {
+        &self.profile
+    }
+}
+
 pub fn parse_create_input(request: Value) -> Result<MacCreateInput, DynError> {
     serde_json::from_value(request).map_err(|_| crate::error::invalid_input("invalid mac request"))
 }
 
 pub fn parse_verify_input(request: Value) -> Result<MacVerifyInput, DynError> {
+    serde_json::from_value(request).map_err(|_| crate::error::invalid_input("invalid mac request"))
+}
+
+pub fn parse_create_batch_input(request: Value) -> Result<MacCreateBatchInput, DynError> {
+    crate::ops::batch::reject_oversized_value(
+        &request,
+        crate::core::config::INTERNAL_MAC_BATCH,
+        "mac",
+    )?;
+    serde_json::from_value(request).map_err(|_| crate::error::invalid_input("invalid mac request"))
+}
+
+pub fn parse_verify_batch_input(request: Value) -> Result<MacVerifyBatchInput, DynError> {
+    crate::ops::batch::reject_oversized_value(
+        &request,
+        crate::core::config::INTERNAL_MAC_BATCH,
+        "mac",
+    )?;
     serde_json::from_value(request).map_err(|_| crate::error::invalid_input("invalid mac request"))
 }
 
@@ -108,6 +243,65 @@ pub fn validate_verify_input(input: MacVerifyInput) -> Result<ValidatedMacVerify
         profile: input.profile,
         plaintext: Zeroizing::new(input.plaintext),
         digest: Zeroizing::new(input.digest),
+    })
+}
+
+pub fn validate_create_batch_input(
+    input: MacCreateBatchInput,
+) -> Result<ValidatedMacCreateBatchInput, DynError> {
+    validation::validate_aad_config_name("profile", &input.profile)?;
+    crate::ops::batch::validate_len(
+        input.items.len(),
+        crate::core::config::INTERNAL_MAC_BATCH,
+        "mac",
+    )?;
+    let mut items = Vec::with_capacity(input.items.len());
+    for (index, item) in input.items.into_iter().enumerate() {
+        let ref_id = validation::validate_ref(&item.ref_id)
+            .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
+        validation::validate_text_field("plaintext", &item.plaintext)
+            .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
+        items.push(ValidatedMacCreateBatchItem {
+            ref_id,
+            plaintext: Zeroizing::new(item.plaintext),
+        });
+    }
+    crate::ops::batch::validate_unique_refs(items.iter().map(|item| item.ref_id.as_str()), "mac")?;
+
+    Ok(ValidatedMacCreateBatchInput {
+        profile: input.profile,
+        items,
+    })
+}
+
+pub fn validate_verify_batch_input(
+    input: MacVerifyBatchInput,
+) -> Result<ValidatedMacVerifyBatchInput, DynError> {
+    validation::validate_aad_config_name("profile", &input.profile)?;
+    crate::ops::batch::validate_len(
+        input.items.len(),
+        crate::core::config::INTERNAL_MAC_BATCH,
+        "mac",
+    )?;
+    let mut items = Vec::with_capacity(input.items.len());
+    for (index, item) in input.items.into_iter().enumerate() {
+        let ref_id = validation::validate_ref(&item.ref_id)
+            .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
+        validation::validate_text_field("plaintext", &item.plaintext)
+            .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
+        validation::validate_hex_field("digest", &item.digest)
+            .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
+        items.push(ValidatedMacVerifyBatchItem {
+            ref_id,
+            plaintext: Zeroizing::new(item.plaintext),
+            digest: Zeroizing::new(item.digest),
+        });
+    }
+    crate::ops::batch::validate_unique_refs(items.iter().map(|item| item.ref_id.as_str()), "mac")?;
+
+    Ok(ValidatedMacVerifyBatchInput {
+        profile: input.profile,
+        items,
     })
 }
 
@@ -149,6 +343,48 @@ pub fn prepare_verify(
     Ok(PreparedMacVerify { profile, input })
 }
 
+pub fn prepare_create_batch(
+    keys_db_state: &KeysDbState,
+    kid: &str,
+    profile: mac::MacProfile,
+    input: ValidatedMacCreateBatchInput,
+) -> Result<PreparedMacCreateBatch, DynError> {
+    if profile.kid() != kid {
+        return Err(crate::error::invalid_input(
+            "mac profile kid does not match request kid",
+        ));
+    }
+    let loaded_key = keys::get_loaded_key(keys_db_state, kid)?;
+    keys::require_lifecycle_for_new_use(&loaded_key)?;
+
+    Ok(PreparedMacCreateBatch {
+        kid: kid.to_string(),
+        profile,
+        input,
+    })
+}
+
+pub fn prepare_verify_batch(
+    keys_db_state: &KeysDbState,
+    kid: &str,
+    profile: mac::MacProfile,
+    input: ValidatedMacVerifyBatchInput,
+) -> Result<PreparedMacVerifyBatch, DynError> {
+    if profile.kid() != kid {
+        return Err(crate::error::invalid_input(
+            "mac profile kid does not match request kid",
+        ));
+    }
+    let loaded_key = keys::get_loaded_key(keys_db_state, kid)?;
+    keys::require_lifecycle_for_decrypt_or_verify(&loaded_key)?;
+
+    Ok(PreparedMacVerifyBatch {
+        kid: kid.to_string(),
+        profile,
+        input,
+    })
+}
+
 pub fn create(prepared: PreparedMacCreate) -> Result<MacCreateOutput, DynError> {
     let digest = compute_digest(&prepared.profile, &prepared.input.plaintext)?;
 
@@ -161,6 +397,25 @@ pub fn create(prepared: PreparedMacCreate) -> Result<MacCreateOutput, DynError> 
     })
 }
 
+pub fn create_batch(prepared: PreparedMacCreateBatch) -> Result<MacCreateBatchOutput, DynError> {
+    let mut items = Vec::with_capacity(prepared.input.items.len());
+    for (index, item) in prepared.input.items.iter().enumerate() {
+        let digest = compute_digest(&prepared.profile, &item.plaintext)
+            .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
+        items.push(MacCreateBatchOutputItem {
+            ref_id: item.ref_id.clone(),
+            digest: hex::encode(digest),
+        });
+    }
+
+    Ok(MacCreateBatchOutput {
+        kid: prepared.kid,
+        profile: prepared.input.profile,
+        algorithm: prepared.profile.algorithm().to_string(),
+        items,
+    })
+}
+
 pub fn verify(prepared: PreparedMacVerify) -> Result<MacVerifyOutput, DynError> {
     let expected = compute_digest(&prepared.profile, &prepared.input.plaintext)?;
     let actual = hex::decode(&*prepared.input.digest)?;
@@ -168,6 +423,25 @@ pub fn verify(prepared: PreparedMacVerify) -> Result<MacVerifyOutput, DynError> 
     Ok(MacVerifyOutput {
         ref_id: prepared.input.ref_id,
         valid: crate::core::crypto::constant_time_eq(&expected, &actual),
+    })
+}
+
+pub fn verify_batch(prepared: PreparedMacVerifyBatch) -> Result<MacVerifyBatchOutput, DynError> {
+    let mut items = Vec::with_capacity(prepared.input.items.len());
+    for (index, item) in prepared.input.items.iter().enumerate() {
+        let expected = compute_digest(&prepared.profile, &item.plaintext)
+            .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
+        let actual = hex::decode(&*item.digest)?;
+        items.push(MacVerifyBatchOutputItem {
+            ref_id: item.ref_id.clone(),
+            valid: crate::core::crypto::constant_time_eq(&expected, &actual),
+        });
+    }
+
+    Ok(MacVerifyBatchOutput {
+        kid: prepared.kid,
+        profile: prepared.input.profile,
+        items,
     })
 }
 
@@ -268,5 +542,129 @@ mod tests {
         })
         .unwrap();
         assert_eq!(verified, json!({"ref": "reg1", "valid": true}));
+    }
+
+    #[test]
+    fn validates_create_batch_input() {
+        let input = parse_create_batch_input(json!({
+            "profile": "pan-blind-index-v1",
+            "items": [
+                {"ref": "reg1", "plaintext": "4111111111111111"},
+                {"ref": "reg2", "plaintext": "5555555555554444"}
+            ]
+        }))
+        .and_then(validate_create_batch_input)
+        .expect("valid MAC create batch input must pass");
+
+        assert_eq!(input.profile(), "pan-blind-index-v1");
+    }
+
+    #[test]
+    fn validates_verify_batch_input() {
+        let input = parse_verify_batch_input(json!({
+            "profile": "pan-blind-index-v1",
+            "items": [
+                {"ref": "reg1", "plaintext": "4111111111111111", "digest": "00"},
+                {"ref": "reg2", "plaintext": "5555555555554444", "digest": "11"}
+            ]
+        }))
+        .and_then(validate_verify_batch_input)
+        .expect("valid MAC verify batch input must pass");
+
+        assert_eq!(input.profile(), "pan-blind-index-v1");
+    }
+
+    #[test]
+    fn rejects_invalid_create_batch_bounds_and_refs() {
+        let empty = parse_create_batch_input(json!({
+            "profile": "pan-blind-index-v1",
+            "items": []
+        }))
+        .and_then(validate_create_batch_input);
+        let err = match empty {
+            Ok(_) => panic!("empty MAC batch must fail"),
+            Err(err) => err,
+        };
+        assert_eq!(err.to_string(), "mac batch items must not be empty");
+
+        let duplicate = parse_create_batch_input(json!({
+            "profile": "pan-blind-index-v1",
+            "items": [
+                {"ref": "dup", "plaintext": "4111111111111111"},
+                {"ref": "dup", "plaintext": "5555555555554444"}
+            ]
+        }))
+        .and_then(validate_create_batch_input);
+        let err = match duplicate {
+            Ok(_) => panic!("duplicate refs must fail"),
+            Err(err) => err,
+        };
+        assert_eq!(
+            err.to_string(),
+            "batch item 1 failed: mac batch ref must be unique"
+        );
+    }
+
+    #[test]
+    fn rejects_oversized_create_batch_early() {
+        let items = (0..=crate::core::config::INTERNAL_MAC_BATCH)
+            .map(|index| json!({"ref": format!("reg{index}"), "plaintext": "4111111111111111"}))
+            .collect::<Vec<_>>();
+        let result = parse_create_batch_input(json!({
+            "profile": "pan-blind-index-v1",
+            "items": items
+        }))
+        .and_then(validate_create_batch_input);
+        let err = match result {
+            Ok(_) => panic!("oversized MAC batch must fail"),
+            Err(err) => err,
+        };
+        assert_eq!(
+            err.to_string(),
+            "mac batch items exceeds maximum allowed value: 128"
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_verify_batch_digest() {
+        let invalid = parse_verify_batch_input(json!({
+            "profile": "pan-blind-index-v1",
+            "items": [
+                {"ref": "reg1", "plaintext": "4111111111111111", "digest": "not-hex"}
+            ]
+        }))
+        .and_then(validate_verify_batch_input);
+        let err = match invalid {
+            Ok(_) => panic!("invalid digest must fail"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("batch item 0 failed: digest"));
+    }
+
+    #[test]
+    fn mac_batch_outputs_serialize_items() {
+        let created = serde_json::to_value(MacCreateBatchOutput {
+            kid: "a".repeat(64),
+            profile: "pan-blind-index-v1".to_string(),
+            algorithm: "KMAC-256".to_string(),
+            items: vec![MacCreateBatchOutputItem {
+                ref_id: "reg1".to_string(),
+                digest: "00".repeat(32),
+            }],
+        })
+        .unwrap();
+        assert_eq!(created["items"][0]["ref"], "reg1");
+        assert_eq!(created["items"][0]["digest"], "00".repeat(32));
+
+        let verified = serde_json::to_value(MacVerifyBatchOutput {
+            kid: "a".repeat(64),
+            profile: "pan-blind-index-v1".to_string(),
+            items: vec![MacVerifyBatchOutputItem {
+                ref_id: "reg1".to_string(),
+                valid: false,
+            }],
+        })
+        .unwrap();
+        assert_eq!(verified["items"][0], json!({"ref": "reg1", "valid": false}));
     }
 }

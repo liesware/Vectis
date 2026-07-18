@@ -31,6 +31,8 @@ FPE_BATCH_PLAINTEXTS = [FPE_PLAINTEXT, "9876543210"]
 TOKENIZATION_PROFILE = "fuzz-patient-id-token-v1"
 TOKEN_PLAINTEXT = "fuzz token plaintext"
 TOKEN_BATCH_PLAINTEXTS = [TOKEN_PLAINTEXT, "second fuzz token plaintext"]
+MAC_PROFILE = "fuzz-pan-blind-index-v1"
+MAC_PLAINTEXTS = ["4111111111111111", "5555555555554444"]
 
 # Minimal, policy-safe key requests (one per crypto profile) used to CREATE seed
 # keys. Creating with only tag+profile works under both crypto policies, and the
@@ -898,6 +900,36 @@ def configure_tokenization_profile(client, kid):
     atexit.register(restore)
 
 
+def configure_mac_profile(client, kid):
+    original_cfg = CONFIG_PATH.read_bytes() if CONFIG_PATH.exists() else None
+    original_sig = CONFIG_SIGN_PATH.read_bytes() if CONFIG_SIGN_PATH.exists() else None
+    config = read_config_or_empty()
+    config["mac_profiles"] = [
+        {
+            "name": MAC_PROFILE,
+            "kid": kid,
+            "context": "tenant=fuzz;field=pan;purpose=blind_index;version=1",
+        }
+    ]
+    CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    sign_config_file()
+    status, body = client.post_json("/config/reload", {}, auth=True)
+    if status != 200:
+        raise RuntimeError(f"could not load mac seed config: HTTP {status}: {body}")
+
+    def restore():
+        if original_cfg is None:
+            CONFIG_PATH.unlink(missing_ok=True)
+        else:
+            CONFIG_PATH.write_bytes(original_cfg)
+        if original_sig is None:
+            CONFIG_SIGN_PATH.unlink(missing_ok=True)
+        else:
+            CONFIG_SIGN_PATH.write_bytes(original_sig)
+
+    atexit.register(restore)
+
+
 def run_config(target, client, rng, args, secrets):
     apikey, unseal = secrets
     counters = {"passed": 0, "failed": 0}
@@ -1165,6 +1197,57 @@ def tokenization_batch_seeds(client):
     ]
 
 
+def mac_seeds(client):
+    kid = _create_key(client, {"tag": "fuzz-mac", "profile": "hybrid-standard-v1"})
+    configure_mac_profile(client, kid)
+    create_seed = {"ref": "mac-fuzz", "profile": MAC_PROFILE, "plaintext": MAC_PLAINTEXTS[0]}
+    status, body = client.post_json(f"/mac/{kid}", create_seed, auth=True)
+    if status != 200:
+        raise RuntimeError(f"could not create mac seed: HTTP {status}: {body}")
+    digest = json.loads(body)["digest"]
+    verify_seed = {
+        "ref": "mac-fuzz",
+        "profile": MAC_PROFILE,
+        "plaintext": MAC_PLAINTEXTS[0],
+        "digest": digest,
+    }
+    return [
+        (f"/mac/{kid}", create_seed),
+        (f"/mac/verify/{kid}", verify_seed),
+    ]
+
+
+def mac_batch_seeds(client):
+    kid = _create_key(client, {"tag": "fuzz-mac-batch", "profile": "hybrid-standard-v1"})
+    configure_mac_profile(client, kid)
+    create_seed = {
+        "profile": MAC_PROFILE,
+        "items": [
+            {"ref": f"mac-fuzz-{index}", "plaintext": plaintext}
+            for index, plaintext in enumerate(MAC_PLAINTEXTS)
+        ],
+    }
+    status, body = client.post_json(f"/mac/batch/{kid}", create_seed, auth=True)
+    if status != 200:
+        raise RuntimeError(f"could not create mac batch seed: HTTP {status}: {body}")
+    parsed = json.loads(body)
+    verify_seed = {
+        "profile": MAC_PROFILE,
+        "items": [
+            {
+                "ref": item["ref"],
+                "plaintext": plaintext,
+                "digest": item["digest"],
+            }
+            for item, plaintext in zip(parsed["items"], MAC_PLAINTEXTS)
+        ],
+    }
+    return [
+        (f"/mac/batch/{kid}", create_seed),
+        (f"/mac/verify/batch/{kid}", verify_seed),
+    ]
+
+
 TARGETS = [
     {"name": "token", "runner": run_body, "seed_factory": token_seeds,
      "path": "/sign/verification", "auth": False, "semantic": token_semantic},
@@ -1189,6 +1272,8 @@ TARGETS = [
      "auth": True, "semantic": tokenization_semantic},
     {"name": "tokenization_batch", "runner": run_body, "seed_factory": tokenization_batch_seeds,
      "auth": True, "semantic": tokenization_batch_semantic},
+    {"name": "mac", "runner": run_body, "seed_factory": mac_seeds, "auth": True},
+    {"name": "mac_batch", "runner": run_body, "seed_factory": mac_batch_seeds, "auth": True},
     {"name": "pubkid", "runner": run_path_param, "require_json_error": False, "endpoints": [
         ("/pub/{}", False),
         ("/keys/properties/{}", True),

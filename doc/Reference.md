@@ -571,7 +571,9 @@ Vectis exposes local MAC create/verify endpoints for deterministic blind indexes
 or integrity tags scoped to signed profile context:
 
 - `POST /mac/{kid}`;
-- `POST /mac/verify/{kid}`.
+- `POST /mac/batch/{kid}`;
+- `POST /mac/verify/{kid}`;
+- `POST /mac/verify/batch/{kid}`.
 
 MAC profiles live in signed config under `mac_profiles`. Requests select a
 profile by name; the bound KID and `context` labels come from signed config.
@@ -744,7 +746,8 @@ Vectis exposes these major endpoint groups:
   `/message/internal/decrypt`;
 - FPE: `/fpe/encrypt/{kid}`, `/fpe/decrypt`;
 - tokenization: `/token/encode/{kid}`, `/token/decode`;
-- MAC: `/mac/{kid}`, `/mac/verify/{kid}`;
+- MAC: `/mac/{kid}`, `/mac/batch/{kid}`, `/mac/verify/{kid}`,
+  `/mac/verify/batch/{kid}`;
 - self-test: `/self-test/init`, `/self-test/keys/{kid}`.
 
 Public endpoints are intentionally limited. Protected endpoints require

@@ -276,6 +276,22 @@ def validate_runtime_metrics(client):
         'vectis_crypto_operation_total{operation="token_decode_batch",result="success"}' in metrics,
         "metrics must include successful token decode batch count",
     )
+    require(
+        'vectis_crypto_operation_total{operation="mac_create",result="success"}' in metrics,
+        "metrics must include successful mac create count",
+    )
+    require(
+        'vectis_crypto_operation_total{operation="mac_verify",result="success"}' in metrics,
+        "metrics must include successful mac verify count",
+    )
+    require(
+        'vectis_crypto_operation_total{operation="mac_create_batch",result="success"}' in metrics,
+        "metrics must include successful mac create batch count",
+    )
+    require(
+        'vectis_crypto_operation_total{operation="mac_verify_batch",result="success"}' in metrics,
+        "metrics must include successful mac verify batch count",
+    )
 
 
 def validate_test_response(response, case):
@@ -866,6 +882,57 @@ def mac_round_trip(client, key_id):
     return profile, algorithm, digest[:16] + "..."
 
 
+def mac_batch_round_trip(client, key_id):
+    profile = "pan-blind-index-v1"
+    refs = ["mac-batch-1", "mac-batch-2"]
+    plaintexts = ["4111111111111111", "5555555555554444"]
+    created = client.post(
+        f"/mac/batch/{key_id}",
+        {
+            "profile": profile,
+            "items": [
+                {"ref": ref, "plaintext": plaintext}
+                for ref, plaintext in zip(refs, plaintexts)
+            ],
+        },
+        auth=True,
+    )
+    require(created.get("kid") == key_id, "mac batch create kid mismatch")
+    require(created.get("profile") == profile, "mac batch create profile mismatch")
+    algorithm = created.get("algorithm")
+    require(algorithm, "mac batch create algorithm missing")
+    items = created.get("items")
+    require(isinstance(items, list), "mac batch create items must be a list")
+    require([item.get("ref") for item in items] == refs, "mac batch create ref mismatch")
+    require(all(set(item.keys()) == {"ref", "digest"} for item in items), "mac batch create item shape mismatch")
+    digests = [item.get("digest") for item in items]
+    for digest in digests:
+        require_hex(digest, "mac batch digest")
+
+    verified = client.post(
+        f"/mac/verify/batch/{key_id}",
+        {
+            "profile": profile,
+            "items": [
+                {"ref": refs[0], "plaintext": plaintexts[0], "digest": digests[0]},
+                {"ref": refs[1], "plaintext": plaintexts[1] + "0", "digest": digests[1]},
+            ],
+        },
+        auth=True,
+    )
+    require(verified.get("kid") == key_id, "mac batch verify kid mismatch")
+    require(verified.get("profile") == profile, "mac batch verify profile mismatch")
+    verify_items = verified.get("items")
+    require(isinstance(verify_items, list), "mac batch verify items must be a list")
+    require([item.get("ref") for item in verify_items] == refs, "mac batch verify ref mismatch")
+    require(
+        [item.get("valid") for item in verify_items] == [True, False],
+        "mac batch verify must preserve true/false results",
+    )
+
+    return profile, algorithm, [digest[:16] + "..." for digest in digests]
+
+
 def validate_permissions_flow(base_url, root_client, key_id, case):
     limited_key, limited_hash = create_api_key_pair()
     admin_key, admin_hash = create_api_key_pair()
@@ -1190,7 +1257,17 @@ def main():
         "config reload must report loaded mac profile",
     )
     mac_profile, mac_algorithm, mac_digest = mac_round_trip(client, created[0][0])
-    mac_rows = [(f"{mac_profile} {mac_algorithm} {mac_digest}", "OK")]
+    mac_batch_profile, mac_batch_algorithm, mac_batch_digests = mac_batch_round_trip(
+        client,
+        created[0][0],
+    )
+    mac_rows = [
+        (f"{mac_profile} {mac_algorithm} {mac_digest}", "OK"),
+        (
+            f"{mac_batch_profile} batch {mac_batch_algorithm} {','.join(mac_batch_digests)}",
+            "OK",
+        ),
+    ]
 
     permission_rows = validate_permissions_flow(args.base_url, client, created[0][0], created[0][1])
     print_section("permissions", permission_rows)

@@ -456,6 +456,8 @@ fn record_operation_denied_metric(event_name: &str) {
         "token.decode.batch.denied" => record_crypto_failed("token_decode_batch"),
         "mac.create.denied" => record_crypto_failed("mac_create"),
         "mac.verify.denied" => record_crypto_failed("mac_verify"),
+        "mac.create.batch.denied" => record_crypto_failed("mac_create_batch"),
+        "mac.verify.batch.denied" => record_crypto_failed("mac_verify_batch"),
         "sign.denied" => core_metrics::record_crypto_operation("sign", "failed"),
         "self_test.denied" => {}
         _ => {}
@@ -501,6 +503,8 @@ pub fn router(state: HttpState) -> Router {
         .route("/token/decode/batch", post(token::decode_batch_endpoint))
         .route("/token/encode/{kid}", post(token::encode_endpoint))
         .route("/token/decode", post(token::decode_endpoint))
+        .route("/mac/batch/{kid}", post(mac::create_batch_endpoint))
+        .route("/mac/verify/batch/{kid}", post(mac::verify_batch_endpoint))
         .route("/mac/verify/{kid}", post(mac::verify_endpoint))
         .route("/mac/{kid}", post(mac::create_endpoint))
         .route("/pub/{kid}", get(pubkey::pub_endpoint))

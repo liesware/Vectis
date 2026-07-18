@@ -224,8 +224,8 @@ Permission mapping summary:
 - `fpe-decrypt`: `POST /fpe/decrypt`.
 - `token-encode`: `POST /token/encode/{kid}`.
 - `token-decode`: `POST /token/decode`.
-- `mac-create`: `POST /mac/{kid}`.
-- `mac-verify`: `POST /mac/verify/{kid}`.
+- `mac-create`: `POST /mac/{kid}`, `POST /mac/batch/{kid}`.
+- `mac-verify`: `POST /mac/verify/{kid}`, `POST /mac/verify/batch/{kid}`.
 - `metrics`: `GET /metrics` with `kid: "*"`; this is a global permission and does not reference a loaded operational KID.
 
 Routes operations require root or `admin`; there is no granular `routes` action.

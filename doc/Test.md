@@ -159,13 +159,14 @@ seeds across crypto profiles (ChaCha20 and AES-GCM variants) with domain-aware
 mutations, and drives a table of targets (`--target`): `token`, `message`,
 `message_send`, `internal`, `internal_encrypt`, `keys`, `sign_body`,
 `lifecycle`, `decrypt`, `config`, `fpe`, `fpe_batch`, `tokenization`,
-`tokenization_batch`, `pubkid` (fuzzes the `{kid}` path segment), `no_body`, and
-`headers` (fuzzes `X-API-Key` and the HTTP method). The `fpe` and
-`tokenization` targets cover the single-item endpoints, while `fpe_batch` and
-`tokenization_batch` cover the all-or-nothing batch endpoints with semantic
-oracles. The `no_body` target checks endpoints called without a body where that
-shape is useful. Beyond crash/status hygiene it runs semantic oracles that flag
-verification, AEAD, FPE, tokenization, and config-integrity bypasses; `--self-check` tests
+`tokenization_batch`, `mac`, `mac_batch`, `pubkid` (fuzzes the `{kid}` path
+segment), `no_body`, and `headers` (fuzzes `X-API-Key` and the HTTP method).
+The `fpe`, `tokenization`, and `mac` targets cover the single-item endpoints,
+while `fpe_batch`, `tokenization_batch`, and `mac_batch` cover the
+all-or-nothing batch endpoints. The `no_body` target checks endpoints called
+without a body where that shape is useful. Beyond crash/status hygiene it runs
+semantic oracles that flag verification, AEAD, FPE, tokenization, and
+config-integrity bypasses; `--self-check` tests
 those oracles offline.
 
 ## Schemathesis OpenAPI Tests

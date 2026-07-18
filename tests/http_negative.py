@@ -763,6 +763,17 @@ def main():
         )
         require_status("limited client blocks mac create", status, 403)
 
+    def limited_blocks_mac_create_batch():
+        status, _ = limited_client.post(
+            f"/mac/batch/{key_id}",
+            {
+                "profile": "pan-blind-index-v1",
+                "items": [{"ref": "mac-limited", "plaintext": "4111111111111111"}],
+            },
+            auth=True,
+        )
+        require_status("limited client blocks mac create batch", status, 403)
+
     def limited_blocks_mac_verify():
         status, _ = limited_client.post(
             f"/mac/verify/{key_id}",
@@ -775,6 +786,23 @@ def main():
             auth=True,
         )
         require_status("limited client blocks mac verify", status, 403)
+
+    def limited_blocks_mac_verify_batch():
+        status, _ = limited_client.post(
+            f"/mac/verify/batch/{key_id}",
+            {
+                "profile": "pan-blind-index-v1",
+                "items": [
+                    {
+                        "ref": "mac-limited",
+                        "plaintext": "4111111111111111",
+                        "digest": "00" * 32,
+                    }
+                ],
+            },
+            auth=True,
+        )
+        require_status("limited client blocks mac verify batch", status, 403)
 
     def metrics_client_allows_metrics():
         status, _ = metrics_client.get("/metrics", auth=True)
@@ -841,7 +869,9 @@ def main():
         ("limited client blocks token decode", limited_blocks_token_decode),
         ("limited client blocks token decode batch", limited_blocks_token_decode_batch),
         ("limited client blocks mac create", limited_blocks_mac_create),
+        ("limited client blocks mac create batch", limited_blocks_mac_create_batch),
         ("limited client blocks mac verify", limited_blocks_mac_verify),
+        ("limited client blocks mac verify batch", limited_blocks_mac_verify_batch),
         ("metrics client allows metrics", metrics_client_allows_metrics),
         ("metrics client blocks admin", metrics_client_blocks_admin),
         ("limited client blocks permissions list", limited_blocks_permissions_list),
@@ -2311,6 +2341,121 @@ def main():
             "MAC long ref must fail",
         )
 
+    def mac_create_batch_unknown_profile():
+        status, body = client.post(
+            f"/mac/batch/{key_id}",
+            {
+                "profile": "missing-profile",
+                "items": [{"ref": "mac-batch-missing", "plaintext": "4111111111111111"}],
+            },
+            auth=True,
+        )
+        require_status("POST /mac/batch/{kid} unknown profile", status, 400)
+        require("items" not in body, "MAC create batch error must not return partial items")
+        require(body.get("error") == "mac profile not found", "MAC batch unknown profile must fail")
+
+    def mac_create_batch_wrong_kid():
+        status, body = client.post(
+            f"/mac/batch/{retired_key_id}",
+            {
+                "profile": "pan-blind-index-v1",
+                "items": [{"ref": "mac-batch-wrong-kid", "plaintext": "4111111111111111"}],
+            },
+            auth=True,
+        )
+        require_status("POST /mac/batch/{kid} wrong kid", status, 400)
+        require("items" not in body, "MAC create batch error must not return partial items")
+        require(
+            body.get("error") == "mac profile kid does not match request kid",
+            "MAC batch wrong KID must fail",
+        )
+
+    def mac_create_batch_empty_items():
+        status, body = client.post(
+            f"/mac/batch/{key_id}",
+            {"profile": "pan-blind-index-v1", "items": []},
+            auth=True,
+        )
+        require_status("POST /mac/batch/{kid} empty items", status, 400)
+        require("items" not in body, "MAC create batch error must not return partial items")
+        require(body.get("error") == "mac batch items must not be empty", "MAC batch empty items must fail")
+
+    def mac_create_batch_too_many_items():
+        status, body = client.post(
+            f"/mac/batch/{key_id}",
+            {
+                "profile": "pan-blind-index-v1",
+                "items": [
+                    {"ref": f"mac-batch-{index}", "plaintext": "4111111111111111"}
+                    for index in range(129)
+                ],
+            },
+            auth=True,
+        )
+        require_status("POST /mac/batch/{kid} too many items", status, 400)
+        require("items" not in body, "MAC create batch error must not return partial items")
+        require(
+            body.get("error") == "mac batch items exceeds maximum allowed value: 128",
+            "MAC batch too many items must fail",
+        )
+
+    def mac_create_batch_duplicate_ref():
+        status, body = client.post(
+            f"/mac/batch/{key_id}",
+            {
+                "profile": "pan-blind-index-v1",
+                "items": [
+                    {"ref": "dup", "plaintext": "4111111111111111"},
+                    {"ref": "dup", "plaintext": "5555555555554444"},
+                ],
+            },
+            auth=True,
+        )
+        require_status("POST /mac/batch/{kid} duplicate ref", status, 400)
+        require("items" not in body, "MAC create batch error must not return partial items")
+        require(
+            body.get("error") == "batch item 1 failed: mac batch ref must be unique",
+            "MAC create batch duplicate ref must fail",
+        )
+
+    def mac_verify_batch_digest_not_hex():
+        status, body = client.post(
+            f"/mac/verify/batch/{key_id}",
+            {
+                "profile": "pan-blind-index-v1",
+                "items": [
+                    {
+                        "ref": "mac-batch-digest",
+                        "plaintext": "4111111111111111",
+                        "digest": "not-hex",
+                    }
+                ],
+            },
+            auth=True,
+        )
+        require_status("POST /mac/verify/batch/{kid} digest not hex", status, 400)
+        require("items" not in body, "MAC verify batch error must not return partial items")
+        require("batch item 0 failed: digest" in body.get("error", ""), "MAC batch invalid digest must mention item")
+
+    def mac_verify_batch_duplicate_ref():
+        status, body = client.post(
+            f"/mac/verify/batch/{key_id}",
+            {
+                "profile": "pan-blind-index-v1",
+                "items": [
+                    {"ref": "dup", "plaintext": "4111111111111111", "digest": "00" * 32},
+                    {"ref": "dup", "plaintext": "5555555555554444", "digest": "11" * 32},
+                ],
+            },
+            auth=True,
+        )
+        require_status("POST /mac/verify/batch/{kid} duplicate ref", status, 400)
+        require("items" not in body, "MAC verify batch error must not return partial items")
+        require(
+            body.get("error") == "batch item 1 failed: mac batch ref must be unique",
+            "MAC verify batch duplicate ref must fail",
+        )
+
     _CONFIG["routes"] = []
     _CONFIG["remote_routes"] = []
     _CONFIG["permissions"] = []
@@ -2378,6 +2523,13 @@ def main():
         ("POST /mac/verify/{kid} digest not hex", mac_verify_digest_not_hex),
         ("POST /mac/verify/{kid} wrong digest", mac_verify_wrong_digest),
         ("POST /mac/verify/{kid} long ref", mac_verify_ref_too_long),
+        ("POST /mac/batch/{kid} unknown profile", mac_create_batch_unknown_profile),
+        ("POST /mac/batch/{kid} wrong kid", mac_create_batch_wrong_kid),
+        ("POST /mac/batch/{kid} empty items", mac_create_batch_empty_items),
+        ("POST /mac/batch/{kid} too many items", mac_create_batch_too_many_items),
+        ("POST /mac/batch/{kid} duplicate ref", mac_create_batch_duplicate_ref),
+        ("POST /mac/verify/batch/{kid} digest not hex", mac_verify_batch_digest_not_hex),
+        ("POST /mac/verify/batch/{kid} duplicate ref", mac_verify_batch_duplicate_ref),
     ):
         run_case(rows, name, func)
 

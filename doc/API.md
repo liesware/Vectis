@@ -81,6 +81,10 @@ Endpoints requiring auth:
 - `POST /token/encode/batch/{kid}`
 - `POST /token/decode`
 - `POST /token/decode/batch`
+- `POST /mac/{kid}`
+- `POST /mac/batch/{kid}`
+- `POST /mac/verify/{kid}`
+- `POST /mac/verify/batch/{kid}`
 
 Endpoints without auth:
 
@@ -195,7 +199,7 @@ Exposed metrics:
 - `vectis_config_last_reload_timestamp_seconds{result}` (`success` or `failed`)
 - `vectis_keys_reload_total{result}` (`success` or `failed`)
 - `vectis_message_total{operation,result}` (`send`, `receive`, or `decrypt`; `success`, `denied`, or `failed`)
-- `vectis_crypto_operation_total{operation,result}` (`sign`, `verify`, `encrypt`, `decrypt`, `fpe_encrypt`, `fpe_decrypt`, `fpe_encrypt_batch`, `fpe_decrypt_batch`, `token_encode`, `token_decode`, `token_encode_batch`, `token_decode_batch`, `mac_create`, or `mac_verify`; `success` or `failed`)
+- `vectis_crypto_operation_total{operation,result}` (`sign`, `verify`, `encrypt`, `decrypt`, `fpe_encrypt`, `fpe_decrypt`, `fpe_encrypt_batch`, `fpe_decrypt_batch`, `token_encode`, `token_decode`, `token_encode_batch`, `token_decode_batch`, `mac_create`, `mac_verify`, `mac_create_batch`, or `mac_verify_batch`; `success` or `failed`)
 
 ### GET /self-test/init
 
@@ -618,8 +622,8 @@ Permission mapping:
 | `fpe-decrypt` | `POST /fpe/decrypt`, `POST /fpe/decrypt/batch` |
 | `token-encode` | `POST /token/encode/{kid}`, `POST /token/encode/batch/{kid}` |
 | `token-decode` | `POST /token/decode`, `POST /token/decode/batch` |
-| `mac-create` | `POST /mac/{kid}` |
-| `mac-verify` | `POST /mac/verify/{kid}` |
+| `mac-create` | `POST /mac/{kid}`, `POST /mac/batch/{kid}` |
+| `mac-verify` | `POST /mac/verify/{kid}`, `POST /mac/verify/batch/{kid}` |
 | `metrics` | `GET /metrics` with `kid: "*"` |
 
 Root always passes permission checks. Routes operations require root or `admin`; there is no granular `routes` action. FPE, tokenization, and MAC actions require explicit KID-scoped grants; `kid: "*"` is rejected for those actions.
@@ -1338,6 +1342,74 @@ Response:
 {
   "ref": "reg1",
   "valid": true
+}
+```
+
+### POST /mac/batch/{kid}
+
+Requires auth and `mac-create` permission for the path KID.
+
+The batch uses one profile and is all-or-nothing. `items` must contain between
+`1` and `128` entries. Each item must include a unique `ref`. Response order
+matches request order. If any item is invalid, the whole request fails and no
+partial `items` are returned.
+
+Request:
+
+```json
+{
+  "profile": "pan-blind-index-v1",
+  "items": [
+    { "ref": "reg1", "plaintext": "4111111111111111" },
+    { "ref": "reg2", "plaintext": "5555555555554444" }
+  ]
+}
+```
+
+Response:
+
+```json
+{
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "profile": "pan-blind-index-v1",
+  "algorithm": "KMAC-256",
+  "items": [
+    { "ref": "reg1", "digest": "hex..." },
+    { "ref": "reg2", "digest": "hex..." }
+  ]
+}
+```
+
+### POST /mac/verify/batch/{kid}
+
+Requires auth and `mac-verify` permission for the path KID.
+
+The batch uses one profile and is all-or-nothing for request validation and
+execution errors. A digest mismatch is not an error; it returns `valid: false`
+for that item.
+
+Request:
+
+```json
+{
+  "profile": "pan-blind-index-v1",
+  "items": [
+    { "ref": "reg1", "plaintext": "4111111111111111", "digest": "hex..." },
+    { "ref": "reg2", "plaintext": "5555555555554444", "digest": "hex..." }
+  ]
+}
+```
+
+Response:
+
+```json
+{
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "profile": "pan-blind-index-v1",
+  "items": [
+    { "ref": "reg1", "valid": true },
+    { "ref": "reg2", "valid": false }
+  ]
 }
 ```
 
