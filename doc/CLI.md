@@ -499,8 +499,8 @@ Calls local MAC create/verify endpoints. MAC profiles are not defined in the
 request; they are loaded from signed `config.json`.
 
 ```sh
-vectis mac create <kid> --json '{"profile":"pan-blind-index-v1","plaintext":"4111111111111111"}'
-vectis mac verify <kid> --json '{"profile":"pan-blind-index-v1","plaintext":"4111111111111111","digest":"<hex>"}'
+vectis mac create <kid> --json '{"ref":"reg1","profile":"pan-blind-index-v1","plaintext":"4111111111111111"}'
+vectis mac verify <kid> --json '{"ref":"reg1","profile":"pan-blind-index-v1","plaintext":"4111111111111111","digest":"<hex>"}'
 ```
 
 `create` requires `mac-create` permission for the KID and an `active` key.

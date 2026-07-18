@@ -822,11 +822,13 @@ def token_batch_round_trip(client, key_id):
 def mac_round_trip(client, key_id):
     profile = "pan-blind-index-v1"
     plaintext = "4111111111111111"
+    ref = "mac-reg1"
     created = client.post(
         f"/mac/{key_id}",
-        {"profile": profile, "plaintext": plaintext},
+        {"ref": ref, "profile": profile, "plaintext": plaintext},
         auth=True,
     )
+    require(created.get("ref") == ref, "mac create ref mismatch")
     require(created.get("kid") == key_id, "mac create kid mismatch")
     require(created.get("profile") == profile, "mac create profile mismatch")
     algorithm = created.get("algorithm")
@@ -847,16 +849,18 @@ def mac_round_trip(client, key_id):
 
     verified = client.post(
         f"/mac/verify/{key_id}",
-        {"profile": profile, "plaintext": plaintext, "digest": digest},
+        {"ref": ref, "profile": profile, "plaintext": plaintext, "digest": digest},
         auth=True,
     )
+    require(verified.get("ref") == ref, "mac verify ref mismatch")
     require(verified.get("valid") is True, "mac verify must accept matching digest")
 
     rejected = client.post(
         f"/mac/verify/{key_id}",
-        {"profile": profile, "plaintext": plaintext + "0", "digest": digest},
+        {"ref": ref, "profile": profile, "plaintext": plaintext + "0", "digest": digest},
         auth=True,
     )
+    require(rejected.get("ref") == ref, "mac verify rejection ref mismatch")
     require(rejected.get("valid") is False, "mac verify must reject changed plaintext")
 
     return profile, algorithm, digest[:16] + "..."

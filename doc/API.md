@@ -1283,6 +1283,9 @@ request KID. Context uses `key=value;key=value` labels and is limited to 128
 characters. MAC create requires an `active` key. MAC verify allows `active` or
 `retired` keys.
 
+All MAC requests include a client-defined `ref`. It is required, non-empty, at
+most 128 characters, and echoed in the response.
+
 If the operational key hash algorithm is `SHA-3(N)`, Vectis uses `KMAC-N` and
 returns an `N`-bit digest; otherwise it uses HMAC with the operational key hash
 algorithm. In both cases Vectis derives a MAC key from the operational
@@ -1296,6 +1299,7 @@ Request:
 
 ```json
 {
+  "ref": "reg1",
   "profile": "pan-blind-index-v1",
   "plaintext": "4111111111111111"
 }
@@ -1305,6 +1309,7 @@ Response:
 
 ```json
 {
+  "ref": "reg1",
   "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
   "profile": "pan-blind-index-v1",
   "algorithm": "KMAC-256",
@@ -1320,6 +1325,7 @@ Request:
 
 ```json
 {
+  "ref": "reg1",
   "profile": "pan-blind-index-v1",
   "plaintext": "4111111111111111",
   "digest": "hex..."
@@ -1330,6 +1336,7 @@ Response:
 
 ```json
 {
+  "ref": "reg1",
   "valid": true
 }
 ```

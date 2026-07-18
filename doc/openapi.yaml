@@ -830,7 +830,7 @@ components:
       minLength: 1
       maxLength: 128
       pattern: '^[^\x00-\x1F\x7F-\x9F]+$'
-      description: Client-defined correlation reference. Echoed in FPE and tokenization responses; not used for cryptographic derivation, storage lookup, audit, or metrics.
+      description: Client-defined correlation reference. Echoed in FPE, tokenization, and MAC responses; not used for cryptographic derivation, storage lookup, audit, or metrics.
       example: reg1
 
     AadSafeText:
@@ -1900,8 +1900,10 @@ components:
     MacCreateInput:
       type: object
       additionalProperties: false
-      required: [profile, plaintext]
+      required: [ref, profile, plaintext]
       properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
         profile:
           $ref: "#/components/schemas/AadSafeText"
           example: pan-blind-index-v1
@@ -1911,8 +1913,10 @@ components:
 
     MacCreateOutput:
       type: object
-      required: [kid, profile, algorithm, digest]
+      required: [ref, kid, profile, algorithm, digest]
       properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
         kid:
           $ref: "#/components/schemas/Kid"
         profile:
@@ -1928,8 +1932,10 @@ components:
     MacVerifyInput:
       type: object
       additionalProperties: false
-      required: [profile, plaintext, digest]
+      required: [ref, profile, plaintext, digest]
       properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
         profile:
           $ref: "#/components/schemas/AadSafeText"
           example: pan-blind-index-v1
@@ -1941,8 +1947,10 @@ components:
 
     MacVerifyOutput:
       type: object
-      required: [valid]
+      required: [ref, valid]
       properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
         valid:
           type: boolean
           example: true

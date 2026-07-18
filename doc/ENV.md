@@ -194,7 +194,7 @@ Recommended admin permission:
 }
 ```
 
-If any permission entry contains `admin`, Vectis treats the whole client as admin and ignores `kid` plus any other actions for that client. Non-admin KID-scoped permissions must reference KIDs already loaded in memory. Global permissions such as `metrics` use `kid: "*"`. FPE and tokenization permissions require explicit KIDs; `kid: "*"` is rejected for those actions.
+If any permission entry contains `admin`, Vectis treats the whole client as admin and ignores `kid` plus any other actions for that client. Non-admin KID-scoped permissions must reference KIDs already loaded in memory. Global permissions such as `metrics` use `kid: "*"`. FPE, tokenization, and MAC permissions require explicit KIDs; `kid: "*"` is rejected for those actions.
 
 Allowed actions:
 

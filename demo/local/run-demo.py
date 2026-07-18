@@ -217,17 +217,18 @@ def run_tokenization(base_url, kid, api_key):
 def run_mac(base_url, kid, api_key):
     print("== MAC Profiles ==", flush=True)
     for profile, plaintext in MAC_SAMPLES:
+        ref = f"{profile}-sample"
         created = post_json(
             base_url,
             f"/mac/{kid}",
-            {"profile": profile, "plaintext": plaintext},
+            {"ref": ref, "profile": profile, "plaintext": plaintext},
             api_key,
         )
         digest = created["response"]["digest"]
         verified = post_json(
             base_url,
             f"/mac/verify/{kid}",
-            {"profile": profile, "plaintext": plaintext, "digest": digest},
+            {"ref": ref, "profile": profile, "plaintext": plaintext, "digest": digest},
             api_key,
         )
         valid = verified["response"].get("valid")

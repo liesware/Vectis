@@ -1069,12 +1069,14 @@ const MAC_HELP: CommandHelp = CommandHelp {
     sections: &[
         HelpSection {
             title: "Create request JSON:",
-            lines: &[r#"  {"profile":"pan-blind-index-v1","plaintext":"4111111111111111"}"#],
+            lines: &[
+                r#"  {"ref":"reg1","profile":"pan-blind-index-v1","plaintext":"4111111111111111"}"#,
+            ],
         },
         HelpSection {
             title: "Verify request JSON:",
             lines: &[
-                r#"  {"profile":"pan-blind-index-v1","plaintext":"4111111111111111","digest":"<hex>"}"#,
+                r#"  {"ref":"reg1","profile":"pan-blind-index-v1","plaintext":"4111111111111111","digest":"<hex>"}"#,
             ],
         },
         HelpSection {

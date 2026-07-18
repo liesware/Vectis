@@ -149,7 +149,8 @@ request:
 {
   "body": {
     "plaintext": "4111111111111111",
-    "profile": "credit-card-pan-mac-v1"
+    "profile": "credit-card-pan-mac-v1",
+    "ref": "credit-card-pan-mac-v1-sample"
   },
   "headers": {
     "Content-Type": "application/json",
@@ -162,7 +163,8 @@ response:
   "algorithm": "HMAC(BLAKE2b(256))",
   "digest": "hex...",
   "kid": "<kid>",
-  "profile": "credit-card-pan-mac-v1"
+  "profile": "credit-card-pan-mac-v1",
+  "ref": "credit-card-pan-mac-v1-sample"
 }
 
 verify
@@ -172,7 +174,8 @@ request:
   "body": {
     "digest": "hex...",
     "plaintext": "4111111111111111",
-    "profile": "credit-card-pan-mac-v1"
+    "profile": "credit-card-pan-mac-v1",
+    "ref": "credit-card-pan-mac-v1-sample"
   },
   "headers": {
     "Content-Type": "application/json",
@@ -182,6 +185,7 @@ request:
 }
 response:
 {
+  "ref": "credit-card-pan-mac-v1-sample",
   "valid": true
 }
 

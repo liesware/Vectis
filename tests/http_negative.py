@@ -758,7 +758,7 @@ def main():
     def limited_blocks_mac_create():
         status, _ = limited_client.post(
             f"/mac/{key_id}",
-            {"profile": "pan-blind-index-v1", "plaintext": "4111111111111111"},
+            {"ref": "mac-limited", "profile": "pan-blind-index-v1", "plaintext": "4111111111111111"},
             auth=True,
         )
         require_status("limited client blocks mac create", status, 403)
@@ -767,6 +767,7 @@ def main():
         status, _ = limited_client.post(
             f"/mac/verify/{key_id}",
             {
+                "ref": "mac-limited",
                 "profile": "pan-blind-index-v1",
                 "plaintext": "4111111111111111",
                 "digest": "00" * 32,
@@ -2229,7 +2230,7 @@ def main():
     def mac_create_unknown_profile():
         status, body = client.post(
             f"/mac/{key_id}",
-            {"profile": "missing-profile", "plaintext": "4111111111111111"},
+            {"ref": "mac-missing", "profile": "missing-profile", "plaintext": "4111111111111111"},
             auth=True,
         )
         require_status("POST /mac/{kid} unknown profile", status, 400)
@@ -2238,7 +2239,7 @@ def main():
     def mac_create_wrong_kid():
         status, body = client.post(
             f"/mac/{retired_key_id}",
-            {"profile": "pan-blind-index-v1", "plaintext": "4111111111111111"},
+            {"ref": "mac-wrong-kid", "profile": "pan-blind-index-v1", "plaintext": "4111111111111111"},
             auth=True,
         )
         require_status("POST /mac/{kid} wrong kid", status, 400)
@@ -2251,6 +2252,7 @@ def main():
         status, body = client.post(
             f"/mac/verify/{key_id}",
             {
+                "ref": "mac-digest",
                 "profile": "pan-blind-index-v1",
                 "plaintext": "4111111111111111",
                 "digest": "not-hex",
@@ -2264,6 +2266,7 @@ def main():
         status, body = client.post(
             f"/mac/verify/{key_id}",
             {
+                "ref": "mac-wrong-digest",
                 "profile": "pan-blind-index-v1",
                 "plaintext": "4111111111111111",
                 "digest": "00" * 32,
@@ -2271,7 +2274,42 @@ def main():
             auth=True,
         )
         require_status("POST /mac/verify/{kid} wrong digest", status, 200)
+        require(body.get("ref") == "mac-wrong-digest", "MAC wrong digest must echo ref")
         require(body.get("valid") is False, "MAC wrong digest must return valid false")
+
+    def mac_create_ref_missing():
+        status, _ = client.post(
+            f"/mac/{key_id}",
+            {"profile": "pan-blind-index-v1", "plaintext": "4111111111111111"},
+            auth=True,
+        )
+        require_status("POST /mac/{kid} missing ref", status, 400)
+
+    def mac_create_ref_empty():
+        status, body = client.post(
+            f"/mac/{key_id}",
+            {"ref": "", "profile": "pan-blind-index-v1", "plaintext": "4111111111111111"},
+            auth=True,
+        )
+        require_status("POST /mac/{kid} empty ref", status, 400)
+        require(body.get("error") == "ref must not be empty", "MAC empty ref must fail")
+
+    def mac_verify_ref_too_long():
+        status, body = client.post(
+            f"/mac/verify/{key_id}",
+            {
+                "ref": "r" * 129,
+                "profile": "pan-blind-index-v1",
+                "plaintext": "4111111111111111",
+                "digest": "00" * 32,
+            },
+            auth=True,
+        )
+        require_status("POST /mac/verify/{kid} long ref", status, 400)
+        require(
+            body.get("error") == "ref exceeds maximum allowed length: 128",
+            "MAC long ref must fail",
+        )
 
     _CONFIG["routes"] = []
     _CONFIG["remote_routes"] = []
@@ -2335,8 +2373,11 @@ def main():
         ("POST /token/decode/batch duplicate ref", token_decode_batch_duplicate_ref),
         ("POST /mac/{kid} unknown profile", mac_create_unknown_profile),
         ("POST /mac/{kid} wrong kid", mac_create_wrong_kid),
+        ("POST /mac/{kid} missing ref", mac_create_ref_missing),
+        ("POST /mac/{kid} empty ref", mac_create_ref_empty),
         ("POST /mac/verify/{kid} digest not hex", mac_verify_digest_not_hex),
         ("POST /mac/verify/{kid} wrong digest", mac_verify_wrong_digest),
+        ("POST /mac/verify/{kid} long ref", mac_verify_ref_too_long),
     ):
         run_case(rows, name, func)
 
