@@ -1,5 +1,6 @@
 use crate::core::{
-    canonical, config, fpe, mac, permissions, protocol, remote_routes, routes, tokenization,
+    canonical, config, fpe, mac, masking, permissions, protocol, remote_routes, routes,
+    tokenization,
 };
 use crate::error::DynError;
 use serde::{Deserialize, Serialize};
@@ -24,6 +25,8 @@ pub struct ConfigFile {
     tokenization_profiles: Vec<tokenization::TokenizationProfileInput>,
     #[serde(default)]
     mac_profiles: Vec<mac::MacProfileInput>,
+    #[serde(default)]
+    masking_profiles: Vec<masking::MaskingProfileInput>,
 }
 
 pub struct ConfigState {
@@ -33,6 +36,7 @@ pub struct ConfigState {
     pub fpe_profiles: fpe::FpeProfilesState,
     pub tokenization_profiles: tokenization::TokenizationProfilesState,
     pub mac_profiles: mac::MacProfilesState,
+    pub masking_profiles: masking::MaskingProfilesState,
 }
 
 impl Zeroize for ConfigState {
@@ -41,6 +45,7 @@ impl Zeroize for ConfigState {
         self.fpe_profiles.zeroize();
         self.tokenization_profiles.zeroize();
         self.mac_profiles.zeroize();
+        self.masking_profiles.zeroize();
     }
 }
 
@@ -244,6 +249,8 @@ fn validate_config_file(
         hooks.hash_algorithm_for_kid,
         hooks.derive_mac_key,
     )?;
+    let validated_masking_profiles =
+        masking::validate_masking_profiles(config_file.masking_profiles, hooks.is_loaded_kid)?;
 
     Ok(ConfigState {
         routes: routes::RoutesState::from_parts(
@@ -256,6 +263,7 @@ fn validate_config_file(
         fpe_profiles: validated_fpe_profiles,
         tokenization_profiles: validated_tokenization_profiles,
         mac_profiles: validated_mac_profiles,
+        masking_profiles: validated_masking_profiles,
     })
 }
 
@@ -271,6 +279,7 @@ fn empty_config_state(config: &config::AppConfig) -> ConfigState {
         fpe_profiles: fpe::FpeProfilesState::default(),
         tokenization_profiles: tokenization::TokenizationProfilesState::default(),
         mac_profiles: mac::MacProfilesState::default(),
+        masking_profiles: masking::MaskingProfilesState::default(),
     }
 }
 

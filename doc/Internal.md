@@ -303,6 +303,16 @@ constant-time digest comparison.
 Blind indexes reuse `mac_profiles`: `/index` computes the same deterministic
 MAC digest and persists only `(kid, digest)` in `indexes`. `/index/verify`
 recomputes the digest and checks storage membership.
+
+### Masking Flow
+
+Masking profiles are loaded from signed config. Each profile binds `name`,
+`kid`, visible character counts, a single-character mask, and plaintext length
+bounds. `/mask/{kid}` and `/mask/batch/{kid}` enforce the `mask` permission and
+decrypt/verify lifecycle, then apply the display transformation in memory. The
+operation does not derive keys, encrypt, tokenize, authenticate, persist data,
+or log plaintext/masked values.
+
 Encode generates a random visible token, hashes it to a storage `hashid`,
 encrypts plaintext plus optional metadata, and stores the row in `tokens`.
 Decode hashes the presented token, loads `tokens.data`, decrypts the payload,
@@ -327,6 +337,7 @@ The signed config contains:
 - FPE field profiles.
 - tokenization profiles.
 - MAC profiles.
+- masking profiles.
 
 The signing flow uses canonical JSON. Vectis signs the canonical config hash
 inside a timestamp token using init keys. The signature is not bound to the local

@@ -36,6 +36,7 @@ def config_init_case(env):
             "fpe_profiles": [],
             "tokenization_profiles": [],
             "mac_profiles": [],
+            "masking_profiles": [],
         },
         "config init must write the minimal skeleton",
     )
@@ -56,6 +57,10 @@ def config_validate_case(env):
         "empty config must have no tokenization profiles",
     )
     require(response["mac_profiles_loaded"] == 0, "empty config must have no MAC profiles")
+    require(
+        response["masking_profiles_loaded"] == 0,
+        "empty config must have no masking profiles",
+    )
 
 
 def version_case(env):
@@ -436,6 +441,68 @@ def mac_profile_cases(env):
     require(read_config(env)["mac_profiles"] == [], "mac profile delete must remove profile")
 
 
+def masking_profile_cases(env):
+    response = run_cli_json(
+        [
+            "config",
+            "masking",
+            "add",
+            "--name",
+            "pan-display-v1",
+            "--kid",
+            KID_A,
+            "--visible-first",
+            "0",
+            "--visible-last",
+            "4",
+            "--mask-char",
+            "*",
+            "--min-len",
+            "12",
+            "--max-len",
+            "19",
+        ],
+        env,
+    )
+    require(response["status"] == "added", "masking profile add must report added")
+    require_next(response)
+
+    profile = read_config(env)["masking_profiles"][0]
+    require(profile["name"] == "pan-display-v1", "masking profile name must be stored")
+    require(profile["kid"] == KID_A, "masking profile kid must be stored")
+
+    response = run_cli_json(["config", "masking", "get", "pan-display-v1"], env)
+    require(response["mask_char"] == "*", "masking profile get must return profile")
+
+    response = run_cli_json(["config", "masking", "list"], env)
+    require(isinstance(response, list), "masking profile list must return an array")
+    require(response[0]["name"] == "pan-display-v1", "masking profile list must include profile")
+
+    response = run_cli_json(
+        [
+            "config",
+            "masking",
+            "update",
+            "pan-display-v1",
+            "--visible-first",
+            "6",
+        ],
+        env,
+    )
+    require(response["status"] == "updated", "masking profile update must report updated")
+    require_next(response)
+    profile = read_config(env)["masking_profiles"][0]
+    require(profile["visible_first"] == 6, "masking profile update must persist visible_first")
+
+    response = run_cli_json(["config", "masking", "delete", "pan-display-v1"], env)
+    require(response["status"] == "deleted", "masking profile delete must report deleted")
+    require_next(response)
+    require(
+        read_config(env)["masking_profiles"] == [],
+        "masking profile delete must remove profile",
+    )
+
+
 def config_list_case(env):
     response = run_cli_json(
         [
@@ -532,6 +599,11 @@ def main():
             counters,
             "config mac add/get/update/delete",
             lambda: mac_profile_cases(env),
+        )
+        run_case(
+            counters,
+            "config masking add/get/update/delete",
+            lambda: masking_profile_cases(env),
         )
         run_case(counters, "config list reads edited config", lambda: config_list_case(env))
 

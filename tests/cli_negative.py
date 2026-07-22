@@ -282,6 +282,30 @@ def main():
                 ],
             )
 
+        def masking_profile_add_missing_config():
+            expect_unchanged_failure(
+                env,
+                [
+                    "config",
+                    "masking",
+                    "add",
+                    "--name",
+                    "missing-config-mask",
+                    "--kid",
+                    KID_A,
+                    "--visible-first",
+                    "0",
+                    "--visible-last",
+                    "4",
+                    "--mask-char",
+                    "*",
+                    "--min-len",
+                    "12",
+                    "--max-len",
+                    "19",
+                ],
+            )
+
         def route_list_missing_config():
             run_cli(["config", "routes", "list"], env, expect_success=False)
 
@@ -299,6 +323,9 @@ def main():
 
         def mac_profile_list_missing_config():
             run_cli(["config", "mac", "list"], env, expect_success=False)
+
+        def masking_profile_list_missing_config():
+            run_cli(["config", "masking", "list"], env, expect_success=False)
 
         def config_json_error_goes_to_stderr():
             payload = expect_json_error(env, ["config", "routes", "add"])
@@ -480,6 +507,10 @@ def main():
                 "config mac add fails when config is missing",
                 mac_profile_add_missing_config,
             ),
+            (
+                "config masking add fails when config is missing",
+                masking_profile_add_missing_config,
+            ),
             ("config routes list fails when config is missing", route_list_missing_config),
             (
                 "config permissions list fails when config is missing",
@@ -492,6 +523,10 @@ def main():
             ("config fpe list fails when config is missing", fpe_profile_list_missing_config),
             ("config token list fails when config is missing", token_profile_list_missing_config),
             ("config mac list fails when config is missing", mac_profile_list_missing_config),
+            (
+                "config masking list fails when config is missing",
+                masking_profile_list_missing_config,
+            ),
             ("config --output json errors are machine readable", config_json_error_goes_to_stderr),
             ("apikey --output json errors are machine readable", apikey_json_error_goes_to_stderr),
             (

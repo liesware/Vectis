@@ -89,6 +89,8 @@ Endpoints requiring auth:
 - `POST /index/batch/{kid}`
 - `POST /index/verify`
 - `POST /index/verify/batch`
+- `POST /mask/{kid}`
+- `POST /mask/batch/{kid}`
 
 Endpoints without auth:
 
@@ -198,6 +200,7 @@ Exposed metrics:
 - `vectis_fpe_profiles_loaded`
 - `vectis_tokenization_profiles_loaded`
 - `vectis_mac_profiles_loaded`
+- `vectis_masking_profiles_loaded`
 - `vectis_permission_total{result}` (`allow` or `deny`)
 - `vectis_config_reload_total{result}` (`success` or `failed`)
 - `vectis_config_last_reload_timestamp_seconds{result}` (`success` or `failed`)
@@ -612,6 +615,7 @@ Allowed actions:
 - `mac-verify`
 - `index-create`
 - `index-verify`
+- `mask`
 - `metrics`
 
 Permission mapping:
@@ -632,6 +636,7 @@ Permission mapping:
 | `mac-verify` | `POST /mac/verify`, `POST /mac/verify/batch` |
 | `index-create` | `POST /index/{kid}`, `POST /index/batch/{kid}` |
 | `index-verify` | `POST /index/verify`, `POST /index/verify/batch` |
+| `mask` | `POST /mask/{kid}`, `POST /mask/batch/{kid}` |
 | `metrics` | `GET /metrics` with `kid: "*"` |
 
 Root always passes permission checks. Routes operations require root or `admin`; there is no granular `routes` action. FPE, tokenization, MAC, and blind-index actions require explicit KID-scoped grants; `kid: "*"` is rejected for those actions.
@@ -1423,6 +1428,59 @@ Response:
 }
 ```
 
+## Masking
+
+Masking is a local display-only transform. It does not encrypt, tokenize,
+persist, or derive keys. A signed `masking_profiles[]` entry controls how many
+characters are visible at the start and end of the value, and which single
+character masks the middle. The profile KID is used for permission and lifecycle
+checks.
+
+### POST /mask/{kid}
+
+Requires auth and `mask` permission for the path KID. The key must be active or
+retired.
+
+Request:
+
+```json
+{ "ref": "row1", "profile": "pan-display-v1", "plaintext": "4111111111111111" }
+```
+
+Response:
+
+```json
+{ "ref": "row1", "kid": "...", "profile": "pan-display-v1", "masked": "************1111" }
+```
+
+### POST /mask/batch/{kid}
+
+Uses one profile for every item. Each item requires a unique `ref`; the batch is
+all-or-nothing and is limited to `INTERNAL_MASK_BATCH` (`128`).
+
+Request:
+
+```json
+{
+  "profile": "pan-display-v1",
+  "items": [
+    { "ref": "row1", "plaintext": "4111111111111111" }
+  ]
+}
+```
+
+Response:
+
+```json
+{
+  "kid": "...",
+  "profile": "pan-display-v1",
+  "items": [
+    { "ref": "row1", "masked": "************1111" }
+  ]
+}
+```
+
 ## Blind Index
 
 Blind indexes reuse signed `mac_profiles`. `/mac` computes a deterministic
@@ -1649,6 +1707,17 @@ Expected file shape:
       "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
       "context": "tenant=mx;field=pan;purpose=blind-index;version=1"
     }
+  ],
+  "masking_profiles": [
+    {
+      "name": "pan-display-v1",
+      "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+      "visible_first": 0,
+      "visible_last": 4,
+      "mask_char": "*",
+      "min_len": 12,
+      "max_len": 19
+    }
   ]
 }
 ```
@@ -1664,6 +1733,7 @@ Top level:
 | `fpe_profiles` | no (defaults to `[]`) | array | Signed local FPE field profiles. |
 | `tokenization_profiles` | no (defaults to `[]`) | array | Signed local reversible tokenization profiles. |
 | `mac_profiles` | no (defaults to `[]`) | array | Signed local MAC profiles. |
+| `masking_profiles` | no (defaults to `[]`) | array | Signed local display masking profiles. |
 
 `routes[]` entries:
 
@@ -1694,7 +1764,7 @@ Top level:
 | `client` | yes | text, unique | Client label. |
 | `apikey_hash` | yes | 64 hex (32 bytes) | Server-side verifier for this client's `X-API-Key`. |
 | `status` | yes | `active` \| `disabled` \| `revoked` | Only `active` clients are authorized. |
-| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `fpe-encrypt`, `fpe-decrypt`, `token-encode`, `token-decode`, `mac-create`, `mac-verify`, `index-create`, `index-verify`, `metrics`. `kid: "*"` is allowed with global actions such as `admin` and `metrics`; FPE, tokenization, MAC, and blind-index actions require explicit KIDs. An `admin` action grants all endpoints and ignores kid-scoped grants. |
+| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `fpe-encrypt`, `fpe-decrypt`, `token-encode`, `token-decode`, `mac-create`, `mac-verify`, `index-create`, `index-verify`, `mask`, `metrics`. `kid: "*"` is allowed with global actions such as `admin` and `metrics`; FPE, tokenization, MAC, blind-index, and masking actions require explicit KIDs. An `admin` action grants all endpoints and ignores kid-scoped grants. |
 
 `fpe_profiles[]` entries:
 
@@ -1725,6 +1795,18 @@ Top level:
 | `name` | yes | unique AAD-safe text, max 128 chars | Profile selected by MAC requests. |
 | `kid` | yes | loaded local KID | Operational key whose symmetric key derives the MAC key. |
 | `context` | yes | `key=value;key=value`, max 128 chars | Signed MAC domain context. Keys must be unique and use `[A-Za-z0-9_.-]+`. |
+
+`masking_profiles[]` entries:
+
+| Field | Required | Value | Meaning |
+| --- | --- | --- | --- |
+| `name` | yes | unique AAD-safe text, max 128 chars | Profile selected by masking requests. |
+| `kid` | yes | loaded local KID | Operational key used for permission and lifecycle checks. |
+| `visible_first` | yes | integer >= 0 | Number of leading characters to show. |
+| `visible_last` | yes | integer >= 0 | Number of trailing characters to show. |
+| `mask_char` | yes | exactly one non-control character | Character used to mask the middle. |
+| `min_len` | yes | integer >= 1 | Minimum plaintext length accepted. |
+| `max_len` | yes | integer >= `min_len`, <= 1024 | Maximum plaintext length accepted. |
 
 Routing behavior:
 

@@ -199,12 +199,13 @@ pub(crate) fn prepare_profile_use(
     keys_db_state: &KeysDbState,
     kid: &str,
     profile_kid: &str,
+    profile_kind: &str,
     use_kind: ProfileUse,
 ) -> Result<(), DynError> {
     if profile_kid != kid {
-        return Err(crate::error::invalid_input(
-            "mac profile kid does not match request kid",
-        ));
+        return Err(crate::error::forbidden(format!(
+            "{profile_kind} profile is not authorized for this kid"
+        )));
     }
     let loaded_key = get_loaded_key(keys_db_state, kid)?;
     match use_kind {

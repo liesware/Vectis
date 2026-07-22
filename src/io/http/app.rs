@@ -122,19 +122,21 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         loaded_fpe_profiles = config_state.fpe_profiles.len(),
         loaded_tokenization_profiles = config_state.tokenization_profiles.len(),
         loaded_mac_profiles = config_state.mac_profiles.len(),
+        loaded_masking_profiles = config_state.masking_profiles.len(),
         "signed config loaded into http state"
     );
     if metrics_handle.is_some() {
         crate::core::metrics::set_unsealed_state(true);
-        crate::core::metrics::set_loaded_gauges(
-            keys_db_state.len(),
-            config_state.routes.len(),
-            config_state.remote_routes.len(),
-            config_state.permissions.len(),
-            config_state.fpe_profiles.len(),
-            config_state.tokenization_profiles.len(),
-            config_state.mac_profiles.len(),
-        );
+        crate::core::metrics::set_loaded_gauges(crate::core::metrics::LoadedGaugeCounts {
+            keys: keys_db_state.len(),
+            routes: config_state.routes.len(),
+            remote_routes: config_state.remote_routes.len(),
+            permission_clients: config_state.permissions.len(),
+            fpe_profiles: config_state.fpe_profiles.len(),
+            tokenization_profiles: config_state.tokenization_profiles.len(),
+            mac_profiles: config_state.mac_profiles.len(),
+            masking_profiles: config_state.masking_profiles.len(),
+        });
     }
     let app = super::router(super::HttpState::new(super::HttpStateInput {
         config: config.clone(),

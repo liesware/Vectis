@@ -69,22 +69,26 @@ pub fn set_unsealed_state(unsealed: bool) {
     gauge!("vectis_unsealed").set(if unsealed { 1.0 } else { 0.0 });
 }
 
-pub fn set_loaded_gauges(
-    keys: usize,
-    routes: usize,
-    remote_routes: usize,
-    permission_clients: usize,
-    fpe_profiles: usize,
-    tokenization_profiles: usize,
-    mac_profiles: usize,
-) {
-    gauge!("vectis_keys_loaded").set(keys as f64);
-    gauge!("vectis_routes_loaded").set(routes as f64);
-    gauge!("vectis_remote_routes_loaded").set(remote_routes as f64);
-    gauge!("vectis_permission_clients").set(permission_clients as f64);
-    gauge!("vectis_fpe_profiles_loaded").set(fpe_profiles as f64);
-    gauge!("vectis_tokenization_profiles_loaded").set(tokenization_profiles as f64);
-    gauge!("vectis_mac_profiles_loaded").set(mac_profiles as f64);
+pub struct LoadedGaugeCounts {
+    pub keys: usize,
+    pub routes: usize,
+    pub remote_routes: usize,
+    pub permission_clients: usize,
+    pub fpe_profiles: usize,
+    pub tokenization_profiles: usize,
+    pub mac_profiles: usize,
+    pub masking_profiles: usize,
+}
+
+pub fn set_loaded_gauges(counts: LoadedGaugeCounts) {
+    gauge!("vectis_keys_loaded").set(counts.keys as f64);
+    gauge!("vectis_routes_loaded").set(counts.routes as f64);
+    gauge!("vectis_remote_routes_loaded").set(counts.remote_routes as f64);
+    gauge!("vectis_permission_clients").set(counts.permission_clients as f64);
+    gauge!("vectis_fpe_profiles_loaded").set(counts.fpe_profiles as f64);
+    gauge!("vectis_tokenization_profiles_loaded").set(counts.tokenization_profiles as f64);
+    gauge!("vectis_mac_profiles_loaded").set(counts.mac_profiles as f64);
+    gauge!("vectis_masking_profiles_loaded").set(counts.masking_profiles as f64);
 }
 
 pub fn record_permission(result: &str) {

@@ -21,6 +21,7 @@ pub const PERMISSION_ACTIONS: &[&str] = &[
     "mac-verify",
     "index-create",
     "index-verify",
+    "mask",
     "metrics",
 ];
 const GLOBAL_PERMISSION_ACTIONS: &[&str] = &["metrics"];

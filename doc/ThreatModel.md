@@ -146,7 +146,7 @@ Vectis is not, and does not replace:
   durable storage (PostgreSQL) but not in-memory state, and cross-node changes
   become visible only through explicit reload, restart, or lazy-load (see
   `doc/Clustering.md`);
-- masking, hash commitments, Merkle proofs, tamper-evident audit chains,
+- hash commitments, Merkle proofs, tamper-evident audit chains,
   SLH-DSA, Vault/KMS/HSM auto-unseal, and mTLS;
 - denial-of-service resistance.
 

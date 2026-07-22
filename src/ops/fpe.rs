@@ -322,13 +322,13 @@ pub fn prepare_encrypt(
     profile: fpe::FpeProfile,
     input: ValidatedFpeEncryptInput,
 ) -> Result<PreparedFpeEncrypt, DynError> {
-    if profile.kid() != kid {
-        return Err(crate::error::forbidden(
-            "fpe profile is not authorized for this kid",
-        ));
-    }
-    let key = keys::get_loaded_key(keys_db_state, kid)?;
-    keys::require_lifecycle_for_new_use(&key)?;
+    keys::prepare_profile_use(
+        keys_db_state,
+        kid,
+        profile.kid(),
+        "fpe",
+        keys::ProfileUse::NewUse,
+    )?;
 
     Ok(PreparedFpeEncrypt {
         kid: kid.to_string(),
@@ -342,13 +342,13 @@ pub fn prepare_decrypt(
     profile: fpe::FpeProfile,
     input: ValidatedFpeDecryptInput,
 ) -> Result<PreparedFpeDecrypt, DynError> {
-    if profile.kid() != input.kid {
-        return Err(crate::error::forbidden(
-            "fpe profile is not authorized for this kid",
-        ));
-    }
-    let key = keys::get_loaded_key(keys_db_state, &input.kid)?;
-    keys::require_lifecycle_for_decrypt_or_verify(&key)?;
+    keys::prepare_profile_use(
+        keys_db_state,
+        &input.kid,
+        profile.kid(),
+        "fpe",
+        keys::ProfileUse::Verify,
+    )?;
 
     Ok(PreparedFpeDecrypt {
         kid: input.kid.clone(),
@@ -363,13 +363,13 @@ pub fn prepare_encrypt_batch(
     profile: fpe::FpeProfile,
     input: ValidatedFpeEncryptBatchInput,
 ) -> Result<PreparedFpeEncryptBatch, DynError> {
-    if profile.kid() != kid {
-        return Err(crate::error::forbidden(
-            "fpe profile is not authorized for this kid",
-        ));
-    }
-    let key = keys::get_loaded_key(keys_db_state, kid)?;
-    keys::require_lifecycle_for_new_use(&key)?;
+    keys::prepare_profile_use(
+        keys_db_state,
+        kid,
+        profile.kid(),
+        "fpe",
+        keys::ProfileUse::NewUse,
+    )?;
 
     Ok(PreparedFpeEncryptBatch {
         kid: kid.to_string(),
@@ -383,13 +383,13 @@ pub fn prepare_decrypt_batch(
     profile: fpe::FpeProfile,
     input: ValidatedFpeDecryptBatchInput,
 ) -> Result<PreparedFpeDecryptBatch, DynError> {
-    if profile.kid() != input.kid {
-        return Err(crate::error::forbidden(
-            "fpe profile is not authorized for this kid",
-        ));
-    }
-    let key = keys::get_loaded_key(keys_db_state, &input.kid)?;
-    keys::require_lifecycle_for_decrypt_or_verify(&key)?;
+    keys::prepare_profile_use(
+        keys_db_state,
+        &input.kid,
+        profile.kid(),
+        "fpe",
+        keys::ProfileUse::Verify,
+    )?;
 
     Ok(PreparedFpeDecryptBatch {
         kid: input.kid.clone(),

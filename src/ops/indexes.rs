@@ -336,7 +336,13 @@ pub fn prepare_create(
     profile: mac::MacProfile,
     input: ValidatedIndexCreateInput,
 ) -> Result<PreparedIndexCreate, DynError> {
-    keys::prepare_profile_use(keys_db_state, kid, profile.kid(), keys::ProfileUse::NewUse)?;
+    keys::prepare_profile_use(
+        keys_db_state,
+        kid,
+        profile.kid(),
+        "index",
+        keys::ProfileUse::NewUse,
+    )?;
 
     Ok(PreparedIndexCreate {
         kid: kid.to_string(),
@@ -354,6 +360,7 @@ pub fn prepare_verify(
         keys_db_state,
         input.kid(),
         profile.kid(),
+        "index",
         keys::ProfileUse::Verify,
     )?;
 
@@ -370,7 +377,13 @@ pub fn prepare_create_batch(
     profile: mac::MacProfile,
     input: ValidatedIndexBatchInput,
 ) -> Result<PreparedIndexCreateBatch, DynError> {
-    keys::prepare_profile_use(keys_db_state, kid, profile.kid(), keys::ProfileUse::NewUse)?;
+    keys::prepare_profile_use(
+        keys_db_state,
+        kid,
+        profile.kid(),
+        "index",
+        keys::ProfileUse::NewUse,
+    )?;
 
     Ok(PreparedIndexCreateBatch {
         kid: kid.to_string(),
@@ -388,6 +401,7 @@ pub fn prepare_verify_batch(
         keys_db_state,
         input.kid(),
         profile.kid(),
+        "index",
         keys::ProfileUse::Verify,
     )?;
 

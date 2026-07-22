@@ -16,6 +16,7 @@ mod health;
 mod indexes;
 mod keys;
 mod mac;
+mod masking;
 mod message;
 mod metrics;
 mod middleware;
@@ -31,6 +32,7 @@ use crate::core::config::AppConfig;
 use crate::core::config_file::ConfigState;
 use crate::core::fpe::FpeProfile;
 use crate::core::mac::MacProfile;
+use crate::core::masking::MaskingProfile;
 use crate::core::permissions::AuthenticatedClient;
 use crate::core::remote_routes::{PeerPublicKeys, RemoteRoute};
 use crate::core::routes::FinalAppRoute;
@@ -232,6 +234,12 @@ impl HttpState {
         config_state.mac_profiles.len()
     }
 
+    async fn masking_profiles_loaded(&self) -> usize {
+        let config_state = self.config_state.read().await;
+
+        config_state.masking_profiles.len()
+    }
+
     async fn routes_output(&self) -> crate::core::routes::ListRoutesOutput {
         let config_state = self.config_state.read().await;
 
@@ -266,6 +274,12 @@ impl HttpState {
         let config_state = self.config_state.read().await;
 
         config_state.mac_profiles.get(name).cloned()
+    }
+
+    async fn masking_profile(&self, name: &str) -> Option<MaskingProfile> {
+        let config_state = self.config_state.read().await;
+
+        config_state.masking_profiles.get(name).cloned()
     }
 
     async fn reload_config_state(&self) -> Result<(), DynError> {
@@ -366,15 +380,16 @@ impl HttpState {
     }
 
     async fn refresh_loaded_gauges(&self) {
-        core_metrics::set_loaded_gauges(
-            self.keys_loaded().await,
-            self.routes_loaded().await,
-            self.remote_routes_loaded().await,
-            self.permissions_loaded().await,
-            self.fpe_profiles_loaded().await,
-            self.tokenization_profiles_loaded().await,
-            self.mac_profiles_loaded().await,
-        );
+        core_metrics::set_loaded_gauges(core_metrics::LoadedGaugeCounts {
+            keys: self.keys_loaded().await,
+            routes: self.routes_loaded().await,
+            remote_routes: self.remote_routes_loaded().await,
+            permission_clients: self.permissions_loaded().await,
+            fpe_profiles: self.fpe_profiles_loaded().await,
+            tokenization_profiles: self.tokenization_profiles_loaded().await,
+            mac_profiles: self.mac_profiles_loaded().await,
+            masking_profiles: self.masking_profiles_loaded().await,
+        });
     }
 
     async fn with_keys_db_state<T>(&self, f: impl FnOnce(&KeysDbState) -> T) -> T {
@@ -463,6 +478,8 @@ fn record_operation_denied_metric(event_name: &str) {
         "index.verify.denied" => record_crypto_failed("index_verify"),
         "index.create.batch.denied" => record_crypto_failed("index_create_batch"),
         "index.verify.batch.denied" => record_crypto_failed("index_verify_batch"),
+        "mask.denied" => record_crypto_failed("mask"),
+        "mask.batch.denied" => record_crypto_failed("mask_batch"),
         "sign.denied" => core_metrics::record_crypto_operation("sign", "failed"),
         "self_test.denied" => {}
         _ => {}
@@ -517,6 +534,8 @@ pub fn router(state: HttpState) -> Router {
         .route("/index/verify/batch", post(index_verify_batch))
         .route("/index/verify", post(indexes::verify_endpoint))
         .route("/index/{kid}", post(indexes::create_endpoint))
+        .route("/mask/batch/{kid}", post(masking::mask_batch_endpoint))
+        .route("/mask/{kid}", post(masking::mask_endpoint))
         .route("/pub/{kid}", get(pubkey::pub_endpoint))
         .route(
             "/message/internal/encrypt/{kid}",

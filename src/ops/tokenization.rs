@@ -389,18 +389,18 @@ pub fn prepare_encode(
     profile: tokenization::TokenizationProfile,
     input: ValidatedTokenEncodeInput,
 ) -> Result<PreparedTokenEncode, DynError> {
-    if profile.kid() != kid {
-        return Err(crate::error::forbidden(
-            "tokenization profile is not authorized for this kid",
-        ));
-    }
+    keys::prepare_profile_use(
+        keys_db_state,
+        kid,
+        profile.kid(),
+        "tokenization",
+        keys::ProfileUse::NewUse,
+    )?;
     if input.plaintext.chars().count() > profile.max_plaintext_len() {
         return Err(crate::error::invalid_input(
             "plaintext length exceeds tokenization profile maximum",
         ));
     }
-    let key = keys::get_loaded_key(keys_db_state, kid)?;
-    keys::require_lifecycle_for_new_use(&key)?;
 
     Ok(PreparedTokenEncode {
         kid: kid.to_string(),
@@ -415,11 +415,13 @@ pub fn prepare_encode_batch(
     profile: tokenization::TokenizationProfile,
     input: ValidatedTokenEncodeBatchInput,
 ) -> Result<PreparedTokenEncodeBatch, DynError> {
-    if profile.kid() != kid {
-        return Err(crate::error::forbidden(
-            "tokenization profile is not authorized for this kid",
-        ));
-    }
+    keys::prepare_profile_use(
+        keys_db_state,
+        kid,
+        profile.kid(),
+        "tokenization",
+        keys::ProfileUse::NewUse,
+    )?;
     for (index, item) in input.items.iter().enumerate() {
         if item.plaintext.chars().count() > profile.max_plaintext_len() {
             return Err(crate::error::invalid_input(format!(
@@ -427,8 +429,6 @@ pub fn prepare_encode_batch(
             )));
         }
     }
-    let key = keys::get_loaded_key(keys_db_state, kid)?;
-    keys::require_lifecycle_for_new_use(&key)?;
 
     Ok(PreparedTokenEncodeBatch {
         kid: kid.to_string(),
@@ -443,13 +443,13 @@ pub fn prepare_decode(
     input: ValidatedTokenDecodeInput,
     data: String,
 ) -> Result<PreparedTokenDecode, DynError> {
-    if profile.kid() != input.kid {
-        return Err(crate::error::forbidden(
-            "tokenization profile is not authorized for this kid",
-        ));
-    }
-    let key = keys::get_loaded_key(keys_db_state, &input.kid)?;
-    keys::require_lifecycle_for_decrypt_or_verify(&key)?;
+    keys::prepare_profile_use(
+        keys_db_state,
+        &input.kid,
+        profile.kid(),
+        "tokenization",
+        keys::ProfileUse::Verify,
+    )?;
 
     Ok(PreparedTokenDecode {
         kid: input.kid.clone(),
@@ -464,13 +464,13 @@ pub fn authorize_decode_batch(
     profile: &tokenization::TokenizationProfile,
     kid: &str,
 ) -> Result<(), DynError> {
-    if profile.kid() != kid {
-        return Err(crate::error::forbidden(
-            "tokenization profile is not authorized for this kid",
-        ));
-    }
-    let key = keys::get_loaded_key(keys_db_state, kid)?;
-    keys::require_lifecycle_for_decrypt_or_verify(&key)?;
+    keys::prepare_profile_use(
+        keys_db_state,
+        kid,
+        profile.kid(),
+        "tokenization",
+        keys::ProfileUse::Verify,
+    )?;
 
     Ok(())
 }

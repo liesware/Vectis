@@ -146,4 +146,5 @@ def empty_config():
         "fpe_profiles": [],
         "tokenization_profiles": [],
         "mac_profiles": [],
+        "masking_profiles": [],
     }

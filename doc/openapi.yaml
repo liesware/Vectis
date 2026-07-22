@@ -282,7 +282,7 @@ paths:
     post:
       tags: [Config]
       summary: Reload the unified signed config
-      description: Administrative endpoint requiring root or an admin client. Reloads the unified config (routes, remote_routes, permissions, fpe_profiles, tokenization_profiles, mac_profiles) only after VECTIS_CONFIG_PATH and VECTIS_CONFIG_SIGN_PATH are successfully read, verified, and validated. Every route, FPE profile, tokenization profile, and MAC profile kid must exist in the keys currently loaded in memory. A missing config reloads to empty sections; an invalid signature, invalid file, or unloaded kid returns an error and keeps the previous in-memory config.
+      description: Administrative endpoint requiring root or an admin client. Reloads the unified config (routes, remote_routes, permissions, fpe_profiles, tokenization_profiles, mac_profiles, masking_profiles) only after VECTIS_CONFIG_PATH and VECTIS_CONFIG_SIGN_PATH are successfully read, verified, and validated. Every route, FPE profile, tokenization profile, MAC profile, and masking profile kid must exist in the keys currently loaded in memory. A missing config reloads to empty sections; an invalid signature, invalid file, or unloaded kid returns an error and keeps the previous in-memory config.
       security:
         - ApiKeyAuth: []
       responses:
@@ -866,6 +866,62 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
+  /mask/{kid}:
+    post:
+      tags: [Masking]
+      summary: Mask a field value for controlled display
+      description: >
+        Applies a signed masking profile to a plaintext value. Masking is
+        display-only; it does not encrypt, tokenize, persist, or derive keys.
+        The profile KID is used for permission and lifecycle checks.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MaskInput"
+      responses:
+        "200":
+          description: Masked value
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MaskOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /mask/batch/{kid}:
+    post:
+      tags: [Masking]
+      summary: Mask field values as an all-or-nothing batch
+      description: >
+        Applies one signed masking profile to a batch. Each item must include a
+        unique client ref. Any validation or execution error fails the whole
+        batch and returns no partial items.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MaskBatchInput"
+      responses:
+        "200":
+          description: Masked values
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MaskBatchOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
   /index/verify:
     post:
       tags: [Blind Index]
@@ -1237,13 +1293,13 @@ components:
           type: array
           items:
             type: string
-            enum: [admin, keys, lifecycle, self-test, sign, message, fpe-encrypt, fpe-decrypt, token-encode, token-decode, mac-create, mac-verify, index-create, index-verify, metrics]
+            enum: [admin, keys, lifecycle, self-test, sign, message, fpe-encrypt, fpe-decrypt, token-encode, token-decode, mac-create, mac-verify, index-create, index-verify, mask, metrics]
           example:
             - message
 
     ReloadConfigResponse:
       type: object
-      required: [status, routes_loaded, remote_routes_loaded, clients_loaded, fpe_profiles_loaded, tokenization_profiles_loaded, mac_profiles_loaded]
+      required: [status, routes_loaded, remote_routes_loaded, clients_loaded, fpe_profiles_loaded, tokenization_profiles_loaded, mac_profiles_loaded, masking_profiles_loaded]
       properties:
         status:
           const: reloaded
@@ -1263,6 +1319,9 @@ components:
           type: integer
           minimum: 0
         mac_profiles_loaded:
+          type: integer
+          minimum: 0
+        masking_profiles_loaded:
           type: integer
           minimum: 0
 
@@ -2221,6 +2280,85 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/MacVerifyBatchOutputItem"
+
+    MaskInput:
+      type: object
+      additionalProperties: false
+      required: [ref, profile, plaintext]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+          example: pan-display-v1
+        plaintext:
+          $ref: "#/components/schemas/TextField"
+          example: "4111111111111111"
+
+    MaskOutput:
+      type: object
+      required: [ref, kid, profile, masked]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+          example: pan-display-v1
+        masked:
+          $ref: "#/components/schemas/TextField"
+          example: "************1111"
+
+    MaskBatchItemInput:
+      type: object
+      additionalProperties: false
+      required: [ref, plaintext]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        plaintext:
+          $ref: "#/components/schemas/TextField"
+          example: "4111111111111111"
+
+    MaskBatchInput:
+      type: object
+      additionalProperties: false
+      required: [profile, items]
+      properties:
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+          example: pan-display-v1
+        items:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items:
+            $ref: "#/components/schemas/MaskBatchItemInput"
+
+    MaskBatchOutputItem:
+      type: object
+      required: [ref, masked]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        masked:
+          $ref: "#/components/schemas/TextField"
+          example: "************1111"
+
+    MaskBatchOutput:
+      type: object
+      required: [kid, profile, items]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+          example: pan-display-v1
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/MaskBatchOutputItem"
 
     IndexCreateInput:
       type: object

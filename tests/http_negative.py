@@ -35,6 +35,7 @@ _CONFIG = {
     "fpe_profiles": [],
     "tokenization_profiles": [],
     "mac_profiles": [],
+    "masking_profiles": [],
 }
 
 
@@ -160,6 +161,7 @@ def write_permissions(clients, sign=True):
     _CONFIG["fpe_profiles"] = []
     _CONFIG["tokenization_profiles"] = []
     _CONFIG["mac_profiles"] = []
+    _CONFIG["masking_profiles"] = []
     write_config(sign=sign)
 
 
@@ -170,6 +172,7 @@ def write_fpe_profiles(profiles, sign=True):
     _CONFIG["fpe_profiles"] = profiles
     _CONFIG["tokenization_profiles"] = []
     _CONFIG["mac_profiles"] = []
+    _CONFIG["masking_profiles"] = []
     write_config(sign=sign)
 
 
@@ -180,6 +183,7 @@ def write_tokenization_profiles(profiles, sign=True):
     _CONFIG["fpe_profiles"] = []
     _CONFIG["tokenization_profiles"] = profiles
     _CONFIG["mac_profiles"] = []
+    _CONFIG["masking_profiles"] = []
     write_config(sign=sign)
 
 
@@ -190,6 +194,18 @@ def write_mac_profiles(profiles, sign=True):
     _CONFIG["fpe_profiles"] = []
     _CONFIG["tokenization_profiles"] = []
     _CONFIG["mac_profiles"] = profiles
+    _CONFIG["masking_profiles"] = []
+    write_config(sign=sign)
+
+
+def write_masking_profiles(profiles, sign=True):
+    _CONFIG["routes"] = []
+    _CONFIG["remote_routes"] = []
+    _CONFIG["permissions"] = []
+    _CONFIG["fpe_profiles"] = []
+    _CONFIG["tokenization_profiles"] = []
+    _CONFIG["mac_profiles"] = []
+    _CONFIG["masking_profiles"] = profiles
     write_config(sign=sign)
 
 
@@ -200,6 +216,7 @@ def write_remote_routes(routes, sign=True):
     _CONFIG["fpe_profiles"] = []
     _CONFIG["tokenization_profiles"] = []
     _CONFIG["mac_profiles"] = []
+    _CONFIG["masking_profiles"] = []
     write_config(sign=sign)
 
 
@@ -210,6 +227,7 @@ def write_routes(routes, sign=True):
     _CONFIG["fpe_profiles"] = []
     _CONFIG["tokenization_profiles"] = []
     _CONFIG["mac_profiles"] = []
+    _CONFIG["masking_profiles"] = []
     write_config(sign=sign)
 
 
@@ -234,6 +252,10 @@ def reload_config(client):
     require(
         isinstance(response.get("mac_profiles_loaded"), int),
         "config mac_profiles_loaded must be int",
+    )
+    require(
+        isinstance(response.get("masking_profiles_loaded"), int),
+        "config masking_profiles_loaded must be int",
     )
     return response
 
@@ -304,6 +326,18 @@ def valid_mac_profile(key_id):
         "name": "pan-blind-index-v1",
         "kid": key_id,
         "context": "tenant=mx;field=pan;purpose=blind-index;version=1",
+    }
+
+
+def valid_masking_profile(key_id):
+    return {
+        "name": "pan-display-v1",
+        "kid": key_id,
+        "visible_first": 0,
+        "visible_last": 4,
+        "mask_char": "*",
+        "min_len": 12,
+        "max_len": 19,
     }
 
 
@@ -619,6 +653,7 @@ def main():
     _CONFIG["fpe_profiles"] = [valid_fpe_profile(key_id)]
     _CONFIG["tokenization_profiles"] = [valid_tokenization_profile(key_id)]
     _CONFIG["mac_profiles"] = [valid_mac_profile(key_id)]
+    _CONFIG["masking_profiles"] = [valid_masking_profile(key_id)]
     write_config()
     reload_config(client)
     limited_client = Client(args.base_url, limited_api_key)
@@ -844,6 +879,25 @@ def main():
         )
         require_status("limited client blocks index verify batch", status, 403)
 
+    def limited_blocks_mask():
+        status, _ = limited_client.post(
+            f"/mask/{key_id}",
+            {"ref": "mask-limited", "profile": "pan-display-v1", "plaintext": "4111111111111111"},
+            auth=True,
+        )
+        require_status("limited client blocks mask", status, 403)
+
+    def limited_blocks_mask_batch():
+        status, _ = limited_client.post(
+            f"/mask/batch/{key_id}",
+            {
+                "profile": "pan-display-v1",
+                "items": [{"ref": "mask-limited", "plaintext": "4111111111111111"}],
+            },
+            auth=True,
+        )
+        require_status("limited client blocks mask batch", status, 403)
+
     def metrics_client_allows_metrics():
         status, _ = metrics_client.get("/metrics", auth=True)
         require_status("metrics client allows metrics", status, 200)
@@ -916,6 +970,8 @@ def main():
         ("limited client blocks index create batch", limited_blocks_index_create_batch),
         ("limited client blocks index verify", limited_blocks_index_verify),
         ("limited client blocks index verify batch", limited_blocks_index_verify_batch),
+        ("limited client blocks mask", limited_blocks_mask),
+        ("limited client blocks mask batch", limited_blocks_mask_batch),
         ("metrics client allows metrics", metrics_client_allows_metrics),
         ("metrics client blocks admin", metrics_client_blocks_admin),
         ("limited client blocks permissions list", limited_blocks_permissions_list),
@@ -1102,6 +1158,20 @@ def main():
         )
         require_config_sign_fails("permissions wildcard index create")
 
+    def permissions_wildcard_mask():
+        write_permissions(
+            [
+                {
+                    "client": "bad-wildcard-mask",
+                    "apikey_hash": limited_api_key_hash,
+                    "status": "active",
+                    "permissions": [{"kid": "*", "actions": ["mask"]}],
+                }
+            ],
+            sign=False,
+        )
+        require_config_sign_fails("permissions wildcard mask")
+
     def fpe_profile_duplicate_name():
         profile = valid_fpe_profile(key_id)
         write_fpe_profiles([profile, dict(profile, kid=key_id)], sign=False)
@@ -1174,6 +1244,29 @@ def main():
         profile = valid_mac_profile("00" * 32)
         write_mac_profiles([profile], sign=False)
         require_config_sign_fails("mac profile unloaded kid")
+
+    def masking_profile_duplicate_name():
+        profile = valid_masking_profile(key_id)
+        write_masking_profiles([profile, dict(profile, kid=key_id)], sign=False)
+        require_config_sign_fails("masking profile duplicate name")
+
+    def masking_profile_invalid_mask_char():
+        profile = valid_masking_profile(key_id)
+        profile["mask_char"] = "**"
+        write_masking_profiles([profile], sign=False)
+        require_config_sign_fails("masking profile invalid mask char")
+
+    def masking_profile_invalid_visible_bounds():
+        profile = valid_masking_profile(key_id)
+        profile["visible_first"] = 8
+        profile["visible_last"] = 4
+        write_masking_profiles([profile], sign=False)
+        require_config_sign_fails("masking profile invalid visible bounds")
+
+    def masking_profile_unloaded_kid():
+        profile = valid_masking_profile("00" * 32)
+        write_masking_profiles([profile], sign=False)
+        require_config_sign_fails("masking profile unloaded kid")
 
     def routes_missing_name():
         write_routes(
@@ -1454,6 +1547,7 @@ def main():
         ("permissions wildcard token encode", permissions_wildcard_token_encode),
         ("permissions wildcard mac create", permissions_wildcard_mac_create),
         ("permissions wildcard index create", permissions_wildcard_index_create),
+        ("permissions wildcard mask", permissions_wildcard_mask),
         ("fpe profile duplicate name", fpe_profile_duplicate_name),
         ("fpe profile invalid version", fpe_profile_invalid_version),
         ("fpe profile duplicate alphabet", fpe_profile_duplicate_alphabet),
@@ -1467,6 +1561,10 @@ def main():
         ("mac profile duplicate name", mac_profile_duplicate_name),
         ("mac profile invalid context", mac_profile_invalid_context),
         ("mac profile unloaded kid", mac_profile_unloaded_kid),
+        ("masking profile duplicate name", masking_profile_duplicate_name),
+        ("masking profile invalid mask char", masking_profile_invalid_mask_char),
+        ("masking profile invalid visible bounds", masking_profile_invalid_visible_bounds),
+        ("masking profile unloaded kid", masking_profile_unloaded_kid),
         ("routes missing name", routes_missing_name),
         ("routes invalid name", routes_invalid_name),
         ("remote routes invalid kid", remote_routes_invalid_kid),
@@ -2331,9 +2429,9 @@ def main():
             {"ref": "mac-wrong-kid", "profile": "pan-blind-index-v1", "plaintext": "4111111111111111"},
             auth=True,
         )
-        require_status("POST /mac/{kid} wrong kid", status, 400)
+        require_status("POST /mac/{kid} wrong kid", status, 403)
         require(
-            body.get("error") == "mac profile kid does not match request kid",
+            body.get("error") == "mac profile is not authorized for this kid",
             "MAC wrong KID must fail",
         )
 
@@ -2425,10 +2523,10 @@ def main():
             },
             auth=True,
         )
-        require_status("POST /mac/batch/{kid} wrong kid", status, 400)
+        require_status("POST /mac/batch/{kid} wrong kid", status, 403)
         require("items" not in body, "MAC create batch error must not return partial items")
         require(
-            body.get("error") == "mac profile kid does not match request kid",
+            body.get("error") == "mac profile is not authorized for this kid",
             "MAC batch wrong KID must fail",
         )
 
@@ -2535,9 +2633,9 @@ def main():
             {"ref": "index-wrong-kid", "profile": "pan-blind-index-v1", "plaintext": "4111111111111111"},
             auth=True,
         )
-        require_status("POST /index/{kid} wrong kid", status, 400)
+        require_status("POST /index/{kid} wrong kid", status, 403)
         require(
-            body.get("error") == "mac profile kid does not match request kid",
+            body.get("error") == "index profile is not authorized for this kid",
             "index wrong KID must fail",
         )
 
@@ -2618,12 +2716,103 @@ def main():
             "index verify batch duplicate ref must fail",
         )
 
+    def mask_unknown_profile():
+        status, body = client.post(
+            f"/mask/{key_id}",
+            {"ref": "mask-missing", "profile": "missing-profile", "plaintext": "4111111111111111"},
+            auth=True,
+        )
+        require_status("POST /mask/{kid} unknown profile", status, 400)
+        require(body.get("error") == "masking profile not found", "mask unknown profile must fail")
+
+    def mask_wrong_kid():
+        status, body = client.post(
+            f"/mask/{retired_key_id}",
+            {"ref": "mask-wrong-kid", "profile": "pan-display-v1", "plaintext": "4111111111111111"},
+            auth=True,
+        )
+        require_status("POST /mask/{kid} wrong kid", status, 403)
+        require(
+            body.get("error") == "masking profile is not authorized for this kid",
+            "mask wrong KID must fail",
+        )
+
+    def mask_plaintext_too_short():
+        status, body = client.post(
+            f"/mask/{key_id}",
+            {"ref": "mask-short", "profile": "pan-display-v1", "plaintext": "123"},
+            auth=True,
+        )
+        require_status("POST /mask/{kid} plaintext too short", status, 400)
+        require(
+            body.get("error") == "plaintext length is outside masking profile bounds",
+            "mask plaintext too short must fail",
+        )
+
+    def mask_ref_empty():
+        status, body = client.post(
+            f"/mask/{key_id}",
+            {"ref": "", "profile": "pan-display-v1", "plaintext": "4111111111111111"},
+            auth=True,
+        )
+        require_status("POST /mask/{kid} empty ref", status, 400)
+        require(body.get("error") == "ref must not be empty", "mask empty ref must fail")
+
+    def mask_batch_empty_items():
+        status, body = client.post(
+            f"/mask/batch/{key_id}",
+            {"profile": "pan-display-v1", "items": []},
+            auth=True,
+        )
+        require_status("POST /mask/batch/{kid} empty items", status, 400)
+        require("items" not in body, "mask batch error must not return partial items")
+        require(body.get("error") == "mask batch items must not be empty", "mask batch empty items must fail")
+
+    def mask_batch_too_many_items():
+        status, body = client.post(
+            f"/mask/batch/{key_id}",
+            {
+                "profile": "pan-display-v1",
+                "items": [
+                    {"ref": f"mask-batch-{index}", "plaintext": "4111111111111111"}
+                    for index in range(129)
+                ],
+            },
+            auth=True,
+        )
+        require_status("POST /mask/batch/{kid} too many items", status, 400)
+        require("items" not in body, "mask batch error must not return partial items")
+        require(
+            body.get("error") == "mask batch items exceeds maximum allowed value: 128",
+            "mask batch too many items must fail",
+        )
+
+    def mask_batch_duplicate_ref():
+        status, body = client.post(
+            f"/mask/batch/{key_id}",
+            {
+                "profile": "pan-display-v1",
+                "items": [
+                    {"ref": "dup", "plaintext": "4111111111111111"},
+                    {"ref": "dup", "plaintext": "5555555555554444"},
+                ],
+            },
+            auth=True,
+        )
+        require_status("POST /mask/batch/{kid} duplicate ref", status, 400)
+        require("items" not in body, "mask batch error must not return partial items")
+        require(
+            body.get("error") == "batch item 1 failed: mask batch ref must be unique",
+            "mask batch duplicate ref must fail",
+        )
+
     _CONFIG["routes"] = []
     _CONFIG["remote_routes"] = []
     _CONFIG["permissions"] = []
     _CONFIG["fpe_profiles"] = [valid_fpe_profile(key_id)]
     _CONFIG["tokenization_profiles"] = [valid_tokenization_profile(key_id)]
     _CONFIG["mac_profiles"] = [valid_mac_profile(key_id)]
+    _CONFIG["masking_profiles"] = [valid_masking_profile(key_id)]
     write_config()
     reload_config(client)
     encoded_token = create_valid_encoded_token(client, key_id)
@@ -2699,6 +2888,13 @@ def main():
         ("POST /index/batch/{kid} too many items", index_create_batch_too_many_items),
         ("POST /index/batch/{kid} duplicate ref", index_create_batch_duplicate_ref),
         ("POST /index/verify/batch duplicate ref", index_verify_batch_duplicate_ref),
+        ("POST /mask/{kid} unknown profile", mask_unknown_profile),
+        ("POST /mask/{kid} wrong kid", mask_wrong_kid),
+        ("POST /mask/{kid} plaintext too short", mask_plaintext_too_short),
+        ("POST /mask/{kid} empty ref", mask_ref_empty),
+        ("POST /mask/batch/{kid} empty items", mask_batch_empty_items),
+        ("POST /mask/batch/{kid} too many items", mask_batch_too_many_items),
+        ("POST /mask/batch/{kid} duplicate ref", mask_batch_duplicate_ref),
     ):
         run_case(rows, name, func)
 

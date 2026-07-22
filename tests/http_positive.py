@@ -33,6 +33,7 @@ from http_support import (
     write_permissions,
     write_fpe_profiles,
     write_mac_profiles,
+    write_masking_profiles,
     write_tokenization_profiles,
     write_test_remote_routes,
     write_test_routes,
@@ -188,6 +189,10 @@ def validate_metrics(client):
     require(
         "vectis_mac_profiles_loaded" in metrics,
         "metrics must include vectis_mac_profiles_loaded",
+    )
+    require(
+        "vectis_masking_profiles_loaded" in metrics,
+        "metrics must include vectis_masking_profiles_loaded",
     )
 
 
@@ -950,6 +955,51 @@ def mac_batch_round_trip(client, key_id):
     return profile, algorithm, [digest[:16] + "..." for digest in digests]
 
 
+def mask_round_trip(client, key_id):
+    profile = "pan-display-v1"
+    ref = "mask-single"
+    plaintext = "4111111111111111"
+    masked = client.post(
+        f"/mask/{key_id}",
+        {"ref": ref, "profile": profile, "plaintext": plaintext},
+        auth=True,
+    )
+    require(masked.get("ref") == ref, "mask ref mismatch")
+    require(masked.get("kid") == key_id, "mask kid mismatch")
+    require(masked.get("profile") == profile, "mask profile mismatch")
+    require(masked.get("masked") == "************1111", "mask output mismatch")
+
+    return profile, masked.get("masked")
+
+
+def mask_batch_round_trip(client, key_id):
+    profile = "pan-display-v1"
+    refs = ["mask-batch-1", "mask-batch-2"]
+    plaintexts = ["4111111111111111", "5555555555554444"]
+    masked = client.post(
+        f"/mask/batch/{key_id}",
+        {
+            "profile": profile,
+            "items": [
+                {"ref": ref, "plaintext": plaintext}
+                for ref, plaintext in zip(refs, plaintexts)
+            ],
+        },
+        auth=True,
+    )
+    require(masked.get("kid") == key_id, "mask batch kid mismatch")
+    require(masked.get("profile") == profile, "mask batch profile mismatch")
+    items = masked.get("items")
+    require(isinstance(items, list), "mask batch items must be a list")
+    require([item.get("ref") for item in items] == refs, "mask batch ref mismatch")
+    require(
+        [item.get("masked") for item in items] == ["************1111", "************4444"],
+        "mask batch output mismatch",
+    )
+
+    return profile, [item.get("masked") for item in items]
+
+
 def index_round_trip(client, key_id):
     profile = "pan-blind-index-v1"
     plaintext = "4111111111111111"
@@ -1365,6 +1415,26 @@ def main():
         client,
         created[0][0],
     )
+    write_masking_profiles(
+        [
+            {
+                "name": "pan-display-v1",
+                "kid": created[0][0],
+                "visible_first": 0,
+                "visible_last": 4,
+                "mask_char": "*",
+                "min_len": 12,
+                "max_len": 19,
+            }
+        ]
+    )
+    mask_reload = reload_config(client)
+    require(
+        mask_reload.get("masking_profiles_loaded") == 1,
+        "config reload must report loaded masking profile",
+    )
+    mask_profile, masked = mask_round_trip(client, created[0][0])
+    mask_batch_profile, mask_batch_values = mask_batch_round_trip(client, created[0][0])
     index_profile, index_digest = index_round_trip(client, created[0][0])
     index_batch_profile, index_batch_digests = index_batch_round_trip(client, created[0][0])
     mac_rows = [
@@ -1373,6 +1443,10 @@ def main():
             f"{mac_batch_profile} batch {mac_batch_algorithm} {','.join(mac_batch_digests)}",
             "OK",
         ),
+    ]
+    mask_rows = [
+        (f"{mask_profile} {masked}", "OK"),
+        (f"{mask_batch_profile} batch {','.join(mask_batch_values)}", "OK"),
     ]
     index_rows = [
         (f"{index_profile} {index_digest}", "OK"),
@@ -1384,6 +1458,8 @@ def main():
     passed_count += len(permission_rows)
     print_section("mac", mac_rows)
     passed_count += len(mac_rows)
+    print_section("mask", mask_rows)
+    passed_count += len(mask_rows)
     print_section("index", index_rows)
     passed_count += len(index_rows)
 
@@ -1492,6 +1568,7 @@ def main():
     _CONFIG["fpe_profiles"] = []
     _CONFIG["tokenization_profiles"] = []
     _CONFIG["mac_profiles"] = []
+    _CONFIG["masking_profiles"] = []
     write_config()
     reload_config(client)
     restore_config_file(config_backup)

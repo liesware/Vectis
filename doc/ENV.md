@@ -53,7 +53,7 @@ These variables are used by CLI commands that call the HTTP API. `serve` and `in
 | --- | --- | --- | --- |
 | `VECTIS_FINAL_APP_ADDR` | `localhost:3999` | Valid host:port | Default final app destination used when no manual route exists for a `kid`. |
 | `VECTIS_FINAL_APP_PATH` | `/message` | HTTP path beginning with `/`, no spaces | Default final app path. |
-| `VECTIS_CONFIG_PATH` | `config.json` | Non-empty file path | Unified signed config file with `routes`, `remote_routes`, `permissions`, optional `fpe_profiles`, optional `tokenization_profiles`, and optional `mac_profiles` sections. Startup uses empty sections only when the config file is missing. If the file exists but is invalid, startup fails. Runtime reload keeps the previous config if the file exists but is invalid. |
+| `VECTIS_CONFIG_PATH` | `config.json` | Non-empty file path | Unified signed config file with `routes`, `remote_routes`, `permissions`, optional `fpe_profiles`, optional `tokenization_profiles`, optional `mac_profiles`, and optional `masking_profiles` sections. Startup uses empty sections only when the config file is missing. If the file exists but is invalid, startup fails. Runtime reload keeps the previous config if the file exists but is invalid. |
 | `VECTIS_CONFIG_SIGN_PATH` | `config_sign.json` | Non-empty file path | Signature token for `VECTIS_CONFIG_PATH`, created by `vectis config sign`. |
 
 `routes` section shape inside `config.json`:
@@ -73,11 +73,12 @@ These variables are used by CLI commands that call the HTTP API. `serve` and `in
   "permissions": [],
   "fpe_profiles": [],
   "tokenization_profiles": [],
-  "mac_profiles": []
+  "mac_profiles": [],
+  "masking_profiles": []
 }
 ```
 
-The `routes`/`remote_routes`/`permissions`/`fpe_profiles`/`tokenization_profiles`/`mac_profiles` sections live in the unified signed `config.json`.
+The `routes`/`remote_routes`/`permissions`/`fpe_profiles`/`tokenization_profiles`/`mac_profiles`/`masking_profiles` sections live in the unified signed `config.json`.
 Vectis does not create it and `POST /keys` does not modify it.
 If `config.json` exists, `config_sign.json` must exist and verify before the config is loaded.
 Vectis rejects `config.json` above 8 MiB and `config_sign.json` above 1 MiB before parsing or verifying.
@@ -92,8 +93,8 @@ Runtime route operations:
 - `GET /remote-routes` lists authorized remote Vectis routes currently loaded in memory and requires `VECTIS_APIKEY`.
 - `POST /config/reload` reloads the unified config and requires root or an admin `VECTIS_APIKEY`.
 - `vectis config sign` signs `VECTIS_CONFIG_PATH` locally with init keys and updates `VECTIS_CONFIG_SIGN_PATH`.
-- `vectis config routes`, `vectis config remote-routes`, `vectis config permissions`, and `vectis config fpe` list or edit local `config.json` sections; they do not sign or reload.
-- `routes[].name`, `remote_routes[].name`, `permissions[].client`, and `fpe_profiles[].name` are unique operator-facing indexes used by the CLI config editor.
+- `vectis config routes`, `vectis config remote-routes`, `vectis config permissions`, `vectis config fpe`, `vectis config token`, `vectis config mac`, and `vectis config masking` list or edit local `config.json` sections; they do not sign or reload.
+- `routes[].name`, `remote_routes[].name`, `permissions[].client`, `fpe_profiles[].name`, `tokenization_profiles[].name`, `mac_profiles[].name`, and `masking_profiles[].name` are unique operator-facing indexes used by the CLI config editor.
 - Every route `kid` must exist in the keys currently loaded in memory.
 - A missing file reloads to an empty manual route list.
 - An invalid existing file, or a route with an unloaded `kid`, returns an error and keeps the previous in-memory routes.
@@ -194,7 +195,7 @@ Recommended admin permission:
 }
 ```
 
-If any permission entry contains `admin`, Vectis treats the whole client as admin and ignores `kid` plus any other actions for that client. Non-admin KID-scoped permissions must reference KIDs already loaded in memory. Global permissions such as `metrics` use `kid: "*"`. FPE, tokenization, and MAC permissions require explicit KIDs; `kid: "*"` is rejected for those actions.
+If any permission entry contains `admin`, Vectis treats the whole client as admin and ignores `kid` plus any other actions for that client. Non-admin KID-scoped permissions must reference KIDs already loaded in memory. Global permissions such as `metrics` use `kid: "*"`. FPE, tokenization, MAC, blind-index, and masking permissions require explicit KIDs; `kid: "*"` is rejected for those actions.
 
 Allowed actions:
 
@@ -212,6 +213,7 @@ Allowed actions:
 - `mac-verify`
 - `index-create`
 - `index-verify`
+- `mask`
 - `metrics`
 
 Permission mapping summary:
@@ -228,6 +230,9 @@ Permission mapping summary:
 - `token-decode`: `POST /token/decode`.
 - `mac-create`: `POST /mac/{kid}`, `POST /mac/batch/{kid}`.
 - `mac-verify`: `POST /mac/verify`, `POST /mac/verify/batch`.
+- `index-create`: `POST /index/{kid}`, `POST /index/batch/{kid}`.
+- `index-verify`: `POST /index/verify`, `POST /index/verify/batch`.
+- `mask`: `POST /mask/{kid}`, `POST /mask/batch/{kid}`.
 - `index-create`: `POST /index/{kid}`, `POST /index/batch/{kid}`.
 - `index-verify`: `POST /index/verify`, `POST /index/verify/batch`.
 - `metrics`: `GET /metrics` with `kid: "*"`; this is a global permission and does not reference a loaded operational KID.

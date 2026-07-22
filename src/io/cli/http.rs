@@ -50,6 +50,7 @@ const HTTP_COMMANDS: &[HttpCommand] = &[
     HttpCommand::new("fpe", command_fpe),
     HttpCommand::new("token", command_token),
     HttpCommand::new("mac", command_mac),
+    HttpCommand::new("mask", command_mask),
     HttpCommand::new("message", command_message),
 ];
 
@@ -65,6 +66,7 @@ const CONFIG_COMMANDS: &[ConfigCommand] = &[
     ConfigCommand::new("fpe", config_command_fpe),
     ConfigCommand::new("token", config_command_token),
     ConfigCommand::new("mac", config_command_mac),
+    ConfigCommand::new("masking", config_command_masking),
 ];
 
 impl HttpCommand {
@@ -149,6 +151,7 @@ boxed_command!(command_sign, run_sign);
 boxed_command!(command_fpe, run_fpe);
 boxed_command!(command_token, run_token);
 boxed_command!(command_mac, run_mac);
+boxed_command!(command_mask, run_mask);
 boxed_command!(command_message, run_message);
 
 fn config_command_init(args: Vec<String>, output: OutputFormat) -> CommandFuture {
@@ -198,6 +201,7 @@ boxed_command!(config_command_permissions, config_editor::run_permissions);
 boxed_command!(config_command_fpe, config_editor::run_config_fpe);
 boxed_command!(config_command_token, config_editor::run_config_token);
 boxed_command!(config_command_mac, config_editor::run_config_mac);
+boxed_command!(config_command_masking, config_editor::run_config_masking);
 
 async fn run_health(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let target = expect_one(args, "health target")?;
@@ -346,6 +350,7 @@ struct ConfigValidationOutput {
     fpe_profiles_loaded: usize,
     tokenization_profiles_loaded: usize,
     mac_profiles_loaded: usize,
+    masking_profiles_loaded: usize,
 }
 
 async fn validate_config_for_local_node() -> Result<
@@ -429,6 +434,7 @@ async fn validate_config_for_local_node() -> Result<
         fpe_profiles_loaded: config_state.fpe_profiles.len(),
         tokenization_profiles_loaded: config_state.tokenization_profiles.len(),
         mac_profiles_loaded: config_state.mac_profiles.len(),
+        masking_profiles_loaded: config_state.masking_profiles.len(),
     };
 
     Ok((config, init_state, config_content, output))
@@ -462,6 +468,7 @@ async fn run_config_sign(output: OutputFormat) -> Result<(), DynError> {
             "fpe_profiles_loaded": validation.fpe_profiles_loaded,
             "tokenization_profiles_loaded": validation.tokenization_profiles_loaded,
             "mac_profiles_loaded": validation.mac_profiles_loaded,
+            "masking_profiles_loaded": validation.masking_profiles_loaded,
         }))?,
         output,
     )
@@ -609,6 +616,22 @@ async fn run_mac(args: Vec<String>, output: OutputFormat) -> Result<(), DynError
         }
         _ => Err(invalid_input(format!("unknown mac command: {subcommand}"))),
     }
+}
+
+async fn run_mask(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+    let (kid, rest) = split_subcommand(args, "kid")?;
+    validate_kid("kid", &kid)?;
+    let body = parse_json_source(rest)?;
+    let client = CliHttpClient::from_env()?;
+    client
+        .send(
+            Method::POST,
+            &format!("/mask/{kid}"),
+            true,
+            Some(body),
+            output,
+        )
+        .await
 }
 
 async fn run_message(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
@@ -1061,6 +1084,10 @@ fn flag_consumes_value(flag: &str) -> bool {
             | "--token-prefix"
             | "--token-len"
             | "--max-plaintext-len"
+            | "--context"
+            | "--visible-first"
+            | "--visible-last"
+            | "--mask-char"
     )
 }
 

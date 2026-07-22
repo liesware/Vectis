@@ -1,5 +1,5 @@
 use super::http::{OutputFormat, invalid_input, print_response};
-use crate::core::{config, config_file, fpe, mac, permissions, tokenization, validation};
+use crate::core::{config, config_file, fpe, mac, masking, permissions, tokenization, validation};
 use crate::error::DynError;
 use serde_json::{Map, Value, json};
 use std::collections::HashSet;
@@ -74,6 +74,8 @@ enum FieldKind {
     TokenPrefix,
     MacProfileName,
     MacContext,
+    MaskingProfileName,
+    MaskChar,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -421,6 +423,81 @@ const MAC_PROFILES_SECTION: SectionSpec = SectionSpec {
     parsed_validator: None,
 };
 
+const MASKING_PROFILES_SECTION: SectionSpec = SectionSpec {
+    cli_name: "masking",
+    json_section: "masking_profiles",
+    key_field: "name",
+    item_name: "masking profile name",
+    command_context: "config masking",
+    fields: &[
+        FieldSpec {
+            flag: "--name",
+            json_field: "name",
+            kind: FieldKind::MaskingProfileName,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: false,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--kid",
+            json_field: "kid",
+            kind: FieldKind::Kid,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--visible-first",
+            json_field: "visible_first",
+            kind: FieldKind::Usize,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--visible-last",
+            json_field: "visible_last",
+            kind: FieldKind::Usize,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--mask-char",
+            json_field: "mask_char",
+            kind: FieldKind::MaskChar,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--min-len",
+            json_field: "min_len",
+            kind: FieldKind::Usize,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--max-len",
+            json_field: "max_len",
+            kind: FieldKind::Usize,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+    ],
+    add_defaults: &[],
+    parsed_validator: Some(validate_masking_profile_parsed_fields),
+};
+
 pub fn init_config(output: OutputFormat) -> Result<(), DynError> {
     let app = config::app_config()?;
     match fs::metadata(&app.config_path) {
@@ -489,6 +566,11 @@ pub async fn run_config_token(args: Vec<String>, output: OutputFormat) -> Result
 pub async fn run_config_mac(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let (command, rest) = split_command(args, "config mac command")?;
     run_basic_section_command(&MAC_PROFILES_SECTION, &command, rest, output).await
+}
+
+pub async fn run_config_masking(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+    let (command, rest) = split_command(args, "config masking command")?;
+    run_basic_section_command(&MASKING_PROFILES_SECTION, &command, rest, output).await
 }
 
 async fn read_config(
@@ -746,6 +828,27 @@ fn validate_fpe_profile_parsed_fields(parsed: &Map<String, Value>) -> Result<(),
     }
 }
 
+fn validate_masking_profile_parsed_fields(parsed: &Map<String, Value>) -> Result<(), DynError> {
+    let visible_first = optional_usize_field(parsed, "visible_first")?;
+    let visible_last = optional_usize_field(parsed, "visible_last")?;
+    let min_len = optional_usize_field(parsed, "min_len")?;
+    let max_len = optional_usize_field(parsed, "max_len")?;
+
+    match (visible_first, visible_last, min_len, max_len) {
+        (Some(visible_first), Some(visible_last), Some(min_len), Some(max_len)) => {
+            masking::validate_masking_lengths(visible_first, visible_last, min_len, max_len)
+        }
+        (None, None, Some(min_len), Some(max_len)) => {
+            masking::validate_masking_lengths(0, 0, min_len, max_len)
+        }
+        (None, None, Some(min_len), None) => {
+            masking::validate_masking_lengths(0, 0, min_len, masking::MASKING_PLAINTEXT_MAX_LEN)
+        }
+        (None, None, None, Some(max_len)) => masking::validate_masking_lengths(0, 0, 1, max_len),
+        _ => Ok(()),
+    }
+}
+
 fn optional_usize_field(
     parsed: &Map<String, Value>,
     field: &str,
@@ -886,6 +989,14 @@ fn parse_field_value(field: &FieldSpec, raw: &str) -> Result<Value, DynError> {
         }
         FieldKind::MacContext => {
             validation::validate_labels("mac_profiles.context", raw, mac::MAC_CONTEXT_MAX_CHARS)?;
+            Ok(Value::String(raw.to_string()))
+        }
+        FieldKind::MaskingProfileName => {
+            validation::validate_aad_config_name("masking_profiles.name", raw)?;
+            Ok(Value::String(raw.to_string()))
+        }
+        FieldKind::MaskChar => {
+            masking::validate_mask_char(raw)?;
             Ok(Value::String(raw.to_string()))
         }
     }
@@ -1091,6 +1202,7 @@ fn empty_config() -> Value {
         "fpe_profiles": [],
         "tokenization_profiles": [],
         "mac_profiles": [],
+        "masking_profiles": [],
     })
 }
 
@@ -1105,6 +1217,7 @@ fn ensure_config_shape(value: &mut Value) -> Result<(), DynError> {
     ensure_section_array(object, "fpe_profiles")?;
     ensure_section_array(object, "tokenization_profiles")?;
     ensure_section_array(object, "mac_profiles")?;
+    ensure_section_array(object, "masking_profiles")?;
     Ok(())
 }
 

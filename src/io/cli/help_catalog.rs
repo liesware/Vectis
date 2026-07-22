@@ -21,6 +21,7 @@ pub(crate) const EXECUTABLE_COMMANDS: &[&str] = &[
     "fpe",
     "token",
     "mac",
+    "mask",
     "message",
 ];
 
@@ -38,6 +39,7 @@ pub(crate) const HTTP_COMMANDS: &[&str] = &[
     "fpe",
     "token",
     "mac",
+    "mask",
     "message",
 ];
 
@@ -53,6 +55,7 @@ pub(crate) const CONFIG_COMMANDS: &[&str] = &[
     "fpe",
     "token",
     "mac",
+    "masking",
 ];
 
 #[cfg(test)]
@@ -235,6 +238,7 @@ const ROOT_HELP: CommandHelp = CommandHelp {
                 "  fpe                   Encrypt or decrypt field values through HTTP",
                 "  token                 Encode or decode reversible random tokens through HTTP",
                 "  mac                   Create or verify MAC digests through HTTP",
+                "  mask                  Mask field values for controlled display through HTTP",
                 "  message               Send, receive, encrypt, or decrypt messages through HTTP",
             ],
         },
@@ -673,6 +677,11 @@ const CONFIG_HELP: CommandHelp = CommandHelp {
         "vectis config mac get <name>",
         "vectis config mac update <name> [--kid <kid>] [--context <labels>]",
         "vectis config mac delete <name>",
+        "vectis config masking list",
+        "vectis config masking add --name <name> --kid <kid> --visible-first <n> --visible-last <n> --mask-char <char> --min-len <n> --max-len <n>",
+        "vectis config masking get <name>",
+        "vectis config masking update <name> [--kid <kid>] [--visible-first <n>] [--visible-last <n>] [--mask-char <char>] [--min-len <n>] [--max-len <n>]",
+        "vectis config masking delete <name>",
     ],
     summary: Some("Validates, signs, prints, reloads, or edits the unified signed config file."),
     sections: &[
@@ -690,6 +699,7 @@ const CONFIG_HELP: CommandHelp = CommandHelp {
                 "  fpe                   Edits local config FPE profiles by unique name",
                 "  token                 Edits local config tokenization profiles by unique name",
                 "  mac                   Edits local config MAC profiles by unique name",
+                "  masking               Edits local config masking profiles by unique name",
             ],
         },
         HelpSection {
@@ -707,6 +717,7 @@ const CONFIG_HELP: CommandHelp = CommandHelp {
                 "  config fpe edits signed FPE field profiles; min_len must be at least 6",
                 "  config token edits signed reversible tokenization profiles",
                 "  config mac edits signed MAC profiles; context uses key=value labels",
+                "  config masking edits signed display masking profiles",
                 "  edit commands do not sign or reload automatically",
             ],
         },
@@ -923,6 +934,37 @@ const CONFIG_MAC_HELP: CommandHelp = CommandHelp {
     output: true,
 };
 
+const CONFIG_MASKING_HELP: CommandHelp = CommandHelp {
+    key: "config masking",
+    heading: "Usage:",
+    usage: &[
+        "vectis config masking list",
+        "vectis config masking add --name <name> --kid <kid> --visible-first <n> --visible-last <n> --mask-char <char> --min-len <n> --max-len <n>",
+        "vectis config masking get <name>",
+        "vectis config masking update <name> [--kid <kid>] [--visible-first <n>] [--visible-last <n>] [--mask-char <char>] [--min-len <n>] [--max-len <n>]",
+        "vectis config masking delete <name>",
+    ],
+    summary: Some("Lists or edits local config masking profiles by unique name."),
+    sections: &[
+        HelpSection {
+            title: "Behavior:",
+            lines: &[
+                "  edits masking_profiles in VECTIS_CONFIG_PATH only",
+                "  mask_char must be exactly one character",
+                "  visible_first plus visible_last must be less than min_len",
+                "  run `vectis config sign`, then `vectis config reload` after edits",
+            ],
+        },
+        HelpSection {
+            title: "Example:",
+            lines: &[
+                "  vectis config masking add --name pan-display-v1 --kid <kid> --visible-first 0 --visible-last 4 --mask-char '*' --min-len 12 --max-len 19",
+            ],
+        },
+    ],
+    output: true,
+};
+
 const PUB_HELP: CommandHelp = CommandHelp {
     key: "pub",
     heading: "Usage:",
@@ -1097,6 +1139,36 @@ const MAC_HELP: CommandHelp = CommandHelp {
     output: true,
 };
 
+const MASK_HELP: CommandHelp = CommandHelp {
+    key: "mask",
+    heading: "Usage:",
+    usage: &[
+        "vectis mask <kid> --json '<json>'",
+        "vectis mask <kid> --file mask.json",
+    ],
+    summary: Some("Masks field values for controlled display with signed-config masking profiles."),
+    sections: &[
+        HelpSection {
+            title: "Request JSON:",
+            lines: &[
+                r#"  {"ref":"row1","profile":"pan-display-v1","plaintext":"4111111111111111"}"#,
+            ],
+        },
+        HelpSection {
+            title: "Endpoint:",
+            lines: &["  mask <kid>            POST /mask/{kid}, requires VECTIS_APIKEY"],
+        },
+        HelpSection {
+            title: "Input options:",
+            lines: &[
+                "  --json <json>         JSON object as a shell argument",
+                "  --file <path>         Path to a JSON file",
+            ],
+        },
+    ],
+    output: true,
+};
+
 const MESSAGE_HELP: CommandHelp = CommandHelp {
     key: "message",
     heading: "Usage:",
@@ -1163,11 +1235,13 @@ const COMMAND_HELPS: &[CommandHelp] = &[
     CONFIG_FPE_HELP,
     CONFIG_TOKEN_HELP,
     CONFIG_MAC_HELP,
+    CONFIG_MASKING_HELP,
     PUB_HELP,
     SIGN_HELP,
     FPE_HELP,
     TOKEN_HELP,
     MAC_HELP,
+    MASK_HELP,
     MESSAGE_HELP,
 ];
 

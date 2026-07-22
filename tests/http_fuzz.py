@@ -33,6 +33,8 @@ TOKEN_PLAINTEXT = "fuzz token plaintext"
 TOKEN_BATCH_PLAINTEXTS = [TOKEN_PLAINTEXT, "second fuzz token plaintext"]
 MAC_PROFILE = "fuzz-pan-blind-index-v1"
 MAC_PLAINTEXTS = ["4111111111111111", "5555555555554444"]
+MASKING_PROFILE = "fuzz-pan-display-v1"
+MASKING_PLAINTEXTS = ["4111111111111111", "5555555555554444"]
 
 # Minimal, policy-safe key requests (one per crypto profile) used to CREATE seed
 # keys. Creating with only tag+profile works under both crypto policies, and the
@@ -431,6 +433,7 @@ CONFIG_LOADED_COUNTS = (
     "fpe_profiles_loaded",
     "tokenization_profiles_loaded",
     "mac_profiles_loaded",
+    "masking_profiles_loaded",
 )
 
 
@@ -784,6 +787,7 @@ def empty_config():
         "fpe_profiles": [],
         "tokenization_profiles": [],
         "mac_profiles": [],
+        "masking_profiles": [],
     }
 
 
@@ -802,6 +806,7 @@ def read_config_or_empty():
         "fpe_profiles",
         "tokenization_profiles",
         "mac_profiles",
+        "masking_profiles",
     ):
         if not isinstance(config.get(key), list):
             config[key] = []
@@ -915,6 +920,40 @@ def configure_mac_profile(client, kid):
     status, body = client.post_json("/config/reload", {}, auth=True)
     if status != 200:
         raise RuntimeError(f"could not load mac seed config: HTTP {status}: {body}")
+
+    def restore():
+        if original_cfg is None:
+            CONFIG_PATH.unlink(missing_ok=True)
+        else:
+            CONFIG_PATH.write_bytes(original_cfg)
+        if original_sig is None:
+            CONFIG_SIGN_PATH.unlink(missing_ok=True)
+        else:
+            CONFIG_SIGN_PATH.write_bytes(original_sig)
+
+    atexit.register(restore)
+
+
+def configure_masking_profile(client, kid):
+    original_cfg = CONFIG_PATH.read_bytes() if CONFIG_PATH.exists() else None
+    original_sig = CONFIG_SIGN_PATH.read_bytes() if CONFIG_SIGN_PATH.exists() else None
+    config = read_config_or_empty()
+    config["masking_profiles"] = [
+        {
+            "name": MASKING_PROFILE,
+            "kid": kid,
+            "visible_first": 0,
+            "visible_last": 4,
+            "mask_char": "*",
+            "min_len": 12,
+            "max_len": 19,
+        }
+    ]
+    CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    sign_config_file()
+    status, body = client.post_json("/config/reload", {}, auth=True)
+    if status != 200:
+        raise RuntimeError(f"could not load masking seed config: HTTP {status}: {body}")
 
     def restore():
         if original_cfg is None:
@@ -1295,6 +1334,38 @@ def index_batch_seeds(client):
     ]
 
 
+def masking_seeds(client):
+    kid = _create_key(client, {"tag": "fuzz-mask", "profile": "hybrid-standard-v1"})
+    configure_masking_profile(client, kid)
+    return [
+        (
+            f"/mask/{kid}",
+            {
+                "ref": "mask-fuzz",
+                "profile": MASKING_PROFILE,
+                "plaintext": MASKING_PLAINTEXTS[0],
+            },
+        )
+    ]
+
+
+def masking_batch_seeds(client):
+    kid = _create_key(client, {"tag": "fuzz-mask-batch", "profile": "hybrid-standard-v1"})
+    configure_masking_profile(client, kid)
+    return [
+        (
+            f"/mask/batch/{kid}",
+            {
+                "profile": MASKING_PROFILE,
+                "items": [
+                    {"ref": f"mask-fuzz-{index}", "plaintext": plaintext}
+                    for index, plaintext in enumerate(MASKING_PLAINTEXTS)
+                ],
+            },
+        )
+    ]
+
+
 TARGETS = [
     {"name": "token", "runner": run_body, "seed_factory": token_seeds,
      "path": "/sign/verification", "auth": False, "semantic": token_semantic},
@@ -1323,6 +1394,8 @@ TARGETS = [
     {"name": "mac_batch", "runner": run_body, "seed_factory": mac_batch_seeds, "auth": True},
     {"name": "index", "runner": run_body, "seed_factory": index_seeds, "auth": True},
     {"name": "index_batch", "runner": run_body, "seed_factory": index_batch_seeds, "auth": True},
+    {"name": "masking", "runner": run_body, "seed_factory": masking_seeds, "auth": True},
+    {"name": "masking_batch", "runner": run_body, "seed_factory": masking_batch_seeds, "auth": True},
     {"name": "pubkid", "runner": run_path_param, "require_json_error": False, "endpoints": [
         ("/pub/{}", False),
         ("/keys/properties/{}", True),
@@ -1397,8 +1470,8 @@ def self_check():
         "internal encrypt ignores plausible body",
     )
 
-    loaded_body = '{"status":"reloaded","routes_loaded":1,"remote_routes_loaded":0,"clients_loaded":0,"fpe_profiles_loaded":0,"tokenization_profiles_loaded":0,"mac_profiles_loaded":0}'
-    empty_body = '{"status":"reloaded","routes_loaded":0,"remote_routes_loaded":0,"clients_loaded":0,"fpe_profiles_loaded":0,"tokenization_profiles_loaded":0,"mac_profiles_loaded":0}'
+    loaded_body = '{"status":"reloaded","routes_loaded":1,"remote_routes_loaded":0,"clients_loaded":0,"fpe_profiles_loaded":0,"tokenization_profiles_loaded":0,"mac_profiles_loaded":0,"masking_profiles_loaded":0}'
+    empty_body = '{"status":"reloaded","routes_loaded":0,"remote_routes_loaded":0,"clients_loaded":0,"fpe_profiles_loaded":0,"tokenization_profiles_loaded":0,"mac_profiles_loaded":0,"masking_profiles_loaded":0}'
     expect(config_semantic(200, loaded_body), "config flags integrity bypass")
     expect(not config_semantic(200, empty_body), "config ignores empty reload")
     expect(not config_semantic(400, '{"error":"x"}'), "config ignores rejected")

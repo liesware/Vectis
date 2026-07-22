@@ -352,7 +352,8 @@ Runtime policy lives in one signed JSON file:
   "permissions": [],
   "fpe_profiles": [],
   "tokenization_profiles": [],
-  "mac_profiles": []
+  "mac_profiles": [],
+  "masking_profiles": []
 }
 ```
 
@@ -467,7 +468,13 @@ Supported actions:
 - `fpe-encrypt`;
 - `fpe-decrypt`;
 - `token-encode`;
-- `token-decode`.
+- `token-decode`;
+- `mac-create`;
+- `mac-verify`;
+- `index-create`;
+- `index-verify`;
+- `mask`;
+- `metrics`.
 
 `admin` grants access to all protected endpoints and ignores kid-scoped grants.
 `GET /permissions` exposes a redacted administrative view of the effective
@@ -589,6 +596,19 @@ compact JSON serialization.
 
 The database stores only `kid`, `hashid`, and encrypted `data`. It does not see
 the profile name, plaintext, metadata, or visible token.
+
+## Masking Profiles
+
+Vectis exposes local display masking endpoints for signed masking profiles:
+
+- `POST /mask/{kid}`;
+- `POST /mask/batch/{kid}`.
+
+Masking profiles live in signed config under `masking_profiles`. Requests select
+a profile by name; visible character counts, the mask character, plaintext
+length bounds, and bound KID come from signed config. Masking does not encrypt,
+persist, tokenize, or authenticate data. It is only a controlled display
+transformation, and the full masked value is not logged.
 
 ## Hybrid Timestamp And Signing Protocol
 
@@ -1159,7 +1179,7 @@ Vectis is still experimental. Important boundaries:
 - no custom CA bundle support yet;
 - no mTLS support yet;
 - no Vault, KMS, or HSM auto-unseal yet;
-- no masking, hash commitments, Merkle proofs, or tamper-evident audit chains
+- no hash commitments, Merkle proofs, or tamper-evident audit chains
   yet;
 - no SLH-DSA support yet;
 - production TLS policy exists, but deployment hardening still needs more work;

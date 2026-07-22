@@ -306,6 +306,23 @@ and comes only from signed config. The CLI validates field shape but does not
 check whether the KID is loaded in a running server. That check happens when
 Vectis loads the signed config.
 
+### `vectis config masking`
+
+Edits the local `masking_profiles` section in `VECTIS_CONFIG_PATH`. The lookup
+key is `name`. Names must be unique.
+
+```sh
+vectis config masking list
+vectis config masking add --name pan-display-v1 --kid <kid> --visible-first 0 --visible-last 4 --mask-char '*' --min-len 12 --max-len 19
+vectis config masking get pan-display-v1
+vectis config masking update pan-display-v1 --visible-first 6
+vectis config masking delete pan-display-v1
+```
+
+`mask_char` must be exactly one non-control character. `visible_first` plus
+`visible_last` must be less than `min_len`. Masking is display-only; it does not
+encrypt, tokenize, or persist data.
+
 Section `list` commands print only the local array from `config.json`. Runtime
 commands such as `vectis routes list` read the server's loaded state instead.
 
@@ -505,6 +522,17 @@ vectis mac verify --json '{"ref":"reg1","kid":"<kid>","profile":"pan-blind-index
 `create` requires `mac-create` permission for the KID and an `active` key.
 `verify` requires `mac-verify` permission for the body KID and allows `active` or `retired`
 keys. The response reports the resolved MAC algorithm and digest.
+
+### `vectis mask`
+
+Calls the local masking endpoint. Masking profiles are loaded from signed
+`config.json`.
+
+```sh
+vectis mask <kid> --json '{"ref":"row1","profile":"pan-display-v1","plaintext":"4111111111111111"}'
+```
+
+Requires `mask` permission for the KID and allows `active` or `retired` keys.
 
 ## Authentication
 

@@ -86,7 +86,7 @@ cryptographic data protection primitives and workflows.
 
 - protected messages between Vectis instances, verified before decryption;
 - one operator-signed config file (routes, remote routes, permissions, FPE
-  profiles, tokenization profiles, and MAC profiles); its registered
+  profiles, tokenization profiles, MAC profiles, and masking profiles); its registered
   `remote_routes` are the only source of peer public keys — no trust-on-first-use
   path;
 - local re-encryption before final app delivery: the receiving application
@@ -98,6 +98,7 @@ cryptographic data protection primitives and workflows.
 - local MAC create/verify for signed MAC profiles;
 - local blind indexes that reuse signed MAC profiles and persist deterministic
   membership digests.
+- local display masking for signed masking profiles.
 
 **Key management**
 
@@ -303,6 +304,7 @@ vectis fpe encrypt <kid> --file fpe-encrypt.json
 vectis token encode <kid> --file token-encode.json
 vectis mac create <kid> --file mac-create.json
 vectis mac verify --file mac-verify.json
+vectis mask <kid> --file mask.json
 vectis message send <sender_kid> --file send-message.json
 vectis message decrypt --file encrypted-message.json
 vectis config sign
@@ -314,10 +316,10 @@ See the full API documentation in [doc/API.md](doc/API.md).
 ## Configuration
 
 Runtime routing, remote peers, API-key permissions, FPE profiles, tokenization
-profiles, and MAC profiles live in a single **signed config file** (`config.json`,
+profiles, MAC profiles, and masking profiles live in a single **signed config file** (`config.json`,
 default path `VECTIS_CONFIG_PATH`) with `version`, `routes`, `remote_routes`,
 `permissions`, optional `fpe_profiles`, optional `tokenization_profiles`, and
-optional `mac_profiles` sections. Blind indexes reuse `mac_profiles`; there is
+optional `mac_profiles` and `masking_profiles` sections. Blind indexes reuse `mac_profiles`; there is
 no separate `index_profiles` section. Edit it, then sign it with
 `vectis config sign`. The full schema
 (every field, allowed values, and the optional peer `public_keys`) is documented
@@ -364,11 +366,13 @@ In development and tests, individual algorithm overrides can be enabled with:
 VECTIS_CRYPTO_POLICY=allow-overrides
 ```
 
-## FPE, Tokenization, MAC, And Blind Indexes
+## FPE, Tokenization, MAC, Blind Indexes, And Masking
 
-FPE, tokenization, MAC, and blind indexes are profile-driven. Profiles are
+FPE, tokenization, MAC, blind indexes, and masking are profile-driven. Profiles are
 loaded only from signed config, and requests select a profile by name. Blind
 indexes reuse MAC profiles and persist the resulting deterministic digest.
+Masking is display-only: it reveals configured leading/trailing characters and
+replaces the middle with a configured mask character.
 
 FPE currently supports:
 
@@ -393,6 +397,7 @@ The CLI can edit these profile sections locally:
 vectis config fpe add --name patient-id-decimal-v1 --kid <kid> --alphabet 0123456789 --min-len 6 --max-len 32 --tweak-aad 'tenant=acme;field=patient_id;version=1'
 vectis config token add --name patient-id-token-v1 --kid <kid> --token-prefix tok_patient --token-len 32 --max-plaintext-len 1024
 vectis config mac add --name pan-blind-index-v1 --kid <kid> --context 'tenant=mx;field=pan;purpose=blind-index;version=1'
+vectis config masking add --name pan-display-v1 --kid <kid> --visible-first 0 --visible-last 4 --mask-char '*' --min-len 12 --max-len 19
 vectis config sign
 vectis config reload
 ```
@@ -436,8 +441,8 @@ Vectis is not a replacement for:
 - access control;
 - traditional DLP products.
 
-Vectis does not currently provide masking, Merkle proofs, tamper-evident audit
-chains, SLH-DSA, Vault/KMS/HSM auto-unseal, or mTLS.
+Vectis does not currently provide Merkle proofs, tamper-evident audit chains,
+SLH-DSA, Vault/KMS/HSM auto-unseal, or mTLS.
 
 Vectis is intended to complement existing security controls by exploring
 cryptographic protection for sensitive data workflows. It should work with
