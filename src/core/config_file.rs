@@ -697,4 +697,41 @@ mod tests {
             .is_err()
         );
     }
+
+    #[test]
+    fn validate_config_content_rejects_tokenization_version_field() {
+        let config = test_config(PathBuf::from("config.json"));
+        let content = json!({
+            "version": "v1",
+            "tokenization_profiles": [
+                {
+                    "name": "patient-id-token-v1",
+                    "tokenization_version": "token-random-v1",
+                    "kid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "token_prefix": "tok_patient",
+                    "token_len": 32,
+                    "max_plaintext_len": 1024
+                }
+            ]
+        })
+        .to_string();
+
+        let err = match validate_config_content(
+            &content,
+            &config,
+            |_| true,
+            |_| Ok(dummy_fpe_key()),
+            |_| Ok(dummy_tokenization_keys()),
+            dummy_hash_algorithm,
+            dummy_mac_key,
+        ) {
+            Ok(_) => panic!("tokenization_version must be rejected as an unknown field"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("unknown field `tokenization_version`")
+        );
+    }
 }

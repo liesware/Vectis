@@ -278,12 +278,12 @@ parameters come from signed config:
 - `token_prefix`, a short visible prefix capped at 16 characters;
 - `token_len`;
 - `max_plaintext_len`;
-- `tokenization_version`;
 - bound local `kid`.
 
 Config loading derives and stores tokenization hash/data keys from the loaded
-key's symmetric key. The derivation binds profile name, KID, and
-`tokenization_version`; `tokens.data` AAD also binds `tokenization_version`.
+key's symmetric key. The derivation binds profile name, KID, and the fixed
+internal tokenization scheme `token-random-v1`; `tokens.data` AAD also binds
+that scheme.
 
 ### MAC Flow
 

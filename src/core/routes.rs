@@ -30,6 +30,7 @@ pub struct RoutesState {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct RouteInput {
     kid: String,
     name: String,

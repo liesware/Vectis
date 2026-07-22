@@ -70,7 +70,6 @@ enum FieldKind {
     FpeVersion,
     FpeAlphabet,
     FpeTweakAad,
-    TokenizationVersion,
     TokenProfileName,
     TokenPrefix,
     MacProfileName,
@@ -350,17 +349,6 @@ const TOKENIZATION_PROFILES_SECTION: SectionSpec = SectionSpec {
             required_on_add: true,
             mutable_on_update: true,
             default_on_add: None,
-        },
-        FieldSpec {
-            flag: "--tokenization-version",
-            json_field: "tokenization_version",
-            kind: FieldKind::TokenizationVersion,
-            cardinality: FieldCardinality::One,
-            required_on_add: false,
-            mutable_on_update: true,
-            default_on_add: Some(DefaultValue::String(
-                tokenization::TOKENIZATION_VERSION_RANDOM_V1,
-            )),
         },
         FieldSpec {
             flag: "--token-prefix",
@@ -882,10 +870,6 @@ fn parse_field_value(field: &FieldSpec, raw: &str) -> Result<Value, DynError> {
                 raw,
                 crate::core::config::FPE_TWEAK_AAD_MAX_CHARS,
             )?;
-            Ok(Value::String(raw.to_string()))
-        }
-        FieldKind::TokenizationVersion => {
-            tokenization::validate_tokenization_version(raw)?;
             Ok(Value::String(raw.to_string()))
         }
         FieldKind::TokenProfileName => {

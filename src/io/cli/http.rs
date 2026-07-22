@@ -1061,7 +1061,6 @@ fn flag_consumes_value(flag: &str) -> bool {
             | "--token-prefix"
             | "--token-len"
             | "--max-plaintext-len"
-            | "--tokenization-version"
     )
 }
 

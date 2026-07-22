@@ -292,7 +292,6 @@ def valid_fpe_profile(key_id):
 def valid_tokenization_profile(key_id):
     return {
         "name": "patient-id-token-v1",
-        "tokenization_version": "token-random-v1",
         "kid": key_id,
         "token_prefix": "tok_patient",
         "token_len": 32,
@@ -1143,11 +1142,11 @@ def main():
         write_tokenization_profiles([profile, dict(profile, kid=key_id)], sign=False)
         require_config_sign_fails("token profile duplicate name")
 
-    def token_profile_invalid_version():
+    def token_profile_unknown_version_field():
         profile = valid_tokenization_profile(key_id)
-        profile["tokenization_version"] = "token-random-v2"
+        profile["tokenization_version"] = "token-random-v1"
         write_tokenization_profiles([profile], sign=False)
-        require_config_sign_fails("token profile invalid version")
+        require_config_sign_fails("token profile unknown tokenization_version field")
 
     def token_profile_invalid_lengths():
         profile = valid_tokenization_profile(key_id)
@@ -1462,7 +1461,7 @@ def main():
         ("fpe profile max len too large", fpe_profile_max_len_too_large),
         ("fpe profile unloaded kid", fpe_profile_unloaded_kid),
         ("token profile duplicate name", token_profile_duplicate_name),
-        ("token profile invalid version", token_profile_invalid_version),
+        ("token profile unknown version field", token_profile_unknown_version_field),
         ("token profile invalid lengths", token_profile_invalid_lengths),
         ("token profile unloaded kid", token_profile_unloaded_kid),
         ("mac profile duplicate name", mac_profile_duplicate_name),

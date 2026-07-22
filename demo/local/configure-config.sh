@@ -80,7 +80,6 @@ cat > "${SITE_DIR}/config.json" <<JSON
   "tokenization_profiles": [
     {
       "name": "credit-card-token-v1",
-      "tokenization_version": "token-random-v1",
       "kid": "${LOCAL_KID}",
       "token_prefix": "tok_card",
       "token_len": 32,
@@ -88,7 +87,6 @@ cat > "${SITE_DIR}/config.json" <<JSON
     },
     {
       "name": "ssn-token-v1",
-      "tokenization_version": "token-random-v1",
       "kid": "${LOCAL_KID}",
       "token_prefix": "tok_ssn",
       "token_len": 32,
@@ -96,7 +94,6 @@ cat > "${SITE_DIR}/config.json" <<JSON
     },
     {
       "name": "bank-account-token-v1",
-      "tokenization_version": "token-random-v1",
       "kid": "${LOCAL_KID}",
       "token_prefix": "tok_bank",
       "token_len": 32,

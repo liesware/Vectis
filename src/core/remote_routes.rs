@@ -57,6 +57,7 @@ pub struct RemoteRoutesState {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct RemoteRouteInput {
     remote_kid: String,
     name: String,

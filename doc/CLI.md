@@ -281,13 +281,12 @@ vectis config token update patient-id-token-v1 --max-plaintext-len 512
 vectis config token delete patient-id-token-v1
 ```
 
-`tokenization_version` defaults to `token-random-v1`; that is the only accepted
-version in this release. `token_len` is the number of random bytes before
-base64url encoding and must be at least `32`. `token_prefix` is a visible
-prefix, is limited to 16 characters, and cannot contain whitespace, control
-characters, `;`, or `=`. The CLI validates field shape but does not check
-whether the KID is loaded in a running server. That check happens when Vectis
-loads the signed config.
+Vectis uses the fixed internal tokenization scheme `token-random-v1`.
+`token_len` is the number of random bytes before base64url encoding and must be
+at least `32`. `token_prefix` is a visible prefix, is limited to 16 characters,
+and cannot contain whitespace, control characters, `;`, or `=`. The CLI
+validates field shape but does not check whether the KID is loaded in a running
+server. That check happens when Vectis loads the signed config.
 
 ### `vectis config mac`
 

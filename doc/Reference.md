@@ -557,13 +557,13 @@ need stable-looking tokens while storing the original value encrypted:
 
 Tokenization profiles live in signed config under `tokenization_profiles`.
 Requests select a profile by name; token prefix, token length, plaintext length
-limit, tokenization version, and bound KID come from signed config. Encode
+limit, and bound KID come from signed config. Vectis uses the fixed internal
+tokenization scheme `token-random-v1`. Encode
 generates a random visible token, stores encrypted payload data in storage, and
 returns only the token. Decode hashes the presented token, looks up the encrypted
 payload, decrypts it, and returns the original plaintext plus optional metadata.
-Tokenization hash/data keys are derived per profile, KID, and
-`tokenization_version`; the encrypted token payload AAD also binds
-`tokenization_version`.
+Tokenization hash/data keys are derived per profile, KID, and internal scheme;
+the encrypted token payload AAD also binds that scheme.
 
 ## MAC Profiles
 

@@ -874,7 +874,6 @@ def configure_tokenization_profile(client, kid):
     config["tokenization_profiles"] = [
         {
             "name": TOKENIZATION_PROFILE,
-            "tokenization_version": "token-random-v1",
             "kid": kid,
             "token_prefix": "tok_fuzz",
             "token_len": 32,

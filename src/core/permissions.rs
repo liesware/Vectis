@@ -72,6 +72,7 @@ struct KidPermissionOutput {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct PermissionClientInput {
     client: String,
     apikey_hash: String,
@@ -80,6 +81,7 @@ pub(crate) struct PermissionClientInput {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct KidPermissionInput {
     kid: String,
     actions: Vec<String>,

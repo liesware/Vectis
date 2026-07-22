@@ -16,6 +16,7 @@ pub const MAC_ALGORITHM_KMAC_384: &str = "KMAC-384";
 pub const MAC_ALGORITHM_KMAC_512: &str = "KMAC-512";
 
 #[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct MacProfileInput {
     name: String,
     kid: String,

@@ -18,6 +18,7 @@ type PreparedFpeAlphabet = Arc<Vec<char>>;
 type PreparedFpeAlphabetIndex = Arc<HashMap<char, u16>>;
 
 #[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct FpeProfileInput {
     name: String,
     fpe_version: String,

@@ -20,9 +20,9 @@ pub const TOKEN_PREFIX_MAX_CHARS: usize = 16;
 pub const TOKEN_DATA_TYPE: &str = "token-data";
 
 #[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct TokenizationProfileInput {
     name: String,
-    tokenization_version: String,
     kid: String,
     token_prefix: String,
     token_len: usize,
@@ -32,7 +32,6 @@ pub(crate) struct TokenizationProfileInput {
 #[derive(Clone)]
 pub struct TokenizationProfile {
     name: String,
-    tokenization_version: String,
     kid: String,
     token_prefix: String,
     token_len: usize,
@@ -67,7 +66,6 @@ impl fmt::Debug for TokenizationProfile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TokenizationProfile")
             .field("name", &self.name)
-            .field("tokenization_version", &self.tokenization_version)
             .field("kid", &self.kid)
             .field("token_prefix", &self.token_prefix)
             .field("token_len", &self.token_len)
@@ -90,10 +88,6 @@ impl fmt::Debug for TokenizationProfilesState {
 impl TokenizationProfile {
     pub fn name(&self) -> &str {
         &self.name
-    }
-
-    pub fn tokenization_version(&self) -> &str {
-        &self.tokenization_version
     }
 
     pub fn kid(&self) -> &str {
@@ -161,7 +155,6 @@ impl Zeroize for TokenizationProfilesState {
 impl Zeroize for TokenizationProfile {
     fn zeroize(&mut self) {
         self.name.zeroize();
-        self.tokenization_version.zeroize();
         self.kid.zeroize();
         self.token_prefix.zeroize();
         self.token_len = 0;
@@ -185,7 +178,6 @@ pub(crate) fn validate_tokenization_profiles(
     for profile in profile_inputs {
         validate_tokenization_profile_fields(
             &profile.name,
-            &profile.tokenization_version,
             &profile.token_prefix,
             profile.token_len,
             profile.max_plaintext_len,
@@ -209,7 +201,6 @@ pub(crate) fn validate_tokenization_profiles(
         let derived = derive_keys(TokenizationKeyDerivationRequest {
             profile_name: &profile.name,
             kid: &profile.kid,
-            tokenization_version: &profile.tokenization_version,
         })?;
         let cipher = crypto::symmetric_cipher(&derived.cipher_algorithm).ok_or_else(|| {
             crate::error::invalid_input(format!(
@@ -227,7 +218,6 @@ pub(crate) fn validate_tokenization_profiles(
 
         profiles.push(TokenizationProfile {
             name: profile.name,
-            tokenization_version: profile.tokenization_version,
             kid: profile.kid,
             token_prefix: profile.token_prefix,
             token_len: profile.token_len,
@@ -244,26 +234,15 @@ pub(crate) fn validate_tokenization_profiles(
 pub struct TokenizationKeyDerivationRequest<'a> {
     pub profile_name: &'a str,
     pub kid: &'a str,
-    pub tokenization_version: &'a str,
-}
-
-pub fn validate_tokenization_version(value: &str) -> Result<(), DynError> {
-    validation::validate_allowed_value(
-        "tokenization_profiles.tokenization_version",
-        value,
-        &[TOKENIZATION_VERSION_RANDOM_V1],
-    )
 }
 
 pub fn validate_tokenization_profile_fields(
     name: &str,
-    tokenization_version: &str,
     token_prefix: &str,
     token_len: usize,
     max_plaintext_len: usize,
 ) -> Result<(), DynError> {
     validation::validate_aad_config_name("tokenization_profiles.name", name)?;
-    validate_tokenization_version(tokenization_version)?;
     validate_token_prefix(token_prefix)?;
     validate_token_lengths(token_len, max_plaintext_len)?;
 
@@ -317,18 +296,10 @@ pub(crate) fn derive_tokenization_keys(
         ))
     })?;
     let ops_symmetric_key = Zeroizing::new(hex::decode(ops_symmetric_key_hex)?);
-    let hash_info = tokenization_key_info(
-        TOKEN_HASH_KEY_PURPOSE,
-        request.profile_name,
-        request.kid,
-        request.tokenization_version,
-    )?;
-    let data_info = tokenization_key_info(
-        TOKEN_DATA_KEY_PURPOSE,
-        request.profile_name,
-        request.kid,
-        request.tokenization_version,
-    )?;
+    let hash_info =
+        tokenization_key_info(TOKEN_HASH_KEY_PURPOSE, request.profile_name, request.kid)?;
+    let data_info =
+        tokenization_key_info(TOKEN_DATA_KEY_PURPOSE, request.profile_name, request.kid)?;
     let hash_key = crypto::create_hkdf(
         &ops_symmetric_key,
         TOKENIZATION_HKDF_SALT,
@@ -349,17 +320,12 @@ pub(crate) fn derive_tokenization_keys(
     })
 }
 
-fn tokenization_key_info(
-    purpose: &str,
-    profile_name: &str,
-    kid: &str,
-    tokenization_version: &str,
-) -> Result<String, DynError> {
+fn tokenization_key_info(purpose: &str, profile_name: &str, kid: &str) -> Result<String, DynError> {
     validation::build_validated_aad(&[
         ("purpose", purpose),
         ("profile", profile_name),
         ("kid", kid),
-        ("tokenization_version", tokenization_version),
+        ("tokenization_version", TOKENIZATION_VERSION_RANDOM_V1),
     ])
 }
 
@@ -489,7 +455,7 @@ fn token_data_aad(profile: &TokenizationProfile, hashid: &str) -> Result<String,
         ("type", TOKEN_DATA_TYPE),
         ("kid", profile.kid()),
         ("profile", profile.name()),
-        ("tokenization_version", profile.tokenization_version()),
+        ("tokenization_version", TOKENIZATION_VERSION_RANDOM_V1),
         ("hashid", hashid),
         ("cipher", profile.cipher_algorithm()),
     ])
@@ -526,7 +492,6 @@ mod tests {
     fn input(name: &str) -> TokenizationProfileInput {
         TokenizationProfileInput {
             name: name.to_string(),
-            tokenization_version: TOKENIZATION_VERSION_RANDOM_V1.to_string(),
             kid: kid().to_string(),
             token_prefix: "tok_patient".to_string(),
             token_len: TOKEN_LEN_MIN_BYTES,
@@ -578,7 +543,6 @@ mod tests {
             TokenizationKeyDerivationRequest {
                 profile_name: "patient-id-token-v1",
                 kid: kid(),
-                tokenization_version: TOKENIZATION_VERSION_RANDOM_V1,
             },
         )
         .expect("AES-128 tokenization keys must derive");
@@ -588,7 +552,6 @@ mod tests {
             TokenizationKeyDerivationRequest {
                 profile_name: "patient-id-token-v1",
                 kid: kid(),
-                tokenization_version: TOKENIZATION_VERSION_RANDOM_V1,
             },
         )
         .expect("AES-192 tokenization keys must derive");
@@ -598,7 +561,6 @@ mod tests {
             TokenizationKeyDerivationRequest {
                 profile_name: "patient-id-token-v1",
                 kid: kid(),
-                tokenization_version: TOKENIZATION_VERSION_RANDOM_V1,
             },
         )
         .expect("AES-256 tokenization keys must derive");
@@ -610,7 +572,7 @@ mod tests {
     }
 
     #[test]
-    fn derived_keys_are_bound_to_profile_and_version() {
+    fn derived_keys_are_bound_to_profile_and_kid() {
         let ops_key = "11".repeat(32);
         let first = derive_tokenization_keys(
             &ops_key,
@@ -618,7 +580,6 @@ mod tests {
             TokenizationKeyDerivationRequest {
                 profile_name: "patient-id-token-v1",
                 kid: kid(),
-                tokenization_version: TOKENIZATION_VERSION_RANDOM_V1,
             },
         )
         .expect("first profile keys must derive");
@@ -628,7 +589,6 @@ mod tests {
             TokenizationKeyDerivationRequest {
                 profile_name: "patient-id-token-v1",
                 kid: kid(),
-                tokenization_version: TOKENIZATION_VERSION_RANDOM_V1,
             },
         )
         .expect("same profile keys must derive");
@@ -638,27 +598,25 @@ mod tests {
             TokenizationKeyDerivationRequest {
                 profile_name: "account-id-token-v1",
                 kid: kid(),
-                tokenization_version: TOKENIZATION_VERSION_RANDOM_V1,
             },
         )
         .expect("other profile keys must derive");
-        let other_version = derive_tokenization_keys(
+        let other_kid = derive_tokenization_keys(
             &ops_key,
             "AES-256/GCM",
             TokenizationKeyDerivationRequest {
                 profile_name: "patient-id-token-v1",
-                kid: kid(),
-                tokenization_version: "token-random-v2",
+                kid: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             },
         )
-        .expect("other version keys must derive");
+        .expect("other kid keys must derive");
 
         assert_eq!(&*first.hash_key, &*same.hash_key);
         assert_eq!(&*first.data_key, &*same.data_key);
         assert_ne!(&*first.hash_key, &*other_profile.hash_key);
         assert_ne!(&*first.data_key, &*other_profile.data_key);
-        assert_ne!(&*first.hash_key, &*other_version.hash_key);
-        assert_ne!(&*first.data_key, &*other_version.data_key);
+        assert_ne!(&*first.hash_key, &*other_kid.hash_key);
+        assert_ne!(&*first.data_key, &*other_kid.data_key);
     }
 
     #[test]
@@ -670,7 +628,6 @@ mod tests {
             TokenizationKeyDerivationRequest {
                 profile_name: "patient-id-token-v1",
                 kid: kid(),
-                tokenization_version: TOKENIZATION_VERSION_RANDOM_V1,
             },
         )
         .expect("valid tokenization keys must derive");
@@ -714,32 +671,18 @@ mod tests {
             TokenizationKeyDerivationRequest {
                 profile_name: "bad;profile",
                 kid: kid(),
-                tokenization_version: TOKENIZATION_VERSION_RANDOM_V1,
             },
             TokenizationKeyDerivationRequest {
                 profile_name: "bad=profile",
                 kid: kid(),
-                tokenization_version: TOKENIZATION_VERSION_RANDOM_V1,
             },
             TokenizationKeyDerivationRequest {
                 profile_name: "patient-id-token-v1",
                 kid: "bad;kid",
-                tokenization_version: TOKENIZATION_VERSION_RANDOM_V1,
             },
             TokenizationKeyDerivationRequest {
                 profile_name: "patient-id-token-v1",
                 kid: "bad=kid",
-                tokenization_version: TOKENIZATION_VERSION_RANDOM_V1,
-            },
-            TokenizationKeyDerivationRequest {
-                profile_name: "patient-id-token-v1",
-                kid: kid(),
-                tokenization_version: "bad;version",
-            },
-            TokenizationKeyDerivationRequest {
-                profile_name: "patient-id-token-v1",
-                kid: kid(),
-                tokenization_version: "bad=version",
             },
         ] {
             let err = match derive_tokenization_keys(&"11".repeat(32), "AES-256/GCM", request) {
@@ -752,7 +695,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_tokenization_profiles() {
-        let mut duplicate = input("patient-id-token-v1");
+        let duplicate = input("patient-id-token-v1");
         let err = validate_tokenization_profiles(
             vec![input("patient-id-token-v1"), duplicate.clone()],
             |item| item == kid(),
@@ -792,16 +735,6 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "tokenization_profiles.name exceeds maximum allowed length: 128"
-        );
-
-        duplicate.tokenization_version = String::from("token-v0");
-        assert!(
-            validate_tokenization_profiles(
-                vec![duplicate],
-                |item| item == kid(),
-                |_| { Ok(derived()) }
-            )
-            .is_err()
         );
 
         let mut bad_prefix = input("bad-prefix");
@@ -897,7 +830,7 @@ mod tests {
             ("type", TOKEN_DATA_TYPE),
             ("kid", profile.kid()),
             ("profile", profile.name()),
-            ("tokenization_version", profile.tokenization_version()),
+            ("tokenization_version", TOKENIZATION_VERSION_RANDOM_V1),
             ("hashid", &hashid),
             ("cipher", profile.cipher_algorithm()),
         ]);
@@ -918,12 +851,6 @@ mod tests {
         bad_profile.name = String::from("bad;profile");
         let err = token_data_aad(&bad_profile, &"b".repeat(64))
             .expect_err("AAD delimiters in token data profile must fail");
-        assert!(err.to_string().contains("must not contain ';' or '='"));
-
-        let mut bad_profile = profile.clone();
-        bad_profile.tokenization_version = String::from("bad=version");
-        let err = token_data_aad(&bad_profile, &"b".repeat(64))
-            .expect_err("AAD delimiters in tokenization version must fail");
         assert!(err.to_string().contains("must not contain ';' or '='"));
     }
 
@@ -975,24 +902,6 @@ mod tests {
                 .get("other-token-v1")
                 .unwrap()
                 .clone();
-        let token = generate_token(&profile).unwrap();
-        let hashid = hash_token(&profile, &token).unwrap();
-        let payload = TokenDataPayload {
-            profile: profile.name().to_string(),
-            plaintext: String::from("123456"),
-            metadata: None,
-            created_at: String::from("1782058090"),
-        };
-        let data = encrypt_token_data(&profile, &hashid, &payload).unwrap();
-
-        assert!(decrypt_token_data(&other_profile, &hashid, &data).is_err());
-    }
-
-    #[test]
-    fn token_data_aad_rejects_wrong_tokenization_version() {
-        let profile = profile();
-        let mut other_profile = profile.clone();
-        other_profile.tokenization_version = String::from("token-random-v2");
         let token = generate_token(&profile).unwrap();
         let hashid = hash_token(&profile, &token).unwrap();
         let payload = TokenDataPayload {

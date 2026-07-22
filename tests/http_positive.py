@@ -1322,7 +1322,6 @@ def main():
         [
             {
                 "name": "patient-id-token-v1",
-                "tokenization_version": "token-random-v1",
                 "kid": created[0][0],
                 "token_prefix": "tok_patient",
                 "token_len": 32,

@@ -1165,11 +1165,11 @@ Response:
 
 Tokenization is a local reversible random-token operation. It returns a visible random token and stores the original plaintext plus optional metadata encrypted in storage. The database only sees `kid`, `hashid`, and encrypted `data`; it never sees plaintext, metadata, profile name as a column, or the visible token.
 
-Tokenization profiles live in `config.json` under `tokenization_profiles`. Requests cannot provide `token_prefix`, `token_len`, `max_plaintext_len`, or `tokenization_version`; those values come only from signed config.
+Tokenization profiles live in `config.json` under `tokenization_profiles`. Requests cannot provide `token_prefix`, `token_len`, or `max_plaintext_len`; those values come only from signed config. Vectis uses the fixed internal tokenization scheme `token-random-v1`.
 
 All tokenization requests include a client-defined `ref`. It is required, non-empty, at most 128 characters, and echoed in the response. Batch requests require every item `ref` to be unique within the request.
 
-`hash_key` and `data_key` are derived from the operational key's symmetric key with `INTERNAL_KEYS_HKDF` and are prepared when config is loaded. The derivation binds the profile name, KID, and `tokenization_version`. `tokens.data` AAD also binds `tokenization_version`. Tokens are random and are not deterministic for the same plaintext.
+`hash_key` and `data_key` are derived from the operational key's symmetric key with `INTERNAL_KEYS_HKDF` and are prepared when config is loaded. The derivation binds the profile name, KID, and fixed internal tokenization scheme `token-random-v1`. `tokens.data` AAD also binds that internal scheme. Tokens are random and are not deterministic for the same plaintext.
 
 Visible tokens have the form `<token_prefix>_<base64url-no-pad random bytes>`. `token_len` is the number of random bytes before base64url encoding, and decode validates both the configured prefix and decoded byte length before looking up the token.
 
@@ -1637,7 +1637,6 @@ Expected file shape:
   "tokenization_profiles": [
     {
       "name": "patient-id-token-v1",
-      "tokenization_version": "token-random-v1",
       "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
       "token_prefix": "tok_patient",
       "token_len": 32,
@@ -1714,7 +1713,6 @@ Top level:
 | Field | Required | Value | Meaning |
 | --- | --- | --- | --- |
 | `name` | yes | unique non-empty text | Profile selected by tokenization requests. |
-| `tokenization_version` | yes | `token-random-v1` | Tokenization profile version. |
 | `kid` | yes | loaded local KID | Operational key whose symmetric key derives tokenization keys. |
 | `token_prefix` | yes | non-empty visible token prefix, max 16 chars, no whitespace/control chars, no `;` or `=` | Prefix used in returned tokens. |
 | `token_len` | yes | integer >= 32 | Random bytes generated before base64url-no-pad encoding; decode requires this exact decoded byte length. |

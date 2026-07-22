@@ -343,8 +343,8 @@ def token_profile_cases(env):
     profile = read_config(env)["tokenization_profiles"][0]
     require(profile["name"] == "patient-id-token-v1", "token profile name must be stored")
     require(
-        profile["tokenization_version"] == "token-random-v1",
-        "token profile version must default",
+        "tokenization_version" not in profile,
+        "token profile must not store tokenization_version",
     )
 
     response = run_cli_json(["config", "token", "get", "patient-id-token-v1"], env)
