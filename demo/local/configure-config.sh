@@ -41,6 +41,7 @@ cat > "${SITE_DIR}/config.json" <<JSON
             "mac-verify",
             "index-create",
             "index-verify",
+            "mask",
             "message",
             "sign"
           ]
@@ -116,6 +117,35 @@ cat > "${SITE_DIR}/config.json" <<JSON
       "kid": "${LOCAL_KID}",
       "context": "tenant=demo;field=bank_account;purpose=blind_index;version=1"
     }
+  ],
+  "masking_profiles": [
+    {
+      "name": "credit-card-pan-display-v1",
+      "kid": "${LOCAL_KID}",
+      "visible_first": 0,
+      "visible_last": 4,
+      "mask_char": "*",
+      "min_len": 16,
+      "max_len": 16
+    },
+    {
+      "name": "ssn-display-v1",
+      "kid": "${LOCAL_KID}",
+      "visible_first": 0,
+      "visible_last": 4,
+      "mask_char": "*",
+      "min_len": 9,
+      "max_len": 9
+    },
+    {
+      "name": "bank-account-display-v1",
+      "kid": "${LOCAL_KID}",
+      "visible_first": 0,
+      "visible_last": 4,
+      "mask_char": "*",
+      "min_len": 6,
+      "max_len": 32
+    }
   ]
 }
 JSON
@@ -127,4 +157,5 @@ echo "  kid: ${LOCAL_KID}"
 echo "  FPE profiles: 3"
 echo "  tokenization profiles: 3"
 echo "  MAC profiles: 3"
+echo "  masking profiles: 3"
 echo "Next: bash demo/local/start-vectis.sh"

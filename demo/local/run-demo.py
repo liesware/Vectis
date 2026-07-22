@@ -19,6 +19,12 @@ FPE_SAMPLES = [
     ("bank-account-v1", "987654321012"),
 ]
 
+MASKING_SAMPLES = [
+    ("credit-card-pan-display-v1", "4111111111111111", "************1111"),
+    ("ssn-display-v1", "123456789", "*****6789"),
+    ("bank-account-display-v1", "987654321012", "********1012"),
+]
+
 TOKEN_SAMPLES = [
     ("credit-card-token-v1", "4111111111111111"),
     ("ssn-token-v1", "123456789"),
@@ -162,6 +168,31 @@ def run_fpe(base_url, kid, api_key):
         )
         if status != "OK":
             raise RuntimeError(f"FPE round-trip failed for {profile}")
+
+
+def run_masking(base_url, kid, api_key):
+    print("== Masking Profiles ==", flush=True)
+    for profile, plaintext, expected in MASKING_SAMPLES:
+        ref = f"{profile}-sample"
+        masked = post_json(
+            base_url,
+            f"/mask/{kid}",
+            {"ref": ref, "profile": profile, "plaintext": plaintext},
+            api_key,
+        )
+        masked_value = masked["response"]["masked"]
+        status = "OK" if masked_value == expected else "FAILED"
+        print_section(profile)
+        print_http_step("mask", masked)
+        print_summary(
+            [
+                ("input", plaintext),
+                ("masked", masked_value),
+                ("status", status),
+            ],
+        )
+        if status != "OK":
+            raise RuntimeError(f"Masking failed for {profile}")
 
 
 def run_tokenization(base_url, kid, api_key):
@@ -370,6 +401,7 @@ def main():
     wait_for_start()
 
     run_fpe(base_url, kid, api_key)
+    run_masking(base_url, kid, api_key)
     run_tokenization(base_url, kid, api_key)
     run_mac(base_url, kid, api_key)
     run_indexes(base_url, kid, api_key)
