@@ -7,6 +7,7 @@ operations over HTTP:
 - display masking;
 - reversible tokenization;
 - MAC create/verify;
+- cryptographic commitment create/verify;
 - blind index create/verify;
 - internal message encrypt/decrypt;
 - sign and verification.
@@ -27,10 +28,12 @@ FPE profiles preserve alphabet and length. Masking profiles reveal configured
 leading/trailing characters for display only; they do not encrypt, tokenize, or
 persist data. Tokenization profiles return visible random tokens and store
 encrypted plaintext in SQLite. MAC profiles produce deterministic keyed digests
-scoped by signed profile context. Blind indexes reuse those MAC profiles and
-persist deterministic indexes in SQLite. The internal message and sign examples
-read `personaldata.json` and use a compact JSON representation of that file as
-the message body.
+scoped by signed profile context. Commitment profiles produce stateless keyed
+commitments with random openings, so repeated commitments for the same plaintext
+can differ. Blind indexes reuse those MAC profiles and persist deterministic
+indexes in SQLite. The internal message and sign examples read
+`personaldata.json` and use a compact JSON representation of that file as the
+message body.
 
 This demo prints synthetic values in full so the transformation and round-trip
 are easy to inspect. Do not use real sensitive data.
@@ -47,9 +50,9 @@ bash demo/local/configure-config.sh
 
 The scripts create local state under `demo/local/site`, including SQLite
 storage, `init.json`, `.unseal_key`, an app API key, and signed FPE, masking,
-tokenization, and MAC config profiles. Blind indexes reuse the MAC profiles and
-are enabled by the same local config. The operational key is created with the
-`hybrid-standard-v1` crypto profile.
+tokenization, MAC, and commitment config profiles. Blind indexes reuse the MAC
+profiles and are enabled by the same local config. The operational key is
+created with the `hybrid-standard-v1` crypto profile.
 
 ## Run The Demo
 
@@ -228,6 +231,71 @@ response:
 input: 4111111111111111
 algorithm: HMAC(BLAKE2b(256))
 digest: hex...
+verify: true
+status: OK
+```
+
+Cryptographic commitments are stateless and return both a commitment and an
+opening. Verification uses the plaintext, opening, commitment, profile, and KID:
+
+```text
+[credit-card-pan-commitment-v1]
+
+create
+url: http://127.0.0.1:3010/commit/<kid>
+request:
+{
+  "body": {
+    "plaintext": "4111111111111111",
+    "profile": "credit-card-pan-commitment-v1",
+    "ref": "credit-card-pan-commitment-v1-sample"
+  },
+  "headers": {
+    "Content-Type": "application/json",
+    "X-API-Key": "..."
+  },
+  "method": "POST"
+}
+response:
+{
+  "algorithm": "HMAC(BLAKE2b(256))",
+  "commitment": "hex...",
+  "kid": "<kid>",
+  "opening": "base64url...",
+  "profile": "credit-card-pan-commitment-v1",
+  "ref": "credit-card-pan-commitment-v1-sample"
+}
+
+verify
+url: http://127.0.0.1:3010/commit/verify
+request:
+{
+  "body": {
+    "commitment": "hex...",
+    "kid": "<kid>",
+    "opening": "base64url...",
+    "plaintext": "4111111111111111",
+    "profile": "credit-card-pan-commitment-v1",
+    "ref": "credit-card-pan-commitment-v1-sample"
+  },
+  "headers": {
+    "Content-Type": "application/json",
+    "X-API-Key": "..."
+  },
+  "method": "POST"
+}
+response:
+{
+  "kid": "<kid>",
+  "profile": "credit-card-pan-commitment-v1",
+  "ref": "credit-card-pan-commitment-v1-sample",
+  "valid": true
+}
+
+input: 4111111111111111
+algorithm: HMAC(BLAKE2b(256))
+commitment: hex...
+opening: base64url...
 verify: true
 status: OK
 ```

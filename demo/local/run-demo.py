@@ -37,6 +37,12 @@ MAC_SAMPLES = [
     ("bank-account-mac-v1", "987654321012"),
 ]
 
+COMMITMENT_SAMPLES = [
+    ("credit-card-pan-commitment-v1", "4111111111111111"),
+    ("ssn-commitment-v1", "123456789"),
+    ("bank-account-commitment-v1", "987654321012"),
+]
+
 INDEX_SAMPLES = MAC_SAMPLES
 
 
@@ -276,6 +282,50 @@ def run_mac(base_url, kid, api_key):
             raise RuntimeError(f"MAC verification failed for {profile}")
 
 
+def run_commitments(base_url, kid, api_key):
+    print("== Cryptographic Commitments ==", flush=True)
+    for profile, plaintext in COMMITMENT_SAMPLES:
+        ref = f"{profile}-sample"
+        created = post_json(
+            base_url,
+            f"/commit/{kid}",
+            {"ref": ref, "profile": profile, "plaintext": plaintext},
+            api_key,
+        )
+        commitment = created["response"]["commitment"]
+        opening = created["response"]["opening"]
+        verified = post_json(
+            base_url,
+            "/commit/verify",
+            {
+                "ref": ref,
+                "kid": kid,
+                "profile": profile,
+                "plaintext": plaintext,
+                "opening": opening,
+                "commitment": commitment,
+            },
+            api_key,
+        )
+        valid = verified["response"].get("valid")
+        status = "OK" if valid is True else "FAILED"
+        print_section(profile)
+        print_http_step("create", created)
+        print_http_step("verify", verified)
+        print_summary(
+            [
+                ("input", plaintext),
+                ("algorithm", created["response"].get("algorithm")),
+                ("commitment", commitment),
+                ("opening", opening),
+                ("verify", str(valid).lower()),
+                ("status", status),
+            ],
+        )
+        if status != "OK":
+            raise RuntimeError(f"Commitment verification failed for {profile}")
+
+
 def run_indexes(base_url, kid, api_key):
     print("== Blind Index Profiles ==", flush=True)
     for profile, plaintext in INDEX_SAMPLES:
@@ -404,6 +454,7 @@ def main():
     run_masking(base_url, kid, api_key)
     run_tokenization(base_url, kid, api_key)
     run_mac(base_url, kid, api_key)
+    run_commitments(base_url, kid, api_key)
     run_indexes(base_url, kid, api_key)
     print_yaml_block("personaldata.json", personaldata)
     run_internal_message(base_url, kid, api_key, plaintext)

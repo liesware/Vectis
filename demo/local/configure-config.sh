@@ -39,6 +39,8 @@ cat > "${SITE_DIR}/config.json" <<JSON
             "token-decode",
             "mac-create",
             "mac-verify",
+            "commit-create",
+            "commit-verify",
             "index-create",
             "index-verify",
             "mask",
@@ -118,6 +120,29 @@ cat > "${SITE_DIR}/config.json" <<JSON
       "context": "tenant=demo;field=bank_account;purpose=blind_index;version=1"
     }
   ],
+  "commitment_profiles": [
+    {
+      "name": "credit-card-pan-commitment-v1",
+      "kid": "${LOCAL_KID}",
+      "context": "tenant=demo;field=credit_card_pan;purpose=commitment;version=1",
+      "max_plaintext_len": 128,
+      "opening_len": 32
+    },
+    {
+      "name": "ssn-commitment-v1",
+      "kid": "${LOCAL_KID}",
+      "context": "tenant=demo;field=ssn;purpose=commitment;version=1",
+      "max_plaintext_len": 128,
+      "opening_len": 32
+    },
+    {
+      "name": "bank-account-commitment-v1",
+      "kid": "${LOCAL_KID}",
+      "context": "tenant=demo;field=bank_account;purpose=commitment;version=1",
+      "max_plaintext_len": 128,
+      "opening_len": 32
+    }
+  ],
   "masking_profiles": [
     {
       "name": "credit-card-pan-display-v1",
@@ -157,5 +182,6 @@ echo "  kid: ${LOCAL_KID}"
 echo "  FPE profiles: 3"
 echo "  tokenization profiles: 3"
 echo "  MAC profiles: 3"
+echo "  commitment profiles: 3"
 echo "  masking profiles: 3"
 echo "Next: bash demo/local/start-vectis.sh"
