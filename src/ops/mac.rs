@@ -465,20 +465,13 @@ pub(crate) fn compute_digest(
     profile: &mac::MacProfile,
     plaintext: &str,
 ) -> Result<Vec<u8>, DynError> {
-    if profile.uses_kmac() {
-        return Ok(crate::core::crypto::create_kmac_with_algorithm(
-            profile.botan_algorithm(),
-            profile.mac_key(),
-            profile.customization().as_bytes(),
-            plaintext.as_bytes(),
-        )?);
-    }
-
-    Ok(crate::core::crypto::create_hmac_with_algorithm(
+    mac::compute_keyed_tag(
+        profile.uses_kmac(),
         profile.botan_algorithm(),
         profile.mac_key(),
+        profile.customization(),
         plaintext.as_bytes(),
-    )?)
+    )
 }
 
 #[cfg(test)]

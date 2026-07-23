@@ -79,6 +79,7 @@ pub struct LoadedGaugeCounts {
     pub mac_profiles: usize,
     pub masking_profiles: usize,
     pub commitment_profiles: usize,
+    pub sharing_profiles: usize,
 }
 
 pub fn set_loaded_gauges(counts: LoadedGaugeCounts) {
@@ -91,6 +92,7 @@ pub fn set_loaded_gauges(counts: LoadedGaugeCounts) {
     gauge!("vectis_mac_profiles_loaded").set(counts.mac_profiles as f64);
     gauge!("vectis_masking_profiles_loaded").set(counts.masking_profiles as f64);
     gauge!("vectis_commitment_profiles_loaded").set(counts.commitment_profiles as f64);
+    gauge!("vectis_sharing_profiles_loaded").set(counts.sharing_profiles as f64);
 }
 
 pub fn record_permission(result: &str) {

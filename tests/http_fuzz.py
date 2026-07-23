@@ -37,6 +37,8 @@ MASKING_PROFILE = "fuzz-pan-display-v1"
 MASKING_PLAINTEXTS = ["4111111111111111", "5555555555554444"]
 COMMITMENT_PROFILE = "fuzz-pan-commitment-v1"
 COMMITMENT_PLAINTEXTS = ["4111111111111111", "5555555555554444"]
+SHARING_PROFILE = "fuzz-customer-secret-3of5-v1"
+SHARING_PLAINTEXT = "fuzz secret sharing plaintext"
 
 # Minimal, policy-safe key requests (one per crypto profile) used to CREATE seed
 # keys. Creating with only tag+profile works under both crypto policies, and the
@@ -437,6 +439,7 @@ CONFIG_LOADED_COUNTS = (
     "mac_profiles_loaded",
     "masking_profiles_loaded",
     "commitment_profiles_loaded",
+    "sharing_profiles_loaded",
 )
 
 
@@ -792,6 +795,7 @@ def empty_config():
         "mac_profiles": [],
         "masking_profiles": [],
         "commitment_profiles": [],
+        "sharing_profiles": [],
     }
 
 
@@ -812,6 +816,7 @@ def read_config_or_empty():
         "mac_profiles",
         "masking_profiles",
         "commitment_profiles",
+        "sharing_profiles",
     ):
         if not isinstance(config.get(key), list):
             config[key] = []
@@ -991,6 +996,39 @@ def configure_commitment_profile(client, kid):
     status, body = client.post_json("/config/reload", {}, auth=True)
     if status != 200:
         raise RuntimeError(f"could not load commitment seed config: HTTP {status}: {body}")
+
+    def restore():
+        if original_cfg is None:
+            CONFIG_PATH.unlink(missing_ok=True)
+        else:
+            CONFIG_PATH.write_bytes(original_cfg)
+        if original_sig is None:
+            CONFIG_SIGN_PATH.unlink(missing_ok=True)
+        else:
+            CONFIG_SIGN_PATH.write_bytes(original_sig)
+
+    atexit.register(restore)
+
+
+def configure_sharing_profile(client, kid):
+    original_cfg = CONFIG_PATH.read_bytes() if CONFIG_PATH.exists() else None
+    original_sig = CONFIG_SIGN_PATH.read_bytes() if CONFIG_SIGN_PATH.exists() else None
+    config = read_config_or_empty()
+    config["sharing_profiles"] = [
+        {
+            "name": SHARING_PROFILE,
+            "kid": kid,
+            "threshold": 3,
+            "shares": 5,
+            "max_secret_len": 4096,
+            "context": "tenant=fuzz;purpose=secret_sharing;version=1",
+        }
+    ]
+    CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    sign_config_file()
+    status, body = client.post_json("/config/reload", {}, auth=True)
+    if status != 200:
+        raise RuntimeError(f"could not load sharing seed config: HTTP {status}: {body}")
 
     def restore():
         if original_cfg is None:
@@ -1462,6 +1500,28 @@ def commitment_batch_seeds(client):
     ]
 
 
+def sharing_seeds(client):
+    kid = _create_key(client, {"tag": "fuzz-sharing", "profile": "hybrid-standard-v1"})
+    configure_sharing_profile(client, kid)
+    split_seed = {
+        "profile": SHARING_PROFILE,
+        "plaintext": SHARING_PLAINTEXT,
+    }
+    status, body = client.post_json(f"/shares/split/{kid}", split_seed, auth=True)
+    if status != 200:
+        raise RuntimeError(f"could not split sharing seed: HTTP {status}: {body}")
+    parsed = json.loads(body)
+    combine_seed = {
+        "kid": kid,
+        "profile": SHARING_PROFILE,
+        "shares": parsed["shares"][:3],
+    }
+    return [
+        (f"/shares/split/{kid}", split_seed),
+        ("/shares/combine", combine_seed),
+    ]
+
+
 TARGETS = [
     {"name": "token", "runner": run_body, "seed_factory": token_seeds,
      "path": "/sign/verification", "auth": False, "semantic": token_semantic},
@@ -1494,6 +1554,7 @@ TARGETS = [
     {"name": "masking_batch", "runner": run_body, "seed_factory": masking_batch_seeds, "auth": True},
     {"name": "commitment", "runner": run_body, "seed_factory": commitment_seeds, "auth": True},
     {"name": "commitment_batch", "runner": run_body, "seed_factory": commitment_batch_seeds, "auth": True},
+    {"name": "sharing", "runner": run_body, "seed_factory": sharing_seeds, "auth": True},
     {"name": "pubkid", "runner": run_path_param, "require_json_error": False, "endpoints": [
         ("/pub/{}", False),
         ("/keys/properties/{}", True),
@@ -1568,8 +1629,8 @@ def self_check():
         "internal encrypt ignores plausible body",
     )
 
-    loaded_body = '{"status":"reloaded","routes_loaded":1,"remote_routes_loaded":0,"clients_loaded":0,"fpe_profiles_loaded":0,"tokenization_profiles_loaded":0,"mac_profiles_loaded":0,"masking_profiles_loaded":0,"commitment_profiles_loaded":0}'
-    empty_body = '{"status":"reloaded","routes_loaded":0,"remote_routes_loaded":0,"clients_loaded":0,"fpe_profiles_loaded":0,"tokenization_profiles_loaded":0,"mac_profiles_loaded":0,"masking_profiles_loaded":0,"commitment_profiles_loaded":0}'
+    loaded_body = '{"status":"reloaded","routes_loaded":1,"remote_routes_loaded":0,"clients_loaded":0,"fpe_profiles_loaded":0,"tokenization_profiles_loaded":0,"mac_profiles_loaded":0,"masking_profiles_loaded":0,"commitment_profiles_loaded":0,"sharing_profiles_loaded":0}'
+    empty_body = '{"status":"reloaded","routes_loaded":0,"remote_routes_loaded":0,"clients_loaded":0,"fpe_profiles_loaded":0,"tokenization_profiles_loaded":0,"mac_profiles_loaded":0,"masking_profiles_loaded":0,"commitment_profiles_loaded":0,"sharing_profiles_loaded":0}'
     expect(config_semantic(200, loaded_body), "config flags integrity bypass")
     expect(not config_semantic(200, empty_body), "config ignores empty reload")
     expect(not config_semantic(400, '{"error":"x"}'), "config ignores rejected")

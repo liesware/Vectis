@@ -316,6 +316,8 @@ vectis index create <kid> --file index-create.json
 vectis index verify --file index-verify.json
 vectis commit create <kid> --file commit-create.json
 vectis commit verify --file commit-verify.json
+vectis shares split <kid> --file shares-split.json
+vectis shares combine --file shares-combine.json
 vectis mask <kid> --file mask.json
 vectis message send <sender_kid> --file send-message.json
 vectis message decrypt --file encrypted-message.json
@@ -328,10 +330,10 @@ See the full API documentation in [doc/API.md](doc/API.md).
 ## Configuration
 
 Runtime routing, remote peers, API-key permissions, FPE profiles, tokenization
-profiles, MAC profiles, commitment profiles, and masking profiles live in a single **signed config file** (`config.json`,
+profiles, MAC profiles, commitment profiles, sharing profiles, and masking profiles live in a single **signed config file** (`config.json`,
 default path `VECTIS_CONFIG_PATH`) with `version`, `routes`, `remote_routes`,
 `permissions`, optional `fpe_profiles`, optional `tokenization_profiles`, and
-optional `mac_profiles`, `commitment_profiles`, and `masking_profiles` sections. Blind indexes reuse `mac_profiles`; there is
+optional `mac_profiles`, `commitment_profiles`, `sharing_profiles`, and `masking_profiles` sections. Blind indexes reuse `mac_profiles`; there is
 no separate `index_profiles` section. Edit it, then sign it with
 `vectis config sign`. The full schema
 (every field, allowed values, and the optional peer `public_keys`) is documented
@@ -378,15 +380,18 @@ In development and tests, individual algorithm overrides can be enabled with:
 VECTIS_CRYPTO_POLICY=allow-overrides
 ```
 
-## FPE, Tokenization, MAC, Commitments, Blind Indexes, And Masking
+## FPE, Tokenization, MAC, Commitments, Blind Indexes, Secret Sharing, And Masking
 
-FPE, tokenization, MAC, commitments, blind indexes, and masking are
+FPE, tokenization, MAC, commitments, blind indexes, secret sharing, and masking are
 profile-driven. Profiles are loaded only from signed config, and requests select
 a profile by name. Commitments use random openings so repeated commitments for
 the same plaintext differ. Blind indexes reuse MAC profiles and persist the
 resulting deterministic digest.
 Masking is display-only: it reveals configured leading/trailing characters and
 replaces the middle with a configured mask character.
+Secret sharing is stateless authenticated Shamir `(t, n)` sharing: a split
+creates self-contained shares, and any compatible threshold-sized subset can
+reconstruct the original UTF-8 secret.
 
 FPE currently supports:
 

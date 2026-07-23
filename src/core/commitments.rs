@@ -115,7 +115,7 @@ impl CommitmentProfile {
     }
 
     pub fn uses_kmac(&self) -> bool {
-        self.public_algorithm.starts_with("KMAC-")
+        mac::is_kmac_algorithm(&self.public_algorithm)
     }
 }
 
@@ -217,16 +217,13 @@ pub(crate) fn validate_commitment_profiles(
             &[("profile", &profile.name), ("kid", &profile.kid)],
             &profile.context,
         )?;
-        let commit_key = if derived.public_algorithm.starts_with("KMAC-") {
-            derived.commit_key
-        } else {
-            Zeroizing::new(crypto::create_hkdf(
-                &derived.commit_key,
-                COMMITMENT_HMAC_SUBKEY_SALT,
-                customization.as_bytes(),
-                COMMITMENT_KEY_SIZE_BYTES,
-            )?)
-        };
+        let commit_key = mac::derive_keyed_tag_subkey(
+            &derived.public_algorithm,
+            derived.commit_key,
+            COMMITMENT_HMAC_SUBKEY_SALT,
+            &customization,
+            COMMITMENT_KEY_SIZE_BYTES,
+        )?;
 
         profiles.push(CommitmentProfile {
             name: profile.name,
@@ -356,20 +353,14 @@ pub fn compute_commitment(
     plaintext: &str,
 ) -> Result<Vec<u8>, DynError> {
     let payload = commitment_payload(profile, opening_b64, plaintext)?;
-    if profile.uses_kmac() {
-        return Ok(crypto::create_kmac_with_algorithm(
-            profile.botan_algorithm(),
-            profile.commit_key(),
-            profile.customization().as_bytes(),
-            &payload,
-        )?);
-    }
 
-    Ok(crypto::create_hmac_with_algorithm(
+    mac::compute_keyed_tag(
+        profile.uses_kmac(),
         profile.botan_algorithm(),
         profile.commit_key(),
+        profile.customization(),
         &payload,
-    )?)
+    )
 }
 
 #[cfg(test)]

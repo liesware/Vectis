@@ -38,6 +38,7 @@ def config_init_case(env):
             "mac_profiles": [],
             "masking_profiles": [],
             "commitment_profiles": [],
+            "sharing_profiles": [],
         },
         "config init must write the minimal skeleton",
     )

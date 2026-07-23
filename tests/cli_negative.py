@@ -603,6 +603,10 @@ def main():
                     "unknown commit create option: --profile",
                 ),
                 (
+                    ["shares", "split", "--profile", "customer-secret-3of5-v1"],
+                    "unknown shares split option: --profile",
+                ),
+                (
                     ["mask", "--profile", "pan"],
                     "unknown mask option: --profile",
                 ),

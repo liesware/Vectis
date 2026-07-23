@@ -321,6 +321,20 @@ Batch variants preserve order and fail all-or-nothing for validation and
 execution errors. Commitments are stateless; Vectis does not store plaintext,
 opening, commitment, or `ref`.
 
+### Secret Sharing Flow
+
+Sharing profiles bind a KID, threshold, total share count, UTF-8 secret bound,
+and structured context. Config load resolves the same HMAC/KMAC algorithm policy
+as MAC, then derives share-authentication material with HKDF and
+`build_mac_domain_aad` using `purpose=sharing-key`.
+
+`/shares/split/{kid}` generates a random 16-byte set ID and Shamir byte-string
+shares over GF(256). Each self-contained `vectis-sss-v1` envelope carries its
+profile/KID/set/threshold/index metadata and an HMAC or KMAC tag. `/shares/combine`
+authenticates every envelope before interpolation, rejects mixed or duplicate
+shares, verifies extra shares against the reconstructed polynomial, and then
+returns UTF-8 plaintext. Vectis does not persist shares or plaintext.
+
 ### Masking Flow
 
 Masking profiles are loaded from signed config. Each profile binds `name`,

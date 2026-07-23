@@ -38,6 +38,7 @@ const ROOT_COMMANDS: &[RootCommand] = &[
     RootCommand::new("mac", RootCommandKind::Http),
     RootCommand::new("index", RootCommandKind::Http),
     RootCommand::new("commit", RootCommandKind::Http),
+    RootCommand::new("shares", RootCommandKind::Http),
     RootCommand::new("mask", RootCommandKind::Http),
     RootCommand::new("message", RootCommandKind::Http),
 ];

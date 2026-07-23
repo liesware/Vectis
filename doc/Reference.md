@@ -354,6 +354,7 @@ Runtime policy lives in one signed JSON file:
   "tokenization_profiles": [],
   "mac_profiles": [],
   "commitment_profiles": [],
+  "sharing_profiles": [],
   "masking_profiles": []
 }
 ```
@@ -792,6 +793,7 @@ Vectis exposes these major endpoint groups:
   `/mac/verify/batch`;
 - commitments: `/commit/{kid}`, `/commit/batch/{kid}`,
   `/commit/verify`, `/commit/verify/batch`;
+- secret sharing: `/shares/split/{kid}`, `/shares/combine`;
 - blind index: `/index/{kid}`, `/index/batch/{kid}`,
   `/index/verify`, `/index/verify/batch`;
 - masking: `/mask/{kid}`, `/mask/batch/{kid}`;

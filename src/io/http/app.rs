@@ -100,6 +100,18 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
                 request,
             )
         },
+        |request| {
+            let loaded_key = keys_db_state.get(request.kid).ok_or_else(|| {
+                crate::error::invalid_input(format!(
+                    "sharing profile references kid not loaded in memory: {}",
+                    request.kid
+                ))
+            })?;
+            crate::core::sharing::derive_sharing_key_for_profile(
+                loaded_key.keys().symmetric().key_hex(),
+                request,
+            )
+        },
     )?;
     let started_at = validation::current_timestamp()?;
     info!(
@@ -136,6 +148,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         loaded_mac_profiles = config_state.mac_profiles.len(),
         loaded_masking_profiles = config_state.masking_profiles.len(),
         loaded_commitment_profiles = config_state.commitment_profiles.len(),
+        loaded_sharing_profiles = config_state.sharing_profiles.len(),
         "signed config loaded into http state"
     );
     if metrics_handle.is_some() {
@@ -150,6 +163,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
             mac_profiles: config_state.mac_profiles.len(),
             masking_profiles: config_state.masking_profiles.len(),
             commitment_profiles: config_state.commitment_profiles.len(),
+            sharing_profiles: config_state.sharing_profiles.len(),
         });
     }
     let app = super::router(super::HttpState::new(super::HttpStateInput {

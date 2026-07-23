@@ -53,7 +53,7 @@ These variables are used by CLI commands that call the HTTP API. `serve` and `in
 | --- | --- | --- | --- |
 | `VECTIS_FINAL_APP_ADDR` | `localhost:3999` | Valid host:port | Default final app destination used when no manual route exists for a `kid`. |
 | `VECTIS_FINAL_APP_PATH` | `/message` | HTTP path beginning with `/`, no spaces | Default final app path. |
-| `VECTIS_CONFIG_PATH` | `config.json` | Non-empty file path | Unified signed config file with `routes`, `remote_routes`, `permissions`, optional `fpe_profiles`, optional `tokenization_profiles`, optional `mac_profiles`, optional `commitment_profiles`, and optional `masking_profiles` sections. Startup uses empty sections only when the config file is missing. If the file exists but is invalid, startup fails. Runtime reload keeps the previous config if the file exists but is invalid. |
+| `VECTIS_CONFIG_PATH` | `config.json` | Non-empty file path | Unified signed config file with `routes`, `remote_routes`, `permissions`, optional `fpe_profiles`, optional `tokenization_profiles`, optional `mac_profiles`, optional `commitment_profiles`, optional `sharing_profiles`, and optional `masking_profiles` sections. Startup uses empty sections only when the config file is missing. If the file exists but is invalid, startup fails. Runtime reload keeps the previous config if the file exists but is invalid. |
 | `VECTIS_CONFIG_SIGN_PATH` | `config_sign.json` | Non-empty file path | Signature token for `VECTIS_CONFIG_PATH`, created by `vectis config sign`. |
 
 `routes` section shape inside `config.json`:
@@ -75,11 +75,12 @@ These variables are used by CLI commands that call the HTTP API. `serve` and `in
   "tokenization_profiles": [],
   "mac_profiles": [],
   "commitment_profiles": [],
+  "sharing_profiles": [],
   "masking_profiles": []
 }
 ```
 
-The `routes`/`remote_routes`/`permissions`/`fpe_profiles`/`tokenization_profiles`/`mac_profiles`/`commitment_profiles`/`masking_profiles` sections live in the unified signed `config.json`.
+The `routes`/`remote_routes`/`permissions`/`fpe_profiles`/`tokenization_profiles`/`mac_profiles`/`commitment_profiles`/`sharing_profiles`/`masking_profiles` sections live in the unified signed `config.json`.
 Vectis does not create it and `POST /keys` does not modify it.
 If `config.json` exists, `config_sign.json` must exist and verify before the config is loaded.
 Vectis rejects `config.json` above 8 MiB and `config_sign.json` above 1 MiB before parsing or verifying.
@@ -94,8 +95,8 @@ Runtime route operations:
 - `GET /remote-routes` lists authorized remote Vectis routes currently loaded in memory and requires `VECTIS_APIKEY`.
 - `POST /config/reload` reloads the unified config and requires root or an admin `VECTIS_APIKEY`.
 - `vectis config sign` signs `VECTIS_CONFIG_PATH` locally with init keys and updates `VECTIS_CONFIG_SIGN_PATH`.
-- `vectis config routes`, `vectis config remote-routes`, `vectis config permissions`, `vectis config fpe`, `vectis config token`, `vectis config mac`, `vectis config commitment`, and `vectis config masking` list or edit local `config.json` sections; they do not sign or reload.
-- `routes[].name`, `remote_routes[].name`, `permissions[].client`, `fpe_profiles[].name`, `tokenization_profiles[].name`, `mac_profiles[].name`, `commitment_profiles[].name`, and `masking_profiles[].name` are unique operator-facing indexes used by the CLI config editor.
+- `vectis config routes`, `vectis config remote-routes`, `vectis config permissions`, `vectis config fpe`, `vectis config token`, `vectis config mac`, `vectis config commitment`, `vectis config sharing`, and `vectis config masking` list or edit local `config.json` sections; they do not sign or reload.
+- `routes[].name`, `remote_routes[].name`, `permissions[].client`, `fpe_profiles[].name`, `tokenization_profiles[].name`, `mac_profiles[].name`, `commitment_profiles[].name`, `sharing_profiles[].name`, and `masking_profiles[].name` are unique operator-facing indexes used by the CLI config editor.
 - Every route `kid` must exist in the keys currently loaded in memory.
 - A missing file reloads to an empty manual route list.
 - An invalid existing file, or a route with an unloaded `kid`, returns an error and keeps the previous in-memory routes.
@@ -214,6 +215,8 @@ Allowed actions:
 - `mac-verify`
 - `commit-create`
 - `commit-verify`
+- `share-split`
+- `share-combine`
 - `index-create`
 - `index-verify`
 - `mask`
@@ -235,6 +238,8 @@ Permission mapping summary:
 - `mac-verify`: `POST /mac/verify`, `POST /mac/verify/batch`.
 - `commit-create`: `POST /commit/{kid}`, `POST /commit/batch/{kid}`.
 - `commit-verify`: `POST /commit/verify`, `POST /commit/verify/batch`.
+- `share-split`: `POST /shares/split/{kid}`.
+- `share-combine`: `POST /shares/combine`.
 - `index-create`: `POST /index/{kid}`, `POST /index/batch/{kid}`.
 - `index-verify`: `POST /index/verify`, `POST /index/verify/batch`.
 - `mask`: `POST /mask/{kid}`, `POST /mask/batch/{kid}`.

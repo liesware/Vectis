@@ -37,6 +37,7 @@ _CONFIG = {
     "mac_profiles": [],
     "masking_profiles": [],
     "commitment_profiles": [],
+    "sharing_profiles": [],
 }
 
 
@@ -171,6 +172,7 @@ def write_permissions(clients, sign=True):
     _CONFIG["mac_profiles"] = []
     _CONFIG["masking_profiles"] = []
     _CONFIG["commitment_profiles"] = []
+    _CONFIG["sharing_profiles"] = []
     write_config(sign=sign)
 
 
@@ -183,6 +185,7 @@ def write_fpe_profiles(profiles, sign=True):
     _CONFIG["mac_profiles"] = []
     _CONFIG["masking_profiles"] = []
     _CONFIG["commitment_profiles"] = []
+    _CONFIG["sharing_profiles"] = []
     write_config(sign=sign)
 
 
@@ -195,6 +198,7 @@ def write_tokenization_profiles(profiles, sign=True):
     _CONFIG["mac_profiles"] = []
     _CONFIG["masking_profiles"] = []
     _CONFIG["commitment_profiles"] = []
+    _CONFIG["sharing_profiles"] = []
     write_config(sign=sign)
 
 
@@ -207,6 +211,7 @@ def write_mac_profiles(profiles, sign=True):
     _CONFIG["mac_profiles"] = profiles
     _CONFIG["masking_profiles"] = []
     _CONFIG["commitment_profiles"] = []
+    _CONFIG["sharing_profiles"] = []
     write_config(sign=sign)
 
 
@@ -219,6 +224,7 @@ def write_masking_profiles(profiles, sign=True):
     _CONFIG["mac_profiles"] = []
     _CONFIG["masking_profiles"] = profiles
     _CONFIG["commitment_profiles"] = []
+    _CONFIG["sharing_profiles"] = []
     write_config(sign=sign)
 
 
@@ -231,6 +237,7 @@ def write_remote_routes(routes, sign=True):
     _CONFIG["mac_profiles"] = []
     _CONFIG["masking_profiles"] = []
     _CONFIG["commitment_profiles"] = []
+    _CONFIG["sharing_profiles"] = []
     write_config(sign=sign)
 
 
@@ -243,6 +250,7 @@ def write_routes(routes, sign=True):
     _CONFIG["mac_profiles"] = []
     _CONFIG["masking_profiles"] = []
     _CONFIG["commitment_profiles"] = []
+    _CONFIG["sharing_profiles"] = []
     write_config(sign=sign)
 
 
@@ -275,6 +283,10 @@ def reload_config(client):
     require(
         isinstance(response.get("commitment_profiles_loaded"), int),
         "config commitment_profiles_loaded must be int",
+    )
+    require(
+        isinstance(response.get("sharing_profiles_loaded"), int),
+        "config sharing_profiles_loaded must be int",
     )
     return response
 
@@ -368,6 +380,27 @@ def valid_commitment_profile(key_id):
         "max_plaintext_len": 128,
         "opening_len": 32,
     }
+
+
+def valid_sharing_profile(key_id):
+    return {
+        "name": "customer-secret-3of5-v1",
+        "kid": key_id,
+        "threshold": 3,
+        "shares": 5,
+        "max_secret_len": 4096,
+        "context": "tenant=mx;purpose=customer-secret-sharing;version=1",
+    }
+
+
+def create_valid_shares(client, key_id):
+    status, response = client.post(
+        f"/shares/split/{key_id}",
+        {"profile": "customer-secret-3of5-v1", "plaintext": "customer-secret-value"},
+        auth=True,
+    )
+    require_status("split valid shares", status, 200)
+    return response["shares"]
 
 
 def create_valid_encoded_token(client, key_id):
@@ -684,6 +717,7 @@ def main():
     _CONFIG["mac_profiles"] = [valid_mac_profile(key_id)]
     _CONFIG["masking_profiles"] = [valid_masking_profile(key_id)]
     _CONFIG["commitment_profiles"] = [valid_commitment_profile(key_id)]
+    _CONFIG["sharing_profiles"] = [valid_sharing_profile(key_id)]
     write_config()
     reload_config(client)
     limited_client = Client(args.base_url, limited_api_key)
@@ -981,6 +1015,26 @@ def main():
         )
         require_status("limited client blocks commit verify batch", status, 403)
 
+    def limited_blocks_share_split():
+        status, _ = limited_client.post(
+            f"/shares/split/{key_id}",
+            {"profile": "customer-secret-3of5-v1", "plaintext": "customer-secret-value"},
+            auth=True,
+        )
+        require_status("limited client blocks share split", status, 403)
+
+    def limited_blocks_share_combine():
+        status, _ = limited_client.post(
+            "/shares/combine",
+            {
+                "kid": key_id,
+                "profile": "customer-secret-3of5-v1",
+                "shares": ["vectis-sss-v1.AAAA", "vectis-sss-v1.BBBB", "vectis-sss-v1.CCCC"],
+            },
+            auth=True,
+        )
+        require_status("limited client blocks share combine", status, 403)
+
     def metrics_client_allows_metrics():
         status, _ = metrics_client.get("/metrics", auth=True)
         require_status("metrics client allows metrics", status, 200)
@@ -1059,6 +1113,8 @@ def main():
         ("limited client blocks commit create batch", limited_blocks_commit_create_batch),
         ("limited client blocks commit verify", limited_blocks_commit_verify),
         ("limited client blocks commit verify batch", limited_blocks_commit_verify_batch),
+        ("limited client blocks share split", limited_blocks_share_split),
+        ("limited client blocks share combine", limited_blocks_share_combine),
         ("metrics client allows metrics", metrics_client_allows_metrics),
         ("metrics client blocks admin", metrics_client_blocks_admin),
         ("limited client blocks permissions list", limited_blocks_permissions_list),
@@ -3059,6 +3115,91 @@ def main():
         require_status("POST /commit/{kid} unknown field", status, 400)
         require_unknown_field_error("POST /commit/{kid} unknown field", body, "sorpresa")
 
+    def share_split_unknown_field():
+        status, body = client.post(
+            f"/shares/split/{key_id}",
+            {
+                "profile": "customer-secret-3of5-v1",
+                "plaintext": "customer-secret-value",
+                "sorpresa": True,
+            },
+            auth=True,
+        )
+        require_status("POST /shares/split/{kid} unknown field", status, 400)
+        require_unknown_field_error(
+            "POST /shares/split/{kid} unknown field", body, "sorpresa"
+        )
+
+    def share_split_unknown_profile():
+        status, _ = client.post(
+            f"/shares/split/{key_id}",
+            {"profile": "missing-sharing-profile-v1", "plaintext": "customer-secret-value"},
+            auth=True,
+        )
+        require_status("POST /shares/split/{kid} unknown profile", status, 400)
+
+    def share_combine_below_threshold():
+        shares = create_valid_shares(client, key_id)
+        status, _ = client.post(
+            "/shares/combine",
+            {"kid": key_id, "profile": "customer-secret-3of5-v1", "shares": shares[:2]},
+            auth=True,
+        )
+        require_status("POST /shares/combine below threshold", status, 400)
+
+    def share_combine_tampered_share():
+        shares = create_valid_shares(client, key_id)
+        tampered = shares[0][:-1] + ("A" if shares[0][-1] != "A" else "B")
+        status, _ = client.post(
+            "/shares/combine",
+            {
+                "kid": key_id,
+                "profile": "customer-secret-3of5-v1",
+                "shares": [tampered, shares[1], shares[2]],
+            },
+            auth=True,
+        )
+        require_status("POST /shares/combine tampered share", status, 400)
+
+    def share_combine_duplicate_share():
+        shares = create_valid_shares(client, key_id)
+        status, _ = client.post(
+            "/shares/combine",
+            {
+                "kid": key_id,
+                "profile": "customer-secret-3of5-v1",
+                "shares": [shares[0], shares[0], shares[1]],
+            },
+            auth=True,
+        )
+        require_status("POST /shares/combine duplicate share", status, 400)
+
+    def share_combine_mixed_sets():
+        first = create_valid_shares(client, key_id)
+        second = create_valid_shares(client, key_id)
+        status, _ = client.post(
+            "/shares/combine",
+            {
+                "kid": key_id,
+                "profile": "customer-secret-3of5-v1",
+                "shares": [first[0], first[1], second[2]],
+            },
+            auth=True,
+        )
+        require_status("POST /shares/combine mixed sets", status, 400)
+
+    def share_combine_malformed_share():
+        status, _ = client.post(
+            "/shares/combine",
+            {
+                "kid": key_id,
+                "profile": "customer-secret-3of5-v1",
+                "shares": ["not-a-vectis-share", "still-not", "nope"],
+            },
+            auth=True,
+        )
+        require_status("POST /shares/combine malformed share", status, 400)
+
     _CONFIG["routes"] = []
     _CONFIG["remote_routes"] = []
     _CONFIG["permissions"] = []
@@ -3067,6 +3208,7 @@ def main():
     _CONFIG["mac_profiles"] = [valid_mac_profile(key_id)]
     _CONFIG["masking_profiles"] = [valid_masking_profile(key_id)]
     _CONFIG["commitment_profiles"] = [valid_commitment_profile(key_id)]
+    _CONFIG["sharing_profiles"] = [valid_sharing_profile(key_id)]
     write_config()
     reload_config(client)
     encoded_token = create_valid_encoded_token(client, key_id)
@@ -3156,6 +3298,13 @@ def main():
         ("POST /mask/batch/{kid} too many items", mask_batch_too_many_items),
         ("POST /mask/batch/{kid} duplicate ref", mask_batch_duplicate_ref),
         ("POST /commit/{kid} unknown field", commit_create_unknown_field),
+        ("POST /shares/split/{kid} unknown field", share_split_unknown_field),
+        ("POST /shares/split/{kid} unknown profile", share_split_unknown_profile),
+        ("POST /shares/combine below threshold", share_combine_below_threshold),
+        ("POST /shares/combine tampered share", share_combine_tampered_share),
+        ("POST /shares/combine duplicate share", share_combine_duplicate_share),
+        ("POST /shares/combine mixed sets", share_combine_mixed_sets),
+        ("POST /shares/combine malformed share", share_combine_malformed_share),
     ):
         run_case(rows, name, func)
 
@@ -3336,6 +3485,7 @@ def main():
     _CONFIG["mac_profiles"] = []
     _CONFIG["masking_profiles"] = []
     _CONFIG["commitment_profiles"] = []
+    _CONFIG["sharing_profiles"] = []
     write_config()
     status, _ = client.post("/config/reload", {}, auth=True)
     require_status("restore config reload", status, 200)

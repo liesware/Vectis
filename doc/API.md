@@ -89,6 +89,8 @@ Endpoints requiring auth:
 - `POST /commit/batch/{kid}`
 - `POST /commit/verify`
 - `POST /commit/verify/batch`
+- `POST /shares/split/{kid}`
+- `POST /shares/combine`
 - `POST /index/{kid}`
 - `POST /index/batch/{kid}`
 - `POST /index/verify`
@@ -206,12 +208,13 @@ Exposed metrics:
 - `vectis_mac_profiles_loaded`
 - `vectis_masking_profiles_loaded`
 - `vectis_commitment_profiles_loaded`
+- `vectis_sharing_profiles_loaded`
 - `vectis_permission_total{result}` (`allow` or `deny`)
 - `vectis_config_reload_total{result}` (`success`, `stale`, or `failed`)
 - `vectis_config_last_reload_timestamp_seconds{result}` (`success`, `stale`, or `failed`)
 - `vectis_keys_reload_total{result}` (`success` or `failed`)
 - `vectis_message_total{operation,result}` (`send`, `receive`, or `decrypt`; `success`, `denied`, or `failed`)
-- `vectis_crypto_operation_total{operation,result}` (`sign`, `verify`, `encrypt`, `decrypt`, `fpe_encrypt`, `fpe_decrypt`, `fpe_encrypt_batch`, `fpe_decrypt_batch`, `token_encode`, `token_decode`, `token_encode_batch`, `token_decode_batch`, `mac_create`, `mac_verify`, `mac_create_batch`, `mac_verify_batch`, `commit_create`, `commit_verify`, `commit_create_batch`, `commit_verify_batch`, `index_create`, `index_verify`, `index_create_batch`, `index_verify_batch`, `mask`, or `mask_batch`; `success` or `failed`)
+- `vectis_crypto_operation_total{operation,result}` (`sign`, `verify`, `encrypt`, `decrypt`, `fpe_encrypt`, `fpe_decrypt`, `fpe_encrypt_batch`, `fpe_decrypt_batch`, `token_encode`, `token_decode`, `token_encode_batch`, `token_decode_batch`, `mac_create`, `mac_verify`, `mac_create_batch`, `mac_verify_batch`, `commit_create`, `commit_verify`, `commit_create_batch`, `commit_verify_batch`, `share_split`, `share_combine`, `index_create`, `index_verify`, `index_create_batch`, `index_verify_batch`, `mask`, or `mask_batch`; `success` or `failed`)
 
 ### GET /self-test/init
 
@@ -646,6 +649,8 @@ Permission mapping:
 | `mac-verify` | `POST /mac/verify`, `POST /mac/verify/batch` |
 | `commit-create` | `POST /commit/{kid}`, `POST /commit/batch/{kid}` |
 | `commit-verify` | `POST /commit/verify`, `POST /commit/verify/batch` |
+| `share-split` | `POST /shares/split/{kid}` |
+| `share-combine` | `POST /shares/combine` |
 | `index-create` | `POST /index/{kid}`, `POST /index/batch/{kid}` |
 | `index-verify` | `POST /index/verify`, `POST /index/verify/batch` |
 | `mask` | `POST /mask/{kid}`, `POST /mask/batch/{kid}` |
@@ -1775,9 +1780,34 @@ When `POST /message` receives and validates a protected message, it delivers thi
 
 The final app can call `POST /message/decrypt` to recover the plaintext.
 
+## Secret Sharing
+
+Secret sharing uses signed `sharing_profiles` and emits self-contained,
+authenticated `vectis-sss-v1` envelopes. Vectis keeps no shares or plaintext in
+storage. Each split creates a public random `set_id`; combine accepts any
+threshold-sized subset from that set. Share tags bind the profile, KID,
+threshold, total shares, set ID, index, and payload before interpolation.
+
+`POST /shares/split/{kid}` requires `share-split` permission and an active KID:
+
+```json
+{"profile":"customer-secret-3of5-v1","plaintext":"secret-value"}
+```
+
+It returns `kid`, `profile`, `threshold`, `set_id`, and `shares`. `POST
+/shares/combine` requires `share-combine` permission and accepts the KID in the
+request body:
+
+```json
+{"kid":"<kid>","profile":"customer-secret-3of5-v1","shares":["vectis-sss-v1.<share>"]}
+```
+
+Combine permits active or retired KIDs. It rejects malformed, altered, mixed,
+duplicate-index, or insufficient shares. There are no batch endpoints in v1.
+
 ## Configuration File (`config.json`)
 
-Vectis loads a single signed config file (`config.json`) with `routes`, `remote_routes`, `permissions`, and optional `fpe_profiles`, `tokenization_profiles`, `mac_profiles`, `commitment_profiles`, and `masking_profiles` sections plus a top-level `version`. It is loaded when `vectis serve` starts and can be reloaded at runtime with `POST /config/reload`. Create/update its signature with `vectis config sign`; inspect it with `vectis config list`.
+Vectis loads a single signed config file (`config.json`) with `routes`, `remote_routes`, `permissions`, and optional `fpe_profiles`, `tokenization_profiles`, `mac_profiles`, `commitment_profiles`, `masking_profiles`, and `sharing_profiles` sections plus a top-level `version`. It is loaded when `vectis serve` starts and can be reloaded at runtime with `POST /config/reload`. Create/update its signature with `vectis config sign`; inspect it with `vectis config list`.
 
 Default paths:
 
@@ -1865,6 +1895,16 @@ Expected file shape:
       "opening_len": 32
     }
   ],
+  "sharing_profiles": [
+    {
+      "name": "customer-secret-3of5-v1",
+      "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+      "threshold": 3,
+      "shares": 5,
+      "max_secret_len": 4096,
+      "context": "tenant=acme;purpose=customer-secret-sharing;version=1"
+    }
+  ],
   "masking_profiles": [
     {
       "name": "pan-display-v1",
@@ -1891,6 +1931,7 @@ Top level:
 | `tokenization_profiles` | no (defaults to `[]`) | array | Signed local reversible tokenization profiles. |
 | `mac_profiles` | no (defaults to `[]`) | array | Signed local MAC profiles. |
 | `commitment_profiles` | no (defaults to `[]`) | array | Signed local keyed commitment profiles. |
+| `sharing_profiles` | no (defaults to `[]`) | array | Signed local authenticated Shamir secret sharing profiles. |
 | `masking_profiles` | no (defaults to `[]`) | array | Signed local display masking profiles. |
 
 `routes[]` entries:
@@ -1922,7 +1963,7 @@ Top level:
 | `client` | yes | text, unique | Client label. |
 | `apikey_hash` | yes | 64 hex (32 bytes) | Server-side verifier for this client's `X-API-Key`. |
 | `status` | yes | `active` \| `disabled` \| `revoked` | Only `active` clients are authorized. |
-| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `fpe-encrypt`, `fpe-decrypt`, `token-encode`, `token-decode`, `mac-create`, `mac-verify`, `commit-create`, `commit-verify`, `index-create`, `index-verify`, `mask`, `metrics`. `kid: "*"` is allowed with global actions such as `admin` and `metrics`; FPE, tokenization, MAC, commitments, blind-index, and masking actions require explicit KIDs. An `admin` action grants all endpoints and ignores kid-scoped grants. |
+| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `fpe-encrypt`, `fpe-decrypt`, `token-encode`, `token-decode`, `mac-create`, `mac-verify`, `commit-create`, `commit-verify`, `share-split`, `share-combine`, `index-create`, `index-verify`, `mask`, `metrics`. `kid: "*"` is allowed with global actions such as `admin` and `metrics`; crypto profile actions require explicit KIDs. An `admin` action grants all endpoints and ignores kid-scoped grants. |
 
 `fpe_profiles[]` entries:
 
@@ -1963,6 +2004,17 @@ Top level:
 | `context` | yes | `key=value;key=value`, max 128 chars | Signed commitment domain context. Keys must be unique and use `[A-Za-z0-9_.-]+`. |
 | `max_plaintext_len` | yes | integer 1..1024 | Maximum plaintext length accepted by commitment create/verify. |
 | `opening_len` | yes | integer 32..64 | Random opening bytes generated before base64url-no-pad encoding. |
+
+`sharing_profiles[]` entries:
+
+| Field | Required | Value | Meaning |
+| --- | --- | --- | --- |
+| `name` | yes | unique AAD-safe text, max 128 chars | Profile selected by sharing requests. |
+| `kid` | yes | loaded local KID | Operational key whose symmetric key derives share authentication material. |
+| `threshold` | yes | integer 2..=`shares` | Minimum shares required for reconstruction. |
+| `shares` | yes | integer `threshold`..32 | Total shares emitted by split. |
+| `max_secret_len` | yes | integer 1..4096 | Maximum UTF-8 plaintext length in bytes. |
+| `context` | yes | `key=value;key=value`, max 128 chars | Signed sharing domain context. |
 
 `masking_profiles[]` entries:
 

@@ -1,6 +1,7 @@
 use super::http::{OutputFormat, invalid_input, print_response, reject_option_like_positional};
 use crate::core::{
-    commitments, config, config_file, fpe, mac, masking, permissions, tokenization, validation,
+    commitments, config, config_file, fpe, mac, masking, permissions, sharing, tokenization,
+    validation,
 };
 use crate::error::DynError;
 use serde_json::{Map, Value, json};
@@ -80,6 +81,8 @@ enum FieldKind {
     MaskChar,
     CommitmentProfileName,
     CommitmentContext,
+    SharingProfileName,
+    SharingContext,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -559,6 +562,72 @@ const COMMITMENT_PROFILES_SECTION: SectionSpec = SectionSpec {
     parsed_validator: Some(validate_commitment_profile_parsed_fields),
 };
 
+const SHARING_PROFILES_SECTION: SectionSpec = SectionSpec {
+    cli_name: "sharing",
+    json_section: "sharing_profiles",
+    key_field: "name",
+    item_name: "sharing profile name",
+    command_context: "config sharing",
+    fields: &[
+        FieldSpec {
+            flag: "--name",
+            json_field: "name",
+            kind: FieldKind::SharingProfileName,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: false,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--kid",
+            json_field: "kid",
+            kind: FieldKind::Kid,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--threshold",
+            json_field: "threshold",
+            kind: FieldKind::Usize,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--shares",
+            json_field: "shares",
+            kind: FieldKind::Usize,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--max-secret-len",
+            json_field: "max_secret_len",
+            kind: FieldKind::Usize,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--context",
+            json_field: "context",
+            kind: FieldKind::SharingContext,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+    ],
+    add_defaults: &[],
+    parsed_validator: Some(validate_sharing_profile_parsed_fields),
+};
+
 pub fn init_config(output: OutputFormat) -> Result<(), DynError> {
     let app = config::app_config()?;
     match fs::metadata(&app.config_path) {
@@ -640,6 +709,11 @@ pub async fn run_config_commitment(
 ) -> Result<(), DynError> {
     let (command, rest) = split_command(args, "config commitment command")?;
     run_basic_section_command(&COMMITMENT_PROFILES_SECTION, &command, rest, output).await
+}
+
+pub async fn run_config_sharing(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+    let (command, rest) = split_command(args, "config sharing command")?;
+    run_basic_section_command(&SHARING_PROFILES_SECTION, &command, rest, output).await
 }
 
 async fn read_config(
@@ -931,6 +1005,26 @@ fn validate_commitment_profile_parsed_fields(parsed: &Map<String, Value>) -> Res
     Ok(())
 }
 
+fn validate_sharing_profile_parsed_fields(parsed: &Map<String, Value>) -> Result<(), DynError> {
+    let threshold = optional_usize_field(parsed, "threshold")?;
+    let shares = optional_usize_field(parsed, "shares")?;
+
+    match (threshold, shares) {
+        (Some(threshold), Some(shares)) => sharing::validate_threshold(threshold, shares)?,
+        (Some(threshold), None) => {
+            sharing::validate_threshold(threshold, config::INTERNAL_SHARE_MAX)?
+        }
+        (None, Some(shares)) => {
+            sharing::validate_threshold(sharing::SHARING_MIN_THRESHOLD, shares)?
+        }
+        (None, None) => {}
+    }
+    if let Some(max_secret_len) = optional_usize_field(parsed, "max_secret_len")? {
+        sharing::validate_max_secret_len(max_secret_len)?;
+    }
+    Ok(())
+}
+
 fn optional_usize_field(
     parsed: &Map<String, Value>,
     field: &str,
@@ -1090,6 +1184,18 @@ fn parse_field_value(field: &FieldSpec, raw: &str) -> Result<Value, DynError> {
                 "commitment_profiles.context",
                 raw,
                 commitments::COMMITMENT_CONTEXT_MAX_CHARS,
+            )?;
+            Ok(Value::String(raw.to_string()))
+        }
+        FieldKind::SharingProfileName => {
+            validation::validate_aad_config_name("sharing_profiles.name", raw)?;
+            Ok(Value::String(raw.to_string()))
+        }
+        FieldKind::SharingContext => {
+            validation::validate_labels(
+                "sharing_profiles.context",
+                raw,
+                sharing::SHARING_CONTEXT_MAX_CHARS,
             )?;
             Ok(Value::String(raw.to_string()))
         }
@@ -1299,6 +1405,7 @@ fn empty_config() -> Value {
         "mac_profiles": [],
         "masking_profiles": [],
         "commitment_profiles": [],
+        "sharing_profiles": [],
     })
 }
 
@@ -1315,6 +1422,7 @@ fn ensure_config_shape(value: &mut Value) -> Result<(), DynError> {
     ensure_section_array(object, "mac_profiles")?;
     ensure_section_array(object, "masking_profiles")?;
     ensure_section_array(object, "commitment_profiles")?;
+    ensure_section_array(object, "sharing_profiles")?;
     Ok(())
 }
 
@@ -1369,6 +1477,16 @@ fn validate_local_config(local: &LocalConfig) -> Result<(), DynError> {
                 commit_key: zeroize::Zeroizing::new(vec![
                     0u8;
                     crate::core::commitments::COMMITMENT_KEY_SIZE_BYTES
+                ]),
+            })
+        },
+        |_| {
+            Ok(crate::core::sharing::DerivedSharingKey {
+                public_algorithm: String::from("HMAC(BLAKE2b(256))"),
+                botan_algorithm: String::from("HMAC(BLAKE2b(256))"),
+                share_auth_key: zeroize::Zeroizing::new(vec![
+                    0u8;
+                    crate::core::sharing::SHARING_KEY_SIZE_BYTES
                 ]),
             })
         },
@@ -1739,6 +1857,23 @@ mod tests {
             "a".repeat(64),
             String::from("--context"),
             String::from("tenant=mx;field=pan;purpose=blind-index;version=1"),
+        ]
+    }
+
+    fn valid_sharing_profile_args() -> Vec<String> {
+        vec![
+            String::from("--name"),
+            String::from("customer-secret-3of5-v1"),
+            String::from("--kid"),
+            "a".repeat(64),
+            String::from("--threshold"),
+            String::from("3"),
+            String::from("--shares"),
+            String::from("5"),
+            String::from("--max-secret-len"),
+            String::from("4096"),
+            String::from("--context"),
+            String::from("tenant=demo;purpose=sharing;version=1"),
         ]
     }
 
@@ -2390,6 +2525,65 @@ mod tests {
             err.to_string(),
             "mac_profiles.context labels must use key=value format"
         );
+    }
+
+    #[test]
+    fn sharing_profile_add_get_update_and_delete_use_name() {
+        let mut local = local_config();
+        let value = parse_section_add(&SHARING_PROFILES_SECTION, valid_sharing_profile_args())
+            .expect("valid sharing profile must parse");
+        section_add_value(&mut local, &SHARING_PROFILES_SECTION, value).unwrap();
+        assert_eq!(
+            section_get(
+                &local,
+                &SHARING_PROFILES_SECTION,
+                vec![String::from("customer-secret-3of5-v1")],
+            )
+            .unwrap()["threshold"],
+            3
+        );
+        let err = parse_section_add(
+            &SHARING_PROFILES_SECTION,
+            vec![
+                String::from("--name"),
+                String::from("bad=name"),
+                String::from("--kid"),
+                "a".repeat(64),
+                String::from("--threshold"),
+                String::from("5"),
+                String::from("--shares"),
+                String::from("3"),
+                String::from("--max-secret-len"),
+                String::from("64"),
+                String::from("--context"),
+                String::from("tenant=demo"),
+            ],
+        )
+        .expect_err("invalid sharing fields must fail inline");
+        assert!(err.to_string().contains("sharing_profiles.name"));
+    }
+
+    #[test]
+    fn sharing_profile_update_validates_bounds_without_the_other_field() {
+        let err = parse_section_update(
+            &SHARING_PROFILES_SECTION,
+            vec![String::from("--shares"), String::from("500")],
+        )
+        .expect_err("shares above the maximum must fail on update");
+        assert!(err.to_string().contains("sharing_profiles.shares"));
+
+        let err = parse_section_update(
+            &SHARING_PROFILES_SECTION,
+            vec![String::from("--threshold"), String::from("1")],
+        )
+        .expect_err("threshold below the minimum must fail on update");
+        assert!(err.to_string().contains("sharing_profiles.threshold"));
+
+        parse_section_update(
+            &SHARING_PROFILES_SECTION,
+            vec![String::from("--threshold"), String::from("3")],
+        )
+        .expect("a threshold within bounds must pass on update");
     }
 
     #[test]

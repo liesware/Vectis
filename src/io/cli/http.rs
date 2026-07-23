@@ -53,6 +53,7 @@ const HTTP_COMMANDS: &[HttpCommand] = &[
     HttpCommand::new("index", command_index),
     HttpCommand::new("mask", command_mask),
     HttpCommand::new("commit", command_commit),
+    HttpCommand::new("shares", command_shares),
     HttpCommand::new("message", command_message),
 ];
 
@@ -70,6 +71,7 @@ const CONFIG_COMMANDS: &[ConfigCommand] = &[
     ConfigCommand::new("mac", config_command_mac),
     ConfigCommand::new("masking", config_command_masking),
     ConfigCommand::new("commitment", config_command_commitment),
+    ConfigCommand::new("sharing", config_command_sharing),
 ];
 
 impl HttpCommand {
@@ -157,6 +159,7 @@ boxed_command!(command_mac, run_mac);
 boxed_command!(command_index, run_index);
 boxed_command!(command_mask, run_mask);
 boxed_command!(command_commit, run_commit);
+boxed_command!(command_shares, run_shares);
 boxed_command!(command_message, run_message);
 
 fn config_command_init(args: Vec<String>, output: OutputFormat) -> CommandFuture {
@@ -211,6 +214,7 @@ boxed_command!(
     config_command_commitment,
     config_editor::run_config_commitment
 );
+boxed_command!(config_command_sharing, config_editor::run_config_sharing);
 
 async fn run_health(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let target = expect_one(args, "health target")?;
@@ -361,6 +365,7 @@ struct ConfigValidationOutput {
     mac_profiles_loaded: usize,
     masking_profiles_loaded: usize,
     commitment_profiles_loaded: usize,
+    sharing_profiles_loaded: usize,
 }
 
 async fn validate_config_for_local_node() -> Result<
@@ -445,6 +450,18 @@ async fn validate_config_for_local_node() -> Result<
                 request,
             )
         },
+        |request| {
+            let loaded_key = keys_db_state.get(request.kid).ok_or_else(|| {
+                invalid_input(format!(
+                    "sharing profile references kid not loaded in memory: {}",
+                    request.kid
+                ))
+            })?;
+            crate::core::sharing::derive_sharing_key_for_profile(
+                loaded_key.keys().symmetric().key_hex(),
+                request,
+            )
+        },
     )?;
     let output = ConfigValidationOutput {
         status: "valid",
@@ -458,6 +475,7 @@ async fn validate_config_for_local_node() -> Result<
         mac_profiles_loaded: config_state.mac_profiles.len(),
         masking_profiles_loaded: config_state.masking_profiles.len(),
         commitment_profiles_loaded: config_state.commitment_profiles.len(),
+        sharing_profiles_loaded: config_state.sharing_profiles.len(),
     };
 
     Ok((config, init_state, config_content, output))
@@ -493,6 +511,7 @@ async fn run_config_sign(output: OutputFormat) -> Result<(), DynError> {
             "mac_profiles_loaded": validation.mac_profiles_loaded,
             "masking_profiles_loaded": validation.masking_profiles_loaded,
             "commitment_profiles_loaded": validation.commitment_profiles_loaded,
+            "sharing_profiles_loaded": validation.sharing_profiles_loaded,
         }))?,
         output,
     )
@@ -716,6 +735,37 @@ async fn run_commit(args: Vec<String>, output: OutputFormat) -> Result<(), DynEr
         }
         _ => Err(invalid_input(format!(
             "unknown commit command: {subcommand}"
+        ))),
+    }
+}
+
+async fn run_shares(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+    let (subcommand, rest) = split_subcommand(args, "shares command")?;
+    let client = CliHttpClient::from_env()?;
+
+    match subcommand.as_str() {
+        "split" => {
+            let (kid, rest) = split_positional_arg(rest, "kid", "shares split")?;
+            validate_kid("kid", &kid)?;
+            let body = parse_json_source(rest)?;
+            client
+                .send(
+                    Method::POST,
+                    &format!("/shares/split/{kid}"),
+                    true,
+                    Some(body),
+                    output,
+                )
+                .await
+        }
+        "combine" => {
+            let body = parse_json_source(rest)?;
+            client
+                .send(Method::POST, "/shares/combine", true, Some(body), output)
+                .await
+        }
+        _ => Err(invalid_input(format!(
+            "unknown shares command: {subcommand}"
         ))),
     }
 }
@@ -1193,6 +1243,13 @@ fn is_help_token(value: &str, index: usize) -> bool {
 }
 
 fn help_request_path<'a>(command: &'a str, args: &'a [String]) -> Option<Vec<&'a str>> {
+    if command == "config"
+        && let [section, help, ..] = args
+        && help == "help"
+        && help_catalog::CONFIG_COMMANDS.contains(&section.as_str())
+    {
+        return Some(vec![command, section]);
+    }
     let mut path = Vec::with_capacity(args.len() + 1);
     path.push(command);
     append_help_path_args(&mut path, args).then_some(path)
@@ -1250,6 +1307,9 @@ fn flag_consumes_value(flag: &str) -> bool {
             | "--visible-first"
             | "--visible-last"
             | "--mask-char"
+            | "--threshold"
+            | "--shares"
+            | "--max-secret-len"
     )
 }
 
@@ -1275,6 +1335,10 @@ mod tests {
         assert_eq!(
             help_request_path("keys", &strings(&["create", "--help"])).unwrap(),
             vec!["keys", "create"]
+        );
+        assert_eq!(
+            help_request_path("config", &strings(&["sharing", "help"])).unwrap(),
+            vec!["config", "sharing"]
         );
         assert_eq!(
             help_request_path("keys", &strings(&["create", "-h", "--tag", "demo"])).unwrap(),
@@ -1373,6 +1437,7 @@ mod tests {
             ("mac create", "kid", "--profile"),
             ("index create", "kid", "--profile"),
             ("commit create", "kid", "--profile"),
+            ("shares split", "kid", "--profile"),
             ("mask", "kid", "--profile"),
             ("message send", "sender kid", "--profile"),
             ("message internal encrypt", "kid", "--profile"),

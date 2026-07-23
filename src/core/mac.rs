@@ -110,7 +110,7 @@ impl MacProfile {
     }
 
     pub fn uses_kmac(&self) -> bool {
-        self.public_algorithm.starts_with("KMAC-")
+        is_kmac_algorithm(&self.public_algorithm)
     }
 }
 
@@ -202,16 +202,13 @@ pub(crate) fn validate_mac_profiles(
             &profile.context,
         )?;
 
-        let mac_key = if derived.public_algorithm.starts_with("KMAC-") {
-            derived.mac_key
-        } else {
-            Zeroizing::new(crypto::create_hkdf(
-                &derived.mac_key,
-                MAC_HMAC_SUBKEY_SALT,
-                customization.as_bytes(),
-                MAC_KEY_SIZE_BYTES,
-            )?)
-        };
+        let mac_key = derive_keyed_tag_subkey(
+            &derived.public_algorithm,
+            derived.mac_key,
+            MAC_HMAC_SUBKEY_SALT,
+            &customization,
+            MAC_KEY_SIZE_BYTES,
+        )?;
 
         profiles.push(MacProfile {
             name: profile.name,
@@ -289,6 +286,52 @@ pub(crate) fn derive_mac_key_for_profile(
         botan_algorithm: resolved.botan_algorithm,
         mac_key,
     })
+}
+
+pub(crate) fn is_kmac_algorithm(public_algorithm: &str) -> bool {
+    public_algorithm.starts_with("KMAC-")
+}
+
+pub(crate) fn derive_keyed_tag_subkey(
+    public_algorithm: &str,
+    derived_key: Zeroizing<Vec<u8>>,
+    hmac_subkey_salt: &[u8],
+    customization: &str,
+    key_size_bytes: usize,
+) -> Result<Zeroizing<Vec<u8>>, DynError> {
+    if is_kmac_algorithm(public_algorithm) {
+        return Ok(derived_key);
+    }
+
+    Ok(Zeroizing::new(crypto::create_hkdf(
+        &derived_key,
+        hmac_subkey_salt,
+        customization.as_bytes(),
+        key_size_bytes,
+    )?))
+}
+
+pub(crate) fn compute_keyed_tag(
+    uses_kmac: bool,
+    botan_algorithm: &str,
+    key: &[u8],
+    customization: &str,
+    payload: &[u8],
+) -> Result<Vec<u8>, DynError> {
+    if uses_kmac {
+        return Ok(crypto::create_kmac_with_algorithm(
+            botan_algorithm,
+            key,
+            customization.as_bytes(),
+            payload,
+        )?);
+    }
+
+    Ok(crypto::create_hmac_with_algorithm(
+        botan_algorithm,
+        key,
+        payload,
+    )?)
 }
 
 pub(crate) fn build_mac_domain_aad(

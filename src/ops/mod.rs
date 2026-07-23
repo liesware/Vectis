@@ -14,6 +14,7 @@ pub mod mac;
 pub mod masking;
 pub mod message;
 pub mod pubkey;
+pub mod sharing;
 pub mod sign;
 pub mod test;
 pub mod tokenization;

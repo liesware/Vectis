@@ -35,6 +35,7 @@ from http_support import (
     write_fpe_profiles,
     write_mac_profiles,
     write_masking_profiles,
+    write_sharing_profiles,
     write_tokenization_profiles,
     write_test_remote_routes,
     write_test_routes,
@@ -200,6 +201,10 @@ def validate_metrics(client):
         "vectis_commitment_profiles_loaded" in metrics,
         "metrics must include vectis_commitment_profiles_loaded",
     )
+    require(
+        "vectis_sharing_profiles_loaded" in metrics,
+        "metrics must include vectis_sharing_profiles_loaded",
+    )
 
 
 def validate_runtime_metrics(client):
@@ -318,6 +323,14 @@ def validate_runtime_metrics(client):
     require(
         'vectis_crypto_operation_total{operation="commit_verify_batch",result="success"}' in metrics,
         "metrics must include successful commit verify batch count",
+    )
+    require(
+        'vectis_crypto_operation_total{operation="share_split",result="success"}' in metrics,
+        "metrics must include successful share split count",
+    )
+    require(
+        'vectis_crypto_operation_total{operation="share_combine",result="success"}' in metrics,
+        "metrics must include successful share combine count",
     )
     require(
         'vectis_crypto_operation_total{operation="index_create",result="success"}' in metrics,
@@ -977,6 +990,71 @@ def mac_batch_round_trip(client, key_id):
     return profile, algorithm, [digest[:16] + "..." for digest in digests]
 
 
+def sharing_round_trip(client, key_id):
+    profile = "customer-secret-3of5-v1"
+    plaintext = "customer-secret-value"
+    split = client.post(
+        f"/shares/split/{key_id}",
+        {"profile": profile, "plaintext": plaintext},
+        auth=True,
+    )
+    require(split.get("kid") == key_id, "shares split kid mismatch")
+    require(split.get("profile") == profile, "shares split profile mismatch")
+    require(split.get("threshold") == 3, "shares split threshold mismatch")
+    set_id = split.get("set_id")
+    require(isinstance(set_id, str) and set_id, "shares split set_id must be present")
+    shares = split.get("shares")
+    require(isinstance(shares, list) and len(shares) == 5, "shares split must return 5 shares")
+    require(
+        all(isinstance(share, str) and share.startswith("vectis-sss-v1.") for share in shares),
+        "every share must use the vectis-sss-v1 envelope prefix",
+    )
+    require(len(set(shares)) == 5, "shares split must return distinct shares")
+    require(
+        all(plaintext not in share for share in shares),
+        "shares must not contain the plaintext",
+    )
+
+    combined = client.post(
+        "/shares/combine",
+        {"kid": key_id, "profile": profile, "shares": shares[:3]},
+        auth=True,
+    )
+    require(combined.get("kid") == key_id, "shares combine kid mismatch")
+    require(combined.get("profile") == profile, "shares combine profile mismatch")
+    require(combined.get("set_id") == set_id, "shares combine set_id mismatch")
+    require(
+        combined.get("plaintext") == plaintext,
+        "threshold subset must reconstruct the original secret",
+    )
+
+    disjoint = client.post(
+        "/shares/combine",
+        {"kid": key_id, "profile": profile, "shares": [shares[0], shares[2], shares[4]]},
+        auth=True,
+    )
+    require(
+        disjoint.get("plaintext") == plaintext,
+        "any threshold subset must reconstruct the original secret",
+    )
+
+    split_again = client.post(
+        f"/shares/split/{key_id}",
+        {"profile": profile, "plaintext": plaintext},
+        auth=True,
+    )
+    require(
+        split_again.get("set_id") != set_id,
+        "each split must create a fresh set id",
+    )
+    require(
+        split_again.get("shares") != shares,
+        "each split must create fresh randomized shares",
+    )
+
+    return profile, set_id, len(shares)
+
+
 def commitment_round_trip(client, key_id):
     profile = "pan-commitment-v1"
     plaintext = "4111111111111111"
@@ -1631,6 +1709,24 @@ def main():
         client,
         created[0][0],
     )
+    write_sharing_profiles(
+        [
+            {
+                "name": "customer-secret-3of5-v1",
+                "kid": created[0][0],
+                "threshold": 3,
+                "shares": 5,
+                "max_secret_len": 4096,
+                "context": "tenant=mx;purpose=customer-secret-sharing;version=1",
+            }
+        ]
+    )
+    sharing_reload = reload_config(client)
+    require(
+        sharing_reload.get("sharing_profiles_loaded") == 1,
+        "config reload must report loaded sharing profile",
+    )
+    sharing_profile, sharing_set_id, sharing_count = sharing_round_trip(client, created[0][0])
     write_masking_profiles(
         [
             {
@@ -1667,6 +1763,9 @@ def main():
             "OK",
         ),
     ]
+    sharing_rows = [
+        (f"{sharing_profile} 3-of-{sharing_count} set {sharing_set_id}", "OK"),
+    ]
     mask_rows = [
         (f"{mask_profile} {masked}", "OK"),
         (f"{mask_batch_profile} batch {','.join(mask_batch_values)}", "OK"),
@@ -1683,6 +1782,8 @@ def main():
     passed_count += len(mac_rows)
     print_section("commit", commit_rows)
     passed_count += len(commit_rows)
+    print_section("shares", sharing_rows)
+    passed_count += len(sharing_rows)
     print_section("mask", mask_rows)
     passed_count += len(mask_rows)
     print_section("index", index_rows)

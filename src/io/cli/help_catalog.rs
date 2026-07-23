@@ -24,6 +24,7 @@ pub(crate) const EXECUTABLE_COMMANDS: &[&str] = &[
     "index",
     "mask",
     "commit",
+    "shares",
     "message",
 ];
 
@@ -44,6 +45,7 @@ pub(crate) const HTTP_COMMANDS: &[&str] = &[
     "index",
     "mask",
     "commit",
+    "shares",
     "message",
 ];
 
@@ -61,6 +63,7 @@ pub(crate) const CONFIG_COMMANDS: &[&str] = &[
     "mac",
     "masking",
     "commitment",
+    "sharing",
 ];
 
 #[cfg(test)]
@@ -246,6 +249,7 @@ const ROOT_HELP: CommandHelp = CommandHelp {
                 "  index                 Create or verify blind indexes through HTTP",
                 "  mask                  Mask field values for controlled display through HTTP",
                 "  commit                Create or verify cryptographic commitments through HTTP",
+                "  shares                Split or combine Shamir secret shares through HTTP",
                 "  message               Send, receive, encrypt, or decrypt messages through HTTP",
             ],
         },
@@ -267,6 +271,7 @@ const ROOT_HELP: CommandHelp = CommandHelp {
                 "  vectis token encode <kid> --file token-encode.json",
                 "  vectis index create <kid> --file index-create.json",
                 "  vectis commit create <kid> --file commit-create.json",
+                "  vectis shares split <kid> --file shares-split.json",
             ],
         },
         HelpSection {
@@ -696,6 +701,11 @@ const CONFIG_HELP: CommandHelp = CommandHelp {
         "vectis config commitment get <name>",
         "vectis config commitment update <name> [--kid <kid>] [--context <labels>] [--max-plaintext-len <n>] [--opening-len <n>]",
         "vectis config commitment delete <name>",
+        "vectis config sharing list",
+        "vectis config sharing add --name <name> --kid <kid> --threshold <n> --shares <n> --max-secret-len <n> --context <labels>",
+        "vectis config sharing get <name>",
+        "vectis config sharing update <name> [--kid <kid>] [--threshold <n>] [--shares <n>] [--max-secret-len <n>] [--context <labels>]",
+        "vectis config sharing delete <name>",
     ],
     summary: Some("Validates, signs, prints, reloads, or edits the unified signed config file."),
     sections: &[
@@ -715,6 +725,7 @@ const CONFIG_HELP: CommandHelp = CommandHelp {
                 "  mac                   Edits local config MAC profiles by unique name",
                 "  masking               Edits local config masking profiles by unique name",
                 "  commitment            Edits local config commitment profiles by unique name",
+                "  sharing               Edits local config secret sharing profiles by unique name",
             ],
         },
         HelpSection {
@@ -734,6 +745,7 @@ const CONFIG_HELP: CommandHelp = CommandHelp {
                 "  config mac edits signed MAC profiles; context uses key=value labels",
                 "  config masking edits signed display masking profiles",
                 "  config commitment edits signed cryptographic commitment profiles",
+                "  config sharing edits signed Shamir secret sharing profiles",
                 "  edit commands do not sign or reload automatically",
             ],
         },
@@ -760,6 +772,7 @@ const CONFIG_HELP: CommandHelp = CommandHelp {
                 "  vectis config fpe add --name patient-id-decimal-v1 --kid <kid> --alphabet 0123456789 --min-len 6 --max-len 32 --tweak-aad tenant=acme\\;field=patient_id\\;version=1",
                 "  vectis config token add --name patient-id-token-v1 --kid <kid> --token-prefix tok_patient --token-len 32 --max-plaintext-len 1024",
                 "  vectis config commitment add --name pan-commitment-v1 --kid <kid> --context tenant=mx\\;field=pan\\;purpose=commitment\\;version=1 --max-plaintext-len 128 --opening-len 32",
+                "  vectis config sharing add --name customer-secret-3of5-v1 --kid <kid> --threshold 3 --shares 5 --max-secret-len 4096 --context tenant=acme\\;purpose=customer-secret-sharing\\;version=1",
             ],
         },
     ],
@@ -1007,6 +1020,36 @@ const CONFIG_COMMITMENT_HELP: CommandHelp = CommandHelp {
             title: "Example:",
             lines: &[
                 "  vectis config commitment add --name pan-commitment-v1 --kid <kid> --context tenant=mx\\;field=pan\\;purpose=commitment\\;version=1 --max-plaintext-len 128 --opening-len 32",
+            ],
+        },
+    ],
+    output: true,
+};
+
+const CONFIG_SHARING_HELP: CommandHelp = CommandHelp {
+    key: "config sharing",
+    heading: "Usage:",
+    usage: &[
+        "vectis config sharing list",
+        "vectis config sharing add --name <name> --kid <kid> --threshold <n> --shares <n> --max-secret-len <n> --context <labels>",
+        "vectis config sharing get <name>",
+        "vectis config sharing update <name> [--kid <kid>] [--threshold <n>] [--shares <n>] [--max-secret-len <n>] [--context <labels>]",
+        "vectis config sharing delete <name>",
+    ],
+    summary: Some("Lists or edits local config Shamir secret sharing profiles by unique name."),
+    sections: &[
+        HelpSection {
+            title: "Behavior:",
+            lines: &[
+                "  edits sharing_profiles in VECTIS_CONFIG_PATH only",
+                "  threshold must be at least 2 and no greater than shares",
+                "  shares must not exceed 32; context uses key=value labels",
+            ],
+        },
+        HelpSection {
+            title: "Example:",
+            lines: &[
+                "  vectis config sharing add --name customer-secret-3of5-v1 --kid <kid> --threshold 3 --shares 5 --max-secret-len 4096 --context tenant=acme\\;purpose=customer-secret-sharing\\;version=1",
             ],
         },
     ],
@@ -1303,6 +1346,47 @@ const COMMIT_HELP: CommandHelp = CommandHelp {
     output: true,
 };
 
+const SHARES_HELP: CommandHelp = CommandHelp {
+    key: "shares",
+    heading: "Usage:",
+    usage: &[
+        "vectis shares split <kid> --json '<json>'",
+        "vectis shares split <kid> --file shares-split.json",
+        "vectis shares combine --json '<json>'",
+        "vectis shares combine --file shares-combine.json",
+    ],
+    summary: Some(
+        "Splits or combines authenticated Shamir secret shares using signed-config sharing profiles.",
+    ),
+    sections: &[
+        HelpSection {
+            title: "Split request JSON:",
+            lines: &[r#"  {"profile":"customer-secret-3of5-v1","plaintext":"secret-value"}"#],
+        },
+        HelpSection {
+            title: "Combine request JSON:",
+            lines: &[
+                r#"  {"kid":"<kid>","profile":"customer-secret-3of5-v1","shares":["vectis-sss-v1.<share>"]}"#,
+            ],
+        },
+        HelpSection {
+            title: "Endpoints:",
+            lines: &[
+                "  split <kid>           POST /shares/split/{kid}, requires VECTIS_APIKEY",
+                "  combine               POST /shares/combine, requires VECTIS_APIKEY",
+            ],
+        },
+        HelpSection {
+            title: "Input options:",
+            lines: &[
+                "  --json <json>         JSON object as a shell argument",
+                "  --file <path>         Path to a JSON file",
+            ],
+        },
+    ],
+    output: true,
+};
+
 const MESSAGE_HELP: CommandHelp = CommandHelp {
     key: "message",
     heading: "Usage:",
@@ -1371,6 +1455,7 @@ const COMMAND_HELPS: &[CommandHelp] = &[
     CONFIG_MAC_HELP,
     CONFIG_MASKING_HELP,
     CONFIG_COMMITMENT_HELP,
+    CONFIG_SHARING_HELP,
     PUB_HELP,
     SIGN_HELP,
     FPE_HELP,
@@ -1379,6 +1464,7 @@ const COMMAND_HELPS: &[CommandHelp] = &[
     INDEX_HELP,
     MASK_HELP,
     COMMIT_HELP,
+    SHARES_HELP,
     MESSAGE_HELP,
 ];
 

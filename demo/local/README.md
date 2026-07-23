@@ -8,6 +8,7 @@ operations over HTTP:
 - reversible tokenization;
 - MAC create/verify;
 - cryptographic commitment create/verify;
+- Shamir secret sharing split/combine;
 - blind index create/verify;
 - internal message encrypt/decrypt;
 - sign and verification.
@@ -31,7 +32,8 @@ encrypted plaintext in SQLite. MAC profiles produce deterministic keyed digests
 scoped by signed profile context. Commitment profiles produce stateless keyed
 commitments with random openings, so repeated commitments for the same plaintext
 can differ. Blind indexes reuse those MAC profiles and persist deterministic
-indexes in SQLite. The internal message and sign examples read
+indexes in SQLite. The sharing profile produces authenticated stateless 3-of-5
+shares and reconstructs the secret from only three shares. The internal message and sign examples read
 `personaldata.json` and use a compact JSON representation of that file as the
 message body.
 
@@ -50,7 +52,7 @@ bash demo/local/configure-config.sh
 
 The scripts create local state under `demo/local/site`, including SQLite
 storage, `init.json`, `.unseal_key`, an app API key, and signed FPE, masking,
-tokenization, MAC, and commitment config profiles. Blind indexes reuse the MAC
+tokenization, MAC, commitment, and sharing config profiles. Blind indexes reuse the MAC
 profiles and are enabled by the same local config. The operational key is
 created with the `hybrid-standard-v1` crypto profile.
 

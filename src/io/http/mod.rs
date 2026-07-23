@@ -25,6 +25,7 @@ mod permissions;
 mod pubkey;
 mod remote_routes;
 mod routes;
+mod sharing;
 mod sign;
 mod test;
 mod token;
@@ -38,6 +39,7 @@ use crate::core::masking::MaskingProfile;
 use crate::core::permissions::AuthenticatedClient;
 use crate::core::remote_routes::{PeerPublicKeys, RemoteRoute};
 use crate::core::routes::FinalAppRoute;
+use crate::core::sharing::SharingProfile;
 use crate::core::storage::StorageState;
 use crate::core::tokenization::TokenizationProfile;
 use crate::core::{audit, blocking, metrics as core_metrics};
@@ -261,6 +263,12 @@ impl HttpState {
         config_state.commitment_profiles.len()
     }
 
+    async fn sharing_profiles_loaded(&self) -> usize {
+        let config_state = self.config_state.read().await;
+
+        config_state.sharing_profiles.len()
+    }
+
     async fn routes_output(&self) -> crate::core::routes::ListRoutesOutput {
         let config_state = self.config_state.read().await;
 
@@ -307,6 +315,12 @@ impl HttpState {
         let config_state = self.config_state.read().await;
 
         config_state.commitment_profiles.get(name).cloned()
+    }
+
+    async fn sharing_profile(&self, name: &str) -> Option<SharingProfile> {
+        let config_state = self.config_state.read().await;
+
+        config_state.sharing_profiles.get(name).cloned()
     }
 
     async fn reload_config_state(&self) -> Result<ConfigReloadOutcome, DynError> {
@@ -412,6 +426,21 @@ impl HttpState {
                         request,
                     )
                 },
+                |request| {
+                    let source = config_key_sources
+                        .iter()
+                        .find(|source| source.kid == request.kid)
+                        .ok_or_else(|| {
+                            crate::error::invalid_input(format!(
+                                "sharing profile references kid not loaded in memory: {}",
+                                request.kid
+                            ))
+                        })?;
+                    crate::core::sharing::derive_sharing_key_for_profile(
+                        &source.symmetric_key_hex,
+                        request,
+                    )
+                },
             )
         })
         .await;
@@ -439,6 +468,7 @@ impl HttpState {
             mac_profiles: self.mac_profiles_loaded().await,
             masking_profiles: self.masking_profiles_loaded().await,
             commitment_profiles: self.commitment_profiles_loaded().await,
+            sharing_profiles: self.sharing_profiles_loaded().await,
         });
     }
 
@@ -540,6 +570,8 @@ fn record_operation_denied_metric(event_name: &str) {
         "commit.verify.denied" => record_crypto_failed("commit_verify"),
         "commit.create.batch.denied" => record_crypto_failed("commit_create_batch"),
         "commit.verify.batch.denied" => record_crypto_failed("commit_verify_batch"),
+        "shares.split.denied" => record_crypto_failed("share_split"),
+        "shares.combine.denied" => record_crypto_failed("share_combine"),
         "sign.denied" => core_metrics::record_crypto_operation("sign", "failed"),
         "self_test.denied" => {}
         _ => {}
@@ -600,6 +632,8 @@ pub fn router(state: HttpState) -> Router {
         .route("/commit/verify/batch", post(commit_verify_batch_endpoint))
         .route("/commit/verify", post(commitments::verify_endpoint))
         .route("/commit/{kid}", post(commitments::create_endpoint))
+        .route("/shares/split/{kid}", post(sharing::split_endpoint))
+        .route("/shares/combine", post(sharing::combine_endpoint))
         .route("/pub/{kid}", get(pubkey::pub_endpoint))
         .route(
             "/message/internal/encrypt/{kid}",

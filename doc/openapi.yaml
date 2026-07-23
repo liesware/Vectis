@@ -27,6 +27,7 @@ tags:
   - name: Tokenization
   - name: MAC
   - name: Commitments
+  - name: Secret Sharing
   - name: Blind Index
   - name: Masking
   - name: Observability
@@ -285,7 +286,7 @@ paths:
     post:
       tags: [Config]
       summary: Reload the unified signed config
-      description: Administrative endpoint requiring root or an admin client. Reloads the unified config (routes, remote_routes, permissions, fpe_profiles, tokenization_profiles, mac_profiles, commitment_profiles, masking_profiles) only after VECTIS_CONFIG_PATH and VECTIS_CONFIG_SIGN_PATH are successfully read, verified, and validated. Every route, FPE profile, tokenization profile, MAC profile, commitment profile, and masking profile kid must exist in the keys currently loaded in memory. A missing config reloads to empty sections; an invalid signature, invalid file, or unloaded kid returns an error and keeps the previous in-memory config. If config.json changed but config_sign.json signs older content, reload keeps the previous state and returns a warning.
+      description: Administrative endpoint requiring root or an admin client. Reloads the unified config (routes, remote_routes, permissions, fpe_profiles, tokenization_profiles, mac_profiles, commitment_profiles, masking_profiles, sharing_profiles) only after VECTIS_CONFIG_PATH and VECTIS_CONFIG_SIGN_PATH are successfully read, verified, and validated. Every route and profile kid must exist in the keys currently loaded in memory. A missing config reloads to empty sections; an invalid signature, invalid file, or unloaded kid returns an error and keeps the previous in-memory config. If config.json changed but config_sign.json signs older content, reload keeps the previous state and returns a warning.
       security:
         - ApiKeyAuth: []
       responses:
@@ -950,6 +951,54 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
+  /shares/split/{kid}:
+    post:
+      tags: [Secret Sharing]
+      summary: Split a UTF-8 secret into authenticated Shamir shares
+      description: Creates a stateless vectis-sss-v1 sharing set. The configured threshold and total share count are returned in authenticated share envelopes. Requires an active key.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ShareSplitInput"
+      responses:
+        "200":
+          description: Authenticated Shamir shares
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShareSplitOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /shares/combine:
+    post:
+      tags: [Secret Sharing]
+      summary: Combine authenticated Shamir shares
+      description: Validates share tags and profile/KID/set consistency before reconstructing the UTF-8 secret. Requires an active or retired key.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ShareCombineInput"
+      responses:
+        "200":
+          description: Reconstructed secret
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShareCombineOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
   /index/{kid}:
     post:
       tags: [Blind Index]
@@ -1408,13 +1457,13 @@ components:
           type: array
           items:
             type: string
-            enum: [admin, keys, lifecycle, self-test, sign, message, fpe-encrypt, fpe-decrypt, token-encode, token-decode, mac-create, mac-verify, commit-create, commit-verify, index-create, index-verify, mask, metrics]
+            enum: [admin, keys, lifecycle, self-test, sign, message, fpe-encrypt, fpe-decrypt, token-encode, token-decode, mac-create, mac-verify, commit-create, commit-verify, share-split, share-combine, index-create, index-verify, mask, metrics]
           example:
             - message
 
     ReloadConfigResponse:
       type: object
-      required: [status, routes_loaded, remote_routes_loaded, clients_loaded, fpe_profiles_loaded, tokenization_profiles_loaded, mac_profiles_loaded, commitment_profiles_loaded, masking_profiles_loaded]
+      required: [status, routes_loaded, remote_routes_loaded, clients_loaded, fpe_profiles_loaded, tokenization_profiles_loaded, mac_profiles_loaded, commitment_profiles_loaded, masking_profiles_loaded, sharing_profiles_loaded]
       properties:
         status:
           const: reloaded
@@ -1443,6 +1492,9 @@ components:
           type: integer
           minimum: 0
         masking_profiles_loaded:
+          type: integer
+          minimum: 0
+        sharing_profiles_loaded:
           type: integer
           minimum: 0
 
@@ -2470,6 +2522,69 @@ components:
         valid:
           type: boolean
           example: true
+
+    ShareSplitInput:
+      type: object
+      additionalProperties: false
+      required: [profile, plaintext]
+      properties:
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+          example: customer-secret-3of5-v1
+        plaintext:
+          $ref: "#/components/schemas/TextField"
+          example: secret-value
+
+    ShareSplitOutput:
+      type: object
+      required: [kid, profile, threshold, set_id, shares]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+        threshold:
+          type: integer
+          minimum: 2
+        set_id:
+          $ref: "#/components/schemas/Base64UrlNoPad"
+        shares:
+          type: array
+          minItems: 2
+          maxItems: 32
+          items:
+            type: string
+            pattern: '^vectis-sss-v1\.[A-Za-z0-9_-]+$'
+
+    ShareCombineInput:
+      type: object
+      additionalProperties: false
+      required: [kid, profile, shares]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+        shares:
+          type: array
+          minItems: 2
+          maxItems: 32
+          items:
+            type: string
+            pattern: '^vectis-sss-v1\.[A-Za-z0-9_-]+$'
+
+    ShareCombineOutput:
+      type: object
+      required: [kid, profile, set_id, plaintext]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+        set_id:
+          $ref: "#/components/schemas/Base64UrlNoPad"
+        plaintext:
+          $ref: "#/components/schemas/TextField"
 
     CommitCreateBatchItemInput:
       type: object

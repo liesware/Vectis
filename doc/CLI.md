@@ -325,6 +325,18 @@ must be between 32 and 64 bytes. The CLI validates field shape but does not
 check whether the KID is loaded in a running server. That check happens when
 Vectis loads the signed config.
 
+### `vectis config sharing`
+
+Edits stateless Shamir `sharing_profiles` in `VECTIS_CONFIG_PATH`.
+
+```sh
+vectis config sharing add --name customer-secret-3of5-v1 --kid <kid> --threshold 3 --shares 5 --max-secret-len 4096 --context 'tenant=acme;purpose=customer-secret-sharing;version=1'
+vectis config sharing list
+```
+
+Names and context are signed and AAD-safe. `threshold` must be at least 2 and
+no greater than `shares`; `shares` is capped at 32.
+
 ### `vectis config masking`
 
 Edits the local `masking_profiles` section in `VECTIS_CONFIG_PATH`. The lookup
@@ -571,6 +583,19 @@ vectis commit verify --json '{"ref":"reg1","kid":"<kid>","profile":"pan-commitme
 `verify` requires `commit-verify` permission for the body KID and allows
 `active` or `retired` keys. Create returns a random `opening`, so the same
 plaintext can produce different commitments.
+
+### `vectis shares`
+
+Splits or combines authenticated stateless `vectis-sss-v1` shares.
+
+```sh
+vectis shares split <kid> --json '{"profile":"customer-secret-3of5-v1","plaintext":"secret-value"}'
+vectis shares combine --json '{"kid":"<kid>","profile":"customer-secret-3of5-v1","shares":["vectis-sss-v1.<share>"]}'
+```
+
+Split requires `share-split` and an active KID. Combine requires
+`share-combine`, accepts active or retired KIDs, and reconstructs only after
+authenticating a compatible threshold-sized share set.
 
 ### `vectis mask`
 

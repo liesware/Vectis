@@ -41,6 +41,8 @@ cat > "${SITE_DIR}/config.json" <<JSON
             "mac-verify",
             "commit-create",
             "commit-verify",
+            "share-split",
+            "share-combine",
             "index-create",
             "index-verify",
             "mask",
@@ -143,6 +145,16 @@ cat > "${SITE_DIR}/config.json" <<JSON
       "opening_len": 32
     }
   ],
+  "sharing_profiles": [
+    {
+      "name": "customer-secret-3of5-v1",
+      "kid": "${LOCAL_KID}",
+      "threshold": 3,
+      "shares": 5,
+      "max_secret_len": 4096,
+      "context": "tenant=demo;purpose=customer_secret_sharing;version=1"
+    }
+  ],
   "masking_profiles": [
     {
       "name": "credit-card-pan-display-v1",
@@ -183,5 +195,6 @@ echo "  FPE profiles: 3"
 echo "  tokenization profiles: 3"
 echo "  MAC profiles: 3"
 echo "  commitment profiles: 3"
+echo "  sharing profiles: 1"
 echo "  masking profiles: 3"
 echo "Next: bash demo/local/start-vectis.sh"

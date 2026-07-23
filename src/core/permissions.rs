@@ -24,6 +24,8 @@ pub const PERMISSION_ACTIONS: &[&str] = &[
     "mask",
     "commit-create",
     "commit-verify",
+    "share-split",
+    "share-combine",
     "metrics",
 ];
 const GLOBAL_PERMISSION_ACTIONS: &[&str] = &["metrics"];

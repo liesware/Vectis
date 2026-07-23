@@ -44,6 +44,7 @@ COMMITMENT_SAMPLES = [
 ]
 
 INDEX_SAMPLES = MAC_SAMPLES
+SHARING_SAMPLE = ("customer-secret-3of5-v1", "customer-secret-demo-value")
 
 
 def load_env(path):
@@ -369,6 +370,41 @@ def run_indexes(base_url, kid, api_key):
             raise RuntimeError(f"Blind index verification failed for {profile}")
 
 
+def run_sharing(base_url, kid, api_key):
+    print("== Secret Sharing (3-of-5) ==", flush=True)
+    profile, plaintext = SHARING_SAMPLE
+    split_result = post_json(
+        base_url,
+        f"/shares/split/{kid}",
+        {"profile": profile, "plaintext": plaintext},
+        api_key,
+    )
+    shares = split_result["response"]["shares"]
+    combined = post_json(
+        base_url,
+        "/shares/combine",
+        {"kid": kid, "profile": profile, "shares": shares[:3]},
+        api_key,
+    )
+    recovered = combined["response"]["plaintext"]
+    status = "OK" if recovered == plaintext else "FAILED"
+    print_section(profile)
+    print_http_step("split", split_result)
+    print_http_step("combine (first 3 shares)", combined)
+    print_summary(
+        [
+            ("input", plaintext),
+            ("threshold", str(split_result["response"]["threshold"])),
+            ("shares_created", str(len(shares))),
+            ("set_id", split_result["response"]["set_id"]),
+            ("combine", recovered),
+            ("status", status),
+        ]
+    )
+    if status != "OK":
+        raise RuntimeError("Secret sharing round-trip failed")
+
+
 def run_internal_message(base_url, kid, api_key, plaintext):
     print("== Internal Message ==", flush=True)
     encrypted = post_json(
@@ -456,6 +492,7 @@ def main():
     run_mac(base_url, kid, api_key)
     run_commitments(base_url, kid, api_key)
     run_indexes(base_url, kid, api_key)
+    run_sharing(base_url, kid, api_key)
     print_yaml_block("personaldata.json", personaldata)
     run_internal_message(base_url, kid, api_key, plaintext)
     print_yaml_block("personaldata.json", personaldata)

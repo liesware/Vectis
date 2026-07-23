@@ -21,6 +21,7 @@ pub struct ReloadConfigResponse {
     mac_profiles_loaded: usize,
     masking_profiles_loaded: usize,
     commitment_profiles_loaded: usize,
+    sharing_profiles_loaded: usize,
 }
 
 pub async fn reload_endpoint(
@@ -71,6 +72,7 @@ pub async fn reload_endpoint(
     let mac_profiles_loaded = state.mac_profiles_loaded().await;
     let masking_profiles_loaded = state.masking_profiles_loaded().await;
     let commitment_profiles_loaded = state.commitment_profiles_loaded().await;
+    let sharing_profiles_loaded = state.sharing_profiles_loaded().await;
     state.refresh_loaded_gauges().await;
     metrics::record_config_reload(reload_result);
     record_config_reload_timestamp(reload_result);
@@ -84,6 +86,7 @@ pub async fn reload_endpoint(
         mac_profiles_loaded,
         masking_profiles_loaded,
         commitment_profiles_loaded,
+        sharing_profiles_loaded,
         warning = warning.as_deref(),
         "config reload response ready"
     );
@@ -100,6 +103,7 @@ pub async fn reload_endpoint(
         mac_profiles_loaded,
         masking_profiles_loaded,
         commitment_profiles_loaded,
+        sharing_profiles_loaded,
     }))
 }
 

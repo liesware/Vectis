@@ -1,6 +1,6 @@
 use crate::core::{
     canonical, commitments, config, fpe, mac, masking, permissions, protocol, remote_routes,
-    routes, tokenization,
+    routes, sharing, tokenization,
 };
 use crate::error::DynError;
 use serde::{Deserialize, Serialize};
@@ -29,6 +29,8 @@ pub struct ConfigFile {
     masking_profiles: Vec<masking::MaskingProfileInput>,
     #[serde(default)]
     commitment_profiles: Vec<commitments::CommitmentProfileInput>,
+    #[serde(default)]
+    sharing_profiles: Vec<sharing::SharingProfileInput>,
 }
 
 pub struct ConfigState {
@@ -40,6 +42,7 @@ pub struct ConfigState {
     pub mac_profiles: mac::MacProfilesState,
     pub masking_profiles: masking::MaskingProfilesState,
     pub commitment_profiles: commitments::CommitmentProfilesState,
+    pub sharing_profiles: sharing::SharingProfilesState,
 }
 
 impl Zeroize for ConfigState {
@@ -50,6 +53,7 @@ impl Zeroize for ConfigState {
         self.mac_profiles.zeroize();
         self.masking_profiles.zeroize();
         self.commitment_profiles.zeroize();
+        self.sharing_profiles.zeroize();
     }
 }
 
@@ -73,6 +77,7 @@ struct ConfigValidationHooks<
     HashAlgorithmForKid,
     DeriveMacKey,
     DeriveCommitmentKey,
+    DeriveSharingKey,
 > {
     is_loaded_kid: &'a IsLoadedKid,
     derive_fpe_key: &'a DeriveFpeKey,
@@ -80,6 +85,7 @@ struct ConfigValidationHooks<
     hash_algorithm_for_kid: &'a HashAlgorithmForKid,
     derive_mac_key: &'a DeriveMacKey,
     derive_commitment_key: &'a DeriveCommitmentKey,
+    derive_sharing_key: &'a DeriveSharingKey,
 }
 
 pub fn canonical_config_json(content: &str) -> Result<String, DynError> {
@@ -107,6 +113,9 @@ pub fn validate_config_content(
     derive_commitment_key: impl Fn(
         commitments::CommitmentKeyDerivationRequest<'_>,
     ) -> Result<commitments::DerivedCommitmentKey, DynError>,
+    derive_sharing_key: impl Fn(
+        sharing::SharingKeyDerivationRequest<'_>,
+    ) -> Result<sharing::DerivedSharingKey, DynError>,
 ) -> Result<ConfigState, DynError> {
     let config_file: ConfigFile = serde_json::from_str(content).map_err(|err| {
         crate::error::invalid_input(format!("config file must be valid JSON: {err}"))
@@ -118,6 +127,7 @@ pub fn validate_config_content(
         hash_algorithm_for_kid: &hash_algorithm_for_kid,
         derive_mac_key: &derive_mac_key,
         derive_commitment_key: &derive_commitment_key,
+        derive_sharing_key: &derive_sharing_key,
     };
     validate_config_file(config_file, config, &hooks)
 }
@@ -148,6 +158,9 @@ pub fn load_config_state(
     derive_commitment_key: impl Fn(
         commitments::CommitmentKeyDerivationRequest<'_>,
     ) -> Result<commitments::DerivedCommitmentKey, DynError>,
+    derive_sharing_key: impl Fn(
+        sharing::SharingKeyDerivationRequest<'_>,
+    ) -> Result<sharing::DerivedSharingKey, DynError>,
 ) -> Result<ConfigState, DynError> {
     let hooks = ConfigValidationHooks {
         is_loaded_kid: &is_loaded_kid,
@@ -156,6 +169,7 @@ pub fn load_config_state(
         hash_algorithm_for_kid: &hash_algorithm_for_kid,
         derive_mac_key: &derive_mac_key,
         derive_commitment_key: &derive_commitment_key,
+        derive_sharing_key: &derive_sharing_key,
     };
     match load_config_file(&config.config_path, verify_config, config, &hooks) {
         Ok(state) => {
@@ -194,6 +208,9 @@ pub fn reload_config_state(
     derive_commitment_key: impl Fn(
         commitments::CommitmentKeyDerivationRequest<'_>,
     ) -> Result<commitments::DerivedCommitmentKey, DynError>,
+    derive_sharing_key: impl Fn(
+        sharing::SharingKeyDerivationRequest<'_>,
+    ) -> Result<sharing::DerivedSharingKey, DynError>,
 ) -> Result<ConfigState, DynError> {
     let hooks = ConfigValidationHooks {
         is_loaded_kid: &is_loaded_kid,
@@ -202,6 +219,7 @@ pub fn reload_config_state(
         hash_algorithm_for_kid: &hash_algorithm_for_kid,
         derive_mac_key: &derive_mac_key,
         derive_commitment_key: &derive_commitment_key,
+        derive_sharing_key: &derive_sharing_key,
     };
     match load_config_file(&config.config_path, verify_config, config, &hooks) {
         Ok(state) => Ok(state),
@@ -226,6 +244,9 @@ fn load_config_file(
         impl Fn(
             commitments::CommitmentKeyDerivationRequest<'_>,
         ) -> Result<commitments::DerivedCommitmentKey, DynError>,
+        impl Fn(
+            sharing::SharingKeyDerivationRequest<'_>,
+        ) -> Result<sharing::DerivedSharingKey, DynError>,
     >,
 ) -> Result<ConfigState, DynError> {
     let content = read_config_file(path)?;
@@ -251,6 +272,9 @@ fn validate_config_file(
         impl Fn(
             commitments::CommitmentKeyDerivationRequest<'_>,
         ) -> Result<commitments::DerivedCommitmentKey, DynError>,
+        impl Fn(
+            sharing::SharingKeyDerivationRequest<'_>,
+        ) -> Result<sharing::DerivedSharingKey, DynError>,
     >,
 ) -> Result<ConfigState, DynError> {
     protocol::validate_protocol_version("config.version", &config_file.version)?;
@@ -284,6 +308,12 @@ fn validate_config_file(
         hooks.hash_algorithm_for_kid,
         hooks.derive_commitment_key,
     )?;
+    let validated_sharing_profiles = sharing::validate_sharing_profiles(
+        config_file.sharing_profiles,
+        hooks.is_loaded_kid,
+        hooks.hash_algorithm_for_kid,
+        hooks.derive_sharing_key,
+    )?;
 
     Ok(ConfigState {
         routes: routes::RoutesState::from_parts(
@@ -298,6 +328,7 @@ fn validate_config_file(
         mac_profiles: validated_mac_profiles,
         masking_profiles: validated_masking_profiles,
         commitment_profiles: validated_commitment_profiles,
+        sharing_profiles: validated_sharing_profiles,
     })
 }
 
@@ -315,6 +346,7 @@ fn empty_config_state(config: &config::AppConfig) -> ConfigState {
         mac_profiles: mac::MacProfilesState::default(),
         masking_profiles: masking::MaskingProfilesState::default(),
         commitment_profiles: commitments::CommitmentProfilesState::default(),
+        sharing_profiles: sharing::SharingProfilesState::default(),
     }
 }
 
@@ -402,6 +434,16 @@ mod tests {
         })
     }
 
+    fn dummy_sharing_key(
+        _: sharing::SharingKeyDerivationRequest<'_>,
+    ) -> Result<sharing::DerivedSharingKey, DynError> {
+        Ok(sharing::DerivedSharingKey {
+            public_algorithm: String::from("HMAC(BLAKE2b(256))"),
+            botan_algorithm: String::from("HMAC(BLAKE2b(256))"),
+            share_auth_key: Zeroizing::new(vec![0u8; sharing::SHARING_KEY_SIZE_BYTES]),
+        })
+    }
+
     fn test_config(config_path: PathBuf) -> config::AppConfig {
         config::AppConfig {
             http_bind_addr: "127.0.0.1:3000".parse().unwrap(),
@@ -464,6 +506,7 @@ mod tests {
             dummy_hash_algorithm,
             dummy_mac_key,
             dummy_commitment_key,
+            dummy_sharing_key,
         )
         .unwrap();
         assert_eq!(state.routes.len(), 0);
@@ -489,6 +532,7 @@ mod tests {
             dummy_hash_algorithm,
             dummy_mac_key,
             dummy_commitment_key,
+            dummy_sharing_key,
         );
         let _ = fs::remove_file(&path);
         assert!(result.is_err());
@@ -508,6 +552,7 @@ mod tests {
             dummy_hash_algorithm,
             dummy_mac_key,
             dummy_commitment_key,
+            dummy_sharing_key,
         );
         let _ = fs::remove_file(&path);
         let err = match result {
@@ -535,6 +580,7 @@ mod tests {
             dummy_hash_algorithm,
             dummy_mac_key,
             dummy_commitment_key,
+            dummy_sharing_key,
         );
 
         let _ = fs::remove_file(&path);
@@ -557,6 +603,7 @@ mod tests {
             dummy_hash_algorithm,
             dummy_mac_key,
             dummy_commitment_key,
+            dummy_sharing_key,
         )
         .unwrap();
         assert_eq!(state.routes.len(), 0);
@@ -580,6 +627,7 @@ mod tests {
             dummy_hash_algorithm,
             dummy_mac_key,
             dummy_commitment_key,
+            dummy_sharing_key,
         );
         let _ = fs::remove_file(&path);
         assert!(result.is_err());
@@ -603,6 +651,7 @@ mod tests {
             dummy_hash_algorithm,
             dummy_mac_key,
             dummy_commitment_key,
+            dummy_sharing_key,
         );
 
         let _ = fs::remove_file(&path);
@@ -698,6 +747,7 @@ mod tests {
             dummy_hash_algorithm,
             dummy_mac_key,
             dummy_commitment_key,
+            dummy_sharing_key,
         )
         .unwrap();
 
@@ -720,6 +770,7 @@ mod tests {
                 dummy_hash_algorithm,
                 dummy_mac_key,
                 dummy_commitment_key,
+                dummy_sharing_key,
             )
             .is_err()
         );
@@ -733,6 +784,7 @@ mod tests {
                 dummy_hash_algorithm,
                 dummy_mac_key,
                 dummy_commitment_key,
+                dummy_sharing_key,
             )
             .is_err()
         );
@@ -746,6 +798,7 @@ mod tests {
                 dummy_hash_algorithm,
                 dummy_mac_key,
                 dummy_commitment_key,
+                dummy_sharing_key,
             )
             .is_err()
         );
@@ -759,6 +812,7 @@ mod tests {
                 dummy_hash_algorithm,
                 dummy_mac_key,
                 dummy_commitment_key,
+                dummy_sharing_key,
             )
             .is_err()
         );
@@ -791,6 +845,7 @@ mod tests {
             dummy_hash_algorithm,
             dummy_mac_key,
             dummy_commitment_key,
+            dummy_sharing_key,
         ) {
             Ok(_) => panic!("tokenization_version must be rejected as an unknown field"),
             Err(err) => err,
