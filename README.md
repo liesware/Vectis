@@ -18,9 +18,10 @@ object or payload itself after it leaves the transport layer.
 > In Latin, *vectis* can mean a lever, crowbar, fastening bar, or carrying pole:
 > a simple tool used to move something heavy with controlled force.
 
-> **Status: experimental.** This project is incomplete, not audited, not
-> production-ready, and should be treated as a work in progress.
-> **Do not use Vectis to protect real sensitive data yet.**
+> **Status: in progress.** Vectis is under active development and has not yet
+> completed an external security audit. It is suitable for evaluation, demos,
+> and design-partner PoCs, but should not be used as the sole protection layer
+> for production sensitive data yet.
 
 ## Why Vectis?
 
@@ -465,16 +466,13 @@ other tools, not absorb their responsibilities.
 
 ## Security Status
 
-Vectis is currently:
+Vectis is currently experimental and under active development. It has not yet
+completed an external security audit, and its APIs and operational model may
+still change as the project matures.
 
-- experimental;
-- incomplete;
-- not audited;
-- not production-ready;
-- subject to major design changes.
-
-Do not use Vectis with real patient data, production secrets, financial records,
-or any other real sensitive data.
+Use Vectis for evaluation, demos, internal testing, and design-partner PoCs. Do
+not rely on it as the only protection layer for production patient data,
+production secrets, financial records, or other sensitive data yet.
 
 The threat model, explicit assumptions, and known limitations are documented in
 [doc/ThreatModel.md](doc/ThreatModel.md).
