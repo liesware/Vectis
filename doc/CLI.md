@@ -542,6 +542,21 @@ vectis mac verify --json '{"ref":"reg1","kid":"<kid>","profile":"pan-blind-index
 `verify` requires `mac-verify` permission for the body KID and allows `active` or `retired`
 keys. The response reports the resolved MAC algorithm and digest.
 
+### `vectis index`
+
+Calls local blind index create/verify endpoints. Blind indexes reuse signed
+`mac_profiles`; manage those profiles with `vectis config mac`.
+
+```sh
+vectis index create <kid> --json '{"ref":"reg1","profile":"pan-index-v1","plaintext":"4111111111111111"}'
+vectis index verify --json '{"ref":"reg1","kid":"<kid>","profile":"pan-index-v1","plaintext":"4111111111111111"}'
+```
+
+`create` requires `index-create` permission for the KID and an `active` key.
+`verify` requires `index-verify` permission for the body KID and allows
+`active` or `retired` keys. `/mac` computes a deterministic digest; `/index`
+computes the same style of digest and persists membership for later verify.
+
 ### `vectis commit`
 
 Calls local cryptographic commitment create/verify endpoints. Commitment

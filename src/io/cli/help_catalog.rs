@@ -21,6 +21,7 @@ pub(crate) const EXECUTABLE_COMMANDS: &[&str] = &[
     "fpe",
     "token",
     "mac",
+    "index",
     "mask",
     "commit",
     "message",
@@ -40,6 +41,7 @@ pub(crate) const HTTP_COMMANDS: &[&str] = &[
     "fpe",
     "token",
     "mac",
+    "index",
     "mask",
     "commit",
     "message",
@@ -241,6 +243,7 @@ const ROOT_HELP: CommandHelp = CommandHelp {
                 "  fpe                   Encrypt or decrypt field values through HTTP",
                 "  token                 Encode or decode reversible random tokens through HTTP",
                 "  mac                   Create or verify MAC digests through HTTP",
+                "  index                 Create or verify blind indexes through HTTP",
                 "  mask                  Mask field values for controlled display through HTTP",
                 "  commit                Create or verify cryptographic commitments through HTTP",
                 "  message               Send, receive, encrypt, or decrypt messages through HTTP",
@@ -262,6 +265,7 @@ const ROOT_HELP: CommandHelp = CommandHelp {
                 "  vectis sign <kid> --file sign-request.json",
                 "  vectis fpe encrypt <kid> --file fpe-encrypt.json",
                 "  vectis token encode <kid> --file token-encode.json",
+                "  vectis index create <kid> --file index-create.json",
                 "  vectis commit create <kid> --file commit-create.json",
             ],
         },
@@ -1183,6 +1187,49 @@ const MAC_HELP: CommandHelp = CommandHelp {
     output: true,
 };
 
+const INDEX_HELP: CommandHelp = CommandHelp {
+    key: "index",
+    heading: "Usage:",
+    usage: &[
+        "vectis index create <kid> --json '<json>'",
+        "vectis index create <kid> --file index-create.json",
+        "vectis index verify --json '<json>'",
+        "vectis index verify --file index-verify.json",
+    ],
+    summary: Some("Creates or verifies blind indexes with signed-config MAC profiles."),
+    sections: &[
+        HelpSection {
+            title: "Create request JSON:",
+            lines: &[r#"  {"ref":"reg1","profile":"pan-index-v1","plaintext":"4111111111111111"}"#],
+        },
+        HelpSection {
+            title: "Verify request JSON:",
+            lines: &[
+                r#"  {"ref":"reg1","kid":"<kid>","profile":"pan-index-v1","plaintext":"4111111111111111"}"#,
+            ],
+        },
+        HelpSection {
+            title: "Endpoints:",
+            lines: &[
+                "  create <kid>          POST /index/{kid}, requires VECTIS_APIKEY",
+                "  verify                POST /index/verify, requires VECTIS_APIKEY",
+            ],
+        },
+        HelpSection {
+            title: "Input options:",
+            lines: &[
+                "  --json <json>         JSON object as a shell argument",
+                "  --file <path>         Path to a JSON file",
+            ],
+        },
+        HelpSection {
+            title: "Configuration:",
+            lines: &["  Blind indexes reuse signed MAC profiles managed with vectis config mac."],
+        },
+    ],
+    output: true,
+};
+
 const MASK_HELP: CommandHelp = CommandHelp {
     key: "mask",
     heading: "Usage:",
@@ -1329,6 +1376,7 @@ const COMMAND_HELPS: &[CommandHelp] = &[
     FPE_HELP,
     TOKEN_HELP,
     MAC_HELP,
+    INDEX_HELP,
     MASK_HELP,
     COMMIT_HELP,
     MESSAGE_HELP,
@@ -1393,7 +1441,20 @@ mod tests {
         assert!(help.contains(
             "  token                 Encode or decode reversible random tokens through HTTP"
         ));
+        assert!(
+            help.contains("  index                 Create or verify blind indexes through HTTP")
+        );
         assert!(help.contains("vectis help config token"));
+    }
+
+    #[test]
+    fn index_help_lists_runtime_commands() {
+        let help = render_help("index");
+        assert!(help.contains("vectis index create <kid>"));
+        assert!(help.contains("vectis index verify"));
+        assert!(help.contains("POST /index/{kid}"));
+        assert!(help.contains("POST /index/verify"));
+        assert!(help.contains("vectis config mac"));
     }
 
     #[test]

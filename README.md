@@ -305,6 +305,8 @@ vectis fpe encrypt <kid> --file fpe-encrypt.json
 vectis token encode <kid> --file token-encode.json
 vectis mac create <kid> --file mac-create.json
 vectis mac verify --file mac-verify.json
+vectis index create <kid> --file index-create.json
+vectis index verify --file index-verify.json
 vectis commit create <kid> --file commit-create.json
 vectis commit verify --file commit-verify.json
 vectis mask <kid> --file mask.json
@@ -417,6 +419,7 @@ native `cargo-fuzz` targets.
 ## Documentation
 
 - [doc/API.md](doc/API.md): HTTP API and CLI mapping.
+- [doc/UseCases.md](doc/UseCases.md): real-world use cases per feature.
 - [doc/CLI.md](doc/CLI.md): CLI behavior, commands, output, and environment.
 - [doc/ENV.md](doc/ENV.md): environment variables and expected values.
 - [doc/Test.md](doc/Test.md): testing strategy and test commands.

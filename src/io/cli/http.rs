@@ -50,6 +50,7 @@ const HTTP_COMMANDS: &[HttpCommand] = &[
     HttpCommand::new("fpe", command_fpe),
     HttpCommand::new("token", command_token),
     HttpCommand::new("mac", command_mac),
+    HttpCommand::new("index", command_index),
     HttpCommand::new("mask", command_mask),
     HttpCommand::new("commit", command_commit),
     HttpCommand::new("message", command_message),
@@ -153,6 +154,7 @@ boxed_command!(command_sign, run_sign);
 boxed_command!(command_fpe, run_fpe);
 boxed_command!(command_token, run_token);
 boxed_command!(command_mac, run_mac);
+boxed_command!(command_index, run_index);
 boxed_command!(command_mask, run_mask);
 boxed_command!(command_commit, run_commit);
 boxed_command!(command_message, run_message);
@@ -637,6 +639,37 @@ async fn run_mac(args: Vec<String>, output: OutputFormat) -> Result<(), DynError
                 .await
         }
         _ => Err(invalid_input(format!("unknown mac command: {subcommand}"))),
+    }
+}
+
+async fn run_index(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+    let (subcommand, rest) = split_subcommand(args, "index command")?;
+    let client = CliHttpClient::from_env()?;
+
+    match subcommand.as_str() {
+        "create" => {
+            let (kid, rest) = split_subcommand(rest, "kid")?;
+            validate_kid("kid", &kid)?;
+            let body = parse_json_source(rest)?;
+            client
+                .send(
+                    Method::POST,
+                    &format!("/index/{kid}"),
+                    true,
+                    Some(body),
+                    output,
+                )
+                .await
+        }
+        "verify" => {
+            let body = parse_json_source(rest)?;
+            client
+                .send(Method::POST, "/index/verify", true, Some(body), output)
+                .await
+        }
+        _ => Err(invalid_input(format!(
+            "unknown index command: {subcommand}"
+        ))),
     }
 }
 
@@ -1280,7 +1313,7 @@ mod tests {
 
     #[test]
     fn key_catalog_commands_are_dispatched() {
-        for name in ["config", "fpe", "token"] {
+        for name in ["config", "fpe", "token", "index"] {
             assert!(
                 find_http_command(name).is_some(),
                 "{name} must remain in HTTP dispatch"
