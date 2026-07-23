@@ -6,6 +6,7 @@ pub mod fpe;
 pub mod indexes;
 pub mod init;
 pub mod internal_keys;
+pub mod json;
 pub mod key_material;
 pub mod key_validation;
 pub mod keys;

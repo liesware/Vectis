@@ -277,7 +277,7 @@ async fn run_keys(args: Vec<String>, output: OutputFormat) -> Result<(), DynErro
 }
 
 async fn run_lifecycle(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
-    let (kid, rest) = split_subcommand(args, "kid")?;
+    let (kid, rest) = split_positional_arg(args, "kid", "lifecycle")?;
     validate_kid("kid", &kid)?;
     let body = parse_lifecycle_body(rest)?;
 
@@ -559,7 +559,7 @@ async fn run_fpe(args: Vec<String>, output: OutputFormat) -> Result<(), DynError
 
     match subcommand.as_str() {
         "encrypt" => {
-            let (kid, rest) = split_subcommand(rest, "kid")?;
+            let (kid, rest) = split_positional_arg(rest, "kid", "fpe encrypt")?;
             validate_kid("kid", &kid)?;
             let body = parse_json_source(rest)?;
             client
@@ -588,7 +588,7 @@ async fn run_token(args: Vec<String>, output: OutputFormat) -> Result<(), DynErr
 
     match subcommand.as_str() {
         "encode" => {
-            let (kid, rest) = split_subcommand(rest, "kid")?;
+            let (kid, rest) = split_positional_arg(rest, "kid", "token encode")?;
             validate_kid("kid", &kid)?;
             let body = parse_json_source(rest)?;
             client
@@ -619,7 +619,7 @@ async fn run_mac(args: Vec<String>, output: OutputFormat) -> Result<(), DynError
 
     match subcommand.as_str() {
         "create" => {
-            let (kid, rest) = split_subcommand(rest, "kid")?;
+            let (kid, rest) = split_positional_arg(rest, "kid", "mac create")?;
             validate_kid("kid", &kid)?;
             let body = parse_json_source(rest)?;
             client
@@ -648,7 +648,7 @@ async fn run_index(args: Vec<String>, output: OutputFormat) -> Result<(), DynErr
 
     match subcommand.as_str() {
         "create" => {
-            let (kid, rest) = split_subcommand(rest, "kid")?;
+            let (kid, rest) = split_positional_arg(rest, "kid", "index create")?;
             validate_kid("kid", &kid)?;
             let body = parse_json_source(rest)?;
             client
@@ -674,7 +674,7 @@ async fn run_index(args: Vec<String>, output: OutputFormat) -> Result<(), DynErr
 }
 
 async fn run_mask(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
-    let (kid, rest) = split_subcommand(args, "kid")?;
+    let (kid, rest) = split_positional_arg(args, "kid", "mask")?;
     validate_kid("kid", &kid)?;
     let body = parse_json_source(rest)?;
     let client = CliHttpClient::from_env()?;
@@ -695,7 +695,7 @@ async fn run_commit(args: Vec<String>, output: OutputFormat) -> Result<(), DynEr
 
     match subcommand.as_str() {
         "create" => {
-            let (kid, rest) = split_subcommand(rest, "kid")?;
+            let (kid, rest) = split_positional_arg(rest, "kid", "commit create")?;
             validate_kid("kid", &kid)?;
             let body = parse_json_source(rest)?;
             client
@@ -726,7 +726,7 @@ async fn run_message(args: Vec<String>, output: OutputFormat) -> Result<(), DynE
 
     match subcommand.as_str() {
         "send" => {
-            let (kid, rest) = split_subcommand(rest, "sender kid")?;
+            let (kid, rest) = split_positional_arg(rest, "sender kid", "message send")?;
             validate_kid("sender_kid", &kid)?;
             let body = parse_json_source(rest)?;
             client
@@ -767,7 +767,7 @@ async fn run_internal_message(
 
     match subcommand.as_str() {
         "encrypt" => {
-            let (kid, rest) = split_subcommand(rest, "kid")?;
+            let (kid, rest) = split_positional_arg(rest, "kid", "message internal encrypt")?;
             validate_kid("kid", &kid)?;
             let body = parse_json_source(rest)?;
             client
@@ -874,7 +874,10 @@ impl CliHttpClient {
             request = request.json(&body);
         }
 
-        let response = request.send().await?;
+        let response = request
+            .send()
+            .await
+            .map_err(|err| cli_transport_error(&self.base_url, err))?;
         let status = response.status();
         let payload = response.text().await?;
 
@@ -883,6 +886,49 @@ impl CliHttpClient {
         }
 
         print_response(&payload, output)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TransportFailure {
+    Unreachable,
+    Timeout,
+    Other,
+}
+
+fn classify_transport_error(err: &reqwest::Error) -> TransportFailure {
+    if err.is_timeout() {
+        TransportFailure::Timeout
+    } else if err.is_connect() {
+        TransportFailure::Unreachable
+    } else {
+        TransportFailure::Other
+    }
+}
+
+fn cli_transport_error(base_url: &Url, err: reqwest::Error) -> DynError {
+    invalid_input(cli_transport_error_message(
+        base_url,
+        classify_transport_error(&err),
+    ))
+}
+
+fn cli_transport_error_message(base_url: &Url, failure: TransportFailure) -> String {
+    let display_url = base_url.as_str().trim_end_matches('/');
+    match failure {
+        TransportFailure::Unreachable => {
+            format!(
+                "cannot reach Vectis at {display_url} — is the server running? (VECTIS_API_URL)"
+            )
+        }
+        TransportFailure::Timeout => {
+            format!(
+                "timed out waiting for Vectis at {display_url} — is the server responding? (VECTIS_API_URL)"
+            )
+        }
+        TransportFailure::Other => {
+            format!("failed to reach Vectis at {display_url} (VECTIS_API_URL)")
+        }
     }
 }
 
@@ -1060,6 +1106,8 @@ fn expect_one(args: Vec<String>, field: &str) -> Result<String, DynError> {
         )));
     }
 
+    reject_option_like_positional(&args[0], field)?;
+
     Ok(args[0].clone())
 }
 
@@ -1074,6 +1122,24 @@ fn expect_no_args(args: &[String], command: &str) -> Result<(), DynError> {
 }
 
 fn split_subcommand(mut args: Vec<String>, field: &str) -> Result<(String, Vec<String>), DynError> {
+    let command = field.trim_end_matches(" command or kid");
+    let command = command.trim_end_matches(" command");
+    split_positional_arg_with_command(&mut args, field, command)
+}
+
+fn split_positional_arg(
+    mut args: Vec<String>,
+    field: &str,
+    command: &str,
+) -> Result<(String, Vec<String>), DynError> {
+    split_positional_arg_with_command(&mut args, field, command)
+}
+
+fn split_positional_arg_with_command(
+    args: &mut Vec<String>,
+    field: &str,
+    command: &str,
+) -> Result<(String, Vec<String>), DynError> {
     if args.is_empty() {
         return Err(invalid_input(format!(
             "missing {field}; run `{PROGRAM_NAME} help` for usage"
@@ -1081,9 +1147,19 @@ fn split_subcommand(mut args: Vec<String>, field: &str) -> Result<(String, Vec<S
     }
 
     let first = args.remove(0);
+    let command = if command.is_empty() { field } else { command };
+    reject_option_like_positional(&first, command)?;
     validation::validate_text_field(field, &first)?;
 
-    Ok((first, args))
+    Ok((first, std::mem::take(args)))
+}
+
+pub(super) fn reject_option_like_positional(value: &str, command: &str) -> Result<(), DynError> {
+    if value.starts_with('-') {
+        return Err(invalid_input(format!("unknown {command} option: {value}")));
+    }
+
+    Ok(())
 }
 
 fn next_flag_value<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a str, DynError> {
@@ -1282,6 +1358,52 @@ mod tests {
         let token_path = help_request_path("config", &token_args).unwrap();
         let token_help = help_catalog::render_help_path(&token_path);
         assert!(token_help.contains("vectis config token add --name <name>"));
+    }
+
+    #[test]
+    fn positional_parsing_rejects_option_like_values() {
+        let err = split_subcommand(strings(&["--bogus"]), "fpe command")
+            .expect_err("option-like subcommand must fail");
+        assert_eq!(err.to_string(), "unknown fpe option: --bogus");
+
+        for (command, field, flag) in [
+            ("sign", "kid", "--bogus"),
+            ("fpe encrypt", "kid", "--profile"),
+            ("token encode", "kid", "--profile"),
+            ("mac create", "kid", "--profile"),
+            ("index create", "kid", "--profile"),
+            ("commit create", "kid", "--profile"),
+            ("mask", "kid", "--profile"),
+            ("message send", "sender kid", "--profile"),
+            ("message internal encrypt", "kid", "--profile"),
+            ("lifecycle", "kid", "--reason"),
+        ] {
+            let err = split_positional_arg(strings(&[flag, "value"]), field, command)
+                .expect_err("option-like positional must fail");
+            assert_eq!(err.to_string(), format!("unknown {command} option: {flag}"));
+        }
+
+        let err = expect_one(strings(&["--bogus"]), "kid")
+            .expect_err("option-like single positional must fail");
+        assert_eq!(err.to_string(), "unknown kid option: --bogus");
+    }
+
+    #[test]
+    fn cli_transport_error_mentions_base_url_and_env() {
+        let url = validate_api_url("http://127.0.0.1:9999").unwrap();
+
+        assert_eq!(
+            cli_transport_error_message(&url, TransportFailure::Unreachable),
+            "cannot reach Vectis at http://127.0.0.1:9999 — is the server running? (VECTIS_API_URL)"
+        );
+        assert_eq!(
+            cli_transport_error_message(&url, TransportFailure::Timeout),
+            "timed out waiting for Vectis at http://127.0.0.1:9999 — is the server responding? (VECTIS_API_URL)"
+        );
+        assert_eq!(
+            cli_transport_error_message(&url, TransportFailure::Other),
+            "failed to reach Vectis at http://127.0.0.1:9999 (VECTIS_API_URL)"
+        );
     }
 
     #[test]

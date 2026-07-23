@@ -348,6 +348,10 @@ def write_config():
     sign_config()
 
 
+def write_unsigned_config():
+    CONFIG_PATH.write_text(json.dumps(_CONFIG, indent=2), encoding="utf-8")
+
+
 def write_test_routes(key_ids, final_app_addr):
     _CONFIG["routes"] = [
         {

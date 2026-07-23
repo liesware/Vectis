@@ -209,8 +209,7 @@ impl PreparedReceiveMessage {
 }
 
 pub fn parse_send_message_input(request: Value) -> Result<SendMessageInput, DynError> {
-    serde_json::from_value(request)
-        .map_err(|_| crate::error::invalid_input("invalid message request"))
+    crate::ops::json::parse_json_request(request, "message request")
 }
 
 pub fn prepare_send_message(
@@ -228,27 +227,23 @@ pub fn prepare_send_message(
 }
 
 pub fn parse_message_envelope(request: Value) -> Result<ProtectedMessageToken, DynError> {
-    serde_json::from_value(request)
-        .map_err(|_| crate::error::invalid_input("invalid protected message"))
+    crate::ops::json::parse_json_request(request, "protected message")
 }
 
 pub fn parse_decrypt_message_input(request: Value) -> Result<DecryptMessageInput, DynError> {
-    serde_json::from_value(request)
-        .map_err(|_| crate::error::invalid_input("invalid message decrypt request"))
+    crate::ops::json::parse_json_request(request, "message decrypt request")
 }
 
 pub fn parse_internal_encrypt_message_input(
     request: Value,
 ) -> Result<InternalEncryptMessageInput, DynError> {
-    serde_json::from_value(request)
-        .map_err(|_| crate::error::invalid_input("invalid internal message encrypt request"))
+    crate::ops::json::parse_json_request(request, "internal message encrypt request")
 }
 
 pub fn parse_internal_decrypt_message_input(
     request: Value,
 ) -> Result<InternalMessageOutput, DynError> {
-    serde_json::from_value(request)
-        .map_err(|_| crate::error::invalid_input("invalid internal message decrypt request"))
+    crate::ops::json::parse_json_request(request, "internal message decrypt request")
 }
 
 pub fn decrypt_message_recipient_kid(input: &DecryptMessageInput) -> Result<String, DynError> {
@@ -1663,7 +1658,13 @@ mod tests {
                 "message": message,
                 "unexpected": extra_value,
             }));
-            prop_assert!(unknown_result.is_err());
+            let public_error = match unknown_result {
+                Ok(_) => panic!("unknown message request fields must fail"),
+                Err(err) => err.to_string(),
+            };
+            prop_assert!(public_error.starts_with("invalid message request:"));
+            prop_assert!(public_error.contains("unknown field"));
+            prop_assert!(public_error.contains("unexpected"));
         }
 
         #[test]
@@ -1854,5 +1855,22 @@ mod tests {
                 .insert(extra_field, json!("unexpected"));
             prop_assert!(parse_message_envelope(nested).is_err());
         }
+    }
+
+    #[test]
+    fn parse_internal_encrypt_input_preserves_unknown_field_detail() {
+        let err = match parse_internal_encrypt_message_input(json!({
+            "plaintext": "hello",
+            "sorpresa": true
+        })) {
+            Ok(_) => panic!("unknown fields must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("invalid internal message encrypt request: unknown field")
+        );
+        assert!(err.to_string().contains("sorpresa"));
     }
 }

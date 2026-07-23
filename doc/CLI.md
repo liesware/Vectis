@@ -461,7 +461,7 @@ Calls `POST /config/reload` on the running server.
 vectis config reload
 ```
 
-Reload is per-node. It is not cluster-wide.
+Reload is per-node. It is not cluster-wide. If `config.json` has changes that are not covered by `config_sign.json`, the server keeps the previous signed config and returns a warning telling you to run `vectis config sign` first.
 
 ### `vectis pub`
 

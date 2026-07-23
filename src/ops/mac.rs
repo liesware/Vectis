@@ -207,11 +207,11 @@ impl ValidatedMacVerifyBatchInput {
 }
 
 pub fn parse_create_input(request: Value) -> Result<MacCreateInput, DynError> {
-    serde_json::from_value(request).map_err(|_| crate::error::invalid_input("invalid mac request"))
+    crate::ops::json::parse_json_request(request, "mac request")
 }
 
 pub fn parse_verify_input(request: Value) -> Result<MacVerifyInput, DynError> {
-    serde_json::from_value(request).map_err(|_| crate::error::invalid_input("invalid mac request"))
+    crate::ops::json::parse_json_request(request, "mac request")
 }
 
 pub fn parse_create_batch_input(request: Value) -> Result<MacCreateBatchInput, DynError> {
@@ -220,7 +220,7 @@ pub fn parse_create_batch_input(request: Value) -> Result<MacCreateBatchInput, D
         crate::core::config::INTERNAL_MAC_BATCH,
         "mac",
     )?;
-    serde_json::from_value(request).map_err(|_| crate::error::invalid_input("invalid mac request"))
+    crate::ops::json::parse_json_request(request, "mac request")
 }
 
 pub fn parse_verify_batch_input(request: Value) -> Result<MacVerifyBatchInput, DynError> {
@@ -229,7 +229,7 @@ pub fn parse_verify_batch_input(request: Value) -> Result<MacVerifyBatchInput, D
         crate::core::config::INTERNAL_MAC_BATCH,
         "mac",
     )?;
-    serde_json::from_value(request).map_err(|_| crate::error::invalid_input("invalid mac request"))
+    crate::ops::json::parse_json_request(request, "mac request")
 }
 
 pub fn validate_create_input(input: MacCreateInput) -> Result<ValidatedMacCreateInput, DynError> {
@@ -495,7 +495,10 @@ mod tests {
             Ok(_) => panic!("missing ref must fail"),
             Err(err) => err,
         };
-        assert_eq!(err.to_string(), "invalid mac request");
+        assert!(
+            err.to_string()
+                .contains("invalid mac request: missing field `ref`")
+        );
 
         let err = match validate_create_input(MacCreateInput {
             ref_id: String::new(),
@@ -529,7 +532,10 @@ mod tests {
             Ok(_) => panic!("missing ref must fail"),
             Err(err) => err,
         };
-        assert_eq!(err.to_string(), "invalid mac request");
+        assert!(
+            err.to_string()
+                .contains("invalid mac request: missing field `ref`")
+        );
 
         let err = match validate_verify_input(MacVerifyInput {
             ref_id: "bad\u{0001}".to_string(),
@@ -542,6 +548,25 @@ mod tests {
             Err(err) => err,
         };
         assert_eq!(err.to_string(), "ref must not contain control characters");
+    }
+
+    #[test]
+    fn parse_mac_input_preserves_unknown_field_detail() {
+        let err = match parse_create_input(json!({
+            "ref": "reg1",
+            "profile": "pan-blind-index-v1",
+            "plaintext": "4111111111111111",
+            "sorpresa": true
+        })) {
+            Ok(_) => panic!("unknown fields must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("invalid mac request: unknown field")
+        );
+        assert!(err.to_string().contains("sorpresa"));
     }
 
     #[test]

@@ -7,27 +7,31 @@ use tracing::info;
 
 pub struct PostgresStorage {
     pool: PgPool,
+    dsn_context: String,
 }
 
 impl PostgresStorage {
     pub async fn new(dsn: &str) -> Result<Self, DynError> {
+        let dsn_context = postgres_context(dsn);
         let pool = PgPoolOptions::new()
             .max_connections(10)
             .connect(dsn)
             .await
             .map_err(|err| {
-                crate::error::storage(format!("failed to connect to ops postgres: {err}"))
+                crate::error::storage(format!(
+                    "failed to connect to ops postgres at {dsn_context}: {err}"
+                ))
             })?;
-        info!("connected to ops postgres");
+        info!(dsn = %dsn_context, "connected to ops postgres");
 
-        validate_opskeys_schema(&pool).await?;
+        validate_opskeys_schema(&pool, &dsn_context).await?;
         info!("validated opskeys postgres schema");
-        validate_tokens_schema(&pool).await?;
+        validate_tokens_schema(&pool, &dsn_context).await?;
         info!("validated tokens postgres schema");
-        validate_indexes_schema(&pool).await?;
+        validate_indexes_schema(&pool, &dsn_context).await?;
         info!("validated indexes postgres schema");
 
-        Ok(Self { pool })
+        Ok(Self { pool, dsn_context })
     }
 
     pub async fn save_ops_keys(
@@ -345,7 +349,15 @@ impl PostgresStorage {
     }
 
     pub async fn health_check(&self) -> Result<(), DynError> {
-        sqlx::query("SELECT 1").execute(&self.pool).await?;
+        sqlx::query("SELECT 1")
+            .execute(&self.pool)
+            .await
+            .map_err(|err| {
+                crate::error::storage(format!(
+                    "postgres health check failed at {}: {err}",
+                    self.dsn_context
+                ))
+            })?;
 
         Ok(())
     }
@@ -392,7 +404,27 @@ async fn fetch_ops_keys_tx(
     }))
 }
 
-async fn validate_opskeys_schema(pool: &PgPool) -> Result<(), DynError> {
+fn postgres_context(dsn: &str) -> String {
+    let Some((scheme, rest)) = dsn.split_once("://") else {
+        return "<configured postgres dsn>".to_string();
+    };
+    let rest_without_credentials = rest.rsplit_once('@').map_or(rest, |(_, after_at)| after_at);
+    let authority_and_path = rest_without_credentials
+        .split_once('?')
+        .map_or(rest_without_credentials, |(before_query, _)| before_query);
+    if authority_and_path.is_empty() {
+        return "<configured postgres dsn>".to_string();
+    }
+    let prefix = if rest.contains('@') {
+        format!("{scheme}://<redacted>@")
+    } else {
+        format!("{scheme}://")
+    };
+
+    format!("{prefix}{authority_and_path}")
+}
+
+async fn validate_opskeys_schema(pool: &PgPool, context: &str) -> Result<(), DynError> {
     let columns = sqlx::query(
         "
         SELECT column_name, data_type, character_maximum_length, is_nullable
@@ -405,28 +437,36 @@ async fn validate_opskeys_schema(pool: &PgPool) -> Result<(), DynError> {
     .await?;
 
     if columns.is_empty() {
-        return Err(crate::error::storage(
-            "postgres schema is missing opskeys table",
-        ));
+        return Err(crate::error::storage(format!(
+            "postgres schema is missing opskeys table ({context})"
+        )));
     }
 
-    let kid = find_column(&columns, "kid")
-        .ok_or_else(|| crate::error::storage("postgres schema is missing opskeys.kid column"))?;
-    let keys = find_column(&columns, "keys")
-        .ok_or_else(|| crate::error::storage("postgres schema is missing opskeys.keys column"))?;
+    let kid = find_column(&columns, "kid").ok_or_else(|| {
+        crate::error::storage(format!(
+            "postgres schema is missing opskeys.kid column ({context})"
+        ))
+    })?;
+    let keys = find_column(&columns, "keys").ok_or_else(|| {
+        crate::error::storage(format!(
+            "postgres schema is missing opskeys.keys column ({context})"
+        ))
+    })?;
     let properties = find_column(&columns, "properties").ok_or_else(|| {
-        crate::error::storage("postgres schema is missing opskeys.properties column")
+        crate::error::storage(format!(
+            "postgres schema is missing opskeys.properties column ({context})"
+        ))
     })?;
 
-    validate_varchar_column(&kid, "opskeys", "kid", 128, false)?;
-    validate_text_column(&keys, "opskeys", "keys", false)?;
-    validate_text_column(&properties, "opskeys", "properties", false)?;
-    validate_primary_key(pool, "opskeys", &["kid"]).await?;
+    validate_varchar_column(&kid, "opskeys", "kid", 128, false, context)?;
+    validate_text_column(&keys, "opskeys", "keys", false, context)?;
+    validate_text_column(&properties, "opskeys", "properties", false, context)?;
+    validate_primary_key(pool, "opskeys", &["kid"], context).await?;
 
     Ok(())
 }
 
-async fn validate_tokens_schema(pool: &PgPool) -> Result<(), DynError> {
+async fn validate_tokens_schema(pool: &PgPool, context: &str) -> Result<(), DynError> {
     let columns = sqlx::query(
         "
         SELECT column_name, data_type, character_maximum_length, is_nullable
@@ -439,27 +479,36 @@ async fn validate_tokens_schema(pool: &PgPool) -> Result<(), DynError> {
     .await?;
 
     if columns.is_empty() {
-        return Err(crate::error::storage(
-            "postgres schema is missing tokens table",
-        ));
+        return Err(crate::error::storage(format!(
+            "postgres schema is missing tokens table ({context})"
+        )));
     }
 
-    let kid = find_column(&columns, "kid")
-        .ok_or_else(|| crate::error::storage("postgres schema is missing tokens.kid column"))?;
-    let hashid = find_column(&columns, "hashid")
-        .ok_or_else(|| crate::error::storage("postgres schema is missing tokens.hashid column"))?;
-    let data = find_column(&columns, "data")
-        .ok_or_else(|| crate::error::storage("postgres schema is missing tokens.data column"))?;
+    let kid = find_column(&columns, "kid").ok_or_else(|| {
+        crate::error::storage(format!(
+            "postgres schema is missing tokens.kid column ({context})"
+        ))
+    })?;
+    let hashid = find_column(&columns, "hashid").ok_or_else(|| {
+        crate::error::storage(format!(
+            "postgres schema is missing tokens.hashid column ({context})"
+        ))
+    })?;
+    let data = find_column(&columns, "data").ok_or_else(|| {
+        crate::error::storage(format!(
+            "postgres schema is missing tokens.data column ({context})"
+        ))
+    })?;
 
-    validate_varchar_column(&kid, "tokens", "kid", 128, false)?;
-    validate_varchar_column(&hashid, "tokens", "hashid", 128, false)?;
-    validate_text_column(&data, "tokens", "data", false)?;
-    validate_primary_key(pool, "tokens", &["kid", "hashid"]).await?;
+    validate_varchar_column(&kid, "tokens", "kid", 128, false, context)?;
+    validate_varchar_column(&hashid, "tokens", "hashid", 128, false, context)?;
+    validate_text_column(&data, "tokens", "data", false, context)?;
+    validate_primary_key(pool, "tokens", &["kid", "hashid"], context).await?;
 
     Ok(())
 }
 
-async fn validate_indexes_schema(pool: &PgPool) -> Result<(), DynError> {
+async fn validate_indexes_schema(pool: &PgPool, context: &str) -> Result<(), DynError> {
     let columns = sqlx::query(
         "
         SELECT column_name, data_type, character_maximum_length, is_nullable
@@ -472,19 +521,25 @@ async fn validate_indexes_schema(pool: &PgPool) -> Result<(), DynError> {
     .await?;
 
     if columns.is_empty() {
-        return Err(crate::error::storage(
-            "postgres schema is missing indexes table",
-        ));
+        return Err(crate::error::storage(format!(
+            "postgres schema is missing indexes table ({context})"
+        )));
     }
 
-    let kid = find_column(&columns, "kid")
-        .ok_or_else(|| crate::error::storage("postgres schema is missing indexes.kid column"))?;
-    let digest = find_column(&columns, "digest")
-        .ok_or_else(|| crate::error::storage("postgres schema is missing indexes.digest column"))?;
+    let kid = find_column(&columns, "kid").ok_or_else(|| {
+        crate::error::storage(format!(
+            "postgres schema is missing indexes.kid column ({context})"
+        ))
+    })?;
+    let digest = find_column(&columns, "digest").ok_or_else(|| {
+        crate::error::storage(format!(
+            "postgres schema is missing indexes.digest column ({context})"
+        ))
+    })?;
 
-    validate_varchar_column(&kid, "indexes", "kid", 128, false)?;
-    validate_varchar_column(&digest, "indexes", "digest", 128, false)?;
-    validate_primary_key(pool, "indexes", &["kid", "digest"]).await?;
+    validate_varchar_column(&kid, "indexes", "kid", 128, false, context)?;
+    validate_varchar_column(&digest, "indexes", "digest", 128, false, context)?;
+    validate_primary_key(pool, "indexes", &["kid", "digest"], context).await?;
 
     Ok(())
 }
@@ -522,6 +577,7 @@ fn validate_varchar_column(
     expected_name: &str,
     expected_max_length: i32,
     expected_nullable: bool,
+    context: &str,
 ) -> Result<(), DynError> {
     if column.name != expected_name
         || column.data_type != "character varying"
@@ -529,7 +585,7 @@ fn validate_varchar_column(
         || column.nullable != expected_nullable
     {
         return Err(crate::error::storage(format!(
-            "postgres schema mismatch for {table_name}.{expected_name}: expected type=VARCHAR({expected_max_length}), nullable={expected_nullable}",
+            "postgres schema mismatch for {table_name}.{expected_name}: expected type=VARCHAR({expected_max_length}), nullable={expected_nullable} ({context})",
         )));
     }
 
@@ -541,6 +597,7 @@ fn validate_text_column(
     table_name: &str,
     expected_name: &str,
     expected_nullable: bool,
+    context: &str,
 ) -> Result<(), DynError> {
     if column.name != expected_name
         || column.data_type != "text"
@@ -548,7 +605,7 @@ fn validate_text_column(
         || column.nullable != expected_nullable
     {
         return Err(crate::error::storage(format!(
-            "postgres schema mismatch for {table_name}.{expected_name}: expected type=TEXT, nullable={expected_nullable}",
+            "postgres schema mismatch for {table_name}.{expected_name}: expected type=TEXT, nullable={expected_nullable} ({context})",
         )));
     }
 
@@ -559,6 +616,7 @@ async fn validate_primary_key(
     pool: &PgPool,
     table_name: &str,
     expected_columns: &[&str],
+    context: &str,
 ) -> Result<(), DynError> {
     let rows = sqlx::query(
         "
@@ -580,10 +638,34 @@ async fn validate_primary_key(
     let primary_key_columns: Vec<String> = rows.iter().map(|row| row.get("attname")).collect();
     if primary_key_columns != expected_columns {
         return Err(crate::error::storage(format!(
-            "postgres schema mismatch for {table_name} primary key: expected {}",
-            expected_columns.join(", ")
+            "postgres schema mismatch for {table_name} primary key: expected {} ({context})",
+            expected_columns.join(", "),
         )));
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn postgres_context_redacts_credentials() {
+        let context = postgres_context("postgres://user:secret@localhost:5432/vectis");
+
+        assert_eq!(context, "postgres://<redacted>@localhost:5432/vectis");
+        assert!(!context.contains("secret"));
+        assert!(context.contains("localhost"));
+        assert!(context.contains("5432"));
+        assert!(context.contains("/vectis"));
+    }
+
+    #[test]
+    fn postgres_context_handles_unparseable_dsn_safely() {
+        assert_eq!(
+            postgres_context("not a postgres url with secret"),
+            "<configured postgres dsn>"
+        );
+    }
 }

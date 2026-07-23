@@ -250,13 +250,11 @@ impl TokenDecodeBatchOutput {
 }
 
 pub fn parse_encode_input(request: Value) -> Result<TokenEncodeInput, DynError> {
-    serde_json::from_value(request)
-        .map_err(|_| crate::error::invalid_input("invalid token encode request"))
+    crate::ops::json::parse_json_request(request, "token encode request")
 }
 
 pub fn parse_decode_input(request: Value) -> Result<TokenDecodeInput, DynError> {
-    serde_json::from_value(request)
-        .map_err(|_| crate::error::invalid_input("invalid token decode request"))
+    crate::ops::json::parse_json_request(request, "token decode request")
 }
 
 pub fn parse_encode_batch_input(request: Value) -> Result<TokenEncodeBatchInput, DynError> {
@@ -265,8 +263,7 @@ pub fn parse_encode_batch_input(request: Value) -> Result<TokenEncodeBatchInput,
         crate::core::config::INTERNAL_TOKEN_BATCH,
         "token",
     )?;
-    serde_json::from_value(request)
-        .map_err(|_| crate::error::invalid_input("invalid token encode request"))
+    crate::ops::json::parse_json_request(request, "token encode request")
 }
 
 pub fn parse_decode_batch_input(request: Value) -> Result<TokenDecodeBatchInput, DynError> {
@@ -275,8 +272,7 @@ pub fn parse_decode_batch_input(request: Value) -> Result<TokenDecodeBatchInput,
         crate::core::config::INTERNAL_TOKEN_BATCH,
         "token",
     )?;
-    serde_json::from_value(request)
-        .map_err(|_| crate::error::invalid_input("invalid token decode request"))
+    crate::ops::json::parse_json_request(request, "token decode request")
 }
 
 pub fn validate_encode_input(
@@ -860,5 +856,24 @@ mod tests {
                 ]
             })
         );
+    }
+
+    #[test]
+    fn parse_token_input_preserves_unknown_field_detail() {
+        let err = match parse_encode_input(json!({
+            "ref": "reg1",
+            "profile": "patient-id-token-v1",
+            "plaintext": "123456",
+            "sorpresa": true
+        })) {
+            Ok(_) => panic!("unknown fields must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("invalid token encode request: unknown field")
+        );
+        assert!(err.to_string().contains("sorpresa"));
     }
 }

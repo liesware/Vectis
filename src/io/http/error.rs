@@ -81,9 +81,9 @@ fn log_internal_error(status: StatusCode, err: &(dyn std::error::Error + 'static
 pub fn status_for_error(err: &(dyn std::error::Error + 'static)) -> StatusCode {
     if let Some(vectis_err) = err.downcast_ref::<VectisError>() {
         return match vectis_err {
-            VectisError::InvalidInput(_) | VectisError::InvalidSignature(_) => {
-                StatusCode::BAD_REQUEST
-            }
+            VectisError::InvalidInput(_)
+            | VectisError::InvalidSignature(_)
+            | VectisError::ConfigSignatureStale(_) => StatusCode::BAD_REQUEST,
             VectisError::NotFound(_) => StatusCode::NOT_FOUND,
             VectisError::Forbidden(_) => StatusCode::FORBIDDEN,
             VectisError::RemoteUnreachable(_)

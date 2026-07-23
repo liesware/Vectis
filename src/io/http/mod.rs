@@ -62,6 +62,15 @@ struct ConfigKeySource {
     hash_algorithm: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConfigReloadOutcome {
+    Applied,
+    StaleSignatureKeptPrevious,
+}
+
+const STALE_CONFIG_SIGNATURE_WARNING: &str =
+    "config.json has changes not covered by config_sign.json — run 'vectis config sign' first";
+
 impl Zeroize for ConfigKeySource {
     fn zeroize(&mut self) {
         self.kid.zeroize();
@@ -300,7 +309,7 @@ impl HttpState {
         config_state.commitment_profiles.get(name).cloned()
     }
 
-    async fn reload_config_state(&self) -> Result<(), DynError> {
+    async fn reload_config_state(&self) -> Result<ConfigReloadOutcome, DynError> {
         let config_key_sources = {
             let keys_db_state = self.keys_db_state.read().await;
             keys_db_state
@@ -318,7 +327,7 @@ impl HttpState {
         };
         let config = Arc::clone(&self.config);
         let init_state = (*self.init_state).clone();
-        let reloaded = blocking::spawn_blocking_crypto(move || {
+        let reload_result = blocking::spawn_blocking_crypto(move || {
             let config_key_sources = Zeroizing::new(config_key_sources);
             crate::core::config_file::reload_config_state(
                 &config,
@@ -405,11 +414,18 @@ impl HttpState {
                 },
             )
         })
-        .await?;
+        .await;
+        let reloaded = match reload_result {
+            Ok(reloaded) => reloaded,
+            Err(err) if config_signature_is_stale_for_content(err.as_ref()) => {
+                return Ok(ConfigReloadOutcome::StaleSignatureKeptPrevious);
+            }
+            Err(err) => return Err(err),
+        };
         let mut config_state = self.config_state.write().await;
         *config_state = Zeroizing::new(reloaded);
 
-        Ok(())
+        Ok(ConfigReloadOutcome::Applied)
     }
 
     async fn refresh_loaded_gauges(&self) {
@@ -485,6 +501,12 @@ impl HttpState {
 
         config_state.remote_routes.public_keys_for(kid).cloned()
     }
+}
+
+fn config_signature_is_stale_for_content(
+    err: &(dyn std::error::Error + Send + Sync + 'static),
+) -> bool {
+    crate::error::is_config_signature_stale(err)
 }
 
 fn record_operation_denied_metric(event_name: &str) {
@@ -592,4 +614,26 @@ pub fn router(state: HttpState) -> Router {
         .route("/message/{sender_kid}", post(message::send_endpoint))
         .layer(axum::middleware::from_fn(middleware::request_context))
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stale_config_signature_classifier_matches_only_typed_stale_error() {
+        let stale = crate::error::config_signature_stale(
+            "config signature message_hash does not match config content",
+        );
+        let corrupt = crate::error::invalid_signature("config signature verification failed");
+        let same_text_wrong_type = crate::error::invalid_input(
+            "config signature message_hash does not match config content",
+        );
+
+        assert!(config_signature_is_stale_for_content(stale.as_ref()));
+        assert!(!config_signature_is_stale_for_content(corrupt.as_ref()));
+        assert!(!config_signature_is_stale_for_content(
+            same_text_wrong_type.as_ref()
+        ));
+    }
 }

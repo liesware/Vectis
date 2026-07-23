@@ -1,5 +1,6 @@
 use super::HttpState;
 use super::error::{ErrorResponse, error_response};
+use super::{ConfigReloadOutcome, STALE_CONFIG_SIGNATURE_WARNING};
 use crate::core::{audit, metrics, validation};
 use axum::Json;
 use axum::extract::State;
@@ -10,6 +11,8 @@ use tracing::{error, info};
 #[derive(Serialize)]
 pub struct ReloadConfigResponse {
     status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    warning: Option<String>,
     routes_loaded: usize,
     remote_routes_loaded: usize,
     clients_loaded: usize,
@@ -34,20 +37,31 @@ pub async fn reload_endpoint(
         endpoint = "POST /config/reload",
         "config reload request accepted"
     );
-    if let Err(err) = state.reload_config_state().await {
-        metrics::record_config_reload("failed");
-        record_config_reload_timestamp("failed");
-        audit::operation_failed(
-            "config.reload.failed",
-            Some(&actor),
-            None,
-            None,
-            Some("admin"),
-            &err.to_string(),
-        );
-        error!(error = %err, "config reload endpoint failed");
-        return Err(error_response(err.as_ref()));
-    }
+    let reload_outcome = match state.reload_config_state().await {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            metrics::record_config_reload("failed");
+            record_config_reload_timestamp("failed");
+            audit::operation_failed(
+                "config.reload.failed",
+                Some(&actor),
+                None,
+                None,
+                Some("admin"),
+                &err.to_string(),
+            );
+            error!(error = %err, "config reload endpoint failed");
+            return Err(error_response(err.as_ref()));
+        }
+    };
+    let (warning, reload_result, audit_event_name) = match reload_outcome {
+        ConfigReloadOutcome::Applied => (None, "success", "config.reload.success"),
+        ConfigReloadOutcome::StaleSignatureKeptPrevious => (
+            Some(STALE_CONFIG_SIGNATURE_WARNING.to_string()),
+            "stale",
+            "config.reload.stale",
+        ),
+    };
 
     let routes_loaded = state.routes_loaded().await;
     let remote_routes_loaded = state.remote_routes_loaded().await;
@@ -58,8 +72,8 @@ pub async fn reload_endpoint(
     let masking_profiles_loaded = state.masking_profiles_loaded().await;
     let commitment_profiles_loaded = state.commitment_profiles_loaded().await;
     state.refresh_loaded_gauges().await;
-    metrics::record_config_reload("success");
-    record_config_reload_timestamp("success");
+    metrics::record_config_reload(reload_result);
+    record_config_reload_timestamp(reload_result);
     info!(
         endpoint = "POST /config/reload",
         routes_loaded,
@@ -70,18 +84,14 @@ pub async fn reload_endpoint(
         mac_profiles_loaded,
         masking_profiles_loaded,
         commitment_profiles_loaded,
+        warning = warning.as_deref(),
         "config reload response ready"
     );
-    audit::operation_success(
-        "config.reload.success",
-        Some(&actor),
-        None,
-        None,
-        Some("admin"),
-    );
+    audit::operation_success(audit_event_name, Some(&actor), None, None, Some("admin"));
 
     Ok(Json(ReloadConfigResponse {
         status: String::from("reloaded"),
+        warning,
         routes_loaded,
         remote_routes_loaded,
         clients_loaded,

@@ -100,7 +100,7 @@ impl ValidatedMaskBatchInput {
 }
 
 pub fn parse_mask_input(request: Value) -> Result<MaskInput, DynError> {
-    serde_json::from_value(request).map_err(|_| crate::error::invalid_input("invalid mask request"))
+    crate::ops::json::parse_json_request(request, "mask request")
 }
 
 pub fn parse_mask_batch_input(request: Value) -> Result<MaskBatchInput, DynError> {
@@ -109,7 +109,7 @@ pub fn parse_mask_batch_input(request: Value) -> Result<MaskBatchInput, DynError
         crate::core::config::INTERNAL_MASK_BATCH,
         "mask",
     )?;
-    serde_json::from_value(request).map_err(|_| crate::error::invalid_input("invalid mask request"))
+    crate::ops::json::parse_json_request(request, "mask request")
 }
 
 pub fn validate_mask_input(input: MaskInput) -> Result<ValidatedMaskInput, DynError> {
@@ -448,5 +448,24 @@ mod tests {
             err.to_string(),
             "batch item 1 failed: plaintext length is outside masking profile bounds"
         );
+    }
+
+    #[test]
+    fn parse_mask_input_preserves_unknown_field_detail() {
+        let err = match parse_mask_input(json!({
+            "ref": "row1",
+            "profile": "pan-display-v1",
+            "plaintext": "4111111111111111",
+            "sorpresa": true
+        })) {
+            Ok(_) => panic!("unknown fields must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("invalid mask request: unknown field")
+        );
+        assert!(err.to_string().contains("sorpresa"));
     }
 }

@@ -285,7 +285,7 @@ paths:
     post:
       tags: [Config]
       summary: Reload the unified signed config
-      description: Administrative endpoint requiring root or an admin client. Reloads the unified config (routes, remote_routes, permissions, fpe_profiles, tokenization_profiles, mac_profiles, commitment_profiles, masking_profiles) only after VECTIS_CONFIG_PATH and VECTIS_CONFIG_SIGN_PATH are successfully read, verified, and validated. Every route, FPE profile, tokenization profile, MAC profile, commitment profile, and masking profile kid must exist in the keys currently loaded in memory. A missing config reloads to empty sections; an invalid signature, invalid file, or unloaded kid returns an error and keeps the previous in-memory config.
+      description: Administrative endpoint requiring root or an admin client. Reloads the unified config (routes, remote_routes, permissions, fpe_profiles, tokenization_profiles, mac_profiles, commitment_profiles, masking_profiles) only after VECTIS_CONFIG_PATH and VECTIS_CONFIG_SIGN_PATH are successfully read, verified, and validated. Every route, FPE profile, tokenization profile, MAC profile, commitment profile, and masking profile kid must exist in the keys currently loaded in memory. A missing config reloads to empty sections; an invalid signature, invalid file, or unloaded kid returns an error and keeps the previous in-memory config. If config.json changed but config_sign.json signs older content, reload keeps the previous state and returns a warning.
       security:
         - ApiKeyAuth: []
       responses:
@@ -1418,6 +1418,9 @@ components:
       properties:
         status:
           const: reloaded
+        warning:
+          type: string
+          description: Present only when config.json has changes not covered by config_sign.json and the previous in-memory config was kept.
         routes_loaded:
           type: integer
           minimum: 0

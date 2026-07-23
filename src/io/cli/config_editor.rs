@@ -1,4 +1,4 @@
-use super::http::{OutputFormat, invalid_input, print_response};
+use super::http::{OutputFormat, invalid_input, print_response, reject_option_like_positional};
 use crate::core::{
     commitments, config, config_file, fpe, mac, masking, permissions, tokenization, validation,
 };
@@ -753,7 +753,8 @@ fn section_get(
     spec: &SectionSpec,
     args: Vec<String>,
 ) -> Result<Value, DynError> {
-    let key = expect_one(args, spec.item_name)?;
+    let command = format!("config {} get", spec.cli_name);
+    let key = expect_one(args, spec.item_name, &command)?;
     validate_text(spec.key_field, &key)?;
     Ok(find_by_field(
         array_ref(&local.value, spec.json_section)?,
@@ -768,7 +769,8 @@ fn section_update(
     spec: &SectionSpec,
     args: Vec<String>,
 ) -> Result<Value, DynError> {
-    let (key, rest) = split_name_and_rest(args, spec.item_name)?;
+    let command = format!("config {} update", spec.cli_name);
+    let (key, rest) = split_name_and_rest(args, spec.item_name, &command)?;
     validate_text(spec.key_field, &key)?;
     let update = parse_section_update(spec, rest)?;
     let item = find_by_field_mut(
@@ -786,7 +788,8 @@ fn section_delete(
     spec: &SectionSpec,
     args: Vec<String>,
 ) -> Result<Value, DynError> {
-    let key = expect_one(args, spec.item_name)?;
+    let command = format!("config {} delete", spec.cli_name);
+    let key = expect_one(args, spec.item_name, &command)?;
     validate_text(spec.key_field, &key)?;
     let removed = remove_by_field(
         array_mut(&mut local.value, spec.json_section)?,
@@ -1131,7 +1134,8 @@ async fn remote_route_add(args: Vec<String>, output: OutputFormat) -> Result<(),
 }
 
 async fn remote_route_update(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
-    let (name, rest) = split_name_and_rest(args, "remote route name")?;
+    let (name, rest) =
+        split_name_and_rest(args, "remote route name", "config remote-routes update")?;
     validate_text("name", &name)?;
 
     let update = parse_section_update(&REMOTE_ROUTES_SECTION, rest)?;
@@ -1162,7 +1166,7 @@ async fn remote_route_update(args: Vec<String>, output: OutputFormat) -> Result<
 }
 
 fn permission_grant(local: &mut LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
-    let (client, rest) = split_name_and_rest(args, "client")?;
+    let (client, rest) = split_name_and_rest(args, "client", "config permissions grant")?;
     validate_text("client", &client)?;
     let grant = parse_permission_action_fields(rest)?;
     let kid = required_map_string(&grant, "kid")?.to_string();
@@ -1211,7 +1215,7 @@ fn permission_grant(local: &mut LocalConfig, args: Vec<String>) -> Result<Value,
 }
 
 fn permission_revoke(local: &mut LocalConfig, args: Vec<String>) -> Result<Value, DynError> {
-    let (client, rest) = split_name_and_rest(args, "client")?;
+    let (client, rest) = split_name_and_rest(args, "client", "config permissions revoke")?;
     validate_text("client", &client)?;
     let grant = parse_permission_action_fields(rest)?;
     let kid = required_map_string(&grant, "kid")?.to_string();
@@ -1585,6 +1589,8 @@ fn split_command(mut args: Vec<String>, field: &str) -> Result<(String, Vec<Stri
         return Err(invalid_input(format!("missing {field}")));
     }
     let command = args.remove(0);
+    let context = field.trim_end_matches(" command");
+    reject_option_like_positional(&command, context)?;
     validate_text(field, &command)?;
     Ok((command, args))
 }
@@ -1592,18 +1598,21 @@ fn split_command(mut args: Vec<String>, field: &str) -> Result<(String, Vec<Stri
 fn split_name_and_rest(
     mut args: Vec<String>,
     field: &str,
+    command: &str,
 ) -> Result<(String, Vec<String>), DynError> {
     if args.is_empty() {
         return Err(invalid_input(format!("missing {field}")));
     }
     let name = args.remove(0);
+    reject_option_like_positional(&name, command)?;
     Ok((name, args))
 }
 
-fn expect_one(args: Vec<String>, field: &str) -> Result<String, DynError> {
+fn expect_one(args: Vec<String>, field: &str, command: &str) -> Result<String, DynError> {
     if args.len() != 1 {
         return Err(invalid_input(format!("expected exactly one {field}")));
     }
+    reject_option_like_positional(&args[0], command)?;
     Ok(args[0].clone())
 }
 
@@ -1800,6 +1809,44 @@ mod tests {
             immutable.to_string(),
             "unknown routes update option: --name"
         );
+    }
+
+    #[test]
+    fn positional_config_parser_rejects_option_like_values() {
+        let err = split_command(vec![String::from("--bogus")], "config routes command")
+            .expect_err("option-like config command must fail");
+        assert_eq!(err.to_string(), "unknown config routes option: --bogus");
+
+        for command in ["config routes get", "config routes delete"] {
+            let err = expect_one(vec![String::from("--bogus")], "name", command)
+                .expect_err("option-like single config positional must fail");
+            assert_eq!(
+                err.to_string(),
+                format!("unknown {command} option: --bogus")
+            );
+        }
+
+        for (command, field) in [
+            ("config routes update", "name"),
+            ("config remote-routes update", "remote route name"),
+            ("config permissions grant", "client"),
+            ("config permissions revoke", "client"),
+        ] {
+            let err = split_name_and_rest(
+                vec![
+                    String::from("--bogus"),
+                    String::from("--kid"),
+                    "a".repeat(64),
+                ],
+                field,
+                command,
+            )
+            .expect_err("option-like config positional must fail");
+            assert_eq!(
+                err.to_string(),
+                format!("unknown {command} option: --bogus")
+            );
+        }
     }
 
     #[test]

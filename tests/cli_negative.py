@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import sqlite3
 import tempfile
 from pathlib import Path
 
@@ -39,6 +40,78 @@ def expect_json_error(env, args):
     require(isinstance(payload.get("error"), str), "JSON error must include error string")
     require(payload["error"], "JSON error string must not be empty")
     return payload
+
+
+def expect_unknown_option(env, args, expected):
+    result = run_cli(args, env, expect_success=False)
+    require(result.stdout == "", "unknown option command must not write stdout")
+    require(expected in result.stderr, f"stderr must contain {expected}: {result.stderr}")
+    for misleading in ["kid must", "not found", "must be hex", "must have"]:
+        require(
+            misleading not in result.stderr,
+            f"stderr must not contain misleading parser error {misleading}: {result.stderr}",
+        )
+
+
+def expect_json_unknown_option(env, args, expected):
+    payload = expect_json_error(env, args)
+    require(expected in payload["error"], f"JSON error must contain {expected}: {payload}")
+    for misleading in ["kid must", "not found", "must be hex", "must have"]:
+        require(
+            misleading not in payload["error"],
+            f"JSON error must not contain misleading parser error {misleading}: {payload}",
+        )
+    return payload
+
+
+def unused_local_url():
+    return "http://127.0.0.1:9"
+
+
+def expect_server_down_json_error(env):
+    test_env = env.copy()
+    base_url = unused_local_url()
+    test_env["VECTIS_API_URL"] = base_url
+    result = run_cli(
+        ["health", "ready", "--output", "json"],
+        test_env,
+        expect_success=False,
+    )
+    require(result.stdout == "", "server down JSON error must not write stdout")
+    payload = json.loads(result.stderr)
+    expected = f"cannot reach Vectis at {base_url}"
+    require(
+        expected in payload.get("error", ""),
+        f"JSON server down error must mention base URL: {payload}",
+    )
+    require(
+        "is the server running? (VECTIS_API_URL)" in payload["error"],
+        f"JSON server down error must mention VECTIS_API_URL: {payload}",
+    )
+    require(
+        "error sending request" not in payload["error"],
+        f"JSON server down error must hide reqwest detail: {payload}",
+    )
+
+
+def expect_server_down_human_error(env):
+    test_env = env.copy()
+    base_url = unused_local_url()
+    test_env["VECTIS_API_URL"] = base_url
+    result = run_cli(["health", "ready"], test_env, expect_success=False)
+    require(result.stdout == "", "server down human error must not write stdout")
+    require(
+        f"Error: cannot reach Vectis at {base_url}" in result.stderr,
+        f"human server down error must mention base URL: {result.stderr}",
+    )
+    require(
+        "is the server running? (VECTIS_API_URL)" in result.stderr,
+        f"human server down error must mention VECTIS_API_URL: {result.stderr}",
+    )
+    require(
+        "error sending request" not in result.stderr,
+        f"human server down error must hide reqwest detail: {result.stderr}",
+    )
 
 
 def seed_route(env):
@@ -364,6 +437,24 @@ def main():
             )
             write_config(env, empty_config())
 
+        def config_sign_empty_sqlite_schema_reports_path():
+            init_material(env)
+            write_config(env, empty_config())
+            empty_db = Path(env["VECTIS_SQLITE_PATH"]).with_name("empty-schema.db")
+            with sqlite3.connect(empty_db):
+                pass
+            local_env = env.copy()
+            local_env["VECTIS_SQLITE_PATH"] = str(empty_db)
+            payload = expect_json_error(local_env, ["config", "sign"])
+            require(
+                "sqlite schema is missing opskeys table" in payload["error"],
+                f"schema error must describe missing opskeys table: {payload}",
+            )
+            require(
+                str(empty_db) in payload["error"],
+                f"schema error must include sqlite path: {payload}",
+            )
+
         def duplicate_route_name():
             seed_route(env)
             expect_unchanged_failure(
@@ -485,7 +576,122 @@ def main():
                 ["config", "fpe", "update", "binary-id", "--min-len", "6"],
             )
 
+        def runtime_positional_flags_are_unknown_options():
+            cases = [
+                (
+                    ["sign", "--bogus"],
+                    "unknown sign option: --bogus",
+                ),
+                (
+                    ["fpe", "encrypt", "--profile", "card", "--value", "4111111111111111"],
+                    "unknown fpe encrypt option: --profile",
+                ),
+                (
+                    ["token", "encode", "--profile", "patient"],
+                    "unknown token encode option: --profile",
+                ),
+                (
+                    ["mac", "create", "--profile", "pan"],
+                    "unknown mac create option: --profile",
+                ),
+                (
+                    ["index", "create", "--profile", "pan"],
+                    "unknown index create option: --profile",
+                ),
+                (
+                    ["commit", "create", "--profile", "pan"],
+                    "unknown commit create option: --profile",
+                ),
+                (
+                    ["mask", "--profile", "pan"],
+                    "unknown mask option: --profile",
+                ),
+                (
+                    ["message", "send", "--profile", "pan"],
+                    "unknown message send option: --profile",
+                ),
+                (
+                    ["message", "internal", "encrypt", "--profile", "pan"],
+                    "unknown message internal encrypt option: --profile",
+                ),
+                (
+                    ["lifecycle", "--reason", "maintenance"],
+                    "unknown lifecycle option: --reason",
+                ),
+            ]
+            for args, expected in cases:
+                expect_unknown_option(env, args, expected)
+
+        def config_positional_flags_are_unknown_options():
+            with tempfile.TemporaryDirectory() as config_tmpdir:
+                local_env = isolated_env(config_tmpdir)
+                init_config(local_env)
+                before = config_bytes(local_env)
+                cases = [
+                    (
+                        ["config", "routes", "get", "--bogus"],
+                        "unknown config routes get option: --bogus",
+                    ),
+                    (
+                        ["config", "routes", "update", "--bogus", "--kid", KID_A],
+                        "unknown config routes update option: --bogus",
+                    ),
+                    (
+                        ["config", "routes", "delete", "--bogus"],
+                        "unknown config routes delete option: --bogus",
+                    ),
+                    (
+                        ["config", "remote-routes", "update", "--bogus", "--remote-kid", KID_A],
+                        "unknown config remote-routes update option: --bogus",
+                    ),
+                    (
+                        [
+                            "config",
+                            "permissions",
+                            "grant",
+                            "--bogus",
+                            "--kid",
+                            KID_A,
+                            "--action",
+                            "message",
+                        ],
+                        "unknown config permissions grant option: --bogus",
+                    ),
+                    (
+                        [
+                            "config",
+                            "permissions",
+                            "revoke",
+                            "--bogus",
+                            "--kid",
+                            KID_A,
+                            "--action",
+                            "message",
+                        ],
+                        "unknown config permissions revoke option: --bogus",
+                    ),
+                ]
+                for args, expected in cases:
+                    expect_json_unknown_option(local_env, args, expected)
+                    assert_config_unchanged(local_env, before)
+
         cases = [
+            (
+                "runtime positional flags are rejected as unknown options",
+                runtime_positional_flags_are_unknown_options,
+            ),
+            (
+                "config positional flags are rejected as unknown options",
+                config_positional_flags_are_unknown_options,
+            ),
+            (
+                "server down emits JSON CLI error",
+                lambda: expect_server_down_json_error(env),
+            ),
+            (
+                "server down emits human CLI error",
+                lambda: expect_server_down_human_error(env),
+            ),
             ("config routes add fails when config is missing", route_add_missing_config),
             (
                 "config permissions add fails when config is missing",
@@ -549,6 +755,10 @@ def main():
             (
                 "config sign validates before writing signature",
                 config_sign_invalid_config_does_not_write_signature,
+            ),
+            (
+                "config sign empty sqlite schema reports path",
+                config_sign_empty_sqlite_schema_reports_path,
             ),
             ("duplicate routes.name fails without rewrite", duplicate_route_name),
             ("duplicate permissions.client fails without rewrite", duplicate_permission_client),

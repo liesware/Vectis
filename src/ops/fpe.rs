@@ -203,11 +203,11 @@ impl ValidatedFpeDecryptBatchInput {
 }
 
 pub fn parse_encrypt_input(request: Value) -> Result<FpeEncryptInput, DynError> {
-    serde_json::from_value(request).map_err(|_| crate::error::invalid_input("invalid fpe request"))
+    crate::ops::json::parse_json_request(request, "fpe request")
 }
 
 pub fn parse_decrypt_input(request: Value) -> Result<FpeDecryptInput, DynError> {
-    serde_json::from_value(request).map_err(|_| crate::error::invalid_input("invalid fpe request"))
+    crate::ops::json::parse_json_request(request, "fpe request")
 }
 
 pub fn parse_encrypt_batch_input(request: Value) -> Result<FpeEncryptBatchInput, DynError> {
@@ -216,7 +216,7 @@ pub fn parse_encrypt_batch_input(request: Value) -> Result<FpeEncryptBatchInput,
         crate::core::config::INTERNAL_FPE_BATCH,
         "fpe",
     )?;
-    serde_json::from_value(request).map_err(|_| crate::error::invalid_input("invalid fpe request"))
+    crate::ops::json::parse_json_request(request, "fpe request")
 }
 
 pub fn parse_decrypt_batch_input(request: Value) -> Result<FpeDecryptBatchInput, DynError> {
@@ -225,7 +225,7 @@ pub fn parse_decrypt_batch_input(request: Value) -> Result<FpeDecryptBatchInput,
         crate::core::config::INTERNAL_FPE_BATCH,
         "fpe",
     )?;
-    serde_json::from_value(request).map_err(|_| crate::error::invalid_input("invalid fpe request"))
+    crate::ops::json::parse_json_request(request, "fpe request")
 }
 
 pub fn validate_encrypt_input(
@@ -608,6 +608,25 @@ mod tests {
         assert_eq!(input.kid(), hex64('a'));
         assert_eq!(input.profile(), "patient-id-decimal-v1");
         assert_eq!(input.items.len(), 2);
+    }
+
+    #[test]
+    fn parse_fpe_input_preserves_unknown_field_detail() {
+        let err = match parse_encrypt_input(json!({
+            "ref": "reg1",
+            "profile": "patient-id-decimal-v1",
+            "plaintext": "123456",
+            "sorpresa": true
+        })) {
+            Ok(_) => panic!("unknown fields must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("invalid fpe request: unknown field")
+        );
+        assert!(err.to_string().contains("sorpresa"));
     }
 
     #[test]

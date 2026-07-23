@@ -65,6 +65,13 @@ def require_hex(value, field):
         raise NegativeTestError(f"{field} must be hex") from err
 
 
+def require_unknown_field_error(name, body, field):
+    error = body.get("error")
+    require(isinstance(error, str), f"{name} must return error string")
+    require("unknown field" in error, f"{name} must mention unknown field, got {error!r}")
+    require(field in error, f"{name} must mention {field!r}, got {error!r}")
+
+
 def ml_dsa_signature_block(token):
     return token.get("signatures", {}).get("ml-dsa") or token.get("signatures", {}).get("ml_dsa")
 
@@ -2959,6 +2966,99 @@ def main():
             "mask batch duplicate ref must fail",
         )
 
+    def internal_encrypt_unknown_field():
+        status, body = client.post(
+            f"/message/internal/encrypt/{key_id}",
+            {"plaintext": "hello", "sorpresa": True},
+            auth=True,
+        )
+        require_status("POST /message/internal/encrypt/{kid} unknown field", status, 400)
+        require_unknown_field_error("POST /message/internal/encrypt/{kid} unknown field", body, "sorpresa")
+
+    def fpe_encrypt_unknown_field():
+        status, body = client.post(
+            f"/fpe/encrypt/{key_id}",
+            {
+                "ref": "fpe-unknown-field",
+                "profile": "patient-id-decimal-v1",
+                "plaintext": "123456",
+                "sorpresa": True,
+            },
+            auth=True,
+        )
+        require_status("POST /fpe/encrypt/{kid} unknown field", status, 400)
+        require_unknown_field_error("POST /fpe/encrypt/{kid} unknown field", body, "sorpresa")
+
+    def token_encode_unknown_field():
+        status, body = client.post(
+            f"/token/encode/{key_id}",
+            {
+                "ref": "token-unknown-field",
+                "profile": "patient-id-token-v1",
+                "plaintext": "123456",
+                "sorpresa": True,
+            },
+            auth=True,
+        )
+        require_status("POST /token/encode/{kid} unknown field", status, 400)
+        require_unknown_field_error("POST /token/encode/{kid} unknown field", body, "sorpresa")
+
+    def mac_create_unknown_field():
+        status, body = client.post(
+            f"/mac/{key_id}",
+            {
+                "ref": "mac-unknown-field",
+                "profile": "pan-blind-index-v1",
+                "plaintext": "4111111111111111",
+                "sorpresa": True,
+            },
+            auth=True,
+        )
+        require_status("POST /mac/{kid} unknown field", status, 400)
+        require_unknown_field_error("POST /mac/{kid} unknown field", body, "sorpresa")
+
+    def index_create_unknown_field():
+        status, body = client.post(
+            f"/index/{key_id}",
+            {
+                "ref": "index-unknown-field",
+                "profile": "pan-blind-index-v1",
+                "plaintext": "4111111111111111",
+                "sorpresa": True,
+            },
+            auth=True,
+        )
+        require_status("POST /index/{kid} unknown field", status, 400)
+        require_unknown_field_error("POST /index/{kid} unknown field", body, "sorpresa")
+
+    def mask_unknown_field():
+        status, body = client.post(
+            f"/mask/{key_id}",
+            {
+                "ref": "mask-unknown-field",
+                "profile": "pan-display-v1",
+                "plaintext": "4111111111111111",
+                "sorpresa": True,
+            },
+            auth=True,
+        )
+        require_status("POST /mask/{kid} unknown field", status, 400)
+        require_unknown_field_error("POST /mask/{kid} unknown field", body, "sorpresa")
+
+    def commit_create_unknown_field():
+        status, body = client.post(
+            f"/commit/{key_id}",
+            {
+                "ref": "commit-unknown-field",
+                "profile": "pan-commitment-v1",
+                "plaintext": "4111111111111111",
+                "sorpresa": True,
+            },
+            auth=True,
+        )
+        require_status("POST /commit/{kid} unknown field", status, 400)
+        require_unknown_field_error("POST /commit/{kid} unknown field", body, "sorpresa")
+
     _CONFIG["routes"] = []
     _CONFIG["remote_routes"] = []
     _CONFIG["permissions"] = []
@@ -2975,12 +3075,14 @@ def main():
         ("POST /message/internal/encrypt/{kid} without auth", internal_encrypt_without_auth),
         ("POST /message/internal/encrypt/{kid} kid not hex", internal_encrypt_kid_not_hex),
         ("POST /message/internal/encrypt/{kid} empty plaintext", internal_encrypt_empty_plaintext),
+        ("POST /message/internal/encrypt/{kid} unknown field", internal_encrypt_unknown_field),
         ("POST /message/internal/decrypt without auth", internal_decrypt_without_auth),
         ("POST /message/internal/decrypt tampered kid", internal_decrypt_tampered_kid),
         ("POST /message/internal/decrypt tampered ciphertext", internal_decrypt_tampered_ciphertext),
         ("POST /fpe/encrypt/{kid} plaintext outside alphabet", fpe_encrypt_plaintext_outside_alphabet),
         ("POST /fpe/encrypt/{kid} plaintext too short", fpe_encrypt_plaintext_too_short),
         ("POST /fpe/encrypt/{kid} unknown profile", fpe_encrypt_unknown_profile),
+        ("POST /fpe/encrypt/{kid} unknown field", fpe_encrypt_unknown_field),
         ("POST /fpe/decrypt ciphertext outside alphabet", fpe_decrypt_ciphertext_outside_alphabet),
         (
             "POST /fpe/encrypt/batch/{kid} plaintext outside alphabet",
@@ -2997,6 +3099,7 @@ def main():
         ),
         ("POST /fpe/decrypt/batch duplicate ref", fpe_decrypt_batch_duplicate_ref),
         ("POST /token/encode/{kid} unknown profile", token_encode_unknown_profile),
+        ("POST /token/encode/{kid} unknown field", token_encode_unknown_field),
         ("POST /token/encode/{kid} plaintext too long", token_encode_plaintext_too_long),
         ("POST /token/encode/{kid} metadata too long", token_encode_metadata_too_long),
         ("POST /token/encode/batch/{kid} empty items", token_encode_batch_empty_items),
@@ -3022,6 +3125,7 @@ def main():
         ("POST /token/decode/batch not found", token_decode_batch_not_found),
         ("POST /token/decode/batch duplicate ref", token_decode_batch_duplicate_ref),
         ("POST /mac/{kid} unknown profile", mac_create_unknown_profile),
+        ("POST /mac/{kid} unknown field", mac_create_unknown_field),
         ("POST /mac/{kid} wrong kid", mac_create_wrong_kid),
         ("POST /mac/{kid} missing ref", mac_create_ref_missing),
         ("POST /mac/{kid} empty ref", mac_create_ref_empty),
@@ -3036,6 +3140,7 @@ def main():
         ("POST /mac/verify/batch digest not hex", mac_verify_batch_digest_not_hex),
         ("POST /mac/verify/batch duplicate ref", mac_verify_batch_duplicate_ref),
         ("POST /index/{kid} unknown profile", index_create_unknown_profile),
+        ("POST /index/{kid} unknown field", index_create_unknown_field),
         ("POST /index/{kid} wrong kid", index_create_wrong_kid),
         ("POST /index/{kid} empty ref", index_create_empty_ref),
         ("POST /index/batch/{kid} empty items", index_create_batch_empty_items),
@@ -3043,12 +3148,14 @@ def main():
         ("POST /index/batch/{kid} duplicate ref", index_create_batch_duplicate_ref),
         ("POST /index/verify/batch duplicate ref", index_verify_batch_duplicate_ref),
         ("POST /mask/{kid} unknown profile", mask_unknown_profile),
+        ("POST /mask/{kid} unknown field", mask_unknown_field),
         ("POST /mask/{kid} wrong kid", mask_wrong_kid),
         ("POST /mask/{kid} plaintext too short", mask_plaintext_too_short),
         ("POST /mask/{kid} empty ref", mask_ref_empty),
         ("POST /mask/batch/{kid} empty items", mask_batch_empty_items),
         ("POST /mask/batch/{kid} too many items", mask_batch_too_many_items),
         ("POST /mask/batch/{kid} duplicate ref", mask_batch_duplicate_ref),
+        ("POST /commit/{kid} unknown field", commit_create_unknown_field),
     ):
         run_case(rows, name, func)
 
@@ -3127,6 +3234,18 @@ def main():
         )
         require_status("POST /sign/{kid} hash not hex", status, 400)
 
+    def sign_unknown_field():
+        status, body = client.post(
+            f"/sign/{key_id}",
+            {
+                "message_hash": {"alg": "SHA-256", "hex": hashlib.sha256(VALID_MESSAGE).hexdigest()},
+                "sorpresa": True,
+            },
+            auth=True,
+        )
+        require_status("POST /sign/{kid} unknown field", status, 400)
+        require_unknown_field_error("POST /sign/{kid} unknown field", body, "sorpresa")
+
     for name, func in (
         ("GET /self-test/init without auth", test_init_without_auth),
         ("GET /self-test/keys/{kid} without auth", test_id_without_auth),
@@ -3140,6 +3259,7 @@ def main():
         ("POST /sign/{kid} invalid hash algorithm", sign_invalid_hash_algorithm),
         ("POST /sign/{kid} hash wrong length", sign_hash_wrong_length),
         ("POST /sign/{kid} hash not hex", sign_hash_not_hex),
+        ("POST /sign/{kid} unknown field", sign_unknown_field),
     ):
         run_case(rows, name, func)
 

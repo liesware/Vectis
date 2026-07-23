@@ -348,7 +348,7 @@ Logging is JSON by default. With `VECTIS_LOG_TARGET=file`, operational events go
 The Helm chart sets `VECTIS_LOG_TARGET=stdout` by default because Kubernetes
 expects containers to write logs to stdout/stderr.
 
-Audit events use stable event names such as `auth.success`, `permission.denied`, `config.reload.success`, `key.lifecycle.changed`, `message.send.failed`, `message.internal.encrypt.success`, `message.internal.decrypt.success`, and `sign.success`. `message.send.*` is reserved for remote message sends. `message.internal.encrypt.*` and `message.internal.decrypt.*` are reserved for local internal message encryption and decryption. Audit records include logical identity fields such as `actor`, `actor_fp`, `root`, `admin`, `kid`, `remote_kid`, `action`, `outcome`, and `reason`. They must not include plaintext, ciphertext, API keys, unseal keys, private keys, or full sensitive payloads.
+Audit events use stable event names such as `auth.success`, `permission.denied`, `config.reload.success`, `config.reload.stale`, `key.lifecycle.changed`, `message.send.failed`, `message.internal.encrypt.success`, `message.internal.decrypt.success`, and `sign.success`. `message.send.*` is reserved for remote message sends. `message.internal.encrypt.*` and `message.internal.decrypt.*` are reserved for local internal message encryption and decryption. Audit records include logical identity fields such as `actor`, `actor_fp`, `root`, `admin`, `kid`, `remote_kid`, `action`, `outcome`, and `reason`. They must not include plaintext, ciphertext, API keys, unseal keys, private keys, or full sensitive payloads.
 
 ## Observability
 

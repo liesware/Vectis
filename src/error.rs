@@ -14,6 +14,8 @@ pub enum VectisError {
     #[error("{0}")]
     InvalidSignature(String),
     #[error("{0}")]
+    ConfigSignatureStale(String),
+    #[error("{0}")]
     RemoteUnreachable(String),
     #[error("{0}")]
     Storage(String),
@@ -37,6 +39,10 @@ pub fn invalid_signature(message: impl Into<String>) -> DynError {
     Box::new(VectisError::InvalidSignature(message.into()))
 }
 
+pub fn config_signature_stale(message: impl Into<String>) -> DynError {
+    Box::new(VectisError::ConfigSignatureStale(message.into()))
+}
+
 pub fn remote_unreachable(message: impl Into<String>) -> DynError {
     Box::new(VectisError::RemoteUnreachable(message.into()))
 }
@@ -57,6 +63,9 @@ pub fn with_prefix(prefix: &str, err: DynError) -> DynError {
         Some(VectisError::InvalidSignature(message)) => {
             invalid_signature(format!("{prefix}: {message}"))
         }
+        Some(VectisError::ConfigSignatureStale(message)) => {
+            config_signature_stale(format!("{prefix}: {message}"))
+        }
         Some(VectisError::RemoteUnreachable(message)) => {
             remote_unreachable(format!("{prefix}: {message}"))
         }
@@ -64,6 +73,13 @@ pub fn with_prefix(prefix: &str, err: DynError) -> DynError {
         Some(VectisError::Internal(message)) => internal(format!("{prefix}: {message}")),
         None => internal(format!("{prefix}: {err}")),
     }
+}
+
+pub fn is_config_signature_stale(err: &(dyn Error + Send + Sync + 'static)) -> bool {
+    matches!(
+        err.downcast_ref::<VectisError>(),
+        Some(VectisError::ConfigSignatureStale(_))
+    )
 }
 
 pub fn is_not_found(err: &(dyn Error + Send + Sync + 'static)) -> bool {

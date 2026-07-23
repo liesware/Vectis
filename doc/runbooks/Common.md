@@ -642,6 +642,7 @@ auth.denied
 permission.allowed
 permission.denied
 config.reload.success
+config.reload.stale
 config.reload.failed
 message.send.success
 message.send.failed

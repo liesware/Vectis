@@ -216,13 +216,11 @@ impl CommitVerifyBatchOutput {
 }
 
 pub fn parse_create_input(request: Value) -> Result<CommitCreateInput, DynError> {
-    serde_json::from_value(request)
-        .map_err(|_| crate::error::invalid_input("invalid commit request"))
+    crate::ops::json::parse_json_request(request, "commit request")
 }
 
 pub fn parse_verify_input(request: Value) -> Result<CommitVerifyInput, DynError> {
-    serde_json::from_value(request)
-        .map_err(|_| crate::error::invalid_input("invalid commit request"))
+    crate::ops::json::parse_json_request(request, "commit request")
 }
 
 pub fn parse_create_batch_input(request: Value) -> Result<CommitCreateBatchInput, DynError> {
@@ -231,8 +229,7 @@ pub fn parse_create_batch_input(request: Value) -> Result<CommitCreateBatchInput
         crate::core::config::INTERNAL_COMMIT_BATCH,
         "commit",
     )?;
-    serde_json::from_value(request)
-        .map_err(|_| crate::error::invalid_input("invalid commit request"))
+    crate::ops::json::parse_json_request(request, "commit request")
 }
 
 pub fn parse_verify_batch_input(request: Value) -> Result<CommitVerifyBatchInput, DynError> {
@@ -241,8 +238,7 @@ pub fn parse_verify_batch_input(request: Value) -> Result<CommitVerifyBatchInput
         crate::core::config::INTERNAL_COMMIT_BATCH,
         "commit",
     )?;
-    serde_json::from_value(request)
-        .map_err(|_| crate::error::invalid_input("invalid commit request"))
+    crate::ops::json::parse_json_request(request, "commit request")
 }
 
 pub fn validate_create_input(
@@ -951,5 +947,24 @@ mod tests {
         .unwrap();
         assert_eq!(verified["ref"], "reg1");
         assert_eq!(verified["valid"], true);
+    }
+
+    #[test]
+    fn parse_commit_input_preserves_unknown_field_detail() {
+        let err = match parse_create_input(json!({
+            "ref": "reg1",
+            "profile": "pan-commitment-v1",
+            "plaintext": "4111111111111111",
+            "sorpresa": true
+        })) {
+            Ok(_) => panic!("unknown fields must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("invalid commit request: unknown field")
+        );
+        assert!(err.to_string().contains("sorpresa"));
     }
 }

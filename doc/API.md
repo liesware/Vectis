@@ -207,8 +207,8 @@ Exposed metrics:
 - `vectis_masking_profiles_loaded`
 - `vectis_commitment_profiles_loaded`
 - `vectis_permission_total{result}` (`allow` or `deny`)
-- `vectis_config_reload_total{result}` (`success` or `failed`)
-- `vectis_config_last_reload_timestamp_seconds{result}` (`success` or `failed`)
+- `vectis_config_reload_total{result}` (`success`, `stale`, or `failed`)
+- `vectis_config_last_reload_timestamp_seconds{result}` (`success`, `stale`, or `failed`)
 - `vectis_keys_reload_total{result}` (`success` or `failed`)
 - `vectis_message_total{operation,result}` (`send`, `receive`, or `decrypt`; `success`, `denied`, or `failed`)
 - `vectis_crypto_operation_total{operation,result}` (`sign`, `verify`, `encrypt`, `decrypt`, `fpe_encrypt`, `fpe_decrypt`, `fpe_encrypt_batch`, `fpe_decrypt_batch`, `token_encode`, `token_decode`, `token_encode_batch`, `token_decode_batch`, `mac_create`, `mac_verify`, `mac_create_batch`, `mac_verify_batch`, `commit_create`, `commit_verify`, `commit_create_batch`, `commit_verify_batch`, `index_create`, `index_verify`, `index_create_batch`, `index_verify_batch`, `mask`, or `mask_batch`; `success` or `failed`)
@@ -521,13 +521,14 @@ Administrative refresh operation. Reloads the unified signed config into memory.
 
 Requires auth with root or an admin client.
 
-If `config.json` is missing, Vectis reloads to empty config sections. If the config exists but is invalid, unsigned, has an invalid signature, references an unloaded KID where a loaded KID is required, or contains invalid section data, the request fails and the previous in-memory config remains active.
+If `config.json` is missing, Vectis reloads to empty config sections. If the config exists but is invalid, unsigned, has an invalid signature, references an unloaded KID where a loaded KID is required, or contains invalid section data, the request fails and the previous in-memory config remains active. If `config.json` has changed but `config_sign.json` still signs older content, reload keeps the previous in-memory config and returns a warning.
 
 Response:
 
 ```json
 {
   "status": "reloaded",
+  "warning": "config.json has changes not covered by config_sign.json — run 'vectis config sign' first",
   "routes_loaded": 1,
   "remote_routes_loaded": 1,
   "clients_loaded": 1,
@@ -538,6 +539,8 @@ Response:
   "masking_profiles_loaded": 1
 }
 ```
+
+`warning` is optional and appears only when the current `config.json` is not covered by the current `config_sign.json`.
 
 ## Routes
 
@@ -1981,7 +1984,7 @@ Routing behavior:
 4. A manual route is loaded only if its `kid` exists in the keys currently loaded in memory.
 5. During startup, a missing config starts with empty sections and uses the default final app fallback.
 6. During startup, an existing invalid config, bad signature, or section referencing an unloaded `kid` is fatal.
-7. During reload, a missing config reloads to empty sections; an invalid config, bad signature, or a section referencing an unloaded `kid` returns an error and keeps the previous in-memory config.
+7. During reload, a missing config reloads to empty sections; an invalid config, corrupt signature, or a section referencing an unloaded `kid` returns an error and keeps the previous in-memory config. If `config.json` changed but `config_sign.json` signs older content, reload returns `status: "reloaded"` with a warning and keeps the previous in-memory config.
 
 The config file is operational configuration. Vectis does not create it automatically and `POST /keys` does not modify it.
 

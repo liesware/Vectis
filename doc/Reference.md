@@ -914,6 +914,8 @@ Important invariants:
 - Root API key is verified by HMAC, not stored as plaintext server-side.
 - Signed config must be canonicalized and verified before loading.
 - Runtime config reload must keep the previous state if validation fails.
+- Runtime config reload must warn when `config.json` has changes not covered
+  by `config_sign.json`.
 - Remote message destinations must come from signed config, not request input.
 - `remote_routes.public_keys`, if present, must be operationally valid.
 - Lifecycle must be enforced centrally.
@@ -1193,6 +1195,8 @@ Vectis is still experimental. Important boundaries:
 - no SLH-DSA support yet;
 - production TLS policy exists, but deployment hardening still needs more work;
 - config reload is whole-file, not per-section transactional;
+- config reload does not apply unsigned edits; stale signatures produce an
+  explicit warning and keep the previous state;
 - message exchange requires peer `public_keys` registered in the signed config;
   there is no runtime key fetch and no trust-on-first-use path;
 - cryptographic implementation depends on Botan availability and correctness;
@@ -1244,6 +1248,7 @@ When changing Vectis, check:
 - Does it avoid logging secrets?
 - Does lifecycle enforcement still happen centrally?
 - Does config reload fail safely?
+- Does config reload warn instead of hiding unsigned config edits?
 - Does the OpenAPI contract need an update?
 - Does `doc/API.md` need an update?
 - Does `doc/ENV.md` need an update?

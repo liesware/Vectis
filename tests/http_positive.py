@@ -38,6 +38,7 @@ from http_support import (
     write_tokenization_profiles,
     write_test_remote_routes,
     write_test_routes,
+    write_unsigned_config,
 )
 
 HASH_CASES = {
@@ -1513,6 +1514,42 @@ def main():
     require(
         fpe_reload.get("fpe_profiles_loaded") == 1,
         "config reload must report loaded fpe profile",
+    )
+    stale_profile = {
+        "name": "patient-id-stale-v1",
+        "fpe_version": "fpe-ff1-2025",
+        "alphabet": "0123456789",
+        "min_len": 6,
+        "max_len": 32,
+        "tweak_aad": "tenant=acme;field=patient_id_stale;version=1",
+        "kid": created[0][0],
+    }
+    _CONFIG["fpe_profiles"].append(stale_profile)
+    write_unsigned_config()
+    stale_reload = reload_config(client)
+    require(
+        stale_reload.get("warning")
+        == "config.json has changes not covered by config_sign.json — run 'vectis config sign' first",
+        "config reload must warn when config.json is not covered by config_sign.json",
+    )
+    require(
+        stale_reload.get("fpe_profiles_loaded") == 1,
+        "stale config reload must keep previously loaded fpe profiles",
+    )
+    stale_metrics = client.get_text("/metrics", auth=True)
+    require(
+        'vectis_config_reload_total{result="stale"}' in stale_metrics,
+        "stale config reload must record a stale reload result metric",
+    )
+    write_config()
+    signed_reload = reload_config(client)
+    require(
+        "warning" not in signed_reload,
+        "config reload must not warn after config is signed",
+    )
+    require(
+        signed_reload.get("fpe_profiles_loaded") == 2,
+        "signed config reload must apply new fpe profile",
     )
     fpe_rows = [
         (

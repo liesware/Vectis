@@ -132,19 +132,6 @@ pub fn verify_config_file_signature(
         ));
     }
 
-    let canonical_config = config_file::canonical_config_json(config_content)?;
-    let expected_hash = hex::encode(crypto::hash_text(
-        config::INTERNAL_KEYS_HASH,
-        &canonical_config,
-    )?);
-    if token.payload.message_hash.alg != config::INTERNAL_KEYS_HASH
-        || token.payload.message_hash.hex != expected_hash
-    {
-        return Err(crate::error::invalid_input(
-            "config signature message_hash does not match config content",
-        ));
-    }
-
     let status = verify_hybrid_payload(
         &token.payload,
         &token.signatures,
@@ -154,6 +141,19 @@ pub fn verify_config_file_signature(
     if status.eddsa != "ok" || status.ml_dsa != "ok" {
         return Err(crate::error::invalid_signature(
             "config signature verification failed",
+        ));
+    }
+
+    let canonical_config = config_file::canonical_config_json(config_content)?;
+    let expected_hash = hex::encode(crypto::hash_text(
+        config::INTERNAL_KEYS_HASH,
+        &canonical_config,
+    )?);
+    if token.payload.message_hash.alg != config::INTERNAL_KEYS_HASH
+        || token.payload.message_hash.hex != expected_hash
+    {
+        return Err(crate::error::config_signature_stale(
+            "config signature message_hash does not match config content",
         ));
     }
 
@@ -245,7 +245,7 @@ fn verify_payload_with_public_keys(
 pub fn parse_sign_input(request: Value) -> Result<SignInput, DynError> {
     debug!("parsing sign request");
 
-    serde_json::from_value(request).map_err(|_| crate::error::invalid_input("invalid sign request"))
+    crate::ops::json::parse_json_request(request, "sign request")
 }
 
 pub fn sign_timestamp_from_state(
@@ -714,9 +714,31 @@ mod tests {
         assert_eq!(err.to_string(), "config signature verification failed");
     }
 
+    #[test]
+    fn config_signature_checks_signature_before_content_staleness() {
+        let init_state = init_state();
+        let mut token =
+            sign_config_file(&init_state, &PathBuf::from("config.json"), empty_config())
+                .expect("config must sign");
+        token.signatures.eddsa.sig.replace_range(0..2, "00");
+        let signature_content = serde_json::to_string(&token).expect("token must serialize");
+        let tampered_config = r#"{"version":"v1","routes":[{"kid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"app","final_app_addr":"127.0.0.1:3999","final_app_path":"/message"}],"remote_routes":[],"permissions":[]}"#;
+
+        let err = verify_config_file_signature(
+            &init_state,
+            &PathBuf::from("config.json"),
+            tampered_config,
+            &signature_content,
+        )
+        .expect_err("invalid signature must fail before content staleness");
+
+        assert_eq!(err.to_string(), "config signature verification failed");
+        assert!(!crate::error::is_config_signature_stale(err.as_ref()));
+    }
+
     proptest! {
         #[test]
-        fn parse_sign_input_rejects_extra_fields_without_reflecting_field_name(extra_field in ".{1,32}") {
+        fn parse_sign_input_rejects_extra_fields_with_actionable_shape_error(extra_field in ".{1,32}") {
             prop_assume!(extra_field != "message_hash");
             let value = json!({
                 "message_hash": {"alg": "SHA-256", "hex": hex64('a')},
@@ -729,7 +751,10 @@ mod tests {
             };
             let public_error = err.to_string();
 
-            prop_assert_eq!(public_error.as_str(), "invalid sign request");
+            prop_assert!(public_error.starts_with("invalid sign request:"));
+            prop_assert!(public_error.contains("unknown field"));
+            prop_assert!(public_error.contains(&extra_field));
+            prop_assert!(!public_error.contains("unexpected"));
         }
 
         #[test]

@@ -3,30 +3,38 @@ use crate::error::DynError;
 use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use tracing::info;
 
 pub struct SqliteStorage {
     pool: SqlitePool,
+    path: PathBuf,
 }
 
 impl SqliteStorage {
-    pub async fn new(path: &std::path::Path) -> Result<Self, DynError> {
+    pub async fn new(path: &Path) -> Result<Self, DynError> {
         let options = SqliteConnectOptions::new()
             .filename(path)
             .create_if_missing(false);
+        let context = sqlite_context(path);
         let pool = SqlitePool::connect_with(options).await.map_err(|err| {
-            crate::error::storage(format!("failed to connect to ops sqlite: {err}"))
+            crate::error::storage(format!(
+                "failed to connect to ops sqlite at {context}: {err}"
+            ))
         })?;
         info!(path = %path.display(), "connected to ops sqlite");
 
-        validate_opskeys_schema(&pool).await?;
+        validate_opskeys_schema(&pool, &context).await?;
         info!("validated opskeys sqlite schema");
-        validate_tokens_schema(&pool).await?;
+        validate_tokens_schema(&pool, &context).await?;
         info!("validated tokens sqlite schema");
-        validate_indexes_schema(&pool).await?;
+        validate_indexes_schema(&pool, &context).await?;
         info!("validated indexes sqlite schema");
 
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            path: path.to_path_buf(),
+        })
     }
 
     pub async fn save_ops_keys(
@@ -328,33 +336,69 @@ impl SqliteStorage {
     }
 
     pub async fn health_check(&self) -> Result<(), DynError> {
-        sqlx::query("SELECT 1").execute(&self.pool).await?;
+        sqlx::query("SELECT 1")
+            .execute(&self.pool)
+            .await
+            .map_err(|err| {
+                crate::error::storage(format!(
+                    "sqlite health check failed at {}: {err}",
+                    sqlite_context(&self.path)
+                ))
+            })?;
 
         Ok(())
     }
 }
 
-async fn validate_opskeys_schema(db: &SqlitePool) -> Result<(), DynError> {
+fn sqlite_context(path: &Path) -> String {
+    path.display().to_string()
+}
+
+async fn validate_opskeys_schema(db: &SqlitePool, context: &str) -> Result<(), DynError> {
     let rows = sqlx::query("PRAGMA table_info(opskeys)")
         .fetch_all(db)
         .await?;
 
     if rows.is_empty() {
-        return Err(crate::error::storage(
-            "sqlite schema is missing opskeys table",
-        ));
+        return Err(crate::error::storage(format!(
+            "sqlite schema is missing opskeys table ({context})",
+        )));
     }
 
-    let kid = find_column(&rows, "kid")
-        .ok_or_else(|| crate::error::storage("sqlite schema is missing opskeys.kid column"))?;
-    let keys = find_column(&rows, "keys")
-        .ok_or_else(|| crate::error::storage("sqlite schema is missing opskeys.keys column"))?;
+    let kid = find_column(&rows, "kid").ok_or_else(|| {
+        crate::error::storage(format!(
+            "sqlite schema is missing opskeys.kid column ({context})"
+        ))
+    })?;
+    let keys = find_column(&rows, "keys").ok_or_else(|| {
+        crate::error::storage(format!(
+            "sqlite schema is missing opskeys.keys column ({context})"
+        ))
+    })?;
     let properties = find_column(&rows, "properties").ok_or_else(|| {
-        crate::error::storage("sqlite schema is missing opskeys.properties column")
+        crate::error::storage(format!(
+            "sqlite schema is missing opskeys.properties column ({context})"
+        ))
     })?;
 
-    validate_column(&kid, "opskeys", "kid", "VARCHAR(128)", false, Some(1))?;
-    validate_column(&keys, "opskeys", "keys", "VARCHAR(10240)", true, None)?;
+    validate_column(
+        &kid,
+        "opskeys",
+        "kid",
+        "VARCHAR(128)",
+        false,
+        Some(1),
+        context,
+    )?;
+    validate_column(
+        &keys,
+        "opskeys",
+        "keys",
+        "VARCHAR(10240)",
+        true,
+        None,
+        context,
+    )?;
     validate_column(
         &properties,
         "opskeys",
@@ -362,54 +406,110 @@ async fn validate_opskeys_schema(db: &SqlitePool) -> Result<(), DynError> {
         "VARCHAR(10240)",
         true,
         None,
+        context,
     )?;
 
     Ok(())
 }
 
-async fn validate_tokens_schema(db: &SqlitePool) -> Result<(), DynError> {
+async fn validate_tokens_schema(db: &SqlitePool, context: &str) -> Result<(), DynError> {
     let rows = sqlx::query("PRAGMA table_info(tokens)")
         .fetch_all(db)
         .await?;
 
     if rows.is_empty() {
-        return Err(crate::error::storage(
-            "sqlite schema is missing tokens table",
-        ));
+        return Err(crate::error::storage(format!(
+            "sqlite schema is missing tokens table ({context})",
+        )));
     }
 
-    let kid = find_column(&rows, "kid")
-        .ok_or_else(|| crate::error::storage("sqlite schema is missing tokens.kid column"))?;
-    let hashid = find_column(&rows, "hashid")
-        .ok_or_else(|| crate::error::storage("sqlite schema is missing tokens.hashid column"))?;
-    let data = find_column(&rows, "data")
-        .ok_or_else(|| crate::error::storage("sqlite schema is missing tokens.data column"))?;
+    let kid = find_column(&rows, "kid").ok_or_else(|| {
+        crate::error::storage(format!(
+            "sqlite schema is missing tokens.kid column ({context})"
+        ))
+    })?;
+    let hashid = find_column(&rows, "hashid").ok_or_else(|| {
+        crate::error::storage(format!(
+            "sqlite schema is missing tokens.hashid column ({context})"
+        ))
+    })?;
+    let data = find_column(&rows, "data").ok_or_else(|| {
+        crate::error::storage(format!(
+            "sqlite schema is missing tokens.data column ({context})"
+        ))
+    })?;
 
-    validate_column(&kid, "tokens", "kid", "VARCHAR(128)", true, Some(1))?;
-    validate_column(&hashid, "tokens", "hashid", "VARCHAR(128)", true, Some(2))?;
-    validate_column(&data, "tokens", "data", "VARCHAR(10240)", true, None)?;
+    validate_column(
+        &kid,
+        "tokens",
+        "kid",
+        "VARCHAR(128)",
+        true,
+        Some(1),
+        context,
+    )?;
+    validate_column(
+        &hashid,
+        "tokens",
+        "hashid",
+        "VARCHAR(128)",
+        true,
+        Some(2),
+        context,
+    )?;
+    validate_column(
+        &data,
+        "tokens",
+        "data",
+        "VARCHAR(10240)",
+        true,
+        None,
+        context,
+    )?;
 
     Ok(())
 }
 
-async fn validate_indexes_schema(db: &SqlitePool) -> Result<(), DynError> {
+async fn validate_indexes_schema(db: &SqlitePool, context: &str) -> Result<(), DynError> {
     let rows = sqlx::query("PRAGMA table_info(indexes)")
         .fetch_all(db)
         .await?;
 
     if rows.is_empty() {
-        return Err(crate::error::storage(
-            "sqlite schema is missing indexes table",
-        ));
+        return Err(crate::error::storage(format!(
+            "sqlite schema is missing indexes table ({context})",
+        )));
     }
 
-    let kid = find_column(&rows, "kid")
-        .ok_or_else(|| crate::error::storage("sqlite schema is missing indexes.kid column"))?;
-    let digest = find_column(&rows, "digest")
-        .ok_or_else(|| crate::error::storage("sqlite schema is missing indexes.digest column"))?;
+    let kid = find_column(&rows, "kid").ok_or_else(|| {
+        crate::error::storage(format!(
+            "sqlite schema is missing indexes.kid column ({context})"
+        ))
+    })?;
+    let digest = find_column(&rows, "digest").ok_or_else(|| {
+        crate::error::storage(format!(
+            "sqlite schema is missing indexes.digest column ({context})"
+        ))
+    })?;
 
-    validate_column(&kid, "indexes", "kid", "VARCHAR(128)", true, Some(1))?;
-    validate_column(&digest, "indexes", "digest", "VARCHAR(128)", true, Some(2))?;
+    validate_column(
+        &kid,
+        "indexes",
+        "kid",
+        "VARCHAR(128)",
+        true,
+        Some(1),
+        context,
+    )?;
+    validate_column(
+        &digest,
+        "indexes",
+        "digest",
+        "VARCHAR(128)",
+        true,
+        Some(2),
+        context,
+    )?;
 
     Ok(())
 }
@@ -448,6 +548,7 @@ fn validate_column(
     expected_type: &str,
     expected_notnull: bool,
     expected_primary_key_position: Option<i64>,
+    context: &str,
 ) -> Result<(), DynError> {
     let expected_primary_key_position = expected_primary_key_position.unwrap_or(0);
     if column.name != expected_name
@@ -456,7 +557,7 @@ fn validate_column(
         || column.primary_key_position != expected_primary_key_position
     {
         return Err(crate::error::storage(format!(
-            "sqlite schema mismatch for {table_name}.{expected_name}: expected type={expected_type}, notnull={expected_notnull}, primary_key_position={expected_primary_key_position}",
+            "sqlite schema mismatch for {table_name}.{expected_name}: expected type={expected_type}, notnull={expected_notnull}, primary_key_position={expected_primary_key_position} ({context})",
         )));
     }
 
@@ -534,6 +635,35 @@ mod tests {
 
     async fn cleanup(path: PathBuf) {
         let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn schema_error_includes_sqlite_path() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time must be valid")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "vectis-sqlite-empty-{}-{nonce}.db",
+            std::process::id()
+        ));
+        let options = SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true);
+        let pool = SqlitePool::connect_with(options)
+            .await
+            .expect("empty sqlite must connect");
+        pool.close().await;
+
+        let err = match SqliteStorage::new(&path).await {
+            Ok(_) => panic!("empty sqlite schema must fail"),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+        assert!(message.contains("sqlite schema is missing opskeys table"));
+        assert!(message.contains(&path.display().to_string()));
+
+        cleanup(path).await;
     }
 
     #[tokio::test]

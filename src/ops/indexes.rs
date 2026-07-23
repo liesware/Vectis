@@ -207,13 +207,11 @@ impl IndexVerifyBatchOutput {
 }
 
 pub fn parse_create_input(request: Value) -> Result<IndexCreateInput, DynError> {
-    serde_json::from_value(request)
-        .map_err(|_| crate::error::invalid_input("invalid index request"))
+    crate::ops::json::parse_json_request(request, "index request")
 }
 
 pub fn parse_verify_input(request: Value) -> Result<IndexVerifyInput, DynError> {
-    serde_json::from_value(request)
-        .map_err(|_| crate::error::invalid_input("invalid index request"))
+    crate::ops::json::parse_json_request(request, "index request")
 }
 
 pub fn parse_batch_input(request: Value) -> Result<IndexBatchInput, DynError> {
@@ -222,8 +220,7 @@ pub fn parse_batch_input(request: Value) -> Result<IndexBatchInput, DynError> {
         crate::core::config::INTERNAL_INDEX_BATCH,
         "index",
     )?;
-    serde_json::from_value(request)
-        .map_err(|_| crate::error::invalid_input("invalid index request"))
+    crate::ops::json::parse_json_request(request, "index request")
 }
 
 pub fn parse_verify_batch_input(request: Value) -> Result<IndexVerifyBatchInput, DynError> {
@@ -232,8 +229,7 @@ pub fn parse_verify_batch_input(request: Value) -> Result<IndexVerifyBatchInput,
         crate::core::config::INTERNAL_INDEX_BATCH,
         "index",
     )?;
-    serde_json::from_value(request)
-        .map_err(|_| crate::error::invalid_input("invalid index request"))
+    crate::ops::json::parse_json_request(request, "index request")
 }
 
 pub fn validate_create_input(
@@ -847,5 +843,24 @@ mod tests {
             value,
             json!({"ref": "reg1", "kid": "kid", "profile": "pan-index-v1", "index": "abcd"})
         );
+    }
+
+    #[test]
+    fn parse_index_input_preserves_unknown_field_detail() {
+        let err = match parse_create_input(json!({
+            "ref": "reg1",
+            "profile": "pan-index-v1",
+            "plaintext": "4111111111111111",
+            "sorpresa": true
+        })) {
+            Ok(_) => panic!("unknown fields must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("invalid index request: unknown field")
+        );
+        assert!(err.to_string().contains("sorpresa"));
     }
 }
