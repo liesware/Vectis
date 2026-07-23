@@ -7,11 +7,16 @@ where
     T: DeserializeOwned,
 {
     serde_json::from_value(request).map_err(|err| {
+        let detail = redact_unexpected_value(&err.to_string());
         invalid_input(format!(
             "invalid {context}: {}",
-            redact_unexpected_value(&err.to_string())
+            strip_control_chars(&detail)
         ))
     })
+}
+
+fn strip_control_chars(message: &str) -> String {
+    message.chars().filter(|c| !c.is_control()).collect()
 }
 
 fn redact_unexpected_value(message: &str) -> String {
@@ -81,6 +86,22 @@ mod tests {
                 .contains("invalid demo request: unknown field")
         );
         assert!(err.to_string().contains("extra"));
+    }
+
+    #[test]
+    fn parse_json_request_strips_control_chars_from_unknown_field_name() {
+        let field = String::from("bad\u{7f}field");
+        let err = match parse_json_request::<DemoInput>(
+            json!({"value": "ok", field: true}),
+            "demo request",
+        ) {
+            Ok(_) => panic!("unknown fields must fail"),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+
+        assert!(!message.chars().any(char::is_control));
+        assert!(message.contains("badfield"));
     }
 
     #[test]

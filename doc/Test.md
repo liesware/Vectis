@@ -41,9 +41,10 @@ cargo install cargo-fuzz
 rustup toolchain install nightly
 ```
 
-On systems where `cargo` and `rustc` come from Homebrew or another package
-manager, `tests_cargo-fuzz.sh` forces the nightly toolchain path for the fuzzing
-run.
+`tests_cargo-fuzz.sh` resolves the selected nightly toolchain through `rustup`
+and prepends its binary directory to `PATH`. This also keeps nested Cargo
+invocations on nightly when the system default comes from Homebrew or another
+package manager.
 
 ## Rust Checks
 
@@ -266,7 +267,15 @@ Run all native fuzz targets with:
 ./tests_cargo-fuzz.sh
 ```
 
-Increase or reduce the number of runs with:
+The runner is non-interactive and can be invoked from a terminal or automation.
+It uses the portable `nightly` rustup toolchain by default. Select another
+installed nightly toolchain with:
+
+```sh
+TOOLCHAIN=nightly-2026-07-01 ./tests_cargo-fuzz.sh
+```
+
+Increase or reduce the number of runs per target with:
 
 ```sh
 RUNS=100000 ./tests_cargo-fuzz.sh
@@ -278,9 +287,13 @@ Or bound each target by wall-clock time (seconds) for a longer hardening run:
 MAX_TOTAL_TIME=120 ./tests_cargo-fuzz.sh
 ```
 
-Committed seed inputs live in `fuzz/seeds/<target>/` and are copied into the
-(git-ignored) `fuzz/corpus/<target>/` before each run to bootstrap coverage from
-realistic examples.
+When both values are set, libFuzzer stops each target when either limit is
+reached. `RUNS` and `MAX_TOTAL_TIME` must be positive integers.
+
+Committed seed inputs live in `fuzz/seeds/<target>/` and are synchronized into
+the (git-ignored) `fuzz/corpus/<target>/` before each run to bootstrap coverage
+from realistic examples. Existing corpus entries discovered by libFuzzer are
+preserved.
 
 The script runs:
 
@@ -289,16 +302,22 @@ The script runs:
 - `fuzz_timestamp_token`
 - `fuzz_message_inputs`
 - `fuzz_config_file`
-
-Additional registered targets can be run manually with `cargo fuzz run`:
-
 - `fuzz_keys_inputs`
 - `fuzz_validation`
 - `fuzz_routes_permissions`
+- `fuzz_fpe_inputs`
+- `fuzz_tokenization_inputs`
+- `fuzz_mac_index_inputs`
+- `fuzz_masking_commitment_inputs`
+- `fuzz_sharing_inputs`
 
-These targets intentionally avoid Botan, SQLite, networking, and server startup
-inside the fuzz loop. They focus on parser safety, validation boundaries,
-canonical JSON determinism, and config parsing robustness.
+These targets intentionally avoid invoking Botan, SQLite, networking, and
+server startup inside the fuzz loop. They focus on parser safety, validation
+boundaries, canonical JSON determinism, and config parsing robustness. The five
+data-protection input targets stop at the `ops` parse/validate boundary: they do
+not load keys or profiles, execute cryptographic operations, or exercise HTTP.
+Hash output validation that depends on Botan remains covered by Rust unit tests
+and `tests/crypto_integration.rs`, rather than `fuzz_validation`.
 
 ### Error message hygiene
 
@@ -310,9 +329,11 @@ of what deeper code interpolates. The fuzz-target assertions are **defense in
 depth** — the `ops`/`core` layers should not gratuitously inject control
 characters into error text — not the primary guarantee.
 
-`cargo-fuzz` is currently a local/manual hardening tool rather than a CI gate.
-Botan itself stays outside these fuzz loops; Vectis' contract with Botan is
-covered by `tests/crypto_integration.rs`.
+The runner stops after the first finding or execution failure, preserves the
+artifact under `fuzz/artifacts/<target>/`, prints a passed/failed/skipped
+summary, and returns a non-zero status. It is ready for non-interactive
+automation but remains a separate hardening tool rather than a default CI gate.
+Vectis' contract with Botan is covered by `tests/crypto_integration.rs`.
 
 If a fuzz target finds a crash, keep the minimized artifact, add a regression
 test, fix the issue, and rerun the target against the artifact and the normal

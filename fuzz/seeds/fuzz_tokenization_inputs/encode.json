@@ -1,0 +1,1 @@
+{"ref":"token-encode-1","profile":"fuzz-token-v1","plaintext":"patient-123","metadata":{"tenant":"fuzz","field":"patient_id"}}

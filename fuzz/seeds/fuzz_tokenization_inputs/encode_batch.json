@@ -1,0 +1,1 @@
+{"profile":"fuzz-token-v1","items":[{"ref":"token-encode-1","plaintext":"patient-123","metadata":{"item":"one"}},{"ref":"token-encode-2","plaintext":"patient-456","metadata":{"item":"two"}}]}

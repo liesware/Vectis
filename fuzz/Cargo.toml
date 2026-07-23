@@ -10,6 +10,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 serde_json = "1"
+zeroize = "1.9.0"
 
 [dependencies.vectis]
 path = ".."
@@ -66,6 +67,41 @@ bench = false
 [[bin]]
 name = "fuzz_routes_permissions"
 path = "fuzz_targets/fuzz_routes_permissions.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_fpe_inputs"
+path = "fuzz_targets/fuzz_fpe_inputs.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_tokenization_inputs"
+path = "fuzz_targets/fuzz_tokenization_inputs.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_mac_index_inputs"
+path = "fuzz_targets/fuzz_mac_index_inputs.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_masking_commitment_inputs"
+path = "fuzz_targets/fuzz_masking_commitment_inputs.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_sharing_inputs"
+path = "fuzz_targets/fuzz_sharing_inputs.rs"
 test = false
 doc = false
 bench = false

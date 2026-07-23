@@ -1,0 +1,1 @@
+{"kid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","profile":"fuzz-mac-v1","items":[{"ref":"mac-verify-1","plaintext":"4111111111111111","digest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},{"ref":"mac-verify-2","plaintext":"5555555555554444","digest":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}]}

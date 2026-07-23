@@ -2,8 +2,6 @@
 
 figlet Vectis
 cowsay Standard Procedure Testing
-
-read -p "Press any key to start: " keyboard
 echo "\n###########################"
 
 echo "\n### Cargo fmt"
@@ -26,7 +24,16 @@ cargo clippy --all-targets --all-features -- -D warnings
 # cargo clippy --all-targets --all-features -- -W clippy::pedantic
 
 echo "\n\n"
-read -p "Start Vectis now, then press Enter to run HTTP tests: "
+
+vectis_api_url="${VECTIS_API_URL:-http://127.0.0.1:3000}"
+health_url="${vectis_api_url%/}/healthz/ready"
+
+echo "\n### Vectis readiness"
+if ! curl --fail --silent --show-error --connect-timeout 5 "${health_url}"; then
+  echo "\nVectis is not ready at ${health_url}; start the service and try again." >&2
+  exit 1
+fi
+echo
 
 echo "\n### CLI Positive/Negative"
 uv sync

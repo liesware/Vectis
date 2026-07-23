@@ -2,15 +2,10 @@
 
 use libfuzzer_sys::fuzz_target;
 use serde_json::{Value, json};
-use vectis::core::config_file;
 
 #[path = "common.rs"]
 mod common;
-use common::{fuzz_config, looks_loaded_kid};
-
-fn dummy_fpe_key() -> zeroize::Zeroizing<Vec<u8>> {
-    zeroize::Zeroizing::new(vec![0u8; vectis::core::fpe::FPE_KEY_SIZE_BYTES])
-}
+use common::validate_fuzz_config_content;
 
 fn strip_public_keys(value: &mut Value) {
     match value {
@@ -33,10 +28,7 @@ fn validate_config_value(value: Value) {
     let Ok(content) = serde_json::to_string(&value) else {
         return;
     };
-    let _ =
-        config_file::validate_config_content(&content, &fuzz_config(), looks_loaded_kid, |_, _, _| {
-            Ok(dummy_fpe_key())
-        });
+    let _ = validate_fuzz_config_content(&content);
 }
 
 fuzz_target!(|data: &[u8]| {

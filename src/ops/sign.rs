@@ -753,7 +753,14 @@ mod tests {
 
             prop_assert!(public_error.starts_with("invalid sign request:"));
             prop_assert!(public_error.contains("unknown field"));
-            prop_assert!(public_error.contains(&extra_field));
+            let sanitized_field: String = extra_field
+                .chars()
+                .filter(|c| !c.is_control())
+                .collect();
+            if !sanitized_field.is_empty() {
+                prop_assert!(public_error.contains(&sanitized_field));
+            }
+            prop_assert!(!public_error.chars().any(char::is_control));
             prop_assert!(!public_error.contains("unexpected"));
         }
 
