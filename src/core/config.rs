@@ -22,6 +22,7 @@ pub const INTERNAL_TOKEN_BATCH: usize = 128;
 pub const INTERNAL_MAC_BATCH: usize = 128;
 pub const INTERNAL_INDEX_BATCH: usize = 128;
 pub const INTERNAL_MASK_BATCH: usize = 128;
+pub const INTERNAL_COMMIT_BATCH: usize = 128;
 pub const INTERNAL_REF_MAX_CHARS: usize = 128;
 pub const CONFIG_NAME_MAX_CHARS: usize = 128;
 pub const FPE_TWEAK_AAD_MAX_CHARS: usize = 128;

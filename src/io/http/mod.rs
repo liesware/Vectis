@@ -8,6 +8,7 @@ use zeroize::Zeroizing;
 
 mod app;
 mod auth;
+mod commitments;
 mod config;
 mod error;
 mod extract;
@@ -28,6 +29,7 @@ mod sign;
 mod test;
 mod token;
 
+use crate::core::commitments::CommitmentProfile;
 use crate::core::config::AppConfig;
 use crate::core::config_file::ConfigState;
 use crate::core::fpe::FpeProfile;
@@ -43,6 +45,10 @@ use crate::error::DynError;
 use crate::ops::init::{InitValidationOutput, ValidatedInitState};
 use crate::ops::internal_keys::InternalDerivedKeysState;
 use crate::ops::keys::{KeysDbState, LoadedOpsKey};
+use commitments::{
+    create_batch_endpoint as commit_create_batch_endpoint,
+    verify_batch_endpoint as commit_verify_batch_endpoint,
+};
 use metrics_exporter_prometheus::PrometheusHandle;
 use zeroize::Zeroize;
 
@@ -240,6 +246,12 @@ impl HttpState {
         config_state.masking_profiles.len()
     }
 
+    async fn commitment_profiles_loaded(&self) -> usize {
+        let config_state = self.config_state.read().await;
+
+        config_state.commitment_profiles.len()
+    }
+
     async fn routes_output(&self) -> crate::core::routes::ListRoutesOutput {
         let config_state = self.config_state.read().await;
 
@@ -280,6 +292,12 @@ impl HttpState {
         let config_state = self.config_state.read().await;
 
         config_state.masking_profiles.get(name).cloned()
+    }
+
+    async fn commitment_profile(&self, name: &str) -> Option<CommitmentProfile> {
+        let config_state = self.config_state.read().await;
+
+        config_state.commitment_profiles.get(name).cloned()
     }
 
     async fn reload_config_state(&self) -> Result<(), DynError> {
@@ -370,6 +388,21 @@ impl HttpState {
                         })?;
                     crate::core::mac::derive_mac_key_for_profile(&source.symmetric_key_hex, request)
                 },
+                |request| {
+                    let source = config_key_sources
+                        .iter()
+                        .find(|source| source.kid == request.kid)
+                        .ok_or_else(|| {
+                            crate::error::invalid_input(format!(
+                                "commitment profile references kid not loaded in memory: {}",
+                                request.kid
+                            ))
+                        })?;
+                    crate::core::commitments::derive_commitment_key_for_profile(
+                        &source.symmetric_key_hex,
+                        request,
+                    )
+                },
             )
         })
         .await?;
@@ -389,6 +422,7 @@ impl HttpState {
             tokenization_profiles: self.tokenization_profiles_loaded().await,
             mac_profiles: self.mac_profiles_loaded().await,
             masking_profiles: self.masking_profiles_loaded().await,
+            commitment_profiles: self.commitment_profiles_loaded().await,
         });
     }
 
@@ -480,6 +514,10 @@ fn record_operation_denied_metric(event_name: &str) {
         "index.verify.batch.denied" => record_crypto_failed("index_verify_batch"),
         "mask.denied" => record_crypto_failed("mask"),
         "mask.batch.denied" => record_crypto_failed("mask_batch"),
+        "commit.create.denied" => record_crypto_failed("commit_create"),
+        "commit.verify.denied" => record_crypto_failed("commit_verify"),
+        "commit.create.batch.denied" => record_crypto_failed("commit_create_batch"),
+        "commit.verify.batch.denied" => record_crypto_failed("commit_verify_batch"),
         "sign.denied" => core_metrics::record_crypto_operation("sign", "failed"),
         "self_test.denied" => {}
         _ => {}
@@ -536,6 +574,10 @@ pub fn router(state: HttpState) -> Router {
         .route("/index/{kid}", post(indexes::create_endpoint))
         .route("/mask/batch/{kid}", post(masking::mask_batch_endpoint))
         .route("/mask/{kid}", post(masking::mask_endpoint))
+        .route("/commit/batch/{kid}", post(commit_create_batch_endpoint))
+        .route("/commit/verify/batch", post(commit_verify_batch_endpoint))
+        .route("/commit/verify", post(commitments::verify_endpoint))
+        .route("/commit/{kid}", post(commitments::create_endpoint))
         .route("/pub/{kid}", get(pubkey::pub_endpoint))
         .route(
             "/message/internal/encrypt/{kid}",

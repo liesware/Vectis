@@ -291,7 +291,10 @@ pub(crate) fn derive_mac_key_for_profile(
     })
 }
 
-fn build_mac_domain_aad(base_fields: &[(&str, &str)], context: &str) -> Result<String, DynError> {
+pub(crate) fn build_mac_domain_aad(
+    base_fields: &[(&str, &str)],
+    context: &str,
+) -> Result<String, DynError> {
     validation::validate_labels("mac_profiles.context", context, MAC_CONTEXT_MAX_CHARS)?;
 
     let mut fields: Vec<(String, String)> = base_fields

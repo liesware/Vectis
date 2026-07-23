@@ -1,6 +1,7 @@
 pub mod audit;
 pub mod blocking;
 pub mod canonical;
+pub mod commitments;
 pub mod config;
 pub mod config_file;
 pub mod crypto;

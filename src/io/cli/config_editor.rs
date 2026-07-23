@@ -1,5 +1,7 @@
 use super::http::{OutputFormat, invalid_input, print_response};
-use crate::core::{config, config_file, fpe, mac, masking, permissions, tokenization, validation};
+use crate::core::{
+    commitments, config, config_file, fpe, mac, masking, permissions, tokenization, validation,
+};
 use crate::error::DynError;
 use serde_json::{Map, Value, json};
 use std::collections::HashSet;
@@ -76,6 +78,8 @@ enum FieldKind {
     MacContext,
     MaskingProfileName,
     MaskChar,
+    CommitmentProfileName,
+    CommitmentContext,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -498,6 +502,63 @@ const MASKING_PROFILES_SECTION: SectionSpec = SectionSpec {
     parsed_validator: Some(validate_masking_profile_parsed_fields),
 };
 
+const COMMITMENT_PROFILES_SECTION: SectionSpec = SectionSpec {
+    cli_name: "commitment",
+    json_section: "commitment_profiles",
+    key_field: "name",
+    item_name: "commitment profile name",
+    command_context: "config commitment",
+    fields: &[
+        FieldSpec {
+            flag: "--name",
+            json_field: "name",
+            kind: FieldKind::CommitmentProfileName,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: false,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--kid",
+            json_field: "kid",
+            kind: FieldKind::Kid,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--context",
+            json_field: "context",
+            kind: FieldKind::CommitmentContext,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--max-plaintext-len",
+            json_field: "max_plaintext_len",
+            kind: FieldKind::Usize,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--opening-len",
+            json_field: "opening_len",
+            kind: FieldKind::Usize,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+    ],
+    add_defaults: &[],
+    parsed_validator: Some(validate_commitment_profile_parsed_fields),
+};
+
 pub fn init_config(output: OutputFormat) -> Result<(), DynError> {
     let app = config::app_config()?;
     match fs::metadata(&app.config_path) {
@@ -571,6 +632,14 @@ pub async fn run_config_mac(args: Vec<String>, output: OutputFormat) -> Result<(
 pub async fn run_config_masking(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let (command, rest) = split_command(args, "config masking command")?;
     run_basic_section_command(&MASKING_PROFILES_SECTION, &command, rest, output).await
+}
+
+pub async fn run_config_commitment(
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
+    let (command, rest) = split_command(args, "config commitment command")?;
+    run_basic_section_command(&COMMITMENT_PROFILES_SECTION, &command, rest, output).await
 }
 
 async fn read_config(
@@ -849,6 +918,16 @@ fn validate_masking_profile_parsed_fields(parsed: &Map<String, Value>) -> Result
     }
 }
 
+fn validate_commitment_profile_parsed_fields(parsed: &Map<String, Value>) -> Result<(), DynError> {
+    if let Some(max_plaintext_len) = optional_usize_field(parsed, "max_plaintext_len")? {
+        commitments::validate_commitment_plaintext_len(max_plaintext_len)?;
+    }
+    if let Some(opening_len) = optional_usize_field(parsed, "opening_len")? {
+        commitments::validate_commitment_opening_len(opening_len)?;
+    }
+    Ok(())
+}
+
 fn optional_usize_field(
     parsed: &Map<String, Value>,
     field: &str,
@@ -997,6 +1076,18 @@ fn parse_field_value(field: &FieldSpec, raw: &str) -> Result<Value, DynError> {
         }
         FieldKind::MaskChar => {
             masking::validate_mask_char(raw)?;
+            Ok(Value::String(raw.to_string()))
+        }
+        FieldKind::CommitmentProfileName => {
+            validation::validate_aad_config_name("commitment_profiles.name", raw)?;
+            Ok(Value::String(raw.to_string()))
+        }
+        FieldKind::CommitmentContext => {
+            validation::validate_labels(
+                "commitment_profiles.context",
+                raw,
+                commitments::COMMITMENT_CONTEXT_MAX_CHARS,
+            )?;
             Ok(Value::String(raw.to_string()))
         }
     }
@@ -1203,6 +1294,7 @@ fn empty_config() -> Value {
         "tokenization_profiles": [],
         "mac_profiles": [],
         "masking_profiles": [],
+        "commitment_profiles": [],
     })
 }
 
@@ -1218,6 +1310,7 @@ fn ensure_config_shape(value: &mut Value) -> Result<(), DynError> {
     ensure_section_array(object, "tokenization_profiles")?;
     ensure_section_array(object, "mac_profiles")?;
     ensure_section_array(object, "masking_profiles")?;
+    ensure_section_array(object, "commitment_profiles")?;
     Ok(())
 }
 
@@ -1263,6 +1356,16 @@ fn validate_local_config(local: &LocalConfig) -> Result<(), DynError> {
                 public_algorithm: String::from("HMAC(BLAKE2b(256))"),
                 botan_algorithm: String::from("HMAC(BLAKE2b(256))"),
                 mac_key: zeroize::Zeroizing::new(vec![0u8; crate::core::mac::MAC_KEY_SIZE_BYTES]),
+            })
+        },
+        |_| {
+            Ok(crate::core::commitments::DerivedCommitmentKey {
+                public_algorithm: String::from("HMAC(BLAKE2b(256))"),
+                botan_algorithm: String::from("HMAC(BLAKE2b(256))"),
+                commit_key: zeroize::Zeroizing::new(vec![
+                    0u8;
+                    crate::core::commitments::COMMITMENT_KEY_SIZE_BYTES
+                ]),
             })
         },
     )?;

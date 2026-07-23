@@ -1,5 +1,6 @@
 pub mod apikey;
 pub mod batch;
+pub mod commitments;
 pub mod contracts;
 pub mod fpe;
 pub mod indexes;

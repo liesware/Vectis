@@ -51,6 +51,7 @@ const HTTP_COMMANDS: &[HttpCommand] = &[
     HttpCommand::new("token", command_token),
     HttpCommand::new("mac", command_mac),
     HttpCommand::new("mask", command_mask),
+    HttpCommand::new("commit", command_commit),
     HttpCommand::new("message", command_message),
 ];
 
@@ -67,6 +68,7 @@ const CONFIG_COMMANDS: &[ConfigCommand] = &[
     ConfigCommand::new("token", config_command_token),
     ConfigCommand::new("mac", config_command_mac),
     ConfigCommand::new("masking", config_command_masking),
+    ConfigCommand::new("commitment", config_command_commitment),
 ];
 
 impl HttpCommand {
@@ -152,6 +154,7 @@ boxed_command!(command_fpe, run_fpe);
 boxed_command!(command_token, run_token);
 boxed_command!(command_mac, run_mac);
 boxed_command!(command_mask, run_mask);
+boxed_command!(command_commit, run_commit);
 boxed_command!(command_message, run_message);
 
 fn config_command_init(args: Vec<String>, output: OutputFormat) -> CommandFuture {
@@ -202,6 +205,10 @@ boxed_command!(config_command_fpe, config_editor::run_config_fpe);
 boxed_command!(config_command_token, config_editor::run_config_token);
 boxed_command!(config_command_mac, config_editor::run_config_mac);
 boxed_command!(config_command_masking, config_editor::run_config_masking);
+boxed_command!(
+    config_command_commitment,
+    config_editor::run_config_commitment
+);
 
 async fn run_health(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let target = expect_one(args, "health target")?;
@@ -351,6 +358,7 @@ struct ConfigValidationOutput {
     tokenization_profiles_loaded: usize,
     mac_profiles_loaded: usize,
     masking_profiles_loaded: usize,
+    commitment_profiles_loaded: usize,
 }
 
 async fn validate_config_for_local_node() -> Result<
@@ -423,6 +431,18 @@ async fn validate_config_for_local_node() -> Result<
                 request,
             )
         },
+        |request| {
+            let loaded_key = keys_db_state.get(request.kid).ok_or_else(|| {
+                invalid_input(format!(
+                    "commitment profile references kid not loaded in memory: {}",
+                    request.kid
+                ))
+            })?;
+            crate::core::commitments::derive_commitment_key_for_profile(
+                loaded_key.keys().symmetric().key_hex(),
+                request,
+            )
+        },
     )?;
     let output = ConfigValidationOutput {
         status: "valid",
@@ -435,6 +455,7 @@ async fn validate_config_for_local_node() -> Result<
         tokenization_profiles_loaded: config_state.tokenization_profiles.len(),
         mac_profiles_loaded: config_state.mac_profiles.len(),
         masking_profiles_loaded: config_state.masking_profiles.len(),
+        commitment_profiles_loaded: config_state.commitment_profiles.len(),
     };
 
     Ok((config, init_state, config_content, output))
@@ -469,6 +490,7 @@ async fn run_config_sign(output: OutputFormat) -> Result<(), DynError> {
             "tokenization_profiles_loaded": validation.tokenization_profiles_loaded,
             "mac_profiles_loaded": validation.mac_profiles_loaded,
             "masking_profiles_loaded": validation.masking_profiles_loaded,
+            "commitment_profiles_loaded": validation.commitment_profiles_loaded,
         }))?,
         output,
     )
@@ -632,6 +654,37 @@ async fn run_mask(args: Vec<String>, output: OutputFormat) -> Result<(), DynErro
             output,
         )
         .await
+}
+
+async fn run_commit(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+    let (subcommand, rest) = split_subcommand(args, "commit command")?;
+    let client = CliHttpClient::from_env()?;
+
+    match subcommand.as_str() {
+        "create" => {
+            let (kid, rest) = split_subcommand(rest, "kid")?;
+            validate_kid("kid", &kid)?;
+            let body = parse_json_source(rest)?;
+            client
+                .send(
+                    Method::POST,
+                    &format!("/commit/{kid}"),
+                    true,
+                    Some(body),
+                    output,
+                )
+                .await
+        }
+        "verify" => {
+            let body = parse_json_source(rest)?;
+            client
+                .send(Method::POST, "/commit/verify", true, Some(body), output)
+                .await
+        }
+        _ => Err(invalid_input(format!(
+            "unknown commit command: {subcommand}"
+        ))),
+    }
 }
 
 async fn run_message(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {

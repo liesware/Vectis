@@ -85,6 +85,10 @@ Endpoints requiring auth:
 - `POST /mac/batch/{kid}`
 - `POST /mac/verify`
 - `POST /mac/verify/batch`
+- `POST /commit/{kid}`
+- `POST /commit/batch/{kid}`
+- `POST /commit/verify`
+- `POST /commit/verify/batch`
 - `POST /index/{kid}`
 - `POST /index/batch/{kid}`
 - `POST /index/verify`
@@ -201,12 +205,13 @@ Exposed metrics:
 - `vectis_tokenization_profiles_loaded`
 - `vectis_mac_profiles_loaded`
 - `vectis_masking_profiles_loaded`
+- `vectis_commitment_profiles_loaded`
 - `vectis_permission_total{result}` (`allow` or `deny`)
 - `vectis_config_reload_total{result}` (`success` or `failed`)
 - `vectis_config_last_reload_timestamp_seconds{result}` (`success` or `failed`)
 - `vectis_keys_reload_total{result}` (`success` or `failed`)
 - `vectis_message_total{operation,result}` (`send`, `receive`, or `decrypt`; `success`, `denied`, or `failed`)
-- `vectis_crypto_operation_total{operation,result}` (`sign`, `verify`, `encrypt`, `decrypt`, `fpe_encrypt`, `fpe_decrypt`, `fpe_encrypt_batch`, `fpe_decrypt_batch`, `token_encode`, `token_decode`, `token_encode_batch`, `token_decode_batch`, `mac_create`, `mac_verify`, `mac_create_batch`, `mac_verify_batch`, `index_create`, `index_verify`, `index_create_batch`, or `index_verify_batch`; `success` or `failed`)
+- `vectis_crypto_operation_total{operation,result}` (`sign`, `verify`, `encrypt`, `decrypt`, `fpe_encrypt`, `fpe_decrypt`, `fpe_encrypt_batch`, `fpe_decrypt_batch`, `token_encode`, `token_decode`, `token_encode_batch`, `token_decode_batch`, `mac_create`, `mac_verify`, `mac_create_batch`, `mac_verify_batch`, `commit_create`, `commit_verify`, `commit_create_batch`, `commit_verify_batch`, `index_create`, `index_verify`, `index_create_batch`, `index_verify_batch`, `mask`, or `mask_batch`; `success` or `failed`)
 
 ### GET /self-test/init
 
@@ -528,7 +533,9 @@ Response:
   "clients_loaded": 1,
   "fpe_profiles_loaded": 1,
   "tokenization_profiles_loaded": 1,
-  "mac_profiles_loaded": 1
+  "mac_profiles_loaded": 1,
+  "commitment_profiles_loaded": 1,
+  "masking_profiles_loaded": 1
 }
 ```
 
@@ -634,6 +641,8 @@ Permission mapping:
 | `token-decode` | `POST /token/decode`, `POST /token/decode/batch` |
 | `mac-create` | `POST /mac/{kid}`, `POST /mac/batch/{kid}` |
 | `mac-verify` | `POST /mac/verify`, `POST /mac/verify/batch` |
+| `commit-create` | `POST /commit/{kid}`, `POST /commit/batch/{kid}` |
+| `commit-verify` | `POST /commit/verify`, `POST /commit/verify/batch` |
 | `index-create` | `POST /index/{kid}`, `POST /index/batch/{kid}` |
 | `index-verify` | `POST /index/verify`, `POST /index/verify/batch` |
 | `mask` | `POST /mask/{kid}`, `POST /mask/batch/{kid}` |
@@ -1428,6 +1437,142 @@ Response:
 }
 ```
 
+## Cryptographic Commitments
+
+Commitment profiles live in signed config under `commitment_profiles`. They use
+the same MAC algorithm resolution as `mac_profiles`: SHA-3 operational keys use
+KMAC with the corresponding output size, and other keys use HMAC with the
+operational key hash algorithm. Commitments are keyed and verified by Vectis;
+they are stateless and are not stored.
+
+Unlike MAC or blind indexes, commitment create generates a random `opening`.
+Two commitments for the same plaintext are expected to differ when their
+openings differ. Verify recomputes the commitment from `plaintext`, `opening`,
+profile, KID, and signed context.
+
+### POST /commit/{kid}
+
+Requires auth and `commit-create` permission for the path KID. Create requires
+an `active` key.
+
+Request:
+
+```json
+{
+  "ref": "reg1",
+  "profile": "pan-commitment-v1",
+  "plaintext": "4111111111111111"
+}
+```
+
+Response:
+
+```json
+{
+  "ref": "reg1",
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "profile": "pan-commitment-v1",
+  "algorithm": "KMAC-256",
+  "commitment": "hex...",
+  "opening": "base64url..."
+}
+```
+
+### POST /commit/verify
+
+Requires auth and `commit-verify` permission for the request body KID. Verify
+allows `active` or `retired` keys. A well-formed but incorrect opening or
+commitment returns `valid: false`; malformed opening or non-hex commitment
+returns `400`.
+
+Request:
+
+```json
+{
+  "ref": "reg1",
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "profile": "pan-commitment-v1",
+  "plaintext": "4111111111111111",
+  "opening": "base64url...",
+  "commitment": "hex..."
+}
+```
+
+Response:
+
+```json
+{
+  "ref": "reg1",
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "profile": "pan-commitment-v1",
+  "valid": true
+}
+```
+
+### POST /commit/batch/{kid}
+
+Requires auth and `commit-create` permission for the path KID. The batch uses
+one profile and is all-or-nothing. `items` must contain between `1` and `128`
+entries, and every `ref` must be unique.
+
+Request:
+
+```json
+{
+  "profile": "pan-commitment-v1",
+  "items": [
+    { "ref": "row1", "plaintext": "4111111111111111" },
+    { "ref": "row2", "plaintext": "5555555555554444" }
+  ]
+}
+```
+
+Response:
+
+```json
+{
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "profile": "pan-commitment-v1",
+  "algorithm": "KMAC-256",
+  "items": [
+    { "ref": "row1", "commitment": "hex...", "opening": "base64url..." },
+    { "ref": "row2", "commitment": "hex...", "opening": "base64url..." }
+  ]
+}
+```
+
+### POST /commit/verify/batch
+
+Requires auth and `commit-verify` permission for the request body KID. Request
+validation errors fail the whole batch; well-formed mismatches return
+`valid: false` per item.
+
+Request:
+
+```json
+{
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "profile": "pan-commitment-v1",
+  "items": [
+    { "ref": "row1", "plaintext": "4111111111111111", "opening": "base64url...", "commitment": "hex..." },
+    { "ref": "row2", "plaintext": "5555555555554444", "opening": "base64url...", "commitment": "hex..." }
+  ]
+}
+```
+
+Response:
+
+```json
+{
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "profile": "pan-commitment-v1",
+  "items": [
+    { "ref": "row1", "valid": true },
+    { "ref": "row2", "valid": false }
+  ]
+}
+```
+
 ## Masking
 
 Masking is a local display-only transform. It does not encrypt, tokenize,
@@ -1629,7 +1774,7 @@ The final app can call `POST /message/decrypt` to recover the plaintext.
 
 ## Configuration File (`config.json`)
 
-Vectis loads a single signed config file (`config.json`) with `routes`, `remote_routes`, `permissions`, and optional `fpe_profiles`, `tokenization_profiles`, and `mac_profiles` sections plus a top-level `version`. It is loaded when `vectis serve` starts and can be reloaded at runtime with `POST /config/reload`. Create/update its signature with `vectis config sign`; inspect it with `vectis config list`.
+Vectis loads a single signed config file (`config.json`) with `routes`, `remote_routes`, `permissions`, and optional `fpe_profiles`, `tokenization_profiles`, `mac_profiles`, `commitment_profiles`, and `masking_profiles` sections plus a top-level `version`. It is loaded when `vectis serve` starts and can be reloaded at runtime with `POST /config/reload`. Create/update its signature with `vectis config sign`; inspect it with `vectis config list`.
 
 Default paths:
 
@@ -1708,6 +1853,15 @@ Expected file shape:
       "context": "tenant=mx;field=pan;purpose=blind-index;version=1"
     }
   ],
+  "commitment_profiles": [
+    {
+      "name": "pan-commitment-v1",
+      "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+      "context": "tenant=mx;field=pan;purpose=commitment;version=1",
+      "max_plaintext_len": 128,
+      "opening_len": 32
+    }
+  ],
   "masking_profiles": [
     {
       "name": "pan-display-v1",
@@ -1733,6 +1887,7 @@ Top level:
 | `fpe_profiles` | no (defaults to `[]`) | array | Signed local FPE field profiles. |
 | `tokenization_profiles` | no (defaults to `[]`) | array | Signed local reversible tokenization profiles. |
 | `mac_profiles` | no (defaults to `[]`) | array | Signed local MAC profiles. |
+| `commitment_profiles` | no (defaults to `[]`) | array | Signed local keyed commitment profiles. |
 | `masking_profiles` | no (defaults to `[]`) | array | Signed local display masking profiles. |
 
 `routes[]` entries:
@@ -1764,7 +1919,7 @@ Top level:
 | `client` | yes | text, unique | Client label. |
 | `apikey_hash` | yes | 64 hex (32 bytes) | Server-side verifier for this client's `X-API-Key`. |
 | `status` | yes | `active` \| `disabled` \| `revoked` | Only `active` clients are authorized. |
-| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `fpe-encrypt`, `fpe-decrypt`, `token-encode`, `token-decode`, `mac-create`, `mac-verify`, `index-create`, `index-verify`, `mask`, `metrics`. `kid: "*"` is allowed with global actions such as `admin` and `metrics`; FPE, tokenization, MAC, blind-index, and masking actions require explicit KIDs. An `admin` action grants all endpoints and ignores kid-scoped grants. |
+| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `fpe-encrypt`, `fpe-decrypt`, `token-encode`, `token-decode`, `mac-create`, `mac-verify`, `commit-create`, `commit-verify`, `index-create`, `index-verify`, `mask`, `metrics`. `kid: "*"` is allowed with global actions such as `admin` and `metrics`; FPE, tokenization, MAC, commitments, blind-index, and masking actions require explicit KIDs. An `admin` action grants all endpoints and ignores kid-scoped grants. |
 
 `fpe_profiles[]` entries:
 
@@ -1795,6 +1950,16 @@ Top level:
 | `name` | yes | unique AAD-safe text, max 128 chars | Profile selected by MAC requests. |
 | `kid` | yes | loaded local KID | Operational key whose symmetric key derives the MAC key. |
 | `context` | yes | `key=value;key=value`, max 128 chars | Signed MAC domain context. Keys must be unique and use `[A-Za-z0-9_.-]+`. |
+
+`commitment_profiles[]` entries:
+
+| Field | Required | Value | Meaning |
+| --- | --- | --- | --- |
+| `name` | yes | unique AAD-safe text, max 128 chars | Profile selected by commitment requests. |
+| `kid` | yes | loaded local KID | Operational key whose symmetric key derives the commitment key. |
+| `context` | yes | `key=value;key=value`, max 128 chars | Signed commitment domain context. Keys must be unique and use `[A-Za-z0-9_.-]+`. |
+| `max_plaintext_len` | yes | integer 1..1024 | Maximum plaintext length accepted by commitment create/verify. |
+| `opening_len` | yes | integer 32..64 | Random opening bytes generated before base64url-no-pad encoding. |
 
 `masking_profiles[]` entries:
 

@@ -147,4 +147,5 @@ def empty_config():
         "tokenization_profiles": [],
         "mac_profiles": [],
         "masking_profiles": [],
+        "commitment_profiles": [],
     }

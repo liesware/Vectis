@@ -136,18 +136,18 @@ Vectis is not, and does not replace:
 - protection against a malicious operator (the operator is the root of trust);
 - protection against compromise of the host or the process memory;
 - a secure channel or a message-encryption substitute for the local field
-  operations: FPE, reversible tokenization, MAC, and blind indexes protect field
+  operations: FPE, reversible tokenization, MAC, commitments, and blind indexes protect field
   values within a single instance, not data in transit between instances.
   Tokenization additionally persists a reversible token-to-plaintext mapping
-  (FPE and MAC store nothing; blind indexes store deterministic digests), so an
+  (FPE, MAC, and commitments store nothing; blind indexes store deterministic digests), so an
   attacker holding both the `tokens` table and the operational key could recover
   plaintexts — the host and operator boundary above applies;
 - automatic runtime state propagation between nodes; clustered instances share
   durable storage (PostgreSQL) but not in-memory state, and cross-node changes
   become visible only through explicit reload, restart, or lazy-load (see
   `doc/Clustering.md`);
-- hash commitments, Merkle proofs, tamper-evident audit chains,
-  SLH-DSA, Vault/KMS/HSM auto-unseal, and mTLS;
+- Merkle proofs, tamper-evident audit chains, SLH-DSA, Vault/KMS/HSM
+  auto-unseal, and mTLS;
 - denial-of-service resistance.
 
 ## Residual Risks And Known Gaps

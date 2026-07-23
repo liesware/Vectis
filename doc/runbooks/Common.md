@@ -585,6 +585,7 @@ vectis_permission_clients
 vectis_fpe_profiles_loaded
 vectis_tokenization_profiles_loaded
 vectis_mac_profiles_loaded
+vectis_commitment_profiles_loaded
 vectis_masking_profiles_loaded
 vectis_config_reload_total
 vectis_message_total

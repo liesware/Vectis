@@ -36,6 +36,7 @@ _CONFIG = {
     "tokenization_profiles": [],
     "mac_profiles": [],
     "masking_profiles": [],
+    "commitment_profiles": [],
 }
 
 
@@ -162,6 +163,7 @@ def write_permissions(clients, sign=True):
     _CONFIG["tokenization_profiles"] = []
     _CONFIG["mac_profiles"] = []
     _CONFIG["masking_profiles"] = []
+    _CONFIG["commitment_profiles"] = []
     write_config(sign=sign)
 
 
@@ -173,6 +175,7 @@ def write_fpe_profiles(profiles, sign=True):
     _CONFIG["tokenization_profiles"] = []
     _CONFIG["mac_profiles"] = []
     _CONFIG["masking_profiles"] = []
+    _CONFIG["commitment_profiles"] = []
     write_config(sign=sign)
 
 
@@ -184,6 +187,7 @@ def write_tokenization_profiles(profiles, sign=True):
     _CONFIG["tokenization_profiles"] = profiles
     _CONFIG["mac_profiles"] = []
     _CONFIG["masking_profiles"] = []
+    _CONFIG["commitment_profiles"] = []
     write_config(sign=sign)
 
 
@@ -195,6 +199,7 @@ def write_mac_profiles(profiles, sign=True):
     _CONFIG["tokenization_profiles"] = []
     _CONFIG["mac_profiles"] = profiles
     _CONFIG["masking_profiles"] = []
+    _CONFIG["commitment_profiles"] = []
     write_config(sign=sign)
 
 
@@ -206,6 +211,7 @@ def write_masking_profiles(profiles, sign=True):
     _CONFIG["tokenization_profiles"] = []
     _CONFIG["mac_profiles"] = []
     _CONFIG["masking_profiles"] = profiles
+    _CONFIG["commitment_profiles"] = []
     write_config(sign=sign)
 
 
@@ -217,6 +223,7 @@ def write_remote_routes(routes, sign=True):
     _CONFIG["tokenization_profiles"] = []
     _CONFIG["mac_profiles"] = []
     _CONFIG["masking_profiles"] = []
+    _CONFIG["commitment_profiles"] = []
     write_config(sign=sign)
 
 
@@ -228,6 +235,7 @@ def write_routes(routes, sign=True):
     _CONFIG["tokenization_profiles"] = []
     _CONFIG["mac_profiles"] = []
     _CONFIG["masking_profiles"] = []
+    _CONFIG["commitment_profiles"] = []
     write_config(sign=sign)
 
 
@@ -256,6 +264,10 @@ def reload_config(client):
     require(
         isinstance(response.get("masking_profiles_loaded"), int),
         "config masking_profiles_loaded must be int",
+    )
+    require(
+        isinstance(response.get("commitment_profiles_loaded"), int),
+        "config commitment_profiles_loaded must be int",
     )
     return response
 
@@ -338,6 +350,16 @@ def valid_masking_profile(key_id):
         "mask_char": "*",
         "min_len": 12,
         "max_len": 19,
+    }
+
+
+def valid_commitment_profile(key_id):
+    return {
+        "name": "pan-commitment-v1",
+        "kid": key_id,
+        "context": "tenant=mx;field=pan;purpose=commitment;version=1",
+        "max_plaintext_len": 128,
+        "opening_len": 32,
     }
 
 
@@ -654,6 +676,7 @@ def main():
     _CONFIG["tokenization_profiles"] = [valid_tokenization_profile(key_id)]
     _CONFIG["mac_profiles"] = [valid_mac_profile(key_id)]
     _CONFIG["masking_profiles"] = [valid_masking_profile(key_id)]
+    _CONFIG["commitment_profiles"] = [valid_commitment_profile(key_id)]
     write_config()
     reload_config(client)
     limited_client = Client(args.base_url, limited_api_key)
@@ -898,6 +921,59 @@ def main():
         )
         require_status("limited client blocks mask batch", status, 403)
 
+    def limited_blocks_commit_create():
+        status, _ = limited_client.post(
+            f"/commit/{key_id}",
+            {"ref": "commit-limited", "profile": "pan-commitment-v1", "plaintext": "4111111111111111"},
+            auth=True,
+        )
+        require_status("limited client blocks commit create", status, 403)
+
+    def limited_blocks_commit_create_batch():
+        status, _ = limited_client.post(
+            f"/commit/batch/{key_id}",
+            {
+                "profile": "pan-commitment-v1",
+                "items": [{"ref": "commit-limited", "plaintext": "4111111111111111"}],
+            },
+            auth=True,
+        )
+        require_status("limited client blocks commit create batch", status, 403)
+
+    def limited_blocks_commit_verify():
+        status, _ = limited_client.post(
+            "/commit/verify",
+            {
+                "ref": "commit-limited",
+                "kid": key_id,
+                "profile": "pan-commitment-v1",
+                "plaintext": "4111111111111111",
+                "opening": "A" * 43,
+                "commitment": "00" * 32,
+            },
+            auth=True,
+        )
+        require_status("limited client blocks commit verify", status, 403)
+
+    def limited_blocks_commit_verify_batch():
+        status, _ = limited_client.post(
+            "/commit/verify/batch",
+            {
+                "kid": key_id,
+                "profile": "pan-commitment-v1",
+                "items": [
+                    {
+                        "ref": "commit-limited",
+                        "plaintext": "4111111111111111",
+                        "opening": "A" * 43,
+                        "commitment": "00" * 32,
+                    }
+                ],
+            },
+            auth=True,
+        )
+        require_status("limited client blocks commit verify batch", status, 403)
+
     def metrics_client_allows_metrics():
         status, _ = metrics_client.get("/metrics", auth=True)
         require_status("metrics client allows metrics", status, 200)
@@ -972,6 +1048,10 @@ def main():
         ("limited client blocks index verify batch", limited_blocks_index_verify_batch),
         ("limited client blocks mask", limited_blocks_mask),
         ("limited client blocks mask batch", limited_blocks_mask_batch),
+        ("limited client blocks commit create", limited_blocks_commit_create),
+        ("limited client blocks commit create batch", limited_blocks_commit_create_batch),
+        ("limited client blocks commit verify", limited_blocks_commit_verify),
+        ("limited client blocks commit verify batch", limited_blocks_commit_verify_batch),
         ("metrics client allows metrics", metrics_client_allows_metrics),
         ("metrics client blocks admin", metrics_client_blocks_admin),
         ("limited client blocks permissions list", limited_blocks_permissions_list),
@@ -1172,6 +1252,20 @@ def main():
         )
         require_config_sign_fails("permissions wildcard mask")
 
+    def permissions_wildcard_commit_create():
+        write_permissions(
+            [
+                {
+                    "client": "bad-wildcard-commit",
+                    "apikey_hash": limited_api_key_hash,
+                    "status": "active",
+                    "permissions": [{"kid": "*", "actions": ["commit-create"]}],
+                }
+            ],
+            sign=False,
+        )
+        require_config_sign_fails("permissions wildcard commit create")
+
     def fpe_profile_duplicate_name():
         profile = valid_fpe_profile(key_id)
         write_fpe_profiles([profile, dict(profile, kid=key_id)], sign=False)
@@ -1267,6 +1361,60 @@ def main():
         profile = valid_masking_profile("00" * 32)
         write_masking_profiles([profile], sign=False)
         require_config_sign_fails("masking profile unloaded kid")
+
+    def commitment_profile_duplicate_name():
+        profile = valid_commitment_profile(key_id)
+        _CONFIG["routes"] = []
+        _CONFIG["remote_routes"] = []
+        _CONFIG["permissions"] = []
+        _CONFIG["fpe_profiles"] = []
+        _CONFIG["tokenization_profiles"] = []
+        _CONFIG["mac_profiles"] = []
+        _CONFIG["masking_profiles"] = []
+        _CONFIG["commitment_profiles"] = [profile, dict(profile, kid=key_id)]
+        write_config(sign=False)
+        require_config_sign_fails("commitment profile duplicate name")
+
+    def commitment_profile_invalid_context():
+        profile = valid_commitment_profile(key_id)
+        profile["context"] = "tenant"
+        _CONFIG["routes"] = []
+        _CONFIG["remote_routes"] = []
+        _CONFIG["permissions"] = []
+        _CONFIG["fpe_profiles"] = []
+        _CONFIG["tokenization_profiles"] = []
+        _CONFIG["mac_profiles"] = []
+        _CONFIG["masking_profiles"] = []
+        _CONFIG["commitment_profiles"] = [profile]
+        write_config(sign=False)
+        require_config_sign_fails("commitment profile invalid context")
+
+    def commitment_profile_invalid_opening_len():
+        profile = valid_commitment_profile(key_id)
+        profile["opening_len"] = 31
+        _CONFIG["routes"] = []
+        _CONFIG["remote_routes"] = []
+        _CONFIG["permissions"] = []
+        _CONFIG["fpe_profiles"] = []
+        _CONFIG["tokenization_profiles"] = []
+        _CONFIG["mac_profiles"] = []
+        _CONFIG["masking_profiles"] = []
+        _CONFIG["commitment_profiles"] = [profile]
+        write_config(sign=False)
+        require_config_sign_fails("commitment profile invalid opening_len")
+
+    def commitment_profile_unloaded_kid():
+        profile = valid_commitment_profile("00" * 32)
+        _CONFIG["routes"] = []
+        _CONFIG["remote_routes"] = []
+        _CONFIG["permissions"] = []
+        _CONFIG["fpe_profiles"] = []
+        _CONFIG["tokenization_profiles"] = []
+        _CONFIG["mac_profiles"] = []
+        _CONFIG["masking_profiles"] = []
+        _CONFIG["commitment_profiles"] = [profile]
+        write_config(sign=False)
+        require_config_sign_fails("commitment profile unloaded kid")
 
     def routes_missing_name():
         write_routes(
@@ -1548,6 +1696,7 @@ def main():
         ("permissions wildcard mac create", permissions_wildcard_mac_create),
         ("permissions wildcard index create", permissions_wildcard_index_create),
         ("permissions wildcard mask", permissions_wildcard_mask),
+        ("permissions wildcard commit create", permissions_wildcard_commit_create),
         ("fpe profile duplicate name", fpe_profile_duplicate_name),
         ("fpe profile invalid version", fpe_profile_invalid_version),
         ("fpe profile duplicate alphabet", fpe_profile_duplicate_alphabet),
@@ -1565,6 +1714,10 @@ def main():
         ("masking profile invalid mask char", masking_profile_invalid_mask_char),
         ("masking profile invalid visible bounds", masking_profile_invalid_visible_bounds),
         ("masking profile unloaded kid", masking_profile_unloaded_kid),
+        ("commitment profile duplicate name", commitment_profile_duplicate_name),
+        ("commitment profile invalid context", commitment_profile_invalid_context),
+        ("commitment profile invalid opening_len", commitment_profile_invalid_opening_len),
+        ("commitment profile unloaded kid", commitment_profile_unloaded_kid),
         ("routes missing name", routes_missing_name),
         ("routes invalid name", routes_invalid_name),
         ("remote routes invalid kid", remote_routes_invalid_kid),
@@ -2813,6 +2966,7 @@ def main():
     _CONFIG["tokenization_profiles"] = [valid_tokenization_profile(key_id)]
     _CONFIG["mac_profiles"] = [valid_mac_profile(key_id)]
     _CONFIG["masking_profiles"] = [valid_masking_profile(key_id)]
+    _CONFIG["commitment_profiles"] = [valid_commitment_profile(key_id)]
     write_config()
     reload_config(client)
     encoded_token = create_valid_encoded_token(client, key_id)
@@ -3060,6 +3214,8 @@ def main():
     _CONFIG["fpe_profiles"] = []
     _CONFIG["tokenization_profiles"] = []
     _CONFIG["mac_profiles"] = []
+    _CONFIG["masking_profiles"] = []
+    _CONFIG["commitment_profiles"] = []
     write_config()
     status, _ = client.post("/config/reload", {}, auth=True)
     require_status("restore config reload", status, 200)

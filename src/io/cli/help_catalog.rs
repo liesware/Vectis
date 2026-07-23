@@ -22,6 +22,7 @@ pub(crate) const EXECUTABLE_COMMANDS: &[&str] = &[
     "token",
     "mac",
     "mask",
+    "commit",
     "message",
 ];
 
@@ -40,6 +41,7 @@ pub(crate) const HTTP_COMMANDS: &[&str] = &[
     "token",
     "mac",
     "mask",
+    "commit",
     "message",
 ];
 
@@ -56,6 +58,7 @@ pub(crate) const CONFIG_COMMANDS: &[&str] = &[
     "token",
     "mac",
     "masking",
+    "commitment",
 ];
 
 #[cfg(test)]
@@ -239,6 +242,7 @@ const ROOT_HELP: CommandHelp = CommandHelp {
                 "  token                 Encode or decode reversible random tokens through HTTP",
                 "  mac                   Create or verify MAC digests through HTTP",
                 "  mask                  Mask field values for controlled display through HTTP",
+                "  commit                Create or verify cryptographic commitments through HTTP",
                 "  message               Send, receive, encrypt, or decrypt messages through HTTP",
             ],
         },
@@ -258,6 +262,7 @@ const ROOT_HELP: CommandHelp = CommandHelp {
                 "  vectis sign <kid> --file sign-request.json",
                 "  vectis fpe encrypt <kid> --file fpe-encrypt.json",
                 "  vectis token encode <kid> --file token-encode.json",
+                "  vectis commit create <kid> --file commit-create.json",
             ],
         },
         HelpSection {
@@ -682,6 +687,11 @@ const CONFIG_HELP: CommandHelp = CommandHelp {
         "vectis config masking get <name>",
         "vectis config masking update <name> [--kid <kid>] [--visible-first <n>] [--visible-last <n>] [--mask-char <char>] [--min-len <n>] [--max-len <n>]",
         "vectis config masking delete <name>",
+        "vectis config commitment list",
+        "vectis config commitment add --name <name> --kid <kid> --context <labels> --max-plaintext-len <n> --opening-len <n>",
+        "vectis config commitment get <name>",
+        "vectis config commitment update <name> [--kid <kid>] [--context <labels>] [--max-plaintext-len <n>] [--opening-len <n>]",
+        "vectis config commitment delete <name>",
     ],
     summary: Some("Validates, signs, prints, reloads, or edits the unified signed config file."),
     sections: &[
@@ -700,6 +710,7 @@ const CONFIG_HELP: CommandHelp = CommandHelp {
                 "  token                 Edits local config tokenization profiles by unique name",
                 "  mac                   Edits local config MAC profiles by unique name",
                 "  masking               Edits local config masking profiles by unique name",
+                "  commitment            Edits local config commitment profiles by unique name",
             ],
         },
         HelpSection {
@@ -718,6 +729,7 @@ const CONFIG_HELP: CommandHelp = CommandHelp {
                 "  config token edits signed reversible tokenization profiles",
                 "  config mac edits signed MAC profiles; context uses key=value labels",
                 "  config masking edits signed display masking profiles",
+                "  config commitment edits signed cryptographic commitment profiles",
                 "  edit commands do not sign or reload automatically",
             ],
         },
@@ -743,6 +755,7 @@ const CONFIG_HELP: CommandHelp = CommandHelp {
                 "  vectis config permissions grant \"Acme App\" --kid <kid> --action message",
                 "  vectis config fpe add --name patient-id-decimal-v1 --kid <kid> --alphabet 0123456789 --min-len 6 --max-len 32 --tweak-aad tenant=acme\\;field=patient_id\\;version=1",
                 "  vectis config token add --name patient-id-token-v1 --kid <kid> --token-prefix tok_patient --token-len 32 --max-plaintext-len 1024",
+                "  vectis config commitment add --name pan-commitment-v1 --kid <kid> --context tenant=mx\\;field=pan\\;purpose=commitment\\;version=1 --max-plaintext-len 128 --opening-len 32",
             ],
         },
     ],
@@ -965,6 +978,37 @@ const CONFIG_MASKING_HELP: CommandHelp = CommandHelp {
     output: true,
 };
 
+const CONFIG_COMMITMENT_HELP: CommandHelp = CommandHelp {
+    key: "config commitment",
+    heading: "Usage:",
+    usage: &[
+        "vectis config commitment list",
+        "vectis config commitment add --name <name> --kid <kid> --context <labels> --max-plaintext-len <n> --opening-len <n>",
+        "vectis config commitment get <name>",
+        "vectis config commitment update <name> [--kid <kid>] [--context <labels>] [--max-plaintext-len <n>] [--opening-len <n>]",
+        "vectis config commitment delete <name>",
+    ],
+    summary: Some("Lists or edits local config commitment profiles by unique name."),
+    sections: &[
+        HelpSection {
+            title: "Behavior:",
+            lines: &[
+                "  edits commitment_profiles in VECTIS_CONFIG_PATH only",
+                "  context must use key=value;key=value labels and is limited to 128 characters",
+                "  opening_len must be between 32 and 64 bytes",
+                "  run `vectis config sign`, then `vectis config reload` after edits",
+            ],
+        },
+        HelpSection {
+            title: "Example:",
+            lines: &[
+                "  vectis config commitment add --name pan-commitment-v1 --kid <kid> --context tenant=mx\\;field=pan\\;purpose=commitment\\;version=1 --max-plaintext-len 128 --opening-len 32",
+            ],
+        },
+    ],
+    output: true,
+};
+
 const PUB_HELP: CommandHelp = CommandHelp {
     key: "pub",
     heading: "Usage:",
@@ -1169,6 +1213,49 @@ const MASK_HELP: CommandHelp = CommandHelp {
     output: true,
 };
 
+const COMMIT_HELP: CommandHelp = CommandHelp {
+    key: "commit",
+    heading: "Usage:",
+    usage: &[
+        "vectis commit create <kid> --json '<json>'",
+        "vectis commit create <kid> --file commit-create.json",
+        "vectis commit verify --json '<json>'",
+        "vectis commit verify --file commit-verify.json",
+    ],
+    summary: Some(
+        "Creates or verifies keyed cryptographic commitments with signed-config commitment profiles.",
+    ),
+    sections: &[
+        HelpSection {
+            title: "Create request JSON:",
+            lines: &[
+                r#"  {"ref":"row1","profile":"pan-commitment-v1","plaintext":"4111111111111111"}"#,
+            ],
+        },
+        HelpSection {
+            title: "Verify request JSON:",
+            lines: &[
+                r#"  {"ref":"row1","kid":"<kid>","profile":"pan-commitment-v1","plaintext":"4111111111111111","opening":"<base64url>","commitment":"<hex>"}"#,
+            ],
+        },
+        HelpSection {
+            title: "Endpoints:",
+            lines: &[
+                "  create <kid>          POST /commit/{kid}, requires VECTIS_APIKEY",
+                "  verify                POST /commit/verify, requires VECTIS_APIKEY",
+            ],
+        },
+        HelpSection {
+            title: "Input options:",
+            lines: &[
+                "  --json <json>         JSON object as a shell argument",
+                "  --file <path>         Path to a JSON file",
+            ],
+        },
+    ],
+    output: true,
+};
+
 const MESSAGE_HELP: CommandHelp = CommandHelp {
     key: "message",
     heading: "Usage:",
@@ -1236,12 +1323,14 @@ const COMMAND_HELPS: &[CommandHelp] = &[
     CONFIG_TOKEN_HELP,
     CONFIG_MAC_HELP,
     CONFIG_MASKING_HELP,
+    CONFIG_COMMITMENT_HELP,
     PUB_HELP,
     SIGN_HELP,
     FPE_HELP,
     TOKEN_HELP,
     MAC_HELP,
     MASK_HELP,
+    COMMIT_HELP,
     MESSAGE_HELP,
 ];
 

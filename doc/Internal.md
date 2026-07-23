@@ -304,6 +304,23 @@ Blind indexes reuse `mac_profiles`: `/index` computes the same deterministic
 MAC digest and persists only `(kid, digest)` in `indexes`. `/index/verify`
 recomputes the digest and checks storage membership.
 
+### Commitment Flow
+
+Commitment profiles are loaded from signed config under
+`commitment_profiles`. Each profile binds `name`, `kid`, structured `context`
+labels, `max_plaintext_len`, and `opening_len`. Config loading resolves the MAC
+algorithm from the operational key hash algorithm, then derives a commitment key
+from the loaded key's symmetric key. The HKDF info is built with
+`build_mac_domain_aad` and binds purpose, profile, KID, resolved public MAC
+algorithm, and context labels.
+
+`/commit/{kid}` generates a random opening, computes a keyed commitment over a
+canonical payload, and returns both commitment and opening. `/commit/verify`
+recomputes the commitment from plaintext, opening, profile, KID, and context.
+Batch variants preserve order and fail all-or-nothing for validation and
+execution errors. Commitments are stateless; Vectis does not store plaintext,
+opening, commitment, or `ref`.
+
 ### Masking Flow
 
 Masking profiles are loaded from signed config. Each profile binds `name`,

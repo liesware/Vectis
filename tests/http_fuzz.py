@@ -35,6 +35,8 @@ MAC_PROFILE = "fuzz-pan-blind-index-v1"
 MAC_PLAINTEXTS = ["4111111111111111", "5555555555554444"]
 MASKING_PROFILE = "fuzz-pan-display-v1"
 MASKING_PLAINTEXTS = ["4111111111111111", "5555555555554444"]
+COMMITMENT_PROFILE = "fuzz-pan-commitment-v1"
+COMMITMENT_PLAINTEXTS = ["4111111111111111", "5555555555554444"]
 
 # Minimal, policy-safe key requests (one per crypto profile) used to CREATE seed
 # keys. Creating with only tag+profile works under both crypto policies, and the
@@ -434,6 +436,7 @@ CONFIG_LOADED_COUNTS = (
     "tokenization_profiles_loaded",
     "mac_profiles_loaded",
     "masking_profiles_loaded",
+    "commitment_profiles_loaded",
 )
 
 
@@ -788,6 +791,7 @@ def empty_config():
         "tokenization_profiles": [],
         "mac_profiles": [],
         "masking_profiles": [],
+        "commitment_profiles": [],
     }
 
 
@@ -807,6 +811,7 @@ def read_config_or_empty():
         "tokenization_profiles",
         "mac_profiles",
         "masking_profiles",
+        "commitment_profiles",
     ):
         if not isinstance(config.get(key), list):
             config[key] = []
@@ -954,6 +959,38 @@ def configure_masking_profile(client, kid):
     status, body = client.post_json("/config/reload", {}, auth=True)
     if status != 200:
         raise RuntimeError(f"could not load masking seed config: HTTP {status}: {body}")
+
+    def restore():
+        if original_cfg is None:
+            CONFIG_PATH.unlink(missing_ok=True)
+        else:
+            CONFIG_PATH.write_bytes(original_cfg)
+        if original_sig is None:
+            CONFIG_SIGN_PATH.unlink(missing_ok=True)
+        else:
+            CONFIG_SIGN_PATH.write_bytes(original_sig)
+
+    atexit.register(restore)
+
+
+def configure_commitment_profile(client, kid):
+    original_cfg = CONFIG_PATH.read_bytes() if CONFIG_PATH.exists() else None
+    original_sig = CONFIG_SIGN_PATH.read_bytes() if CONFIG_SIGN_PATH.exists() else None
+    config = read_config_or_empty()
+    config["commitment_profiles"] = [
+        {
+            "name": COMMITMENT_PROFILE,
+            "kid": kid,
+            "context": "tenant=fuzz;field=pan;purpose=commitment;version=1",
+            "max_plaintext_len": 128,
+            "opening_len": 32,
+        }
+    ]
+    CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    sign_config_file()
+    status, body = client.post_json("/config/reload", {}, auth=True)
+    if status != 200:
+        raise RuntimeError(f"could not load commitment seed config: HTTP {status}: {body}")
 
     def restore():
         if original_cfg is None:
@@ -1366,6 +1403,65 @@ def masking_batch_seeds(client):
     ]
 
 
+def commitment_seeds(client):
+    kid = _create_key(client, {"tag": "fuzz-commit", "profile": "hybrid-standard-v1"})
+    configure_commitment_profile(client, kid)
+    create_seed = {
+        "ref": "commit-fuzz",
+        "profile": COMMITMENT_PROFILE,
+        "plaintext": COMMITMENT_PLAINTEXTS[0],
+    }
+    status, body = client.post_json(f"/commit/{kid}", create_seed, auth=True)
+    if status != 200:
+        raise RuntimeError(f"could not create commitment seed: HTTP {status}: {body}")
+    parsed = json.loads(body)
+    verify_seed = {
+        "ref": "commit-fuzz",
+        "kid": kid,
+        "profile": COMMITMENT_PROFILE,
+        "plaintext": COMMITMENT_PLAINTEXTS[0],
+        "opening": parsed["opening"],
+        "commitment": parsed["commitment"],
+    }
+    return [
+        (f"/commit/{kid}", create_seed),
+        ("/commit/verify", verify_seed),
+    ]
+
+
+def commitment_batch_seeds(client):
+    kid = _create_key(client, {"tag": "fuzz-commit-batch", "profile": "hybrid-standard-v1"})
+    configure_commitment_profile(client, kid)
+    create_seed = {
+        "profile": COMMITMENT_PROFILE,
+        "items": [
+            {"ref": f"commit-fuzz-{index}", "plaintext": plaintext}
+            for index, plaintext in enumerate(COMMITMENT_PLAINTEXTS)
+        ],
+    }
+    status, body = client.post_json(f"/commit/batch/{kid}", create_seed, auth=True)
+    if status != 200:
+        raise RuntimeError(f"could not create commitment batch seed: HTTP {status}: {body}")
+    parsed = json.loads(body)
+    verify_seed = {
+        "kid": kid,
+        "profile": COMMITMENT_PROFILE,
+        "items": [
+            {
+                "ref": item["ref"],
+                "plaintext": plaintext,
+                "opening": item["opening"],
+                "commitment": item["commitment"],
+            }
+            for item, plaintext in zip(parsed["items"], COMMITMENT_PLAINTEXTS)
+        ],
+    }
+    return [
+        (f"/commit/batch/{kid}", create_seed),
+        ("/commit/verify/batch", verify_seed),
+    ]
+
+
 TARGETS = [
     {"name": "token", "runner": run_body, "seed_factory": token_seeds,
      "path": "/sign/verification", "auth": False, "semantic": token_semantic},
@@ -1396,6 +1492,8 @@ TARGETS = [
     {"name": "index_batch", "runner": run_body, "seed_factory": index_batch_seeds, "auth": True},
     {"name": "masking", "runner": run_body, "seed_factory": masking_seeds, "auth": True},
     {"name": "masking_batch", "runner": run_body, "seed_factory": masking_batch_seeds, "auth": True},
+    {"name": "commitment", "runner": run_body, "seed_factory": commitment_seeds, "auth": True},
+    {"name": "commitment_batch", "runner": run_body, "seed_factory": commitment_batch_seeds, "auth": True},
     {"name": "pubkid", "runner": run_path_param, "require_json_error": False, "endpoints": [
         ("/pub/{}", False),
         ("/keys/properties/{}", True),
@@ -1470,8 +1568,8 @@ def self_check():
         "internal encrypt ignores plausible body",
     )
 
-    loaded_body = '{"status":"reloaded","routes_loaded":1,"remote_routes_loaded":0,"clients_loaded":0,"fpe_profiles_loaded":0,"tokenization_profiles_loaded":0,"mac_profiles_loaded":0,"masking_profiles_loaded":0}'
-    empty_body = '{"status":"reloaded","routes_loaded":0,"remote_routes_loaded":0,"clients_loaded":0,"fpe_profiles_loaded":0,"tokenization_profiles_loaded":0,"mac_profiles_loaded":0,"masking_profiles_loaded":0}'
+    loaded_body = '{"status":"reloaded","routes_loaded":1,"remote_routes_loaded":0,"clients_loaded":0,"fpe_profiles_loaded":0,"tokenization_profiles_loaded":0,"mac_profiles_loaded":0,"masking_profiles_loaded":0,"commitment_profiles_loaded":0}'
+    empty_body = '{"status":"reloaded","routes_loaded":0,"remote_routes_loaded":0,"clients_loaded":0,"fpe_profiles_loaded":0,"tokenization_profiles_loaded":0,"mac_profiles_loaded":0,"masking_profiles_loaded":0,"commitment_profiles_loaded":0}'
     expect(config_semantic(200, loaded_body), "config flags integrity bypass")
     expect(not config_semantic(200, empty_body), "config ignores empty reload")
     expect(not config_semantic(400, '{"error":"x"}'), "config ignores rejected")

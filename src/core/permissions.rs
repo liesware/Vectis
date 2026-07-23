@@ -22,6 +22,8 @@ pub const PERMISSION_ACTIONS: &[&str] = &[
     "index-create",
     "index-verify",
     "mask",
+    "commit-create",
+    "commit-verify",
     "metrics",
 ];
 const GLOBAL_PERMISSION_ACTIONS: &[&str] = &["metrics"];

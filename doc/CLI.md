@@ -306,6 +306,25 @@ and comes only from signed config. The CLI validates field shape but does not
 check whether the KID is loaded in a running server. That check happens when
 Vectis loads the signed config.
 
+### `vectis config commitment`
+
+Edits the local `commitment_profiles` section in `VECTIS_CONFIG_PATH`. The
+lookup key is `name`. Names must be unique.
+
+```sh
+vectis config commitment list
+vectis config commitment add --name pan-commitment-v1 --kid <kid> --context 'tenant=mx;field=pan;purpose=commitment;version=1' --max-plaintext-len 128 --opening-len 32
+vectis config commitment get pan-commitment-v1
+vectis config commitment update pan-commitment-v1 --opening-len 64
+vectis config commitment delete pan-commitment-v1
+```
+
+`context` must use `key=value;key=value` labels and is limited to 128
+characters. `max_plaintext_len` must be between 1 and 1024, and `opening_len`
+must be between 32 and 64 bytes. The CLI validates field shape but does not
+check whether the KID is loaded in a running server. That check happens when
+Vectis loads the signed config.
+
 ### `vectis config masking`
 
 Edits the local `masking_profiles` section in `VECTIS_CONFIG_PATH`. The lookup
@@ -522,6 +541,21 @@ vectis mac verify --json '{"ref":"reg1","kid":"<kid>","profile":"pan-blind-index
 `create` requires `mac-create` permission for the KID and an `active` key.
 `verify` requires `mac-verify` permission for the body KID and allows `active` or `retired`
 keys. The response reports the resolved MAC algorithm and digest.
+
+### `vectis commit`
+
+Calls local cryptographic commitment create/verify endpoints. Commitment
+profiles are loaded from signed `config.json`.
+
+```sh
+vectis commit create <kid> --json '{"ref":"reg1","profile":"pan-commitment-v1","plaintext":"4111111111111111"}'
+vectis commit verify --json '{"ref":"reg1","kid":"<kid>","profile":"pan-commitment-v1","plaintext":"4111111111111111","opening":"<base64url>","commitment":"<hex>"}'
+```
+
+`create` requires `commit-create` permission for the KID and an `active` key.
+`verify` requires `commit-verify` permission for the body KID and allows
+`active` or `retired` keys. Create returns a random `opening`, so the same
+plaintext can produce different commitments.
 
 ### `vectis mask`
 

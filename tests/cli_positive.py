@@ -37,6 +37,7 @@ def config_init_case(env):
             "tokenization_profiles": [],
             "mac_profiles": [],
             "masking_profiles": [],
+            "commitment_profiles": [],
         },
         "config init must write the minimal skeleton",
     )
@@ -60,6 +61,10 @@ def config_validate_case(env):
     require(
         response["masking_profiles_loaded"] == 0,
         "empty config must have no masking profiles",
+    )
+    require(
+        response["commitment_profiles_loaded"] == 0,
+        "empty config must have no commitment profiles",
     )
 
 

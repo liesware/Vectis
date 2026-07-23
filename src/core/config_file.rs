@@ -1,6 +1,6 @@
 use crate::core::{
-    canonical, config, fpe, mac, masking, permissions, protocol, remote_routes, routes,
-    tokenization,
+    canonical, commitments, config, fpe, mac, masking, permissions, protocol, remote_routes,
+    routes, tokenization,
 };
 use crate::error::DynError;
 use serde::{Deserialize, Serialize};
@@ -27,6 +27,8 @@ pub struct ConfigFile {
     mac_profiles: Vec<mac::MacProfileInput>,
     #[serde(default)]
     masking_profiles: Vec<masking::MaskingProfileInput>,
+    #[serde(default)]
+    commitment_profiles: Vec<commitments::CommitmentProfileInput>,
 }
 
 pub struct ConfigState {
@@ -37,6 +39,7 @@ pub struct ConfigState {
     pub tokenization_profiles: tokenization::TokenizationProfilesState,
     pub mac_profiles: mac::MacProfilesState,
     pub masking_profiles: masking::MaskingProfilesState,
+    pub commitment_profiles: commitments::CommitmentProfilesState,
 }
 
 impl Zeroize for ConfigState {
@@ -46,6 +49,7 @@ impl Zeroize for ConfigState {
         self.tokenization_profiles.zeroize();
         self.mac_profiles.zeroize();
         self.masking_profiles.zeroize();
+        self.commitment_profiles.zeroize();
     }
 }
 
@@ -68,12 +72,14 @@ struct ConfigValidationHooks<
     DeriveTokenizationKeys,
     HashAlgorithmForKid,
     DeriveMacKey,
+    DeriveCommitmentKey,
 > {
     is_loaded_kid: &'a IsLoadedKid,
     derive_fpe_key: &'a DeriveFpeKey,
     derive_tokenization_keys: &'a DeriveTokenizationKeys,
     hash_algorithm_for_kid: &'a HashAlgorithmForKid,
     derive_mac_key: &'a DeriveMacKey,
+    derive_commitment_key: &'a DeriveCommitmentKey,
 }
 
 pub fn canonical_config_json(content: &str) -> Result<String, DynError> {
@@ -87,6 +93,7 @@ pub fn canonical_config_json(content: &str) -> Result<String, DynError> {
     )?)?)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn validate_config_content(
     content: &str,
     config: &config::AppConfig,
@@ -97,6 +104,9 @@ pub fn validate_config_content(
     ) -> Result<tokenization::DerivedTokenizationKeys, DynError>,
     hash_algorithm_for_kid: impl Fn(&str) -> Result<String, DynError>,
     derive_mac_key: impl Fn(mac::MacKeyDerivationRequest<'_>) -> Result<mac::DerivedMacKey, DynError>,
+    derive_commitment_key: impl Fn(
+        commitments::CommitmentKeyDerivationRequest<'_>,
+    ) -> Result<commitments::DerivedCommitmentKey, DynError>,
 ) -> Result<ConfigState, DynError> {
     let config_file: ConfigFile = serde_json::from_str(content).map_err(|err| {
         crate::error::invalid_input(format!("config file must be valid JSON: {err}"))
@@ -107,6 +117,7 @@ pub fn validate_config_content(
         derive_tokenization_keys: &derive_tokenization_keys,
         hash_algorithm_for_kid: &hash_algorithm_for_kid,
         derive_mac_key: &derive_mac_key,
+        derive_commitment_key: &derive_commitment_key,
     };
     validate_config_file(config_file, config, &hooks)
 }
@@ -123,6 +134,7 @@ pub fn read_config_signature_file(path: &Path) -> Result<String, DynError> {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn load_config_state(
     config: &config::AppConfig,
     verify_config: impl Fn(&Path, &str) -> Result<(), DynError>,
@@ -133,6 +145,9 @@ pub fn load_config_state(
     ) -> Result<tokenization::DerivedTokenizationKeys, DynError>,
     hash_algorithm_for_kid: impl Fn(&str) -> Result<String, DynError>,
     derive_mac_key: impl Fn(mac::MacKeyDerivationRequest<'_>) -> Result<mac::DerivedMacKey, DynError>,
+    derive_commitment_key: impl Fn(
+        commitments::CommitmentKeyDerivationRequest<'_>,
+    ) -> Result<commitments::DerivedCommitmentKey, DynError>,
 ) -> Result<ConfigState, DynError> {
     let hooks = ConfigValidationHooks {
         is_loaded_kid: &is_loaded_kid,
@@ -140,6 +155,7 @@ pub fn load_config_state(
         derive_tokenization_keys: &derive_tokenization_keys,
         hash_algorithm_for_kid: &hash_algorithm_for_kid,
         derive_mac_key: &derive_mac_key,
+        derive_commitment_key: &derive_commitment_key,
     };
     match load_config_file(&config.config_path, verify_config, config, &hooks) {
         Ok(state) => {
@@ -164,6 +180,7 @@ pub fn load_config_state(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn reload_config_state(
     config: &config::AppConfig,
     verify_config: impl Fn(&Path, &str) -> Result<(), DynError>,
@@ -174,6 +191,9 @@ pub fn reload_config_state(
     ) -> Result<tokenization::DerivedTokenizationKeys, DynError>,
     hash_algorithm_for_kid: impl Fn(&str) -> Result<String, DynError>,
     derive_mac_key: impl Fn(mac::MacKeyDerivationRequest<'_>) -> Result<mac::DerivedMacKey, DynError>,
+    derive_commitment_key: impl Fn(
+        commitments::CommitmentKeyDerivationRequest<'_>,
+    ) -> Result<commitments::DerivedCommitmentKey, DynError>,
 ) -> Result<ConfigState, DynError> {
     let hooks = ConfigValidationHooks {
         is_loaded_kid: &is_loaded_kid,
@@ -181,6 +201,7 @@ pub fn reload_config_state(
         derive_tokenization_keys: &derive_tokenization_keys,
         hash_algorithm_for_kid: &hash_algorithm_for_kid,
         derive_mac_key: &derive_mac_key,
+        derive_commitment_key: &derive_commitment_key,
     };
     match load_config_file(&config.config_path, verify_config, config, &hooks) {
         Ok(state) => Ok(state),
@@ -202,6 +223,9 @@ fn load_config_file(
         ) -> Result<tokenization::DerivedTokenizationKeys, DynError>,
         impl Fn(&str) -> Result<String, DynError>,
         impl Fn(mac::MacKeyDerivationRequest<'_>) -> Result<mac::DerivedMacKey, DynError>,
+        impl Fn(
+            commitments::CommitmentKeyDerivationRequest<'_>,
+        ) -> Result<commitments::DerivedCommitmentKey, DynError>,
     >,
 ) -> Result<ConfigState, DynError> {
     let content = read_config_file(path)?;
@@ -224,6 +248,9 @@ fn validate_config_file(
         ) -> Result<tokenization::DerivedTokenizationKeys, DynError>,
         impl Fn(&str) -> Result<String, DynError>,
         impl Fn(mac::MacKeyDerivationRequest<'_>) -> Result<mac::DerivedMacKey, DynError>,
+        impl Fn(
+            commitments::CommitmentKeyDerivationRequest<'_>,
+        ) -> Result<commitments::DerivedCommitmentKey, DynError>,
     >,
 ) -> Result<ConfigState, DynError> {
     protocol::validate_protocol_version("config.version", &config_file.version)?;
@@ -251,6 +278,12 @@ fn validate_config_file(
     )?;
     let validated_masking_profiles =
         masking::validate_masking_profiles(config_file.masking_profiles, hooks.is_loaded_kid)?;
+    let validated_commitment_profiles = commitments::validate_commitment_profiles(
+        config_file.commitment_profiles,
+        hooks.is_loaded_kid,
+        hooks.hash_algorithm_for_kid,
+        hooks.derive_commitment_key,
+    )?;
 
     Ok(ConfigState {
         routes: routes::RoutesState::from_parts(
@@ -264,6 +297,7 @@ fn validate_config_file(
         tokenization_profiles: validated_tokenization_profiles,
         mac_profiles: validated_mac_profiles,
         masking_profiles: validated_masking_profiles,
+        commitment_profiles: validated_commitment_profiles,
     })
 }
 
@@ -280,6 +314,7 @@ fn empty_config_state(config: &config::AppConfig) -> ConfigState {
         tokenization_profiles: tokenization::TokenizationProfilesState::default(),
         mac_profiles: mac::MacProfilesState::default(),
         masking_profiles: masking::MaskingProfilesState::default(),
+        commitment_profiles: commitments::CommitmentProfilesState::default(),
     }
 }
 
@@ -357,6 +392,16 @@ mod tests {
         })
     }
 
+    fn dummy_commitment_key(
+        _: commitments::CommitmentKeyDerivationRequest<'_>,
+    ) -> Result<commitments::DerivedCommitmentKey, DynError> {
+        Ok(commitments::DerivedCommitmentKey {
+            public_algorithm: String::from("HMAC(BLAKE2b(256))"),
+            botan_algorithm: String::from("HMAC(BLAKE2b(256))"),
+            commit_key: Zeroizing::new(vec![0u8; commitments::COMMITMENT_KEY_SIZE_BYTES]),
+        })
+    }
+
     fn test_config(config_path: PathBuf) -> config::AppConfig {
         config::AppConfig {
             http_bind_addr: "127.0.0.1:3000".parse().unwrap(),
@@ -418,6 +463,7 @@ mod tests {
             |_| Ok(dummy_tokenization_keys()),
             dummy_hash_algorithm,
             dummy_mac_key,
+            dummy_commitment_key,
         )
         .unwrap();
         assert_eq!(state.routes.len(), 0);
@@ -442,6 +488,7 @@ mod tests {
             |_| Ok(dummy_tokenization_keys()),
             dummy_hash_algorithm,
             dummy_mac_key,
+            dummy_commitment_key,
         );
         let _ = fs::remove_file(&path);
         assert!(result.is_err());
@@ -460,6 +507,7 @@ mod tests {
             |_| Ok(dummy_tokenization_keys()),
             dummy_hash_algorithm,
             dummy_mac_key,
+            dummy_commitment_key,
         );
         let _ = fs::remove_file(&path);
         let err = match result {
@@ -486,6 +534,7 @@ mod tests {
             |_| Ok(dummy_tokenization_keys()),
             dummy_hash_algorithm,
             dummy_mac_key,
+            dummy_commitment_key,
         );
 
         let _ = fs::remove_file(&path);
@@ -507,6 +556,7 @@ mod tests {
             |_| Ok(dummy_tokenization_keys()),
             dummy_hash_algorithm,
             dummy_mac_key,
+            dummy_commitment_key,
         )
         .unwrap();
         assert_eq!(state.routes.len(), 0);
@@ -529,6 +579,7 @@ mod tests {
             |_| Ok(dummy_tokenization_keys()),
             dummy_hash_algorithm,
             dummy_mac_key,
+            dummy_commitment_key,
         );
         let _ = fs::remove_file(&path);
         assert!(result.is_err());
@@ -551,6 +602,7 @@ mod tests {
             |_| Ok(dummy_tokenization_keys()),
             dummy_hash_algorithm,
             dummy_mac_key,
+            dummy_commitment_key,
         );
 
         let _ = fs::remove_file(&path);
@@ -645,6 +697,7 @@ mod tests {
             |_| Ok(dummy_tokenization_keys()),
             dummy_hash_algorithm,
             dummy_mac_key,
+            dummy_commitment_key,
         )
         .unwrap();
 
@@ -666,6 +719,7 @@ mod tests {
                 |_| Ok(dummy_tokenization_keys()),
                 dummy_hash_algorithm,
                 dummy_mac_key,
+                dummy_commitment_key,
             )
             .is_err()
         );
@@ -678,6 +732,7 @@ mod tests {
                 |_| Ok(dummy_tokenization_keys()),
                 dummy_hash_algorithm,
                 dummy_mac_key,
+                dummy_commitment_key,
             )
             .is_err()
         );
@@ -690,6 +745,7 @@ mod tests {
                 |_| Ok(dummy_tokenization_keys()),
                 dummy_hash_algorithm,
                 dummy_mac_key,
+                dummy_commitment_key,
             )
             .is_err()
         );
@@ -702,6 +758,7 @@ mod tests {
                 |_| Ok(dummy_tokenization_keys()),
                 dummy_hash_algorithm,
                 dummy_mac_key,
+                dummy_commitment_key,
             )
             .is_err()
         );
@@ -733,6 +790,7 @@ mod tests {
             |_| Ok(dummy_tokenization_keys()),
             dummy_hash_algorithm,
             dummy_mac_key,
+            dummy_commitment_key,
         ) {
             Ok(_) => panic!("tokenization_version must be rejected as an unknown field"),
             Err(err) => err,

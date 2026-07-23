@@ -86,7 +86,7 @@ cryptographic data protection primitives and workflows.
 
 - protected messages between Vectis instances, verified before decryption;
 - one operator-signed config file (routes, remote routes, permissions, FPE
-  profiles, tokenization profiles, MAC profiles, and masking profiles); its registered
+  profiles, tokenization profiles, MAC profiles, commitment profiles, and masking profiles); its registered
   `remote_routes` are the only source of peer public keys — no trust-on-first-use
   path;
 - local re-encryption before final app delivery: the receiving application
@@ -96,6 +96,7 @@ cryptographic data protection primitives and workflows.
 - local FF1 format-preserving encryption for signed field profiles;
 - local reversible random tokenization for signed token profiles;
 - local MAC create/verify for signed MAC profiles;
+- local keyed cryptographic commitments with random openings;
 - local blind indexes that reuse signed MAC profiles and persist deterministic
   membership digests.
 - local display masking for signed masking profiles.
@@ -304,6 +305,8 @@ vectis fpe encrypt <kid> --file fpe-encrypt.json
 vectis token encode <kid> --file token-encode.json
 vectis mac create <kid> --file mac-create.json
 vectis mac verify --file mac-verify.json
+vectis commit create <kid> --file commit-create.json
+vectis commit verify --file commit-verify.json
 vectis mask <kid> --file mask.json
 vectis message send <sender_kid> --file send-message.json
 vectis message decrypt --file encrypted-message.json
@@ -316,10 +319,10 @@ See the full API documentation in [doc/API.md](doc/API.md).
 ## Configuration
 
 Runtime routing, remote peers, API-key permissions, FPE profiles, tokenization
-profiles, MAC profiles, and masking profiles live in a single **signed config file** (`config.json`,
+profiles, MAC profiles, commitment profiles, and masking profiles live in a single **signed config file** (`config.json`,
 default path `VECTIS_CONFIG_PATH`) with `version`, `routes`, `remote_routes`,
 `permissions`, optional `fpe_profiles`, optional `tokenization_profiles`, and
-optional `mac_profiles` and `masking_profiles` sections. Blind indexes reuse `mac_profiles`; there is
+optional `mac_profiles`, `commitment_profiles`, and `masking_profiles` sections. Blind indexes reuse `mac_profiles`; there is
 no separate `index_profiles` section. Edit it, then sign it with
 `vectis config sign`. The full schema
 (every field, allowed values, and the optional peer `public_keys`) is documented
@@ -366,11 +369,13 @@ In development and tests, individual algorithm overrides can be enabled with:
 VECTIS_CRYPTO_POLICY=allow-overrides
 ```
 
-## FPE, Tokenization, MAC, Blind Indexes, And Masking
+## FPE, Tokenization, MAC, Commitments, Blind Indexes, And Masking
 
-FPE, tokenization, MAC, blind indexes, and masking are profile-driven. Profiles are
-loaded only from signed config, and requests select a profile by name. Blind
-indexes reuse MAC profiles and persist the resulting deterministic digest.
+FPE, tokenization, MAC, commitments, blind indexes, and masking are
+profile-driven. Profiles are loaded only from signed config, and requests select
+a profile by name. Commitments use random openings so repeated commitments for
+the same plaintext differ. Blind indexes reuse MAC profiles and persist the
+resulting deterministic digest.
 Masking is display-only: it reveals configured leading/trailing characters and
 replaces the middle with a configured mask character.
 
@@ -397,6 +402,7 @@ The CLI can edit these profile sections locally:
 vectis config fpe add --name patient-id-decimal-v1 --kid <kid> --alphabet 0123456789 --min-len 6 --max-len 32 --tweak-aad 'tenant=acme;field=patient_id;version=1'
 vectis config token add --name patient-id-token-v1 --kid <kid> --token-prefix tok_patient --token-len 32 --max-plaintext-len 1024
 vectis config mac add --name pan-blind-index-v1 --kid <kid> --context 'tenant=mx;field=pan;purpose=blind-index;version=1'
+vectis config commitment add --name pan-commitment-v1 --kid <kid> --context 'tenant=mx;field=pan;purpose=commitment;version=1' --max-plaintext-len 128 --opening-len 32
 vectis config masking add --name pan-display-v1 --kid <kid> --visible-first 0 --visible-last 4 --mask-char '*' --min-len 12 --max-len 19
 vectis config sign
 vectis config reload

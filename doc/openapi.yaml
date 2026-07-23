@@ -26,6 +26,9 @@ tags:
   - name: FPE
   - name: Tokenization
   - name: MAC
+  - name: Commitments
+  - name: Blind Index
+  - name: Masking
   - name: Observability
 security: []
 
@@ -282,7 +285,7 @@ paths:
     post:
       tags: [Config]
       summary: Reload the unified signed config
-      description: Administrative endpoint requiring root or an admin client. Reloads the unified config (routes, remote_routes, permissions, fpe_profiles, tokenization_profiles, mac_profiles, masking_profiles) only after VECTIS_CONFIG_PATH and VECTIS_CONFIG_SIGN_PATH are successfully read, verified, and validated. Every route, FPE profile, tokenization profile, MAC profile, and masking profile kid must exist in the keys currently loaded in memory. A missing config reloads to empty sections; an invalid signature, invalid file, or unloaded kid returns an error and keeps the previous in-memory config.
+      description: Administrative endpoint requiring root or an admin client. Reloads the unified config (routes, remote_routes, permissions, fpe_profiles, tokenization_profiles, mac_profiles, commitment_profiles, masking_profiles) only after VECTIS_CONFIG_PATH and VECTIS_CONFIG_SIGN_PATH are successfully read, verified, and validated. Every route, FPE profile, tokenization profile, MAC profile, commitment profile, and masking profile kid must exist in the keys currently loaded in memory. A missing config reloads to empty sections; an invalid signature, invalid file, or unloaded kid returns an error and keeps the previous in-memory config.
       security:
         - ApiKeyAuth: []
       responses:
@@ -839,6 +842,114 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
+  /commit/{kid}:
+    post:
+      tags: [Commitments]
+      summary: Create a keyed cryptographic commitment
+      description: >
+        Creates a keyed commitment using a commitment profile loaded from
+        signed config. The profile binds name, KID, and structured context.
+        Create generates a random opening and requires an active key.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommitCreateInput"
+      responses:
+        "200":
+          description: Cryptographic commitment and opening
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommitCreateOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /commit/batch/{kid}:
+    post:
+      tags: [Commitments]
+      summary: Create cryptographic commitments as an all-or-nothing batch
+      description: >
+        Creates keyed commitments for a batch using one signed commitment
+        profile. Each item must include a unique client ref. Create requires an
+        active key. Any validation or execution error fails the whole batch.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommitCreateBatchInput"
+      responses:
+        "200":
+          description: Cryptographic commitments and openings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommitCreateBatchOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /commit/verify:
+    post:
+      tags: [Commitments]
+      summary: Verify a keyed cryptographic commitment
+      description: >
+        Verifies a commitment using plaintext, opening, commitment, and the
+        selected signed commitment profile. Verify permits active and retired
+        keys.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommitVerifyInput"
+      responses:
+        "200":
+          description: Commitment verification result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommitVerifyOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /commit/verify/batch:
+    post:
+      tags: [Commitments]
+      summary: Verify cryptographic commitments as an all-or-nothing batch
+      description: >
+        Verifies commitments for a batch using one signed commitment profile.
+        Request validation and execution errors fail the whole batch; well
+        formed mismatches return valid=false for their items.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommitVerifyBatchInput"
+      responses:
+        "200":
+          description: Commitment verification results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommitVerifyBatchOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
   /index/{kid}:
     post:
       tags: [Blind Index]
@@ -1044,8 +1155,12 @@ components:
       minLength: 1
       maxLength: 128
       pattern: '^[^\x00-\x1F\x7F-\x9F]+$'
-      description: Client-defined correlation reference. Echoed in FPE, tokenization, and MAC responses; not used for cryptographic derivation, storage lookup, audit, or metrics.
+      description: Client-defined correlation reference. Echoed in FPE, tokenization, MAC, commitment, blind-index, and masking responses; not used for cryptographic derivation, storage lookup, audit, or metrics.
       example: reg1
+
+    Base64UrlNoPad:
+      type: string
+      pattern: "^[A-Za-z0-9_-]+$"
 
     AadSafeText:
       type: string
@@ -1293,13 +1408,13 @@ components:
           type: array
           items:
             type: string
-            enum: [admin, keys, lifecycle, self-test, sign, message, fpe-encrypt, fpe-decrypt, token-encode, token-decode, mac-create, mac-verify, index-create, index-verify, mask, metrics]
+            enum: [admin, keys, lifecycle, self-test, sign, message, fpe-encrypt, fpe-decrypt, token-encode, token-decode, mac-create, mac-verify, commit-create, commit-verify, index-create, index-verify, mask, metrics]
           example:
             - message
 
     ReloadConfigResponse:
       type: object
-      required: [status, routes_loaded, remote_routes_loaded, clients_loaded, fpe_profiles_loaded, tokenization_profiles_loaded, mac_profiles_loaded, masking_profiles_loaded]
+      required: [status, routes_loaded, remote_routes_loaded, clients_loaded, fpe_profiles_loaded, tokenization_profiles_loaded, mac_profiles_loaded, commitment_profiles_loaded, masking_profiles_loaded]
       properties:
         status:
           const: reloaded
@@ -1319,6 +1434,9 @@ components:
           type: integer
           minimum: 0
         mac_profiles_loaded:
+          type: integer
+          minimum: 0
+        commitment_profiles_loaded:
           type: integer
           minimum: 0
         masking_profiles_loaded:
@@ -2280,6 +2398,186 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/MacVerifyBatchOutputItem"
+
+    CommitCreateInput:
+      type: object
+      additionalProperties: false
+      required: [ref, profile, plaintext]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+          example: pan-commitment-v1
+        plaintext:
+          $ref: "#/components/schemas/TextField"
+          example: "4111111111111111"
+
+    CommitCreateOutput:
+      type: object
+      required: [ref, kid, profile, algorithm, commitment, opening]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+          example: pan-commitment-v1
+        algorithm:
+          type: string
+          description: HMAC(<ops-key-hash>) or KMAC-224/256/384/512 for SHA-3 keys.
+          example: KMAC-256
+        commitment:
+          $ref: "#/components/schemas/HexString"
+        opening:
+          $ref: "#/components/schemas/Base64UrlNoPad"
+
+    CommitVerifyInput:
+      type: object
+      additionalProperties: false
+      required: [ref, kid, profile, plaintext, opening, commitment]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+          example: pan-commitment-v1
+        plaintext:
+          $ref: "#/components/schemas/TextField"
+          example: "4111111111111111"
+        opening:
+          $ref: "#/components/schemas/Base64UrlNoPad"
+        commitment:
+          $ref: "#/components/schemas/HexString"
+
+    CommitVerifyOutput:
+      type: object
+      required: [ref, kid, profile, valid]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+          example: pan-commitment-v1
+        valid:
+          type: boolean
+          example: true
+
+    CommitCreateBatchItemInput:
+      type: object
+      additionalProperties: false
+      required: [ref, plaintext]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        plaintext:
+          $ref: "#/components/schemas/TextField"
+          example: "4111111111111111"
+
+    CommitCreateBatchInput:
+      type: object
+      additionalProperties: false
+      required: [profile, items]
+      properties:
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+          example: pan-commitment-v1
+        items:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items:
+            $ref: "#/components/schemas/CommitCreateBatchItemInput"
+
+    CommitCreateBatchOutputItem:
+      type: object
+      required: [ref, commitment, opening]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        commitment:
+          $ref: "#/components/schemas/HexString"
+        opening:
+          $ref: "#/components/schemas/Base64UrlNoPad"
+
+    CommitCreateBatchOutput:
+      type: object
+      required: [kid, profile, algorithm, items]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+          example: pan-commitment-v1
+        algorithm:
+          type: string
+          description: HMAC(<ops-key-hash>) or KMAC-224/256/384/512 for SHA-3 keys.
+          example: KMAC-256
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommitCreateBatchOutputItem"
+
+    CommitVerifyBatchItemInput:
+      type: object
+      additionalProperties: false
+      required: [ref, plaintext, opening, commitment]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        plaintext:
+          $ref: "#/components/schemas/TextField"
+          example: "4111111111111111"
+        opening:
+          $ref: "#/components/schemas/Base64UrlNoPad"
+        commitment:
+          $ref: "#/components/schemas/HexString"
+
+    CommitVerifyBatchInput:
+      type: object
+      additionalProperties: false
+      required: [kid, profile, items]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+          example: pan-commitment-v1
+        items:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items:
+            $ref: "#/components/schemas/CommitVerifyBatchItemInput"
+
+    CommitVerifyBatchOutputItem:
+      type: object
+      required: [ref, valid]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        valid:
+          type: boolean
+          example: true
+
+    CommitVerifyBatchOutput:
+      type: object
+      required: [kid, profile, items]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+          example: pan-commitment-v1
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommitVerifyBatchOutputItem"
 
     MaskInput:
       type: object

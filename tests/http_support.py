@@ -25,6 +25,7 @@ _CONFIG = {
     "tokenization_profiles": [],
     "mac_profiles": [],
     "masking_profiles": [],
+    "commitment_profiles": [],
 }
 
 KEY_CASES = [
@@ -423,6 +424,11 @@ def write_masking_profiles(profiles):
     write_config()
 
 
+def write_commitment_profiles(profiles):
+    _CONFIG["commitment_profiles"] = profiles
+    write_config()
+
+
 def reload_config(client):
     response = client.post("/config/reload", {}, auth=True)
     require(response.get("status") == "reloaded", "config reload status must be reloaded")
@@ -453,6 +459,10 @@ def reload_config(client):
     require(
         isinstance(response.get("masking_profiles_loaded"), int),
         "config reload masking_profiles_loaded must be an integer",
+    )
+    require(
+        isinstance(response.get("commitment_profiles_loaded"), int),
+        "config reload commitment_profiles_loaded must be an integer",
     )
     return response
 

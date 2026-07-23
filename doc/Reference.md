@@ -353,6 +353,7 @@ Runtime policy lives in one signed JSON file:
   "fpe_profiles": [],
   "tokenization_profiles": [],
   "mac_profiles": [],
+  "commitment_profiles": [],
   "masking_profiles": []
 }
 ```
@@ -591,11 +592,16 @@ profile by name; the bound KID and `context` labels come from signed config.
 If the operational key hash algorithm is `SHA-3(N)`, Vectis uses `KMAC-N` with
 an `N`-bit digest; otherwise it uses HMAC with the operational key hash
 algorithm.
-Encode metadata must be a JSON object and is capped at 128 characters after
-compact JSON serialization.
 
-The database stores only `kid`, `hashid`, and encrypted `data`. It does not see
-the profile name, plaintext, metadata, or visible token.
+Commitments live in signed config under `commitment_profiles` and use the same
+MAC algorithm resolution and structured context style. Create returns a random
+opening plus a keyed commitment; verify recomputes the commitment from the
+plaintext and opening. Unlike MAC or blind indexes, repeated commitments for the
+same plaintext differ when their openings differ.
+
+Blind indexes reuse `mac_profiles`: `/mac` computes a deterministic digest,
+while `/index` computes that same digest and stores or verifies membership in
+the `indexes` table. The database stores only `kid` and digest.
 
 ## Masking Profiles
 
@@ -784,8 +790,11 @@ Vectis exposes these major endpoint groups:
 - tokenization: `/token/encode/{kid}`, `/token/decode`;
 - MAC: `/mac/{kid}`, `/mac/batch/{kid}`, `/mac/verify`,
   `/mac/verify/batch`;
+- commitments: `/commit/{kid}`, `/commit/batch/{kid}`,
+  `/commit/verify`, `/commit/verify/batch`;
 - blind index: `/index/{kid}`, `/index/batch/{kid}`,
   `/index/verify`, `/index/verify/batch`;
+- masking: `/mask/{kid}`, `/mask/batch/{kid}`;
 - self-test: `/self-test/init`, `/self-test/keys/{kid}`.
 
 Public endpoints are intentionally limited. Protected endpoints require
@@ -891,9 +900,10 @@ sensitive payloads.
 
 Metrics are exposed in Prometheus text format and should avoid sensitive labels.
 Labels should remain low cardinality. Runtime metrics cover unsealed state,
-loaded keys/routes/permissions, auth and permission decisions, config/key
-reload results, message send/receive/decrypt results, and cryptographic
-sign/verify/encrypt/decrypt/FPE results.
+loaded keys/routes/permissions/profiles, auth and permission decisions,
+config/key reload results, message send/receive/decrypt results, and
+cryptographic sign/verify/encrypt/decrypt/FPE/token/MAC/commit/index/mask
+results.
 
 ## Security Boundaries And Invariants
 
@@ -1179,8 +1189,7 @@ Vectis is still experimental. Important boundaries:
 - no custom CA bundle support yet;
 - no mTLS support yet;
 - no Vault, KMS, or HSM auto-unseal yet;
-- no hash commitments, Merkle proofs, or tamper-evident audit chains
-  yet;
+- no Merkle proofs or tamper-evident audit chains yet;
 - no SLH-DSA support yet;
 - production TLS policy exists, but deployment hardening still needs more work;
 - config reload is whole-file, not per-section transactional;
@@ -1196,8 +1205,7 @@ Likely future work:
 - additional storage backends if they keep the same storage contract;
 - stronger cluster-aware key loading and cache invalidation;
 - custom trust store / CA bundle support;
-- masking for display-safe sensitive fields;
-- commitments and Merkle-based batch verification;
+- Merkle-based batch verification;
 - tamper-evident audit export built on signed roots;
 - SLH-DSA support if it fits the profile model;
 - Vault/KMS/HSM-backed auto-unseal;
