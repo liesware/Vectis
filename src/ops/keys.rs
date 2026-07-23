@@ -89,6 +89,64 @@ impl KeysDbState {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn test_keys_state_with_lifecycle(id: &str, status: &str) -> KeysDbState {
+    use crate::ops::key_material::{
+        KeyMaterialKeys, KeyMaterialOutput, VariantDerKeyPair, VariantHash,
+        VariantKeyAgreementKeyPair, VariantSymmetricKey,
+    };
+    use std::sync::Arc;
+
+    KeysDbState::from_keys(vec![Arc::new(LoadedOpsKey {
+        id: id.to_string(),
+        aad: String::from("type=ops-keys"),
+        properties_aad: String::from("type=ops-key-properties"),
+        key_material: KeyMaterialOutput {
+            hash: VariantHash {
+                variant: String::from("SHA-3(256)"),
+            },
+            keys: KeyMaterialKeys {
+                symmetric: VariantSymmetricKey {
+                    variant: String::from("AES-256/GCM"),
+                    key_hex: "a".repeat(64),
+                },
+                eddsa: VariantDerKeyPair {
+                    variant: String::from("Ed25519"),
+                    private_key_der_hex: String::from("aa"),
+                    public_key_der_hex: String::from("aa"),
+                },
+                xecdh: VariantKeyAgreementKeyPair {
+                    variant: String::from("X25519"),
+                    private_key_der_hex: String::from("aa"),
+                    public_key_hex: "a".repeat(64),
+                },
+                ml_dsa: VariantDerKeyPair {
+                    variant: String::from("ML-DSA-44"),
+                    private_key_der_hex: String::from("aa"),
+                    public_key_der_hex: String::from("aa"),
+                },
+                ml_kem: VariantDerKeyPair {
+                    variant: String::from("ML-KEM-512"),
+                    private_key_der_hex: String::from("aa"),
+                    public_key_der_hex: String::from("aa"),
+                },
+            },
+        },
+        properties: OpsKeyProperties {
+            version: 1,
+            profile: String::from("hybrid-standard-v1"),
+            tag: String::from("test"),
+            created_at: String::from("1"),
+            lifecycle: OpsKeyLifecycle {
+                status: status.to_string(),
+                reason: String::from("test"),
+                changed_at: String::from("1"),
+            },
+            access: None,
+        },
+    })])
+}
+
 impl LoadedOpsKey {
     pub(crate) fn id(&self) -> &str {
         &self.id

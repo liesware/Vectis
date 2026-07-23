@@ -524,6 +524,120 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    const KID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const OTHER_KID: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn mac_profile(kid: &str) -> mac::MacProfile {
+        let input = serde_json::from_value(json!({
+            "name": "pan-index-v1",
+            "kid": kid,
+            "context": "tenant=mx;field=pan;purpose=index;version=1"
+        }))
+        .expect("mac profile input must deserialize");
+        mac::validate_mac_profiles(
+            vec![input],
+            |_| true,
+            |_| Ok(String::from("SHA-3(256)")),
+            |request| mac::derive_mac_key_for_profile(&"11".repeat(32), request),
+        )
+        .expect("mac profile must validate")
+        .get("pan-index-v1")
+        .expect("profile must exist")
+        .clone()
+    }
+
+    fn create_input() -> IndexCreateInput {
+        parse_create_input(json!({
+            "ref": "row1",
+            "profile": "pan-index-v1",
+            "plaintext": "4111111111111111"
+        }))
+        .expect("index create input must parse")
+    }
+
+    fn verify_input() -> IndexVerifyInput {
+        parse_verify_input(json!({
+            "ref": "row1",
+            "kid": KID,
+            "profile": "pan-index-v1",
+            "plaintext": "4111111111111111"
+        }))
+        .expect("index verify input must parse")
+    }
+
+    fn keys_state(status: &str) -> KeysDbState {
+        keys::test_keys_state_with_lifecycle(KID, status)
+    }
+
+    fn err_string<T>(result: Result<T, DynError>) -> String {
+        result.err().expect("operation must fail").to_string()
+    }
+
+    #[test]
+    fn validates_single_index_inputs_and_rejects_bad_shapes() {
+        let create = validate_create_input(create_input()).expect("valid create input must pass");
+        assert_eq!(create.profile(), "pan-index-v1");
+
+        let verify = validate_verify_input(verify_input()).expect("valid verify input must pass");
+        assert_eq!(verify.profile(), "pan-index-v1");
+        assert_eq!(verify.kid(), KID);
+
+        assert!(
+            parse_create_input(json!({
+                "ref": "row1",
+                "profile": "pan-index-v1",
+                "plaintext": "4111111111111111",
+                "extra": true
+            }))
+            .is_err()
+        );
+        assert_eq!(
+            err_string(validate_create_input(
+                parse_create_input(json!({
+                    "ref": "bad\nref",
+                    "profile": "pan-index-v1",
+                    "plaintext": "4111111111111111"
+                }))
+                .unwrap()
+            )),
+            "ref must not contain control characters"
+        );
+        assert_eq!(
+            err_string(validate_create_input(
+                parse_create_input(json!({
+                    "ref": "row1",
+                    "profile": "bad=profile",
+                    "plaintext": "4111111111111111"
+                }))
+                .unwrap()
+            )),
+            "profile must not contain ';' or '='"
+        );
+        assert_eq!(
+            err_string(validate_verify_input(
+                parse_verify_input(json!({
+                    "ref": "row1",
+                "kid": "aa",
+                    "profile": "pan-index-v1",
+                    "plaintext": "4111111111111111"
+                }))
+                .unwrap()
+            )),
+            "kid is invalid: id must be 64 hex characters for BLAKE2b(256), got 2"
+        );
+        assert_eq!(
+            err_string(validate_create_input(
+                parse_create_input(json!({
+                    "ref": "row1",
+                    "profile": "pan-index-v1",
+                    "plaintext": ""
+                }))
+                .unwrap()
+            )),
+            "plaintext must not be empty"
+        );
+    }
+
     #[test]
     fn validates_index_batch_input() {
         let input = parse_batch_input(json!({
@@ -536,6 +650,24 @@ mod tests {
         .and_then(validate_batch_input)
         .expect("valid index batch input must pass");
 
+        assert_eq!(input.profile(), "pan-index-v1");
+        assert_eq!(input.items.len(), 2);
+    }
+
+    #[test]
+    fn validates_index_verify_batch_input() {
+        let input = parse_verify_batch_input(json!({
+            "kid": KID,
+            "profile": "pan-index-v1",
+            "items": [
+                {"ref": "row1", "plaintext": "4111111111111111"},
+                {"ref": "row2", "plaintext": "5555555555554444"}
+            ]
+        }))
+        .and_then(validate_verify_batch_input)
+        .expect("valid verify batch input must pass");
+
+        assert_eq!(input.kid(), KID);
         assert_eq!(input.profile(), "pan-index-v1");
         assert_eq!(input.items.len(), 2);
     }
@@ -569,6 +701,137 @@ mod tests {
             duplicate.to_string(),
             "batch item 1 failed: index batch ref must be unique"
         );
+    }
+
+    #[test]
+    fn prepare_index_operations_enforce_lifecycle_and_profile_kid() {
+        let profile = mac_profile(KID);
+        let create = validate_create_input(create_input()).unwrap();
+        assert!(prepare_create(&keys_state("active"), KID, profile.clone(), create).is_ok());
+
+        let create = validate_create_input(create_input()).unwrap();
+        let err = prepare_create(&keys_state("active"), OTHER_KID, profile.clone(), create)
+            .err()
+            .expect("profile kid mismatch must fail");
+        assert_eq!(
+            err.to_string(),
+            "index profile is not authorized for this kid"
+        );
+
+        let create = validate_create_input(create_input()).unwrap();
+        let err = prepare_create(&keys_state("retired"), KID, profile.clone(), create)
+            .err()
+            .expect("retired key cannot create indexes");
+        assert_eq!(
+            err.to_string(),
+            "key is retired and can only be used for decrypt or verification"
+        );
+
+        let verify = validate_verify_input(verify_input()).unwrap();
+        assert!(prepare_verify(&keys_state("retired"), profile.clone(), verify).is_ok());
+
+        let verify = validate_verify_input(verify_input()).unwrap();
+        let err = prepare_verify(&keys_state("destroyed"), profile, verify)
+            .err()
+            .expect("destroyed key cannot verify indexes");
+        assert_eq!(
+            err.to_string(),
+            "key is logically destroyed and cannot be used"
+        );
+    }
+
+    #[test]
+    fn index_create_digest_and_verify_outputs_are_stable() {
+        let profile = mac_profile(KID);
+        let create_input = validate_create_input(create_input()).unwrap();
+        let prepared = prepare_create(&keys_state("active"), KID, profile.clone(), create_input)
+            .expect("create must prepare");
+        let result = create(prepared).expect("index must create");
+
+        assert_eq!(result.row.kid, KID);
+        assert_eq!(result.row.digest.len(), 64);
+        assert_eq!(result.output.digest, result.row.digest);
+
+        let verify_input = validate_verify_input(verify_input()).unwrap();
+        let prepared = prepare_verify(&keys_state("active"), profile, verify_input)
+            .expect("verify must prepare");
+        let digest = digest(&prepared).expect("digest must compute");
+        assert_eq!(digest, result.row.digest);
+
+        let output = verify(prepared, digest.clone(), true);
+        assert_eq!(output.kid, KID);
+        assert_eq!(output.profile, "pan-index-v1");
+        assert!(output.matched);
+        assert_eq!(output.digest, digest);
+    }
+
+    #[test]
+    fn index_batch_create_and_verify_preserve_order() {
+        let profile = mac_profile(KID);
+        let input = parse_batch_input(json!({
+            "profile": "pan-index-v1",
+            "items": [
+                {"ref": "row1", "plaintext": "4111111111111111"},
+                {"ref": "row2", "plaintext": "5555555555554444"}
+            ]
+        }))
+        .and_then(validate_batch_input)
+        .unwrap();
+        let prepared = prepare_create_batch(&keys_state("active"), KID, profile.clone(), input)
+            .expect("create batch must prepare");
+        let result = create_batch(prepared).expect("batch must create");
+
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.output.items[0].ref_id, "row1");
+        assert_eq!(result.output.items[1].ref_id, "row2");
+        assert_ne!(result.output.items[0].digest, result.output.items[1].digest);
+
+        let input = parse_verify_batch_input(json!({
+            "kid": KID,
+            "profile": "pan-index-v1",
+            "items": [
+                {"ref": "row1", "plaintext": "4111111111111111"},
+                {"ref": "row2", "plaintext": "5555555555554444"}
+            ]
+        }))
+        .and_then(validate_verify_batch_input)
+        .unwrap();
+        let prepared = prepare_verify_batch(&keys_state("retired"), profile, input)
+            .expect("verify batch must prepare");
+        let digests = batch_digests(&prepared).expect("batch digests must compute");
+        assert_eq!(
+            digests,
+            result
+                .rows
+                .iter()
+                .map(|row| row.digest.clone())
+                .collect::<Vec<_>>()
+        );
+
+        let output = verify_batch(prepared, digests, vec![true, false]).unwrap();
+        assert_eq!(output.items[0].ref_id, "row1");
+        assert!(output.items[0].matched);
+        assert_eq!(output.items[1].ref_id, "row2");
+        assert!(!output.items[1].matched);
+    }
+
+    #[test]
+    fn index_verify_batch_rejects_mismatched_result_lengths() {
+        let profile = mac_profile(KID);
+        let input = parse_verify_batch_input(json!({
+            "kid": KID,
+            "profile": "pan-index-v1",
+            "items": [{"ref": "row1", "plaintext": "4111111111111111"}]
+        }))
+        .and_then(validate_verify_batch_input)
+        .unwrap();
+        let prepared =
+            prepare_verify_batch(&keys_state("active"), profile, input).expect("must prepare");
+
+        let err = verify_batch(prepared, Vec::new(), vec![true])
+            .err()
+            .expect("mismatched digest count must fail");
+        assert_eq!(err.to_string(), "index batch match count is invalid");
     }
 
     #[test]

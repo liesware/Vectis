@@ -240,6 +240,93 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    const KID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const OTHER_KID: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn masking_profile(kid: &str) -> masking::MaskingProfile {
+        let input = serde_json::from_value(json!({
+            "name": "pan-display-v1",
+            "kid": kid,
+            "visible_first": 0,
+            "visible_last": 4,
+            "mask_char": "*",
+            "min_len": 12,
+            "max_len": 19
+        }))
+        .expect("masking profile input must deserialize");
+        masking::validate_masking_profiles(vec![input], |_| true)
+            .expect("masking profile must validate")
+            .get("pan-display-v1")
+            .expect("profile must exist")
+            .clone()
+    }
+
+    fn keys_state(status: &str) -> KeysDbState {
+        keys::test_keys_state_with_lifecycle(KID, status)
+    }
+
+    fn mask_input() -> MaskInput {
+        parse_mask_input(json!({
+            "ref": "row1",
+            "profile": "pan-display-v1",
+            "plaintext": "4111111111111111"
+        }))
+        .expect("mask input must parse")
+    }
+
+    fn err_string<T>(result: Result<T, DynError>) -> String {
+        result.err().expect("operation must fail").to_string()
+    }
+
+    #[test]
+    fn validates_single_mask_input_and_rejects_bad_shapes() {
+        let input = validate_mask_input(mask_input()).expect("valid mask input must pass");
+        assert_eq!(input.profile(), "pan-display-v1");
+
+        assert!(
+            parse_mask_input(json!({
+                "ref": "row1",
+                "profile": "pan-display-v1",
+                "plaintext": "4111111111111111",
+                "extra": true
+            }))
+            .is_err()
+        );
+        assert_eq!(
+            err_string(validate_mask_input(
+                parse_mask_input(json!({
+                    "ref": "bad\nref",
+                    "profile": "pan-display-v1",
+                    "plaintext": "4111111111111111"
+                }))
+                .unwrap()
+            )),
+            "ref must not contain control characters"
+        );
+        assert_eq!(
+            err_string(validate_mask_input(
+                parse_mask_input(json!({
+                    "ref": "row1",
+                    "profile": "bad;profile",
+                    "plaintext": "4111111111111111"
+                }))
+                .unwrap()
+            )),
+            "profile must not contain ';' or '='"
+        );
+        assert_eq!(
+            err_string(validate_mask_input(
+                parse_mask_input(json!({
+                    "ref": "row1",
+                    "profile": "pan-display-v1",
+                    "plaintext": ""
+                }))
+                .unwrap()
+            )),
+            "plaintext must not be empty"
+        );
+    }
+
     #[test]
     fn validates_mask_batch_input() {
         let input = parse_mask_batch_input(json!({
@@ -272,6 +359,94 @@ mod tests {
             }))
             .and_then(validate_mask_batch_input)
             .is_err()
+        );
+    }
+
+    #[test]
+    fn prepare_mask_enforces_profile_kid_and_lifecycle() {
+        let profile = masking_profile(KID);
+        let input = validate_mask_input(mask_input()).unwrap();
+        assert!(prepare_mask(&keys_state("active"), KID, profile.clone(), input).is_ok());
+
+        let input = validate_mask_input(mask_input()).unwrap();
+        let err = prepare_mask(&keys_state("active"), OTHER_KID, profile.clone(), input)
+            .err()
+            .expect("profile kid mismatch must fail");
+        assert_eq!(
+            err.to_string(),
+            "masking profile is not authorized for this kid"
+        );
+
+        let input = validate_mask_input(mask_input()).unwrap();
+        assert!(
+            prepare_mask(&keys_state("retired"), KID, profile.clone(), input).is_ok(),
+            "retired keys may support verify-like masking"
+        );
+
+        let input = validate_mask_input(mask_input()).unwrap();
+        let err = prepare_mask(&keys_state("compromised"), KID, profile, input)
+            .err()
+            .expect("compromised key must block masking");
+        assert_eq!(
+            err.to_string(),
+            "key is compromised and cannot be used for security reasons"
+        );
+    }
+
+    #[test]
+    fn mask_outputs_expected_value() {
+        let profile = masking_profile(KID);
+        let input = validate_mask_input(mask_input()).unwrap();
+        let prepared =
+            prepare_mask(&keys_state("active"), KID, profile, input).expect("mask must prepare");
+        let output = mask(prepared).expect("mask must succeed");
+
+        assert_eq!(output.ref_id, "row1");
+        assert_eq!(output.kid, KID);
+        assert_eq!(output.profile, "pan-display-v1");
+        assert_eq!(output.masked, "************1111");
+    }
+
+    #[test]
+    fn mask_batch_preserves_order_and_reports_item_errors() {
+        let profile = masking_profile(KID);
+        let input = parse_mask_batch_input(json!({
+            "profile": "pan-display-v1",
+            "items": [
+                {"ref": "row1", "plaintext": "4111111111111111"},
+                {"ref": "row2", "plaintext": "5555555555554444"}
+            ]
+        }))
+        .and_then(validate_mask_batch_input)
+        .unwrap();
+        let prepared = prepare_mask_batch(&keys_state("active"), KID, profile.clone(), input)
+            .expect("batch must prepare");
+        let output = mask_batch(prepared).expect("batch must mask");
+
+        assert_eq!(output.kid, KID);
+        assert_eq!(output.profile, "pan-display-v1");
+        assert_eq!(output.items[0].ref_id, "row1");
+        assert_eq!(output.items[0].masked, "************1111");
+        assert_eq!(output.items[1].ref_id, "row2");
+        assert_eq!(output.items[1].masked, "************4444");
+
+        let input = parse_mask_batch_input(json!({
+            "profile": "pan-display-v1",
+            "items": [
+                {"ref": "row1", "plaintext": "4111111111111111"},
+                {"ref": "row2", "plaintext": "123"}
+            ]
+        }))
+        .and_then(validate_mask_batch_input)
+        .unwrap();
+        let prepared = prepare_mask_batch(&keys_state("active"), KID, profile, input)
+            .expect("batch with short plaintext still prepares");
+        let err = mask_batch(prepared)
+            .err()
+            .expect("short plaintext must fail during masking");
+        assert_eq!(
+            err.to_string(),
+            "batch item 1 failed: plaintext length is outside masking profile bounds"
         );
     }
 }

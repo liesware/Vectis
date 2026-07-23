@@ -549,6 +549,148 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    const KID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const OTHER_KID: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn commitment_profile(kid: &str) -> commitments::CommitmentProfile {
+        let input = serde_json::from_value(json!({
+            "name": "pan-commitment-v1",
+            "kid": kid,
+            "context": "tenant=mx;field=pan;purpose=commitment;version=1",
+            "max_plaintext_len": 20,
+            "opening_len": 32
+        }))
+        .expect("commitment profile input must deserialize");
+        commitments::validate_commitment_profiles(
+            vec![input],
+            |_| true,
+            |_| Ok(String::from("SHA-3(256)")),
+            |request| commitments::derive_commitment_key_for_profile(&"11".repeat(32), request),
+        )
+        .expect("commitment profile must validate")
+        .get("pan-commitment-v1")
+        .expect("profile must exist")
+        .clone()
+    }
+
+    fn keys_state(status: &str) -> KeysDbState {
+        keys::test_keys_state_with_lifecycle(KID, status)
+    }
+
+    fn create_input_with_plaintext(plaintext: &str) -> CommitCreateInput {
+        parse_create_input(json!({
+            "ref": "row1",
+            "profile": "pan-commitment-v1",
+            "plaintext": plaintext
+        }))
+        .expect("commit create input must parse")
+    }
+
+    fn create_input() -> CommitCreateInput {
+        create_input_with_plaintext("4111111111111111")
+    }
+
+    fn verify_input(plaintext: &str, opening: &str, commitment: &str) -> CommitVerifyInput {
+        parse_verify_input(json!({
+            "ref": "row1",
+            "kid": KID,
+            "profile": "pan-commitment-v1",
+            "plaintext": plaintext,
+            "opening": opening,
+            "commitment": commitment
+        }))
+        .expect("commit verify input must parse")
+    }
+
+    fn created_commitment(profile: commitments::CommitmentProfile) -> CommitCreateOutput {
+        let input = validate_create_input(create_input()).unwrap();
+        let prepared = prepare_create(&keys_state("active"), KID, profile, input)
+            .expect("commit create must prepare");
+        create(prepared).expect("commitment must create")
+    }
+
+    fn err_string<T>(result: Result<T, DynError>) -> String {
+        result.err().expect("operation must fail").to_string()
+    }
+
+    #[test]
+    fn validates_single_commit_inputs_and_rejects_bad_shapes() {
+        let create = validate_create_input(create_input()).expect("valid create input must pass");
+        assert_eq!(create.profile(), "pan-commitment-v1");
+
+        assert!(
+            parse_create_input(json!({
+                "ref": "row1",
+                "profile": "pan-commitment-v1",
+                "plaintext": "4111111111111111",
+                "extra": true
+            }))
+            .is_err()
+        );
+        assert_eq!(
+            err_string(validate_create_input(
+                parse_create_input(json!({
+                    "ref": "bad\nref",
+                    "profile": "pan-commitment-v1",
+                    "plaintext": "4111111111111111"
+                }))
+                .unwrap()
+            )),
+            "ref must not contain control characters"
+        );
+        assert_eq!(
+            err_string(validate_create_input(
+                parse_create_input(json!({
+                    "ref": "row1",
+                    "profile": "bad=profile",
+                    "plaintext": "4111111111111111"
+                }))
+                .unwrap()
+            )),
+            "profile must not contain ';' or '='"
+        );
+        assert_eq!(
+            err_string(validate_create_input(
+                parse_create_input(json!({
+                    "ref": "row1",
+                    "profile": "pan-commitment-v1",
+                    "plaintext": ""
+                }))
+                .unwrap()
+            )),
+            "plaintext must not be empty"
+        );
+
+        assert_eq!(
+            err_string(validate_verify_input(
+                parse_verify_input(json!({
+                    "ref": "row1",
+                "kid": "aa",
+                    "profile": "pan-commitment-v1",
+                    "plaintext": "4111111111111111",
+                    "opening": "abcd",
+                    "commitment": "00"
+                }))
+                .unwrap()
+            )),
+            "kid is invalid: id must be 64 hex characters for BLAKE2b(256), got 2"
+        );
+        assert_eq!(
+            err_string(validate_verify_input(
+                parse_verify_input(json!({
+                    "ref": "row1",
+                    "kid": KID,
+                    "profile": "pan-commitment-v1",
+                    "plaintext": "4111111111111111",
+                    "opening": "abcd",
+                "commitment": "zz"
+                }))
+                .unwrap()
+            )),
+            "commitment must contain only hexadecimal characters"
+        );
+    }
+
     #[test]
     fn validates_commit_batch_input() {
         let input = parse_create_batch_input(json!({
@@ -563,6 +705,24 @@ mod tests {
 
         assert_eq!(input.profile(), "pan-commitment-v1");
         assert_eq!(input.items.len(), 2);
+    }
+
+    #[test]
+    fn validates_commit_verify_batch_input() {
+        let opening = commitments::encode_opening(&[7u8; 32]);
+        let input = parse_verify_batch_input(json!({
+            "kid": KID,
+            "profile": "pan-commitment-v1",
+            "items": [
+                {"ref": "row1", "plaintext": "4111111111111111", "opening": opening, "commitment": "00".repeat(32)}
+            ]
+        }))
+        .and_then(validate_verify_batch_input)
+        .expect("valid verify batch input must pass");
+
+        assert_eq!(input.kid(), KID);
+        assert_eq!(input.profile(), "pan-commitment-v1");
+        assert_eq!(input.items.len(), 1);
     }
 
     #[test]
@@ -594,6 +754,178 @@ mod tests {
             duplicate.to_string(),
             "batch item 1 failed: commit batch ref must be unique"
         );
+    }
+
+    #[test]
+    fn prepare_commit_operations_enforce_profile_lifecycle_and_bounds() {
+        let profile = commitment_profile(KID);
+        let input = validate_create_input(create_input()).unwrap();
+        assert!(prepare_create(&keys_state("active"), KID, profile.clone(), input).is_ok());
+
+        let input = validate_create_input(create_input()).unwrap();
+        let err = prepare_create(&keys_state("active"), OTHER_KID, profile.clone(), input)
+            .err()
+            .expect("profile kid mismatch must fail");
+        assert_eq!(
+            err.to_string(),
+            "commit profile is not authorized for this kid"
+        );
+
+        let input = validate_create_input(create_input()).unwrap();
+        let err = prepare_create(&keys_state("retired"), KID, profile.clone(), input)
+            .err()
+            .expect("retired key cannot create commitments");
+        assert_eq!(
+            err.to_string(),
+            "key is retired and can only be used for decrypt or verification"
+        );
+
+        let overlong_plaintext = "1".repeat(21);
+        let input = validate_create_input(create_input_with_plaintext(&overlong_plaintext))
+            .expect("overlong plaintext is still syntactically valid");
+        let err = prepare_create(&keys_state("active"), KID, profile.clone(), input)
+            .err()
+            .expect("profile plaintext bound must be enforced");
+        assert_eq!(
+            err.to_string(),
+            "plaintext exceeds commitment profile maximum length"
+        );
+
+        let bad_opening = commitments::encode_opening(&[7u8; 31]);
+        let input = validate_verify_input(verify_input(
+            "4111111111111111",
+            &bad_opening,
+            &"00".repeat(32),
+        ))
+        .unwrap();
+        let err = prepare_verify(&keys_state("active"), profile, input)
+            .err()
+            .expect("wrong opening length must fail");
+        assert_eq!(
+            err.to_string(),
+            "opening length does not match commitment profile"
+        );
+    }
+
+    #[test]
+    fn commit_create_and_verify_round_trip_and_detect_tampering() {
+        let profile = commitment_profile(KID);
+        let created = created_commitment(profile.clone());
+
+        assert_eq!(created.kid, KID);
+        assert_eq!(created.profile, "pan-commitment-v1");
+        assert_eq!(created.algorithm, "KMAC-256");
+        assert_eq!(created.commitment.len(), 64);
+        assert!(commitments::validate_opening(&profile, &created.opening).is_ok());
+
+        let input = validate_verify_input(verify_input(
+            "4111111111111111",
+            &created.opening,
+            &created.commitment,
+        ))
+        .unwrap();
+        let prepared = prepare_verify(&keys_state("retired"), profile.clone(), input)
+            .expect("verify prepares");
+        let verified = verify(prepared).expect("verify must run");
+        assert!(verified.valid);
+
+        let input = validate_verify_input(verify_input(
+            "5555555555554444",
+            &created.opening,
+            &created.commitment,
+        ))
+        .unwrap();
+        let prepared =
+            prepare_verify(&keys_state("active"), profile.clone(), input).expect("verify prepares");
+        assert!(!verify(prepared).unwrap().valid);
+
+        let other_opening = commitments::encode_opening(&[9u8; 32]);
+        let input = validate_verify_input(verify_input(
+            "4111111111111111",
+            &other_opening,
+            &created.commitment,
+        ))
+        .unwrap();
+        let prepared =
+            prepare_verify(&keys_state("active"), profile.clone(), input).expect("verify prepares");
+        assert!(!verify(prepared).unwrap().valid);
+
+        let mut tampered_commitment = created.commitment.clone();
+        let replacement = if tampered_commitment.starts_with("ff") {
+            "00"
+        } else {
+            "ff"
+        };
+        tampered_commitment.replace_range(0..2, replacement);
+        let input = validate_verify_input(verify_input(
+            "4111111111111111",
+            &created.opening,
+            &tampered_commitment,
+        ))
+        .unwrap();
+        let prepared =
+            prepare_verify(&keys_state("active"), profile, input).expect("verify prepares");
+        assert!(!verify(prepared).unwrap().valid);
+    }
+
+    #[test]
+    fn commit_create_uses_fresh_openings_for_same_plaintext() {
+        let profile = commitment_profile(KID);
+        let first = created_commitment(profile.clone());
+        let second = created_commitment(profile);
+
+        assert_ne!(first.opening, second.opening);
+        assert_ne!(first.commitment, second.commitment);
+    }
+
+    #[test]
+    fn commit_batch_create_and_verify_preserve_order() {
+        let profile = commitment_profile(KID);
+        let input = parse_create_batch_input(json!({
+            "profile": "pan-commitment-v1",
+            "items": [
+                {"ref": "row1", "plaintext": "4111111111111111"},
+                {"ref": "row2", "plaintext": "5555555555554444"}
+            ]
+        }))
+        .and_then(validate_create_batch_input)
+        .unwrap();
+        let prepared = prepare_create_batch(&keys_state("active"), KID, profile.clone(), input)
+            .expect("create batch prepares");
+        let created = create_batch(prepared).expect("batch must create");
+
+        assert_eq!(created.items[0].ref_id, "row1");
+        assert_eq!(created.items[1].ref_id, "row2");
+        assert_ne!(created.items[0].commitment, created.items[1].commitment);
+
+        let input = parse_verify_batch_input(json!({
+            "kid": KID,
+            "profile": "pan-commitment-v1",
+            "items": [
+                {
+                    "ref": "row1",
+                    "plaintext": "4111111111111111",
+                    "opening": created.items[0].opening,
+                    "commitment": created.items[0].commitment
+                },
+                {
+                    "ref": "row2",
+                    "plaintext": "0000000000000000",
+                    "opening": created.items[1].opening,
+                    "commitment": created.items[1].commitment
+                }
+            ]
+        }))
+        .and_then(validate_verify_batch_input)
+        .unwrap();
+        let prepared = prepare_verify_batch(&keys_state("active"), profile, input)
+            .expect("verify batch prepares");
+        let verified = verify_batch(prepared).expect("batch must verify");
+
+        assert_eq!(verified.items[0].ref_id, "row1");
+        assert!(verified.items[0].valid);
+        assert_eq!(verified.items[1].ref_id, "row2");
+        assert!(!verified.items[1].valid);
     }
 
     #[test]
