@@ -4,26 +4,54 @@
   <img width="300" alt="Vectis logo" src="logo.png">
 </p>
 
-Vectis is a **cryptographic data protection toolkit for sensitive data
-workflows**.
+Vectis is an **open source advanced data protection service**:
+format-preserving encryption, reversible tokenization, masking, MACs, blind
+indexes, commitments, and post-quantum protected messaging/signing — governed by an
+operator-signed configuration, served through a consistent HTTP and CLI
+interface.
 
-The core idea is simple: TLS protects the connection, but sensitive data often
+**TLS protects the connection. Vectis protects the data.** Sensitive data often
 continues moving through applications, services, queues, storage, logs, workers,
-and final systems after the transport session is over. Vectis explores how to
-protect the data object or payload itself after it leaves the transport layer.
-
-Today it provides hybrid encryption, hybrid signatures, protected messages,
-FF1 format-preserving encryption, reversible random tokenization, MAC profiles,
-blind indexes, signed configuration, API-key permissions, encrypted storage,
-health probes, metrics, structured logs, and a dedicated audit log stream
-through a consistent HTTP and CLI interface.
+and final systems after the transport session is over; Vectis protects the data
+object or payload itself after it leaves the transport layer.
 
 > In Latin, *vectis* can mean a lever, crowbar, fastening bar, or carrying pole:
 > a simple tool used to move something heavy with controlled force.
 
-This project is experimental and should be treated as a work in progress.
+> **Status: experimental.** This project is incomplete, not audited, not
+> production-ready, and should be treated as a work in progress.
+> **Do not use Vectis to protect real sensitive data yet.**
 
-**Do not use Vectis to protect real sensitive data yet.**
+## Why Vectis?
+
+Modern systems already use important security controls:
+
+- TLS;
+- encrypted disks;
+- cloud KMS;
+- HSMs;
+- secrets managers;
+- access control;
+- database encryption;
+- traditional DLP tools.
+
+Those controls are necessary, but sensitive data can still appear in plaintext
+inside application payloads, logs, queues, databases, backups, internal APIs, and
+temporary processing steps.
+
+Vectis answers a different question:
+
+> What if sensitive data stayed protected as a data object while it moves
+> through an application workflow?
+
+Advanced data protection — tokenization, format-preserving encryption, masking,
+encryption as a service — has traditionally shipped as expensive enterprise
+licensing. Vectis provides that capability as free, self-hosted, open source
+software, and leaves every other job (secrets, transport, key custody) to the
+tools that already do it well.
+
+Not sure which primitive solves your problem? See the how-to-choose table in
+[doc/UseCases.md](doc/UseCases.md).
 
 ## Philosophy
 
@@ -47,32 +75,10 @@ capabilities such as stronger clustering, HSM/KMS support, mTLS, or additional
 distributed storage should exist only when the operating environment requires
 them, not as product tiers or decorative complexity.
 
-## Why Vectis?
-
-Modern systems already use important security controls:
-
-- TLS;
-- encrypted disks;
-- cloud KMS;
-- HSMs;
-- secrets managers;
-- access control;
-- database encryption;
-- traditional DLP tools.
-
-Those controls are necessary, but sensitive data can still appear in plaintext
-inside application payloads, logs, queues, databases, backups, internal APIs, and
-temporary processing steps.
-
-Vectis explores a different question:
-
-> What if sensitive data stayed protected as a data object while it moves
-> through an application workflow?
-
 ## What Vectis Does Today
 
-Vectis currently provides an HTTP service and CLI for experimenting with
-cryptographic data protection primitives and workflows.
+Vectis currently provides an HTTP service and CLI for cryptographic data
+protection primitives and workflows.
 
 **Cryptography**
 
@@ -453,7 +459,7 @@ Vectis is not a replacement for:
 Vectis does not currently provide Merkle proofs, tamper-evident audit chains,
 SLH-DSA, Vault/KMS/HSM auto-unseal, or mTLS.
 
-Vectis is intended to complement existing security controls by exploring
+Vectis is intended to complement existing security controls by providing
 cryptographic protection for sensitive data workflows. It should work with
 other tools, not absorb their responsibilities.
 

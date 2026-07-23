@@ -27,7 +27,7 @@ This document complements:
 Vectis is an experimental **cryptographic data protection toolkit for sensitive
 data workflows**. TLS protects a network connection, but sensitive data often
 continues moving through applications, queues, services, storage, logs, jobs,
-and final systems after the TLS session ends. Vectis explores object-level
+and final systems after the TLS session ends. Vectis provides object-level
 protection: the data itself is encrypted, signed, routed, verified,
 re-encrypted, and governed after it leaves the transport layer.
 
