@@ -1,9 +1,16 @@
 use crate::core::crypto;
 use crate::error::DynError;
+use base64::{Engine as _, engine::general_purpose};
 use std::collections::HashSet;
 use std::net::{IpAddr, SocketAddr};
 use std::time::{SystemTime, UNIX_EPOCH};
 use zeroize::Zeroizing;
+
+pub struct DecodedBase64Envelope {
+    pub ciphertext: Zeroizing<Vec<u8>>,
+    pub nonce: Zeroizing<Vec<u8>>,
+    pub aad: Zeroizing<Vec<u8>>,
+}
 
 pub fn build_aad(fields: &[(&str, &str)]) -> String {
     fields
@@ -133,6 +140,113 @@ pub fn validate_encrypted_payload(
     }
 
     Ok(())
+}
+
+fn split_base64_standard_envelope_segments<'a>(
+    field: &str,
+    value: &'a str,
+    max_chars: usize,
+) -> Result<(&'a str, &'a str, &'a str), DynError> {
+    if value.is_empty() {
+        return Err(crate::error::invalid_input(format!(
+            "{field} must not be empty"
+        )));
+    }
+    if value.len() > max_chars {
+        return Err(crate::error::invalid_input(format!(
+            "{field} exceeds maximum allowed length: {max_chars}"
+        )));
+    }
+    if !value.is_ascii()
+        || value
+            .as_bytes()
+            .iter()
+            .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
+    {
+        return Err(crate::error::invalid_input(format!(
+            "{field} contains invalid base64"
+        )));
+    }
+
+    let mut parts = value.split('.');
+    let (Some(ciphertext), Some(nonce), Some(aad), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err(crate::error::invalid_input(format!(
+            "{field} must have ciphertext.nonce.aad base64 sections"
+        )));
+    };
+    if ciphertext.is_empty() || nonce.is_empty() || aad.is_empty() {
+        return Err(crate::error::invalid_input(format!(
+            "{field} must have ciphertext.nonce.aad base64 sections"
+        )));
+    }
+
+    Ok((ciphertext, nonce, aad))
+}
+
+pub fn validate_base64_standard_envelope_segments<'a>(
+    field: &str,
+    value: &'a str,
+    max_chars: usize,
+) -> Result<(&'a str, &'a str, &'a str), DynError> {
+    let (ciphertext, nonce, aad) =
+        split_base64_standard_envelope_segments(field, value, max_chars)?;
+
+    for part in [ciphertext, nonce, aad] {
+        general_purpose::STANDARD
+            .decode(part)
+            .map_err(|_| crate::error::invalid_input(format!("{field} contains invalid base64")))?;
+    }
+
+    Ok((ciphertext, nonce, aad))
+}
+
+pub fn decode_base64_standard_envelope(
+    field: &str,
+    value: &str,
+    max_chars: usize,
+    nonce_size_bytes: usize,
+) -> Result<DecodedBase64Envelope, DynError> {
+    let (ciphertext_b64, nonce_b64, aad_b64) =
+        split_base64_standard_envelope_segments(field, value, max_chars)?;
+    let ciphertext = Zeroizing::new(
+        general_purpose::STANDARD
+            .decode(ciphertext_b64)
+            .map_err(|_| crate::error::invalid_input(format!("{field} contains invalid base64")))?,
+    );
+    let nonce =
+        Zeroizing::new(general_purpose::STANDARD.decode(nonce_b64).map_err(|_| {
+            crate::error::invalid_input(format!("{field} contains invalid base64"))
+        })?);
+    let aad =
+        Zeroizing::new(general_purpose::STANDARD.decode(aad_b64).map_err(|_| {
+            crate::error::invalid_input(format!("{field} contains invalid base64"))
+        })?);
+
+    if ciphertext.len() < 16 {
+        return Err(crate::error::invalid_input(format!(
+            "{field}.ciphertext must include at least a 16-byte authentication tag"
+        )));
+    }
+    if nonce.len() != nonce_size_bytes {
+        return Err(crate::error::invalid_input(format!(
+            "{field}.nonce must be {nonce_size_bytes} bytes"
+        )));
+    }
+    let aad_text = std::str::from_utf8(&aad)
+        .map_err(|_| crate::error::invalid_input(format!("{field}.aad is not valid UTF-8")))?;
+    if aad_text.trim().is_empty() {
+        return Err(crate::error::invalid_input(format!(
+            "{field}.aad must not be empty"
+        )));
+    }
+
+    Ok(DecodedBase64Envelope {
+        ciphertext,
+        nonce,
+        aad,
+    })
 }
 
 pub fn validate_text_field(field: &str, value: &str) -> Result<(), DynError> {
@@ -359,6 +473,7 @@ pub fn read_hidden_text(prompt: &str) -> Result<Zeroizing<String>, DynError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::engine::general_purpose;
     use proptest::prelude::*;
 
     fn expected_hash_hex_len(algorithm: &str) -> usize {
@@ -390,6 +505,53 @@ mod tests {
                 "must reject {value:?}"
             );
         }
+    }
+
+    #[test]
+    fn decode_base64_standard_envelope_validates_shape_and_crypto_bounds() {
+        let envelope = format!(
+            "{}.{}.{}",
+            general_purpose::STANDARD.encode([7_u8; 16]),
+            general_purpose::STANDARD.encode([3_u8; 12]),
+            general_purpose::STANDARD.encode(b"type=test")
+        );
+        let decoded = decode_base64_standard_envelope("tokens.data", &envelope, 128, 12)
+            .expect("valid envelope must decode");
+        assert_eq!(&*decoded.ciphertext, &[7_u8; 16]);
+        assert_eq!(&*decoded.nonce, &[3_u8; 12]);
+        assert_eq!(&*decoded.aad, b"type=test");
+
+        for value in [
+            "one.two",
+            "one.two.three.four",
+            ".two.three",
+            "%%%%.AA==.YWFk",
+            "AA==.AA==.YWFk\n",
+        ] {
+            assert!(
+                decode_base64_standard_envelope("tokens.data", value, 128, 12).is_err(),
+                "must reject {value:?}"
+            );
+        }
+
+        let short_ciphertext = format!(
+            "{}.{}.{}",
+            general_purpose::STANDARD.encode([7_u8; 15]),
+            general_purpose::STANDARD.encode([3_u8; 12]),
+            general_purpose::STANDARD.encode(b"type=test")
+        );
+        assert!(
+            decode_base64_standard_envelope("tokens.data", &short_ciphertext, 128, 12).is_err()
+        );
+
+        let wrong_nonce = format!(
+            "{}.{}.{}",
+            general_purpose::STANDARD.encode([7_u8; 16]),
+            general_purpose::STANDARD.encode([3_u8; 11]),
+            general_purpose::STANDARD.encode(b"type=test")
+        );
+        assert!(decode_base64_standard_envelope("tokens.data", &wrong_nonce, 128, 12).is_err());
+        assert!(decode_base64_standard_envelope("tokens.data", &envelope, 4, 12).is_err());
     }
 
     #[test]

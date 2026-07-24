@@ -190,6 +190,10 @@ through the validator for that concept. Bounds are part of the type: maximum
 length, exact length, alphabet, delimiter policy, and whether Unicode is allowed
 must be explicit.
 
+Command-line parsers must reject option-like tokens where a positional value is
+expected. Never let `--unknown` become a malformed KID, name, or path and then
+report a misleading validation error.
+
 **In Vectis**: `core/validation.rs` (`validate_allowed_value`,
 `validate_hex_field`, `validate_host_port`, `validate_symmetric_key`,
 `validate_ref`, `validate_config_name`); statuses like
@@ -248,6 +252,24 @@ records that were already valid.
 legacy `build_aad` output for valid fields, while adding delimiter and
 over-limit rejection tests for invalid fields.
 
+### Rule 7D — Treat persisted data as untrusted input *(refines Rule 7)*
+
+**Applies**: always.
+
+**Why**: a database is durable, not inherently trustworthy. Corruption, manual
+edits, unsafe migrations, or a compromised writer can turn a stored row into
+attacker-controlled input long after the original request boundary has gone.
+
+**How**: validate data both before persistence and immediately after reading it,
+before deserializing it, decrypting it, or using it as cryptographic material.
+Use the same domain validators as at HTTP and config boundaries; bind SQL
+parameters regardless. Treat the database schema as a storage constraint, not
+as proof that a value has a safe shape.
+
+**In Vectis**: `StorageState` validates KIDs, token hash IDs, index digests, and
+encrypted Base64 envelopes on every read and write before ops-key or token
+decryption.
+
 ### Rule 8 — Lenient startup, strict reload
 
 **Applies**: networked services.
@@ -267,6 +289,39 @@ degraded state. Choose per project which failure is worse.
 
 **In Vectis**: `load_config_state` (lenient) vs `reload_config_state` (strict)
 in `core/config_file.rs`, both covered by unit tests.
+
+### Rule 8A — Report the state actually applied *(refines Rule 8)*
+
+**Applies**: networked services.
+
+**Why**: an operation that safely retains prior state can still mislead an
+operator if its response implies that newly requested state was applied.
+
+**How**: success responses report the effective state, not merely that the
+request was handled. When an operation intentionally keeps a known-good prior
+state, return an explicit warning and the counts or version of that prior
+state. Reserve unqualified success for requested state that was actually
+applied.
+
+**In Vectis**: config reload warns when `config.json` is newer than the signed
+content and reports the still-loaded profile counts rather than pretending the
+unsigned config was applied.
+
+### Rule 8B — Validate an artifact against the operation it prepares *(refines Rule 8)*
+
+**Applies**: networked services.
+
+**Why**: a syntactically valid artifact is not useful if the operation that
+consumes it will fail immediately because its referenced resources, keys, or
+storage state are unavailable.
+
+**How**: validation and publication steps must exercise the same prerequisites
+as the future operation. Keep the validation local where possible, but load the
+actual storage, keys, and derived state needed to prove that the artifact can
+be used. Do not write or sign the artifact when that validation fails.
+
+**In Vectis**: `config validate` loads local storage and keys; `config sign`
+runs the same strong validation before writing `config_sign.json`.
 
 ### Rule 9 — Bound config and file parsing before expensive work
 
@@ -404,6 +459,9 @@ double-apply an effect (double charge, duplicate record, replayed message).
   handlers safe under at-least-once;
 - distinguish "already done" from "failed" so a safe retry returns success, not
   a spurious error.
+- for batch APIs, require a client-supplied reference per item and preserve it
+  in the response; order is an implementation detail, while a unique reference
+  is the caller's durable correlation key.
 
 **In Vectis**: message identity and lifecycle guards make replays observable
 rather than silently reprocessed; object replay is an explicit, documented
@@ -466,6 +524,25 @@ object.
 peer keys are operator-approved; crypto algorithms come from profiles; callers
 select registered FPE/tokenization profiles rather than redefining cryptography
 in the request.
+
+### Rule 14B — Validate encoding before cryptographic processing *(refines Rule 14)*
+
+**Applies**: systems handling secrets or cryptography.
+
+**Why**: a decoder, verifier, or decryptor should not be the first component to
+discover malformed attacker-controlled bytes. Ambiguous separators, invalid
+encodings, oversized payloads, and empty segments expand parser and resource
+exposure before cryptographic authentication can reject them.
+
+**How**: first enforce size, character set, delimiter count, non-empty segments,
+and the exact encoding for every component. Then verify signatures or AEAD tags
+over the original authenticated bytes. Decoding a header or payload is not
+permission to interpret it: parse structured content only after authentication
+succeeds.
+
+**In Vectis**: compact hybrid signatures validate all four Base64URL segments
+before ML-DSA then EdDSA verification; stored AEAD envelopes validate their
+three Base64 segments, nonce size, tag minimum, and AAD UTF-8 before decrypt.
 
 ### Rule 15 — Treat secrets as radioactive
 
@@ -714,5 +791,5 @@ one cheaper:
 
 ## Revision
 
-Distilled from the Vectis codebase as of 2026-07-17. Update when a rule is
+Distilled from the Vectis codebase as of 2026-07-24. Update when a rule is
 learned, invalidated, or superseded by a better one.

@@ -1,4 +1,4 @@
-use crate::core::{crypto, validation};
+use crate::core::{config, crypto, validation};
 use crate::error::DynError;
 use crate::ops::keys;
 use base64::{Engine as _, engine::general_purpose};
@@ -405,33 +405,26 @@ pub fn decrypt_token_data(
     let cipher = crypto::symmetric_cipher(profile.cipher_algorithm()).ok_or_else(|| {
         crate::error::invalid_input("tokenization symmetric algorithm is not supported")
     })?;
-    let (ciphertext_b64, nonce_b64, aad_b64) = parse_token_data(data)?;
-    let ciphertext = Zeroizing::new(general_purpose::STANDARD.decode(ciphertext_b64)?);
-    let nonce = Zeroizing::new(general_purpose::STANDARD.decode(nonce_b64)?);
-    let aad_bytes = Zeroizing::new(general_purpose::STANDARD.decode(aad_b64)?);
-    let aad = std::str::from_utf8(&aad_bytes)
-        .map_err(|_| crate::error::invalid_input("token data aad is not valid UTF-8"))?;
+    let envelope = validation::decode_base64_standard_envelope(
+        "tokens.data",
+        data,
+        config::STORAGE_ENVELOPE_MAX_CHARS,
+        cipher.nonce_size_bytes,
+    )?;
+    let aad = std::str::from_utf8(&envelope.aad)
+        .map_err(|_| crate::error::invalid_input("tokens.data.aad is not valid UTF-8"))?;
     let expected_aad = token_data_aad(profile, hashid)?;
     if aad != expected_aad {
         return Err(crate::error::invalid_input(
             "token data aad does not match request",
         ));
     }
-    validation::validate_encrypted_payload(
-        "token.data.ciphertext",
-        &hex::encode(&*ciphertext),
-        "token.data.nonce",
-        &hex::encode(&*nonce),
-        "token.data.aad",
-        aad,
-        cipher.nonce_size_bytes,
-    )?;
     let mut plaintext_bytes = Zeroizing::new(crypto::decrypt_symmetric(
         cipher.algorithm,
-        &ciphertext,
+        &envelope.ciphertext,
         profile.data_key(),
-        &nonce,
-        aad.as_bytes(),
+        &envelope.nonce,
+        &envelope.aad,
     )?);
     let plaintext = String::from_utf8(std::mem::take(&mut *plaintext_bytes)).map_err(|err| {
         let mut bytes = err.into_bytes();
@@ -459,26 +452,6 @@ fn token_data_aad(profile: &TokenizationProfile, hashid: &str) -> Result<String,
         ("hashid", hashid),
         ("cipher", profile.cipher_algorithm()),
     ])
-}
-
-fn parse_token_data(data: &str) -> Result<(&str, &str, &str), DynError> {
-    let mut parts = data.split('.');
-    let ciphertext = parts.next().ok_or_else(|| {
-        crate::error::invalid_input("token data must have ciphertext.nonce.aad base64 sections")
-    })?;
-    let nonce = parts.next().ok_or_else(|| {
-        crate::error::invalid_input("token data must have ciphertext.nonce.aad base64 sections")
-    })?;
-    let aad = parts.next().ok_or_else(|| {
-        crate::error::invalid_input("token data must have ciphertext.nonce.aad base64 sections")
-    })?;
-    if parts.next().is_some() {
-        return Err(crate::error::invalid_input(
-            "token data must have ciphertext.nonce.aad base64 sections",
-        ));
-    }
-
-    Ok((ciphertext, nonce, aad))
 }
 
 #[cfg(test)]

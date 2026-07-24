@@ -591,8 +591,12 @@ fn create_key_id(keys_b64: &str) -> Result<String, DynError> {
 
 fn validate_kid_matches_keys(kid: &str, keys: &str) -> Result<(), DynError> {
     KeyId::parse(kid)?;
-    let parts = split_internal_payload("keys", keys)?;
-    let expected_kid = create_key_id(parts[0])?;
+    let (ciphertext_b64, _, _) = validation::validate_base64_standard_envelope_segments(
+        "opskeys.keys",
+        keys,
+        config::STORAGE_ENVELOPE_MAX_CHARS,
+    )?;
+    let expected_kid = create_key_id(ciphertext_b64)?;
 
     if kid != expected_kid {
         return Err(crate::error::invalid_input(
@@ -801,27 +805,20 @@ fn decrypt_ops_keys_payload(
     internal_keys: &InternalDerivedKeysState,
     keys: &str,
 ) -> Result<DecryptedOpsKeys, DynError> {
-    let parts = split_internal_payload("keys", keys)?;
-
-    let ciphertext = general_purpose::STANDARD.decode(parts[0])?;
-    let nonce = Zeroizing::new(general_purpose::STANDARD.decode(parts[1])?);
-    let aad = general_purpose::STANDARD.decode(parts[2])?;
-    let aad_text = String::from_utf8(aad.clone())?;
-    validation::validate_encrypted_payload(
-        "keys ciphertext",
-        &hex::encode(&ciphertext),
-        "keys nonce",
-        &hex::encode(&*nonce),
-        "keys aad",
-        &aad_text,
+    let envelope = validation::decode_base64_standard_envelope(
+        "opskeys.keys",
+        keys,
+        config::STORAGE_ENVELOPE_MAX_CHARS,
         config::INTERNAL_KEYS_NONCE_SIZE_BYTES,
     )?;
+    let aad_text = String::from_utf8(envelope.aad.to_vec())
+        .map_err(|_| crate::error::invalid_input("opskeys.keys.aad is not valid UTF-8"))?;
     let plaintext_bytes = Zeroizing::new(crypto::decrypt_symmetric(
         config::INTERNAL_KEYS_CIPHER,
-        &ciphertext,
+        &envelope.ciphertext,
         internal_keys.db_key(),
-        &nonce,
-        &aad,
+        &envelope.nonce,
+        &envelope.aad,
     )?);
     let plaintext = zeroizing_string_from_utf8(plaintext_bytes)?;
     let output = serde_json::from_str(&plaintext)?;
@@ -836,27 +833,20 @@ fn decrypt_ops_key_properties_payload(
     internal_keys: &InternalDerivedKeysState,
     properties: &str,
 ) -> Result<DecryptedOpsKeyProperties, DynError> {
-    let parts = split_internal_payload("properties", properties)?;
-
-    let ciphertext = general_purpose::STANDARD.decode(parts[0])?;
-    let nonce = Zeroizing::new(general_purpose::STANDARD.decode(parts[1])?);
-    let aad = general_purpose::STANDARD.decode(parts[2])?;
-    let aad_text = String::from_utf8(aad.clone())?;
-    validation::validate_encrypted_payload(
-        "properties ciphertext",
-        &hex::encode(&ciphertext),
-        "properties nonce",
-        &hex::encode(&*nonce),
-        "properties aad",
-        &aad_text,
+    let envelope = validation::decode_base64_standard_envelope(
+        "opskeys.properties",
+        properties,
+        config::STORAGE_ENVELOPE_MAX_CHARS,
         config::INTERNAL_KEYS_NONCE_SIZE_BYTES,
     )?;
+    let aad_text = String::from_utf8(envelope.aad.to_vec())
+        .map_err(|_| crate::error::invalid_input("opskeys.properties.aad is not valid UTF-8"))?;
     let plaintext_bytes = Zeroizing::new(crypto::decrypt_symmetric(
         config::INTERNAL_KEYS_CIPHER,
-        &ciphertext,
+        &envelope.ciphertext,
         internal_keys.properties_key(),
-        &nonce,
-        &aad,
+        &envelope.nonce,
+        &envelope.aad,
     )?);
     let plaintext = zeroizing_string_from_utf8(plaintext_bytes)?;
     let output = serde_json::from_str(&plaintext)?;
@@ -865,17 +855,6 @@ fn decrypt_ops_key_properties_payload(
         aad: aad_text,
         output,
     })
-}
-
-fn split_internal_payload<'a>(field: &str, value: &'a str) -> Result<Vec<&'a str>, DynError> {
-    let parts = value.split('.').collect::<Vec<_>>();
-    if parts.len() != 3 {
-        return Err(crate::error::invalid_input(format!(
-            "{field} must have ciphertext.nonce.aad base64 sections"
-        )));
-    }
-
-    Ok(parts)
 }
 
 fn zeroizing_string_from_utf8(
@@ -1804,20 +1783,40 @@ mod tests {
 
         #[test]
         fn split_internal_payload_requires_exactly_three_sections(
-            first in "[A-Za-z0-9+/=]{1,16}",
-            second in "[A-Za-z0-9+/=]{1,16}",
-            third in "[A-Za-z0-9+/=]{1,16}",
-            extra in "[A-Za-z0-9+/=]{1,16}"
+            first in "[A-Za-z0-9_-]{1,16}",
+            second in "[A-Za-z0-9_-]{1,16}",
+            third in "[A-Za-z0-9_-]{1,16}",
+            extra in "[A-Za-z0-9_-]{1,16}"
         ) {
+            let first = general_purpose::STANDARD.encode(first.as_bytes());
+            let second = general_purpose::STANDARD.encode(second.as_bytes());
+            let third = general_purpose::STANDARD.encode(third.as_bytes());
+            let extra = general_purpose::STANDARD.encode(extra.as_bytes());
             let valid = format!("{first}.{second}.{third}");
             let two_sections = format!("{first}.{second}");
             let four_sections = format!("{first}.{second}.{third}.{extra}");
 
-            prop_assert_eq!(split_internal_payload("payload", &valid).unwrap().len(), 3);
+            prop_assert!(validation::validate_base64_standard_envelope_segments(
+                "payload",
+                &valid,
+                config::STORAGE_ENVELOPE_MAX_CHARS,
+            ).is_ok());
 
-            prop_assert!(split_internal_payload("payload", &first).is_err());
-            prop_assert!(split_internal_payload("payload", &two_sections).is_err());
-            prop_assert!(split_internal_payload("payload", &four_sections).is_err());
+            prop_assert!(validation::validate_base64_standard_envelope_segments(
+                "payload",
+                &first,
+                config::STORAGE_ENVELOPE_MAX_CHARS,
+            ).is_err());
+            prop_assert!(validation::validate_base64_standard_envelope_segments(
+                "payload",
+                &two_sections,
+                config::STORAGE_ENVELOPE_MAX_CHARS,
+            ).is_err());
+            prop_assert!(validation::validate_base64_standard_envelope_segments(
+                "payload",
+                &four_sections,
+                config::STORAGE_ENVELOPE_MAX_CHARS,
+            ).is_err());
         }
 
         #[test]
