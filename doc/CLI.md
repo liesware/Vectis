@@ -493,6 +493,10 @@ vectis sign <kid> --json '{"message_hash":{"alg":"SHA-256","hex":"<64 hex chars>
 vectis sign verify --file token.json
 ```
 
+`vectis sign <kid>` returns `{ "kid": "...", "signature": "..." }`.
+That same JSON can be passed unchanged to `vectis sign verify`; the compact
+signature has four unpadded Base64URL segments.
+
 ### `vectis message`
 
 Sends, receives, encrypts, or decrypts messages.

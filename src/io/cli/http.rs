@@ -7,13 +7,16 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 use std::fs;
 use std::future::Future;
+use std::io::Write;
 use std::path::Path;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 const DEFAULT_API_URL: &str = "http://127.0.0.1:3000";
 const DEFAULT_TIMEOUT_SECONDS: u64 = 30;
 const PROGRAM_NAME: &str = "vectis";
+static ATOMIC_WRITE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 type CommandFuture = Pin<Box<dyn Future<Output = Result<(), DynError>>>>;
 type CommandHandler = fn(Vec<String>, OutputFormat) -> CommandFuture;
@@ -495,7 +498,7 @@ async fn run_config_sign(output: OutputFormat) -> Result<(), DynError> {
         &config.config_sign_path,
     );
     let token_json = serde_json::to_string_pretty(&token)?;
-    fs::write(&config_sign_path, token_json)?;
+    write_file_atomically(&config_sign_path, &token_json)?;
 
     print_response(
         &serde_json::to_string(&json!({
@@ -515,6 +518,40 @@ async fn run_config_sign(output: OutputFormat) -> Result<(), DynError> {
         }))?,
         output,
     )
+}
+
+pub(super) fn write_file_atomically(path: &Path, content: &str) -> Result<(), DynError> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| crate::error::invalid_input("config file path must name a file"))?;
+    let suffix = ATOMIC_WRITE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temporary_path = parent.join(format!(
+        ".{}.{}.{}.tmp",
+        file_name.to_string_lossy(),
+        std::process::id(),
+        suffix,
+    ));
+    let write_result = (|| -> Result<(), DynError> {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary_path)?;
+        file.write_all(content.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&temporary_path, path)?;
+        fs::File::open(parent)?.sync_all()?;
+        Ok(())
+    })();
+
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temporary_path);
+    }
+    write_result
 }
 
 fn run_config_list(output: OutputFormat) -> Result<(), DynError> {
@@ -1328,6 +1365,32 @@ mod tests {
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn config_signature_writer_replaces_files_atomically() {
+        let directory = std::env::temp_dir().join(format!(
+            "vectis-config-signature-{}-{}",
+            std::process::id(),
+            ATOMIC_WRITE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed),
+        ));
+        std::fs::create_dir_all(&directory).expect("temporary directory must be created");
+        let signature_path = directory.join("config_sign.json");
+
+        write_file_atomically(&signature_path, "first")
+            .expect("first signature write must succeed");
+        write_file_atomically(&signature_path, "second")
+            .expect("replacement signature write must succeed");
+        assert_eq!(
+            std::fs::read_to_string(&signature_path).expect("signature file must exist"),
+            "second"
+        );
+
+        let missing_parent_target = directory.join("missing").join("config_sign.json");
+        assert!(write_file_atomically(&missing_parent_target, "partial").is_err());
+        assert!(!missing_parent_target.exists());
+
+        std::fs::remove_dir_all(directory).expect("temporary directory must be removed");
     }
 
     #[test]

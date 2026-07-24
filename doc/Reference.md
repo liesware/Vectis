@@ -365,6 +365,8 @@ The content is canonicalized before signing. The signature is stored in
 
 Vectis rejects config files above 8 MiB and config signature files above 1 MiB
 before parsing, canonicalizing, signing, or verifying them.
+The compact signature inside `config_sign.json` is additionally limited to 64 KiB
+and uses `{ "signature": "header.payload.eddsa.ml-dsa" }`.
 
 The unified config exists to keep policy changes explicit, reviewable, and
 protected against local tampering.
@@ -636,12 +638,17 @@ Vectis validates that:
 - the hex value is valid;
 - the length matches the algorithm.
 
-The output separates:
+The output is a compact reusable token:
 
-- `payload`: canonical signed content;
-- `signatures`: EdDSA and ML-DSA signatures.
+```json
+{ "kid": "...", "signature": "header.payload.eddsa.ml-dsa" }
+```
 
-The payload includes:
+Each segment is unpadded Base64URL. The canonical header is
+`{ "version": "vectis-signature-v1" }`; both signatures cover the exact
+ASCII bytes `header_b64.payload_b64`.
+
+The authenticated payload includes:
 
 - protocol version;
 - type `vectis-sign`;
@@ -651,8 +658,10 @@ The payload includes:
 - serial;
 - message hash.
 
-Signatures cover canonical JSON for the payload. JSON field order in received
-input should not matter, because verification canonicalizes the signed payload.
+The payload is canonical JSON. Verification validates all compact segments,
+uses the outer `kid` to resolve local or trusted peer keys, verifies ML-DSA
+before EdDSA, and only then parses the payload. The authenticated payload KID
+must match the outer KID.
 
 `POST /sign/verification` verifies the token. It can verify local KIDs and, when
 configured, remote KIDs from trusted `remote_routes.public_keys`.

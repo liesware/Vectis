@@ -366,24 +366,24 @@ paths:
               $ref: "#/components/schemas/SignInput"
       responses:
         "200":
-          description: Hybrid timestamp token
+          description: Compact hybrid signature token
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/TimestampToken"
+                $ref: "#/components/schemas/CompactSignatureToken"
         default:
           $ref: "#/components/responses/Error"
 
   /sign/verification:
     post:
       tags: [Signatures]
-      summary: Verify a hybrid timestamp token
+      summary: Verify a compact hybrid signature token
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/TimestampToken"
+              $ref: "#/components/schemas/CompactSignatureToken"
       responses:
         "200":
           description: Signature verification result
@@ -1726,35 +1726,17 @@ components:
           type: string
           pattern: "^[0-9a-fA-F]{128}$"
 
-    TimestampToken:
+    CompactSignatureToken:
       type: object
-      required: [version, payload, signatures]
+      additionalProperties: false
+      required: [kid, signature]
       properties:
-        version:
-          const: v1
-          description: Envelope version for dispatch; must equal payload.version.
-        payload:
-          type: object
-          required: [version, type, created_at, info, kid, serial, message_hash]
-          properties:
-            version:
-              const: v1
-              description: Signed payload version; integrity-protected by the signatures.
-            type:
-              const: vectis-sign
-            created_at:
-              $ref: "#/components/schemas/Timestamp"
-            info:
-              $ref: "#/components/schemas/TextField"
-            kid:
-              $ref: "#/components/schemas/Kid"
-            serial:
-              type: string
-              pattern: "^[0-9a-fA-F]{64}$"
-            message_hash:
-              $ref: "#/components/schemas/MessageHash"
-        signatures:
-          $ref: "#/components/schemas/DualSignatures"
+        kid:
+          $ref: "#/components/schemas/Kid"
+        signature:
+          type: string
+          maxLength: 65536
+          description: "Four unpadded Base64URL segments: header.payload.eddsa.ml-dsa."
 
     DualSignatures:
       type: object
@@ -1783,7 +1765,7 @@ components:
           required: [eddsa, ml-dsa]
           properties:
             eddsa:
-              enum: [ok, fail]
+              enum: [ok, fail, not_checked]
             ml-dsa:
               enum: [ok, fail]
         valid:

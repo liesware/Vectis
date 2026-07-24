@@ -1593,12 +1593,11 @@ def self_check():
             failures.append(label)
 
     token = {
-        "version": "v1",
-        "payload": {"kid": "a" * 64},
-        "signatures": {"eddsa": {"sig": "aa"}, "ml-dsa": {"sig": "bb"}},
+        "kid": "a" * 64,
+        "signature": "header.payload.eddsa.ml-dsa",
     }
     token_mut = json.loads(json.dumps(token))
-    token_mut["payload"]["kid"] = "b" * 64
+    token_mut["kid"] = "b" * 64
     expect(token_semantic(token_mut, token, 200, '{"valid":"ok"}'), "token flags bypass")
     expect(not token_semantic(token, token, 200, '{"valid":"ok"}'), "token ignores identity")
     expect(not token_semantic(token_mut, token, 200, '{"valid":"fail"}'), "token ignores valid=fail")

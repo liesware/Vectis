@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import argparse
 import atexit
+import base64
 import hashlib
+import json
 import sys
 from test_config import require_apikey
 from http_support import (
@@ -629,18 +631,18 @@ def sign_key(client, key_id, hash_alg, message_hash_hex):
         }
     }
     token = client.post(f"/sign/{key_id}", body, auth=True)
-    require(token.get("version") == "v1", "sign.version must be v1")
+    require(token.get("kid") == key_id, "sign.kid mismatch")
+    signature = token.get("signature")
+    require(isinstance(signature, str), "sign.signature must be a string")
+    parts = signature.split(".")
+    require(len(parts) == 4 and all(parts), "sign.signature must have four non-empty segments")
 
-    payload = token.get("payload")
-    require(isinstance(payload, dict), "sign.payload must be an object")
+    payload_segment = parts[1]
+    payload = json.loads(
+        base64.urlsafe_b64decode(payload_segment + "=" * (-len(payload_segment) % 4))
+    )
     require(payload.get("kid") == key_id, "sign.payload.kid mismatch")
     require(payload.get("message_hash") == body["message_hash"], "sign.payload.message_hash mismatch")
-
-    signatures = token.get("signatures")
-    require(isinstance(signatures, dict), "sign.signatures must be an object")
-    require_hex(signatures.get("eddsa", {}).get("sig"), "sign.signatures.eddsa.sig")
-    ml_dsa_signature = signatures.get("ml-dsa") or signatures.get("ml_dsa") or {}
-    require_hex(ml_dsa_signature.get("sig"), "sign.signatures.ml-dsa.sig")
 
     return token
 

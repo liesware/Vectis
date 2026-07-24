@@ -313,7 +313,14 @@ def create_valid_token(client, key_id):
         auth=True,
     )
     require_status("create valid token", status, 200)
-    require(token.get("version") == "v1", "valid token must include version v1")
+    require(token.get("kid") == key_id, "valid token must include the signing kid")
+    signature = token.get("signature")
+    require(isinstance(signature, str), "valid token must include a signature string")
+    segments = signature.split(".")
+    require(
+        len(segments) == 4 and all(segments),
+        "valid token signature must have four non-empty segments",
+    )
     return token
 
 
@@ -3412,66 +3419,71 @@ def main():
     ):
         run_case(rows, name, func)
 
-    def verify_missing_payload():
+    def verify_missing_signature():
         bad = copy.deepcopy(token)
-        bad.pop("payload", None)
+        bad.pop("signature", None)
         status, _ = client.post("/sign/verification", bad)
-        require_status("POST /sign/verification missing payload", status, 400)
+        require_status("POST /sign/verification missing signature", status, 400)
 
-    def verify_invalid_version():
+    def verify_missing_kid():
         bad = copy.deepcopy(token)
-        bad["version"] = "v2"
+        bad.pop("kid", None)
         status, _ = client.post("/sign/verification", bad)
-        require_status("POST /sign/verification invalid version", status, 400)
+        require_status("POST /sign/verification missing kid", status, 400)
 
-    def verify_invalid_type():
+    def verify_unknown_field():
         bad = copy.deepcopy(token)
-        bad["payload"]["type"] = "bad"
-        status, _ = client.post("/sign/verification", bad)
-        require_status("POST /sign/verification invalid type", status, 400)
+        bad["sorpresa"] = True
+        status, body = client.post("/sign/verification", bad)
+        require_status("POST /sign/verification unknown field", status, 400)
+        require_unknown_field_error("POST /sign/verification unknown field", body, "sorpresa")
 
-    def verify_tampered_message_hash():
+    def tampered_signature(index):
         bad = copy.deepcopy(token)
-        bad["payload"]["message_hash"]["hex"] = hashlib.sha256(b"tampered").hexdigest()
+        segments = bad["signature"].split(".")
+        first = segments[index][0]
+        segments[index] = ("A" if first != "A" else "B") + segments[index][1:]
+        bad["signature"] = ".".join(segments)
         status, response = client.post("/sign/verification", bad)
-        require_status("POST /sign/verification tampered hash", status, 200)
-        require(response.get("valid") == "fail", "tampered hash must fail verification")
+        return status, response
 
     def verify_tampered_kid():
         bad = copy.deepcopy(token)
-        bad["payload"]["kid"] = "00" * 32
+        bad["kid"] = "00" * 32
         status, _ = client.post("/sign/verification", bad)
         require_status("POST /sign/verification tampered kid", status, 404)
 
-    def verify_tampered_info():
-        bad = copy.deepcopy(token)
-        bad["payload"]["info"] = "tampered"
-        status, _ = client.post("/sign/verification", bad)
-        require_status("POST /sign/verification tampered info", status, 400)
-
     def verify_tampered_eddsa_signature():
-        bad = copy.deepcopy(token)
-        bad["signatures"]["eddsa"]["sig"] = tamper_hex(bad["signatures"]["eddsa"]["sig"])
-        status, response = client.post("/sign/verification", bad)
+        status, response = tampered_signature(2)
         require_status("POST /sign/verification tampered eddsa signature", status, 200)
         require(response.get("valid") == "fail", "tampered eddsa signature must fail verification")
+        require(response.get("status", {}).get("ml-dsa") == "ok", "ML-DSA must be checked first")
 
     def verify_tampered_ml_dsa_signature():
-        bad = copy.deepcopy(token)
-        signature = ml_dsa_signature_block(bad)
-        require(isinstance(signature, dict), "token must include ml-dsa signature")
-        signature["sig"] = tamper_hex(signature["sig"])
-        status, response = client.post("/sign/verification", bad)
+        status, response = tampered_signature(3)
         require_status("POST /sign/verification tampered ml-dsa signature", status, 200)
         require(response.get("valid") == "fail", "tampered ml-dsa signature must fail verification")
+        require(response.get("status", {}).get("eddsa") == "not_checked", "EdDSA must not run after ML-DSA failure")
+
+    def verify_tampered_header_segment():
+        status, response = tampered_signature(0)
+        require_status("POST /sign/verification tampered header segment", status, 200)
+        require(response.get("valid") == "fail", "tampered header must fail verification")
+        require(response.get("status", {}).get("ml-dsa") == "fail", "tampered header must break the signed input")
+
+    def verify_tampered_payload_segment():
+        status, response = tampered_signature(1)
+        require_status("POST /sign/verification tampered payload segment", status, 200)
+        require(response.get("valid") == "fail", "tampered payload must fail verification")
+        require(response.get("status", {}).get("ml-dsa") == "fail", "tampered payload must break the signed input")
 
     for name, func in (
-        ("POST /sign/verification missing payload", verify_missing_payload),
-        ("POST /sign/verification invalid version", verify_invalid_version),
-        ("POST /sign/verification invalid type", verify_invalid_type),
-        ("POST /sign/verification tampered hash", verify_tampered_message_hash),
+        ("POST /sign/verification missing signature", verify_missing_signature),
+        ("POST /sign/verification missing kid", verify_missing_kid),
+        ("POST /sign/verification unknown field", verify_unknown_field),
         ("POST /sign/verification tampered kid", verify_tampered_kid),
-        ("POST /sign/verification tampered info", verify_tampered_info),
+        ("POST /sign/verification tampered header segment", verify_tampered_header_segment),
+        ("POST /sign/verification tampered payload segment", verify_tampered_payload_segment),
         ("POST /sign/verification tampered eddsa signature", verify_tampered_eddsa_signature),
         ("POST /sign/verification tampered ml-dsa signature", verify_tampered_ml_dsa_signature),
     ):

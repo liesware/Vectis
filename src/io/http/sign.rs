@@ -13,7 +13,7 @@ pub async fn sign_endpoint(
     Path(id): Path<String>,
     headers: HeaderMap,
     JsonBody(request): JsonBody,
-) -> Result<Json<ops::sign::TimestampToken>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<ops::sign::CompactSignatureToken>, (StatusCode, Json<ErrorResponse>)> {
     let client = state.authorize_api_key(&headers).await?;
     state
         .require_permission_for(&client, Some(&id), "sign", Some("sign.denied"))
@@ -88,20 +88,14 @@ pub async fn sign_endpoint(
         Ok(response) => {
             info!(
                 endpoint = "/sign/{kid}",
-                kid = %response.kid(),
-                created_at = %response.payload.created_at,
-                info = %response.payload.info,
-                serial = %response.payload.serial,
-                eddsa_alg = %response.signatures.eddsa.alg,
-                eddsa_sig_len = response.signatures.eddsa.sig.len(),
-                ml_dsa_alg = %response.signatures.ml_dsa.alg,
-                ml_dsa_sig_len = response.signatures.ml_dsa.sig.len(),
+                kid = %response.kid,
+                signature_len = response.signature.len(),
                 "sign response ready"
             );
             audit::operation_success(
                 "sign.success",
                 Some(&actor),
-                Some(response.kid()),
+                Some(&response.kid),
                 None,
                 Some("sign"),
             );
@@ -129,34 +123,16 @@ pub async fn sign_verification_endpoint(
     State(state): State<HttpState>,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::sign::VerificationOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let request = ops::sign::parse_timestamp_token(request).map_err(|err| {
+    let request = ops::sign::parse_compact_signature_token(request).map_err(|err| {
         audit::operation_failed("verify.failed", None, None, None, None, &err.to_string());
         metrics::record_crypto_operation("verify", "failed");
         error_response(err.as_ref())
     })?;
-    ops::sign::validate_timestamp_token(&request).map_err(|err| {
-        audit::operation_failed(
-            "verify.failed",
-            None,
-            Some(request.kid()),
-            None,
-            None,
-            &err.to_string(),
-        );
-        metrics::record_crypto_operation("verify", "failed");
-        error_response(err.as_ref())
-    })?;
-
-    let kid = request.kid().to_string();
+    let kid = request.kid.clone();
     info!(
         endpoint = "/sign/verification",
         kid = %kid,
-        hash_alg = %request.payload.message_hash.alg,
-        hash_hex_len = request.payload.message_hash.hex.len(),
-        eddsa_alg = %request.signatures.eddsa.alg,
-        eddsa_sig_len = request.signatures.eddsa.sig.len(),
-        ml_dsa_alg = %request.signatures.ml_dsa.alg,
-        ml_dsa_sig_len = request.signatures.ml_dsa.sig.len(),
+        signature_len = request.signature.len(),
         "sign verification request accepted"
     );
 
@@ -168,7 +144,7 @@ pub async fn sign_verification_endpoint(
             match loaded_key {
                 Ok(loaded_key) => {
                     blocking::spawn_blocking_crypto(move || {
-                        ops::sign::verify_timestamp_with_loaded_key(&loaded_key, &request)
+                        ops::sign::verify_compact_timestamp_with_loaded_key(&loaded_key, &request)
                     })
                     .await
                 }
@@ -178,7 +154,7 @@ pub async fn sign_verification_endpoint(
         Err(local_err) => match state.remote_peer_public_keys(&kid).await {
             Some(peer) => {
                 blocking::spawn_blocking_crypto(move || {
-                    ops::sign::verify_timestamp_with_peer_keys(&request, &peer)
+                    ops::sign::verify_compact_timestamp_with_peer_keys(&request, &peer)
                 })
                 .await
             }

@@ -370,10 +370,13 @@ The signed config contains:
 - MAC profiles.
 - masking profiles.
 
-The signing flow uses canonical JSON. Vectis signs the canonical config hash
-inside a timestamp token using init keys. The signature is not bound to the local
-filesystem path; a `config.json` and `config_sign.json` pair can be moved
-together between host, container, and Kubernetes-mounted paths.
+The signing flow uses canonical JSON. Vectis signs the canonical config hash in
+a compact hybrid signature using init keys. `config_sign.json` wraps the four
+base64url-without-padding segments as `{ "signature": "header.payload.eddsa.ml-dsa" }`.
+ML-DSA and EdDSA authenticate the raw encoded `header.payload` before either
+segment is parsed. The signature is not bound to the local filesystem path; a
+`config.json` and `config_sign.json` pair can be moved together between host,
+container, and Kubernetes-mounted paths.
 
 Startup behavior:
 

@@ -1,12 +1,13 @@
 use crate::core::remote_routes::PeerPublicKeys;
 use crate::core::{canonical, config, config_file, crypto, protocol, validation};
 use crate::error::DynError;
-use crate::ops::contracts::{
-    MessageHash, SignatureBlock, TimestampPayload, TimestampSignatures, VerificationStatus,
-};
+use crate::ops::contracts::{MessageHash, TimestampPayload, VerificationStatus};
 use crate::ops::init::ValidatedInitState;
 use crate::ops::key_material::VariantDerKeyPair;
-use crate::ops::keys::{self, KeysDbState, LoadedOpsKey};
+use crate::ops::keys::{self, LoadedOpsKey};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
 use tracing::{debug, info};
@@ -17,6 +18,48 @@ const TIMESTAMP_TOKEN_TYPE: &str = "vectis-sign";
 const CONFIG_TOKEN_TYPE: &str = "vectis-config";
 const INIT_KEYS_KID: &str = "init-keys";
 const PAYLOAD_SERIAL_RANDOM_BYTES: usize = 32;
+const COMPACT_SIGNATURE_VERSION: &str = "vectis-signature-v1";
+const COMPACT_SIGNATURE_SEGMENTS: usize = 4;
+const COMPACT_SIGNATURE_MAX_CHARS: usize = 64 * 1024;
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompactSignatureFile {
+    pub signature: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompactSignatureToken {
+    pub kid: String,
+    pub signature: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CompactSignatureHeader {
+    version: String,
+}
+
+#[derive(Debug)]
+struct CompactSignatureParts<'a> {
+    header: &'a str,
+    payload: &'a str,
+    header_bytes: Vec<u8>,
+    payload_bytes: Vec<u8>,
+    eddsa_signature_bytes: Vec<u8>,
+    ml_dsa_signature_bytes: Vec<u8>,
+}
+
+enum CompactSignatureFailure {
+    MlDsaFailed,
+    EdDsaFailed,
+}
+
+enum CompactSignatureVerification<T> {
+    Valid(T),
+    Invalid(CompactSignatureFailure),
+}
 
 pub struct ValidatedSignInput {
     input: SignInput,
@@ -25,7 +68,7 @@ pub struct ValidatedSignInput {
 fn sign_timestamp(
     loaded_key: &LoadedOpsKey,
     input: ValidatedSignInput,
-) -> Result<TimestampToken, DynError> {
+) -> Result<CompactSignatureToken, DynError> {
     keys::require_lifecycle_for_new_use(loaded_key)?;
     debug!(
         kid = %loaded_key.id(),
@@ -58,7 +101,7 @@ fn sign_timestamp(
         ml_dsa_alg = %ml_dsa.variant(),
         "timestamp signing keys selected"
     );
-    let signatures = sign_hybrid_payload(&mut rng, &payload, eddsa, ml_dsa)?;
+    let signature = sign_compact_hybrid_payload(&mut rng, &payload, eddsa, ml_dsa)?;
     info!(
         kid = %loaded_key.id(),
         hash_alg = %payload.message_hash.alg,
@@ -69,10 +112,9 @@ fn sign_timestamp(
         "timestamp token signed"
     );
 
-    Ok(TimestampToken {
-        version: protocol::PROTOCOL_VERSION_V1.to_string(),
-        payload,
-        signatures,
+    Ok(CompactSignatureToken {
+        kid: loaded_key.id().to_string(),
+        signature,
     })
 }
 
@@ -80,7 +122,7 @@ pub fn sign_config_file(
     init_state: &ValidatedInitState,
     _config_path: &Path,
     config_content: &str,
-) -> Result<TimestampToken, DynError> {
+) -> Result<CompactSignatureFile, DynError> {
     let canonical_config = config_file::canonical_config_json(config_content)?;
     let message_hash = MessageHash {
         alg: config::INTERNAL_KEYS_HASH.to_string(),
@@ -101,18 +143,14 @@ pub fn sign_config_file(
         kid: String::from(INIT_KEYS_KID),
         message_hash,
     };
-    let signatures = sign_hybrid_payload(
+    let signature = sign_compact_hybrid_payload(
         &mut rng,
         &payload,
         init_state.init_keys.keys().eddsa(),
         init_state.init_keys.keys().ml_dsa(),
     )?;
 
-    Ok(TimestampToken {
-        version: protocol::PROTOCOL_VERSION_V1.to_string(),
-        payload,
-        signatures,
-    })
+    Ok(CompactSignatureFile { signature })
 }
 
 pub fn verify_config_file_signature(
@@ -121,26 +159,23 @@ pub fn verify_config_file_signature(
     config_content: &str,
     signature_content: &str,
 ) -> Result<(), DynError> {
-    let token = parse_timestamp_token(serde_json::from_str(signature_content).map_err(|err| {
-        crate::error::invalid_input(format!("config signature must be valid JSON: {err}"))
-    })?)?;
-    validate_signed_payload_token(&token, CONFIG_TOKEN_TYPE, INIT_KEYS_KID)?;
-    let expected_info = config_token_info()?;
-    if token.payload.info != expected_info {
-        return Err(crate::error::invalid_input(
-            "config signature payload.info does not match config token",
-        ));
-    }
-
-    let status = verify_hybrid_payload(
-        &token.payload,
-        &token.signatures,
+    let signature_file: CompactSignatureFile =
+        serde_json::from_str(signature_content).map_err(|_| {
+            crate::error::invalid_input(
+                "unsupported config signature format; run 'vectis config sign'",
+            )
+        })?;
+    let payload: TimestampPayload = verify_compact_hybrid_signature(
+        &signature_file.signature,
         init_state.init_keys.keys().eddsa(),
         init_state.init_keys.keys().ml_dsa(),
-    )?;
-    if status.eddsa != "ok" || status.ml_dsa != "ok" {
-        return Err(crate::error::invalid_signature(
-            "config signature verification failed",
+    )
+    .map_err(|_| crate::error::invalid_signature("config signature verification failed"))?;
+    validate_config_signature_payload(&payload)?;
+    let expected_info = config_token_info()?;
+    if payload.info != expected_info {
+        return Err(crate::error::invalid_input(
+            "config signature payload.info does not match config token",
         ));
     }
 
@@ -149,8 +184,8 @@ pub fn verify_config_file_signature(
         config::INTERNAL_KEYS_HASH,
         &canonical_config,
     )?);
-    if token.payload.message_hash.alg != config::INTERNAL_KEYS_HASH
-        || token.payload.message_hash.hex != expected_hash
+    if payload.message_hash.alg != config::INTERNAL_KEYS_HASH
+        || payload.message_hash.hex != expected_hash
     {
         return Err(crate::error::config_signature_stale(
             "config signature message_hash does not match config content",
@@ -158,6 +193,189 @@ pub fn verify_config_file_signature(
     }
 
     Ok(())
+}
+
+fn validate_signed_payload_fields(
+    payload: &TimestampPayload,
+    expected_type: &str,
+    check_kid: impl Fn(&str) -> Result<(), DynError>,
+) -> Result<(), DynError> {
+    protocol::validate_protocol_version("payload.version", &payload.version)?;
+    validation::validate_allowed_value("payload.type", &payload.token_type, &[expected_type])?;
+    validation::validate_text_field("payload.created_at", &payload.created_at)?;
+    validation::validate_text_field("payload.info", &payload.info)?;
+    check_kid(&payload.kid)?;
+    validation::validate_hex_field("payload.serial", &payload.serial)?;
+    let expected_serial_len = crypto::hash_bytes(config::INTERNAL_KEYS_HASH, &[])?.len() * 2;
+    if payload.serial.len() != expected_serial_len {
+        return Err(crate::error::invalid_input(format!(
+            "payload.serial must be {expected_serial_len} hex characters, got {}",
+            payload.serial.len()
+        )));
+    }
+    validate_message_hash(&payload.message_hash)
+}
+
+fn validate_config_signature_payload(payload: &TimestampPayload) -> Result<(), DynError> {
+    validate_signed_payload_fields(payload, CONFIG_TOKEN_TYPE, |kid| {
+        if kid != INIT_KEYS_KID {
+            return Err(crate::error::invalid_input(
+                "payload.kid does not match expected signer",
+            ));
+        }
+        Ok(())
+    })
+}
+
+pub(crate) fn sign_compact_hybrid_payload<T: Serialize>(
+    rng: &mut crypto::CryptoRng,
+    payload: &T,
+    eddsa: &VariantDerKeyPair,
+    ml_dsa: &VariantDerKeyPair,
+) -> Result<String, DynError> {
+    let header = CompactSignatureHeader {
+        version: COMPACT_SIGNATURE_VERSION.to_string(),
+    };
+    let header = URL_SAFE_NO_PAD.encode(canonical::canonical_json_v1(&header)?);
+    let payload = URL_SAFE_NO_PAD.encode(canonical::canonical_json_v1(payload)?);
+    let signing_input = format!("{header}.{payload}");
+    let eddsa_private_key = crypto::load_private_key_der_hex(eddsa.private_key_der_hex())?;
+    let ml_dsa_private_key = crypto::load_private_key_der_hex(ml_dsa.private_key_der_hex())?;
+    let eddsa_signature = crypto::sign_message_with_rng(rng, &eddsa_private_key, &signing_input)?;
+    let ml_dsa_signature =
+        crypto::sign_ml_dsa_message_with_rng(rng, &ml_dsa_private_key, &signing_input)?;
+
+    let signature = format!(
+        "{signing_input}.{}.{}",
+        URL_SAFE_NO_PAD.encode(eddsa_signature),
+        URL_SAFE_NO_PAD.encode(ml_dsa_signature),
+    );
+    if signature.len() > COMPACT_SIGNATURE_MAX_CHARS {
+        return Err(crate::error::internal(
+            "compact signature exceeds the maximum supported size",
+        ));
+    }
+
+    Ok(signature)
+}
+
+pub(crate) fn verify_compact_hybrid_signature<T>(
+    signature: &str,
+    eddsa: &VariantDerKeyPair,
+    ml_dsa: &VariantDerKeyPair,
+) -> Result<T, DynError>
+where
+    T: DeserializeOwned + Serialize,
+{
+    match verify_compact_hybrid_signature_with_public_keys(
+        signature,
+        eddsa.public_key_der_hex(),
+        ml_dsa.public_key_der_hex(),
+    )? {
+        CompactSignatureVerification::Valid(payload) => Ok(payload),
+        CompactSignatureVerification::Invalid(CompactSignatureFailure::MlDsaFailed) => Err(
+            crate::error::invalid_signature("compact signature ML-DSA verification failed"),
+        ),
+        CompactSignatureVerification::Invalid(CompactSignatureFailure::EdDsaFailed) => Err(
+            crate::error::invalid_signature("compact signature EdDSA verification failed"),
+        ),
+    }
+}
+
+fn verify_compact_hybrid_signature_with_public_keys<T>(
+    signature: &str,
+    eddsa_public_key_der_hex: &str,
+    ml_dsa_public_key_der_hex: &str,
+) -> Result<CompactSignatureVerification<T>, DynError>
+where
+    T: DeserializeOwned + Serialize,
+{
+    let parts = split_compact_signature(signature)?;
+    let signing_input = format!("{}.{}", parts.header, parts.payload);
+
+    let ml_dsa_public_key = crypto::load_public_key_der_hex(ml_dsa_public_key_der_hex)?;
+    if !crypto::verify_ml_dsa_message(
+        &ml_dsa_public_key,
+        &signing_input,
+        &parts.ml_dsa_signature_bytes,
+    )? {
+        return Ok(CompactSignatureVerification::Invalid(
+            CompactSignatureFailure::MlDsaFailed,
+        ));
+    }
+
+    let eddsa_public_key = crypto::load_public_key_der_hex(eddsa_public_key_der_hex)?;
+    if !crypto::verify_message(
+        &eddsa_public_key,
+        &signing_input,
+        &parts.eddsa_signature_bytes,
+    )? {
+        return Ok(CompactSignatureVerification::Invalid(
+            CompactSignatureFailure::EdDsaFailed,
+        ));
+    }
+
+    let header: CompactSignatureHeader = parse_canonical_compact_segment(&parts.header_bytes)?;
+    if header.version != COMPACT_SIGNATURE_VERSION {
+        return Err(crate::error::invalid_signature(
+            "compact signature version is not supported",
+        ));
+    }
+
+    Ok(CompactSignatureVerification::Valid(
+        parse_canonical_compact_segment(&parts.payload_bytes)?,
+    ))
+}
+
+fn split_compact_signature(signature: &str) -> Result<CompactSignatureParts<'_>, DynError> {
+    if signature.is_empty()
+        || signature.len() > COMPACT_SIGNATURE_MAX_CHARS
+        || !signature.is_ascii()
+        || signature.chars().any(char::is_whitespace)
+        || signature.chars().any(char::is_control)
+    {
+        return Err(crate::error::invalid_signature(
+            "compact signature is malformed",
+        ));
+    }
+    let segments: Vec<_> = signature.split('.').collect();
+    if segments.len() != COMPACT_SIGNATURE_SEGMENTS
+        || segments.iter().any(|segment| segment.is_empty())
+    {
+        return Err(crate::error::invalid_signature(
+            "compact signature is malformed",
+        ));
+    }
+
+    Ok(CompactSignatureParts {
+        header: segments[0],
+        payload: segments[1],
+        header_bytes: decode_compact_segment(segments[0])?,
+        payload_bytes: decode_compact_segment(segments[1])?,
+        eddsa_signature_bytes: decode_compact_segment(segments[2])?,
+        ml_dsa_signature_bytes: decode_compact_segment(segments[3])?,
+    })
+}
+
+fn decode_compact_segment(segment: &str) -> Result<Vec<u8>, DynError> {
+    URL_SAFE_NO_PAD.decode(segment).map_err(|_| {
+        crate::error::invalid_signature("compact signature contains invalid base64url")
+    })
+}
+
+fn parse_canonical_compact_segment<T>(bytes: &[u8]) -> Result<T, DynError>
+where
+    T: DeserializeOwned + Serialize,
+{
+    let value: T = serde_json::from_slice(bytes)
+        .map_err(|_| crate::error::invalid_signature("compact signature contains invalid JSON"))?;
+    if canonical::canonical_json_v1(&value)? != bytes {
+        return Err(crate::error::invalid_signature(
+            "compact signature JSON is not canonical",
+        ));
+    }
+
+    Ok(value)
 }
 
 fn config_token_info() -> Result<String, DynError> {
@@ -180,91 +398,16 @@ fn create_payload_serial(
     )?))
 }
 
-fn sign_hybrid_payload(
-    rng: &mut crypto::CryptoRng,
-    payload: &TimestampPayload,
-    eddsa: &VariantDerKeyPair,
-    ml_dsa: &VariantDerKeyPair,
-) -> Result<TimestampSignatures, DynError> {
-    let payload_bytes = canonical::canonical_json_v1(payload)?;
-    let payload_text = std::str::from_utf8(&payload_bytes)?;
-    let eddsa_private_key = crypto::load_private_key_der_hex(eddsa.private_key_der_hex())?;
-    let ml_dsa_private_key = crypto::load_private_key_der_hex(ml_dsa.private_key_der_hex())?;
-    let eddsa_signature = crypto::sign_message_with_rng(rng, &eddsa_private_key, payload_text)?;
-    let ml_dsa_signature =
-        crypto::sign_ml_dsa_message_with_rng(rng, &ml_dsa_private_key, payload_text)?;
-
-    Ok(TimestampSignatures {
-        eddsa: SignatureBlock {
-            alg: eddsa.variant().to_string(),
-            sig: hex::encode(eddsa_signature),
-        },
-        ml_dsa: SignatureBlock {
-            alg: ml_dsa.variant().to_string(),
-            sig: hex::encode(ml_dsa_signature),
-        },
-    })
-}
-
-fn verify_hybrid_payload(
-    payload: &TimestampPayload,
-    signatures: &TimestampSignatures,
-    eddsa: &VariantDerKeyPair,
-    ml_dsa: &VariantDerKeyPair,
-) -> Result<VerificationStatus, DynError> {
-    verify_payload_with_public_keys(
-        payload,
-        signatures,
-        eddsa.public_key_der_hex(),
-        ml_dsa.public_key_der_hex(),
-    )
-}
-
-fn verify_payload_with_public_keys(
-    payload: &TimestampPayload,
-    signatures: &TimestampSignatures,
-    eddsa_public_key_der_hex: &str,
-    ml_dsa_public_key_der_hex: &str,
-) -> Result<VerificationStatus, DynError> {
-    let payload_bytes = canonical::canonical_json_v1(payload)?;
-    let payload_text = std::str::from_utf8(&payload_bytes)?;
-    let eddsa_public_key = crypto::load_public_key_der_hex(eddsa_public_key_der_hex)?;
-    let ml_dsa_public_key = crypto::load_public_key_der_hex(ml_dsa_public_key_der_hex)?;
-    let eddsa_signature = hex::decode(&signatures.eddsa.sig)?;
-    let ml_dsa_signature = hex::decode(&signatures.ml_dsa.sig)?;
-    let eddsa_valid = crypto::verify_message(&eddsa_public_key, payload_text, &eddsa_signature)?;
-    let ml_dsa_valid =
-        crypto::verify_ml_dsa_message(&ml_dsa_public_key, payload_text, &ml_dsa_signature)?;
-
-    Ok(VerificationStatus {
-        eddsa: status_text(eddsa_valid),
-        ml_dsa: status_text(ml_dsa_valid),
-    })
-}
-
 pub fn parse_sign_input(request: Value) -> Result<SignInput, DynError> {
     debug!("parsing sign request");
 
     crate::ops::json::parse_json_request(request, "sign request")
 }
 
-pub fn sign_timestamp_from_state(
-    keys_db_state: &KeysDbState,
-    id: &str,
-    input: SignInput,
-) -> Result<TimestampToken, DynError> {
-    debug!(kid = %id, "validating sign input");
-    let input = validate_sign_input(input)?;
-    debug!(kid = %id, "loading key for timestamp signing");
-    let loaded_key = keys::get_loaded_key(keys_db_state, id)?;
-
-    sign_timestamp(&loaded_key, input)
-}
-
 pub(crate) fn sign_timestamp_with_loaded_key(
     loaded_key: &LoadedOpsKey,
     input: SignInput,
-) -> Result<TimestampToken, DynError> {
+) -> Result<CompactSignatureToken, DynError> {
     let input = validate_sign_input(input)?;
 
     sign_timestamp(loaded_key, input)
@@ -290,226 +433,112 @@ pub fn validate_sign_input(input: SignInput) -> Result<ValidatedSignInput, DynEr
     Ok(ValidatedSignInput { input })
 }
 
-pub fn parse_timestamp_token(request: Value) -> Result<TimestampToken, DynError> {
-    debug!("parsing timestamp verification token");
-
-    serde_json::from_value(request)
-        .map_err(|err| crate::error::invalid_input(format!("invalid timestamp token: {err}")))
+pub fn parse_compact_signature_token(request: Value) -> Result<CompactSignatureToken, DynError> {
+    let token: CompactSignatureToken =
+        crate::ops::json::parse_json_request(request, "compact signature token")?;
+    keys::validate_key_id(&token.kid)
+        .map_err(|err| crate::error::invalid_input(format!("kid is invalid: {err}")))?;
+    Ok(token)
 }
 
-fn verify_timestamp(
+pub(crate) fn verify_compact_timestamp_with_loaded_key(
     loaded_key: &LoadedOpsKey,
-    token: &TimestampToken,
+    token: &CompactSignatureToken,
 ) -> Result<VerificationOutput, DynError> {
     keys::require_lifecycle_for_decrypt_or_verify(loaded_key)?;
-    debug!(
-        kid = %loaded_key.id(),
-        token_kid = %token.kid(),
-        eddsa_alg = %token.signatures.eddsa.alg,
-        ml_dsa_alg = %token.signatures.ml_dsa.alg,
-        "timestamp verification started"
-    );
-    validate_timestamp_token_for_key(loaded_key, token)?;
+    let result = verify_compact_timestamp_with_public_keys(
+        token,
+        loaded_key.keys().eddsa().public_key_der_hex(),
+        loaded_key.keys().ml_dsa().public_key_der_hex(),
+    )?;
 
-    let eddsa = loaded_key.keys().eddsa();
-    let ml_dsa = loaded_key.keys().ml_dsa();
-    debug!(
-        kid = %loaded_key.id(),
-        "timestamp verification material loaded"
-    );
-    let status = verify_hybrid_payload(&token.payload, &token.signatures, eddsa, ml_dsa)?;
-    let eddsa_valid = status.eddsa == "ok";
-    let ml_dsa_valid = status.ml_dsa == "ok";
-    info!(
-        kid = %loaded_key.id(),
-        eddsa = status_text(eddsa_valid),
-        ml_dsa = status_text(ml_dsa_valid),
-        valid = eddsa_valid && ml_dsa_valid,
-        "timestamp token verified"
-    );
-
-    if !eddsa_valid || !ml_dsa_valid {
-        return Ok(VerificationOutput {
-            status,
-            valid: String::from("fail"),
-        });
+    match result {
+        CompactSignatureVerification::Valid(payload) => {
+            validate_compact_timestamp_payload(&payload, &token.kid)?;
+            if payload.info != loaded_key.aad() {
+                return Err(crate::error::invalid_input(
+                    "payload.info does not match loaded key aad",
+                ));
+            }
+            Ok(verification_ok())
+        }
+        CompactSignatureVerification::Invalid(failure) => Ok(verification_failure(failure)),
     }
-
-    Ok(VerificationOutput {
-        status: VerificationStatus {
-            eddsa: String::from("ok"),
-            ml_dsa: String::from("ok"),
-        },
-        valid: String::from("ok"),
-    })
 }
 
-pub fn verify_timestamp_with_peer_keys(
-    token: &TimestampToken,
+pub fn verify_compact_timestamp_with_peer_keys(
+    token: &CompactSignatureToken,
     peer: &PeerPublicKeys,
 ) -> Result<VerificationOutput, DynError> {
-    validate_timestamp_token(token)?;
-    if token.signatures.eddsa.alg != peer.eddsa.alg {
-        return Err(crate::error::invalid_input(
-            "signatures.eddsa.alg does not match peer public key",
-        ));
-    }
-    if token.signatures.ml_dsa.alg != peer.ml_dsa.alg {
-        return Err(crate::error::invalid_input(
-            "signatures.ml-dsa.alg does not match peer public key",
-        ));
-    }
-
-    let status = verify_payload_with_public_keys(
-        &token.payload,
-        &token.signatures,
+    let result = verify_compact_timestamp_with_public_keys(
+        token,
         &peer.eddsa.public_key_der_hex,
         &peer.ml_dsa.public_key_der_hex,
     )?;
-    let eddsa_valid = status.eddsa == "ok";
-    let ml_dsa_valid = status.ml_dsa == "ok";
-    info!(
-        token_kid = %token.kid(),
-        valid = eddsa_valid && ml_dsa_valid,
-        "timestamp token verified against peer public keys"
-    );
 
-    if !eddsa_valid || !ml_dsa_valid {
-        return Ok(VerificationOutput {
-            status,
-            valid: String::from("fail"),
-        });
+    match result {
+        CompactSignatureVerification::Valid(payload) => {
+            validate_compact_timestamp_payload(&payload, &token.kid)?;
+            Ok(verification_ok())
+        }
+        CompactSignatureVerification::Invalid(failure) => Ok(verification_failure(failure)),
     }
+}
 
-    Ok(VerificationOutput {
+fn verify_compact_timestamp_with_public_keys(
+    token: &CompactSignatureToken,
+    eddsa_public_key_der_hex: &str,
+    ml_dsa_public_key_der_hex: &str,
+) -> Result<CompactSignatureVerification<TimestampPayload>, DynError> {
+    verify_compact_hybrid_signature_with_public_keys(
+        &token.signature,
+        eddsa_public_key_der_hex,
+        ml_dsa_public_key_der_hex,
+    )
+}
+
+fn validate_compact_timestamp_payload(
+    payload: &TimestampPayload,
+    expected_kid: &str,
+) -> Result<(), DynError> {
+    validate_signed_payload_fields(payload, TIMESTAMP_TOKEN_TYPE, |kid| {
+        if kid != expected_kid {
+            return Err(crate::error::invalid_input(
+                "payload.kid does not match request kid",
+            ));
+        }
+        keys::validate_key_id(kid)
+            .map_err(|err| crate::error::invalid_input(format!("payload.kid is invalid: {err}")))
+    })
+}
+
+fn verification_ok() -> VerificationOutput {
+    VerificationOutput {
         status: VerificationStatus {
             eddsa: String::from("ok"),
             ml_dsa: String::from("ok"),
         },
         valid: String::from("ok"),
-    })
+    }
 }
 
-pub fn verify_timestamp_from_state(
-    keys_db_state: &KeysDbState,
-    token: &TimestampToken,
-) -> Result<VerificationOutput, DynError> {
-    debug!(kid = %token.kid(), "validating timestamp token");
-    validate_timestamp_token(token)?;
-
-    let kid = token.kid();
-    debug!(kid = %kid, "loading key for timestamp verification");
-    let loaded_key = keys::get_loaded_key(keys_db_state, kid)?;
-
-    verify_timestamp(&loaded_key, token)
-}
-
-pub(crate) fn verify_timestamp_with_loaded_key(
-    loaded_key: &LoadedOpsKey,
-    token: &TimestampToken,
-) -> Result<VerificationOutput, DynError> {
-    validate_timestamp_token(token)?;
-
-    verify_timestamp(loaded_key, token)
-}
-
-pub fn validate_timestamp_token(token: &TimestampToken) -> Result<(), DynError> {
-    debug!(
-        version = %token.version,
-        token_type = %token.payload.token_type,
-        kid = %token.payload.kid,
-        hash_alg = %token.payload.message_hash.alg,
-        hash_hex_len = token.payload.message_hash.hex.len(),
-        eddsa_alg = %token.signatures.eddsa.alg,
-        ml_dsa_alg = %token.signatures.ml_dsa.alg,
-        "validating timestamp token fields"
-    );
-    validate_signed_payload_token(token, TIMESTAMP_TOKEN_TYPE, &token.payload.kid)?;
-    validation::validate_hash_hex_field(
-        "payload.kid",
-        &token.payload.kid,
-        crate::core::config::INTERNAL_KEYS_HASH,
-    )?;
-
-    Ok(())
-}
-
-fn validate_signed_payload_token(
-    token: &TimestampToken,
-    expected_type: &str,
-    expected_kid: &str,
-) -> Result<(), DynError> {
-    protocol::validate_protocol_version("version", &token.version)?;
-    protocol::validate_protocol_version("payload.version", &token.payload.version)?;
-    if token.version != token.payload.version {
-        return Err(crate::error::invalid_input(
-            "token version does not match signed payload version",
-        ));
+fn verification_failure(failure: CompactSignatureFailure) -> VerificationOutput {
+    match failure {
+        CompactSignatureFailure::MlDsaFailed => VerificationOutput {
+            status: VerificationStatus {
+                eddsa: String::from("not_checked"),
+                ml_dsa: String::from("fail"),
+            },
+            valid: String::from("fail"),
+        },
+        CompactSignatureFailure::EdDsaFailed => VerificationOutput {
+            status: VerificationStatus {
+                eddsa: String::from("fail"),
+                ml_dsa: String::from("ok"),
+            },
+            valid: String::from("fail"),
+        },
     }
-    validation::validate_allowed_value(
-        "payload.type",
-        &token.payload.token_type,
-        &[expected_type],
-    )?;
-    validation::validate_text_field("payload.created_at", &token.payload.created_at)?;
-    validation::validate_text_field("payload.info", &token.payload.info)?;
-    if token.payload.kid != expected_kid {
-        return Err(crate::error::invalid_input(
-            "payload.kid does not match expected signer",
-        ));
-    }
-    validation::validate_hex_field("payload.serial", &token.payload.serial)?;
-    let expected_serial_len = crypto::hash_bytes(config::INTERNAL_KEYS_HASH, &[])?.len() * 2;
-    if token.payload.serial.len() != expected_serial_len {
-        return Err(crate::error::invalid_input(format!(
-            "payload.serial must be {expected_serial_len} hex characters, got {}",
-            token.payload.serial.len()
-        )));
-    }
-    validate_message_hash(&token.payload.message_hash)?;
-    validation::validate_allowed_value(
-        "signatures.eddsa.alg",
-        &token.signatures.eddsa.alg,
-        &["Ed25519", "Ed448"],
-    )?;
-    validation::validate_hex_field("signatures.eddsa.sig", &token.signatures.eddsa.sig)?;
-    validation::validate_allowed_value(
-        "signatures.ml-dsa.alg",
-        &token.signatures.ml_dsa.alg,
-        &["ML-DSA-44", "ML-DSA-65", "ML-DSA-87"],
-    )?;
-    validation::validate_hex_field("signatures.ml-dsa.sig", &token.signatures.ml_dsa.sig)?;
-
-    Ok(())
-}
-
-fn validate_timestamp_token_for_key(
-    loaded_key: &LoadedOpsKey,
-    token: &TimestampToken,
-) -> Result<(), DynError> {
-    validate_timestamp_token(token)?;
-    if token.payload.kid != loaded_key.id() {
-        return Err(crate::error::invalid_input(
-            "payload.kid does not match loaded key",
-        ));
-    }
-    if token.payload.info != loaded_key.aad() {
-        return Err(crate::error::invalid_input(
-            "payload.info does not match loaded key aad",
-        ));
-    }
-    if token.signatures.eddsa.alg != loaded_key.keys().eddsa().variant() {
-        return Err(crate::error::invalid_input(
-            "signatures.eddsa.alg does not match loaded key",
-        ));
-    }
-    if token.signatures.ml_dsa.alg != loaded_key.keys().ml_dsa().variant() {
-        return Err(crate::error::invalid_input(
-            "signatures.ml-dsa.alg does not match loaded key",
-        ));
-    }
-
-    Ok(())
 }
 
 fn validate_message_hash(message_hash: &MessageHash) -> Result<(), DynError> {
@@ -521,14 +550,6 @@ fn validate_message_hash(message_hash: &MessageHash) -> Result<(), DynError> {
     validation::validate_hash_hex_field("message_hash.hex", &message_hash.hex, &message_hash.alg)?;
 
     Ok(())
-}
-
-fn status_text(valid: bool) -> String {
-    if valid {
-        String::from("ok")
-    } else {
-        String::from("fail")
-    }
 }
 
 #[cfg(test)]
@@ -573,50 +594,6 @@ mod tests {
         .unwrap()
     }
 
-    fn token_value() -> serde_json::Value {
-        serde_json::to_value(token("Ed25519", "ML-DSA-44", "v1")).unwrap()
-    }
-
-    fn peer(eddsa_alg: &str, ml_dsa_alg: &str) -> PeerPublicKeys {
-        serde_json::from_value(json!({
-            "eddsa": {"alg": eddsa_alg, "public_key_der_hex": "aa"},
-            "xecdh": {"alg": "X25519", "public_key_hex": "aa"},
-            "ml-dsa": {"alg": ml_dsa_alg, "public_key_der_hex": "aa"},
-            "ml-kem": {"alg": "ML-KEM-512", "public_key_der_hex": "aa"}
-        }))
-        .unwrap()
-    }
-
-    #[test]
-    fn validate_timestamp_token_accepts_well_formed_token() {
-        assert!(validate_timestamp_token(&token("Ed25519", "ML-DSA-44", "v1")).is_ok());
-    }
-
-    #[test]
-    fn validate_timestamp_token_rejects_wrong_token_type() {
-        let mut value = serde_json::to_value(token("Ed25519", "ML-DSA-44", "v1")).unwrap();
-        value["payload"]["type"] = json!("vectis-config");
-        let token: TimestampToken = serde_json::from_value(value).unwrap();
-        assert!(validate_timestamp_token(&token).is_err());
-    }
-
-    #[test]
-    fn validate_timestamp_token_rejects_unsupported_payload_version() {
-        assert!(validate_timestamp_token(&token("Ed25519", "ML-DSA-44", "v2")).is_err());
-    }
-
-    #[test]
-    fn verify_timestamp_with_peer_keys_rejects_eddsa_alg_mismatch() {
-        let token = token("Ed25519", "ML-DSA-44", "v1");
-        assert!(verify_timestamp_with_peer_keys(&token, &peer("Ed448", "ML-DSA-44")).is_err());
-    }
-
-    #[test]
-    fn verify_timestamp_with_peer_keys_rejects_ml_dsa_alg_mismatch() {
-        let token = token("Ed25519", "ML-DSA-44", "v1");
-        assert!(verify_timestamp_with_peer_keys(&token, &peer("Ed25519", "ML-DSA-65")).is_err());
-    }
-
     #[test]
     fn config_token_info_keeps_legacy_format() {
         let actual = config_token_info().expect("config token info must build");
@@ -628,6 +605,123 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
+    fn compact_timestamp_payload(kid: &str) -> TimestampPayload {
+        TimestampPayload {
+            version: String::from("v1"),
+            token_type: String::from(TIMESTAMP_TOKEN_TYPE),
+            created_at: String::from("2024-01-01T00:00:00Z"),
+            info: String::from("type=ops-keys"),
+            kid: kid.to_string(),
+            serial: hex64('b'),
+            message_hash: MessageHash {
+                alg: String::from("BLAKE2b(256)"),
+                hex: hex64('c'),
+            },
+        }
+    }
+
+    #[test]
+    fn compact_runtime_signature_round_trips_and_reports_ordered_failures() {
+        let init_state = init_state();
+        let kid = hex64('a');
+        let payload = compact_timestamp_payload(&kid);
+        let mut rng = crypto::new_rng().expect("rng must initialize");
+        let signature = sign_compact_hybrid_payload(
+            &mut rng,
+            &payload,
+            init_state.init_keys.keys().eddsa(),
+            init_state.init_keys.keys().ml_dsa(),
+        )
+        .expect("timestamp payload must sign");
+        let token = CompactSignatureToken {
+            kid: kid.clone(),
+            signature,
+        };
+
+        let verified = verify_compact_hybrid_signature_with_public_keys::<TimestampPayload>(
+            &token.signature,
+            init_state.init_keys.keys().eddsa().public_key_der_hex(),
+            init_state.init_keys.keys().ml_dsa().public_key_der_hex(),
+        )
+        .expect("compact signature must verify");
+        assert!(matches!(verified, CompactSignatureVerification::Valid(_)));
+
+        let mut segments: Vec<String> = token.signature.split('.').map(str::to_string).collect();
+        let replacement = if segments[3].starts_with('A') {
+            "B"
+        } else {
+            "A"
+        };
+        segments[3].replace_range(0..1, replacement);
+        let invalid_ml_dsa = verify_compact_hybrid_signature_with_public_keys::<TimestampPayload>(
+            &segments.join("."),
+            init_state.init_keys.keys().eddsa().public_key_der_hex(),
+            init_state.init_keys.keys().ml_dsa().public_key_der_hex(),
+        )
+        .expect("well-formed tampered signature must be checked");
+        let failure = match invalid_ml_dsa {
+            CompactSignatureVerification::Invalid(failure) => failure,
+            CompactSignatureVerification::Valid(_) => {
+                panic!("tampered signature must not verify")
+            }
+        };
+        let output = verification_failure(failure);
+        assert_eq!(output.valid, "fail");
+        assert_eq!(output.status.ml_dsa, "fail");
+        assert_eq!(output.status.eddsa, "not_checked");
+    }
+
+    fn config_signature_content(signature: &CompactSignatureFile) -> String {
+        serde_json::to_string(signature).expect("compact signature must serialize")
+    }
+
+    fn config_payload(signature: &CompactSignatureFile) -> TimestampPayload {
+        let payload = signature
+            .signature
+            .split('.')
+            .nth(1)
+            .expect("compact signature must contain a payload");
+        serde_json::from_slice(
+            &URL_SAFE_NO_PAD
+                .decode(payload)
+                .expect("payload must use base64url"),
+        )
+        .expect("payload must be valid JSON")
+    }
+
+    fn sign_config_payload(
+        init_state: &ValidatedInitState,
+        payload: &TimestampPayload,
+    ) -> CompactSignatureFile {
+        let mut rng = crypto::new_rng().expect("rng must initialize");
+        CompactSignatureFile {
+            signature: sign_compact_hybrid_payload(
+                &mut rng,
+                payload,
+                init_state.init_keys.keys().eddsa(),
+                init_state.init_keys.keys().ml_dsa(),
+            )
+            .expect("payload must sign"),
+        }
+    }
+
+    fn tamper_compact_segment(
+        signature: &CompactSignatureFile,
+        index: usize,
+    ) -> CompactSignatureFile {
+        let mut segments: Vec<String> =
+            signature.signature.split('.').map(str::to_string).collect();
+        let first = segments[index]
+            .chars()
+            .next()
+            .expect("compact segments must be non-empty");
+        segments[index].replace_range(0..first.len_utf8(), if first == 'A' { "B" } else { "A" });
+
+        CompactSignatureFile {
+            signature: segments.join("."),
+        }
+    }
+
     #[test]
     fn config_signature_is_portable_across_paths() {
         let init_state = init_state();
@@ -637,8 +731,26 @@ mod tests {
             empty_config(),
         )
         .expect("config must sign");
-        assert_eq!(token.payload.info, "version=v1;type=vectis-config");
-        let signature_content = serde_json::to_string(&token).expect("token must serialize");
+        let wrapper: Value = serde_json::from_str(&config_signature_content(&token)).unwrap();
+        let signature = wrapper["signature"]
+            .as_str()
+            .expect("signature wrapper must contain a string");
+        let segments: Vec<_> = signature.split('.').collect();
+        assert_eq!(segments.len(), COMPACT_SIGNATURE_SEGMENTS);
+        let header: CompactSignatureHeader = serde_json::from_slice(
+            &URL_SAFE_NO_PAD
+                .decode(segments[0])
+                .expect("header must decode"),
+        )
+        .expect("header must parse");
+        assert_eq!(header.version, COMPACT_SIGNATURE_VERSION);
+        let payload = config_payload(&token);
+        assert_eq!(payload.info, "version=v1;type=vectis-config");
+        assert_eq!(
+            canonical::canonical_json_v1(&payload).unwrap(),
+            URL_SAFE_NO_PAD.decode(segments[1]).unwrap()
+        );
+        let signature_content = config_signature_content(&token);
 
         verify_config_file_signature(
             &init_state,
@@ -652,11 +764,12 @@ mod tests {
     #[test]
     fn config_signature_rejects_wrong_info_token() {
         let init_state = init_state();
-        let mut token =
-            sign_config_file(&init_state, &PathBuf::from("config.json"), empty_config())
-                .expect("config must sign");
-        token.payload.info = String::from("version=v1;type=vectis-config;path=config.json");
-        let signature_content = serde_json::to_string(&token).expect("token must serialize");
+        let token = sign_config_file(&init_state, &PathBuf::from("config.json"), empty_config())
+            .expect("config must sign");
+        let mut payload = config_payload(&token);
+        payload.info = String::from("version=v1;type=vectis-config;path=config.json");
+        let signature_content =
+            config_signature_content(&sign_config_payload(&init_state, &payload));
 
         let err = verify_config_file_signature(
             &init_state,
@@ -677,7 +790,7 @@ mod tests {
         let init_state = init_state();
         let token = sign_config_file(&init_state, &PathBuf::from("config.json"), empty_config())
             .expect("config must sign");
-        let signature_content = serde_json::to_string(&token).expect("token must serialize");
+        let signature_content = config_signature_content(&token);
         let tampered_config = r#"{"version":"v1","routes":[{"kid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"app","final_app_addr":"127.0.0.1:3999","final_app_path":"/message"}],"remote_routes":[],"permissions":[]}"#;
 
         let err = verify_config_file_signature(
@@ -697,31 +810,29 @@ mod tests {
     #[test]
     fn config_signature_rejects_tampered_signature() {
         let init_state = init_state();
-        let mut token =
-            sign_config_file(&init_state, &PathBuf::from("config.json"), empty_config())
-                .expect("config must sign");
-        token.signatures.eddsa.sig.replace_range(0..2, "00");
-        let signature_content = serde_json::to_string(&token).expect("token must serialize");
+        let token = sign_config_file(&init_state, &PathBuf::from("config.json"), empty_config())
+            .expect("config must sign");
+        for index in 0..COMPACT_SIGNATURE_SEGMENTS {
+            let signature_content =
+                config_signature_content(&tamper_compact_segment(&token, index));
+            let err = verify_config_file_signature(
+                &init_state,
+                &PathBuf::from("config.json"),
+                empty_config(),
+                &signature_content,
+            )
+            .expect_err("tampered signature must fail");
 
-        let err = verify_config_file_signature(
-            &init_state,
-            &PathBuf::from("config.json"),
-            empty_config(),
-            &signature_content,
-        )
-        .expect_err("tampered signature must fail");
-
-        assert_eq!(err.to_string(), "config signature verification failed");
+            assert_eq!(err.to_string(), "config signature verification failed");
+        }
     }
 
     #[test]
     fn config_signature_checks_signature_before_content_staleness() {
         let init_state = init_state();
-        let mut token =
-            sign_config_file(&init_state, &PathBuf::from("config.json"), empty_config())
-                .expect("config must sign");
-        token.signatures.eddsa.sig.replace_range(0..2, "00");
-        let signature_content = serde_json::to_string(&token).expect("token must serialize");
+        let token = sign_config_file(&init_state, &PathBuf::from("config.json"), empty_config())
+            .expect("config must sign");
+        let signature_content = config_signature_content(&tamper_compact_segment(&token, 3));
         let tampered_config = r#"{"version":"v1","routes":[{"kid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"app","final_app_addr":"127.0.0.1:3999","final_app_path":"/message"}],"remote_routes":[],"permissions":[]}"#;
 
         let err = verify_config_file_signature(
@@ -736,7 +847,106 @@ mod tests {
         assert!(!crate::error::is_config_signature_stale(err.as_ref()));
     }
 
+    #[test]
+    fn config_signature_rejects_legacy_timestamp_envelope() {
+        let legacy = serde_json::to_string(&token("Ed25519", "ML-DSA-44", "v1"))
+            .expect("legacy token must serialize");
+        let err = verify_config_file_signature(
+            &init_state(),
+            &PathBuf::from("config.json"),
+            empty_config(),
+            &legacy,
+        )
+        .expect_err("legacy config signature format must be rejected");
+
+        assert_eq!(
+            err.to_string(),
+            "unsupported config signature format; run 'vectis config sign'"
+        );
+    }
+
+    #[test]
+    fn compact_signature_rejects_padding_and_extra_segments() {
+        let init_state = init_state();
+        let token = sign_config_file(&init_state, &PathBuf::from("config.json"), empty_config())
+            .expect("config must sign");
+        for malformed in [
+            format!("{}=", token.signature),
+            format!("{}.extra", token.signature),
+        ] {
+            let content = config_signature_content(&CompactSignatureFile {
+                signature: malformed,
+            });
+            let err = verify_config_file_signature(
+                &init_state,
+                &PathBuf::from("config.json"),
+                empty_config(),
+                &content,
+            )
+            .expect_err("malformed compact signature must fail");
+            assert_eq!(err.to_string(), "config signature verification failed");
+        }
+    }
+
+    #[test]
+    fn compact_signature_validates_every_segment_as_base64url_before_verification() {
+        let token = sign_config_file(&init_state(), &PathBuf::from("config.json"), empty_config())
+            .expect("config must sign");
+
+        for index in 0..COMPACT_SIGNATURE_SEGMENTS {
+            let mut segments: Vec<String> =
+                token.signature.split('.').map(str::to_string).collect();
+            segments[index] = String::from("!");
+
+            let err = split_compact_signature(&segments.join("."))
+                .expect_err("invalid base64url must fail during structural validation");
+            assert_eq!(
+                err.to_string(),
+                "compact signature contains invalid base64url"
+            );
+        }
+    }
+
+    #[test]
+    fn config_signature_rejects_authenticated_payload_with_invalid_fields() {
+        let init_state = init_state();
+        let token = sign_config_file(&init_state, &PathBuf::from("config.json"), empty_config())
+            .expect("config must sign");
+
+        let mut wrong_kid = config_payload(&token);
+        wrong_kid.kid = String::from("not-init-keys");
+        let content = config_signature_content(&sign_config_payload(&init_state, &wrong_kid));
+        let err = verify_config_file_signature(
+            &init_state,
+            &PathBuf::from("config.json"),
+            empty_config(),
+            &content,
+        )
+        .expect_err("payload with wrong kid must be rejected");
+        assert_eq!(
+            err.to_string(),
+            "payload.kid does not match expected signer"
+        );
+
+        let mut short_serial = config_payload(&token);
+        short_serial.serial = String::from("abcd");
+        let content = config_signature_content(&sign_config_payload(&init_state, &short_serial));
+        let err = verify_config_file_signature(
+            &init_state,
+            &PathBuf::from("config.json"),
+            empty_config(),
+            &content,
+        )
+        .expect_err("payload with short serial must be rejected");
+        assert!(err.to_string().contains("payload.serial must be"));
+    }
+
     proptest! {
+        #[test]
+        fn compact_signature_structure_handles_arbitrary_text(signature in ".{0,256}") {
+            let _ = split_compact_signature(&signature);
+        }
+
         #[test]
         fn parse_sign_input_rejects_extra_fields_with_actionable_shape_error(extra_field in ".{1,32}") {
             prop_assume!(extra_field != "message_hash");
@@ -773,89 +983,6 @@ mod tests {
             let result = validate_message_hash(&message_hash);
 
             prop_assert_eq!(result.is_ok(), message_hash.hex.len() == 64);
-        }
-
-        #[test]
-        fn parse_timestamp_token_rejects_extra_fields(suffix in "[A-Za-z0-9_]{1,24}") {
-            let extra_field = format!("extra_{suffix}");
-
-            let mut top_level = token_value();
-            top_level
-                .as_object_mut()
-                .unwrap()
-                .insert(extra_field.clone(), json!("unexpected"));
-            prop_assert!(parse_timestamp_token(top_level).is_err());
-
-            let mut payload = token_value();
-            payload["payload"]
-                .as_object_mut()
-                .unwrap()
-                .insert(extra_field.clone(), json!("unexpected"));
-            prop_assert!(parse_timestamp_token(payload).is_err());
-
-            let mut signatures = token_value();
-            signatures["signatures"]
-                .as_object_mut()
-                .unwrap()
-                .insert(extra_field.clone(), json!("unexpected"));
-            prop_assert!(parse_timestamp_token(signatures).is_err());
-
-            let mut eddsa = token_value();
-            eddsa["signatures"]["eddsa"]
-                .as_object_mut()
-                .unwrap()
-                .insert(extra_field.clone(), json!("unexpected"));
-            prop_assert!(parse_timestamp_token(eddsa).is_err());
-
-            let mut ml_dsa = token_value();
-            ml_dsa["signatures"]["ml-dsa"]
-                .as_object_mut()
-                .unwrap()
-                .insert(extra_field, json!("unexpected"));
-            prop_assert!(parse_timestamp_token(ml_dsa).is_err());
-        }
-
-        #[test]
-        fn validate_timestamp_token_rejects_invalid_kid(kid in "[A-Za-z0-9]{0,80}") {
-            prop_assume!(kid.len() != 64 || !kid.chars().all(|item| item.is_ascii_hexdigit()));
-            let mut token = token("Ed25519", "ML-DSA-44", "v1");
-            token.payload.kid = kid;
-
-            prop_assert!(validate_timestamp_token(&token).is_err());
-        }
-
-        #[test]
-        fn validate_timestamp_token_rejects_invalid_serial(serial in "[A-Za-z0-9]{0,80}") {
-            prop_assume!(serial.len() != 64 || !serial.chars().all(|item| item.is_ascii_hexdigit()));
-            let mut token = token("Ed25519", "ML-DSA-44", "v1");
-            token.payload.serial = serial;
-
-            prop_assert!(validate_timestamp_token(&token).is_err());
-        }
-
-        #[test]
-        fn validate_timestamp_token_rejects_invalid_signature_fields(
-            eddsa_alg in "[A-Za-z0-9_-]{1,24}",
-            ml_dsa_alg in "[A-Za-z0-9_-]{1,24}",
-            sig in "[A-Za-z0-9_-]{1,32}"
-        ) {
-            prop_assume!(!["Ed25519", "Ed448"].contains(&eddsa_alg.as_str()));
-            prop_assume!(!["ML-DSA-44", "ML-DSA-65", "ML-DSA-87"].contains(&ml_dsa_alg.as_str()));
-            prop_assume!(!sig.chars().all(|item| item.is_ascii_hexdigit()) || sig.len() % 2 != 0);
-
-            let invalid_eddsa = token(&eddsa_alg, "ML-DSA-44", "v1");
-            prop_assert!(validate_timestamp_token(&invalid_eddsa).is_err());
-
-            let invalid_ml_dsa = token("Ed25519", &ml_dsa_alg, "v1");
-            prop_assert!(validate_timestamp_token(&invalid_ml_dsa).is_err());
-
-            let mut invalid_sig = token("Ed25519", "ML-DSA-44", "v1");
-            invalid_sig.signatures.eddsa.sig = sig.clone();
-            prop_assert!(validate_timestamp_token(&invalid_sig).is_err());
-
-            let mut invalid_ml_sig = token("Ed25519", "ML-DSA-44", "v1");
-            invalid_ml_sig.signatures.ml_dsa.sig = sig;
-            prop_assert!(validate_timestamp_token(&invalid_ml_sig).is_err());
         }
     }
 }

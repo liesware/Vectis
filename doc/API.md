@@ -780,31 +780,13 @@ Response:
 
 ```json
 {
-  "version": "v1",
-  "payload": {
-    "version": "v1",
-    "type": "vectis-sign",
-    "created_at": "1782058090",
-    "info": "version=v1;hostname=localhost;type=ops-keys;cipher=AES-192/GCM;tag=ACME Corp.;profile=hybrid-high-assurance-v1;timestamp=1782058090",
-    "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
-    "serial": "...",
-    "message_hash": {
-      "alg": "BLAKE2b(256)",
-      "hex": "..."
-    }
-  },
-  "signatures": {
-    "eddsa": {
-      "alg": "Ed25519",
-      "sig": "..."
-    },
-    "ml-dsa": {
-      "alg": "ML-DSA-44",
-      "sig": "..."
-    }
-  }
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
+  "signature": "<base64url(header)>.<base64url(payload)>.<base64url(eddsa)>.<base64url(ml-dsa)>"
 }
 ```
+
+The canonical compact header is `{ "version": "vectis-signature-v1" }`. Both
+signatures cover the exact ASCII bytes `header_b64.payload_b64`.
 
 ### POST /sign/verification
 
@@ -831,12 +813,17 @@ Response with invalid signatures:
 ```json
 {
   "status": {
-    "eddsa": "fail",
-    "ml-dsa": "ok"
+    "eddsa": "not_checked",
+    "ml-dsa": "fail"
   },
   "valid": "fail"
 }
 ```
+
+Verification validates all four Base64URL segments, resolves the KID from the
+request, then verifies ML-DSA before EdDSA. `eddsa: "not_checked"` means
+ML-DSA failed, so EdDSA was deliberately not evaluated. The authenticated
+payload KID must match the request KID.
 
 ## Protected Messages Between Instances
 
@@ -2146,35 +2133,18 @@ Create or update the signature:
 vectis config sign
 ```
 
-`config_sign.json` uses the same signed payload structure as `POST /sign/{kid}`:
+`config_sign.json` stores a Vectis compact hybrid signature wrapper:
 
 ```json
 {
-  "version": "v1",
-  "payload": {
-    "version": "v1",
-    "type": "vectis-config",
-    "created_at": "1782058090",
-    "info": "version=v1;type=vectis-config",
-    "kid": "init-keys",
-    "serial": "INTERNAL_KEYS_HASH(created_at + random_bytes)",
-    "message_hash": {
-      "alg": "BLAKE2b(256)",
-      "hex": "hash of canonical config.json"
-    }
-  },
-  "signatures": {
-    "eddsa": {
-      "alg": "Ed25519",
-      "sig": "..."
-    },
-    "ml-dsa": {
-      "alg": "ML-DSA-44",
-      "sig": "..."
-    }
-  }
+  "signature": "base64url(header).base64url(payload).base64url(eddsa).base64url(ml-dsa)"
 }
 ```
+
+The canonical header is `{"version":"vectis-signature-v1"}`. The canonical
+payload contains `version`, `type`, `created_at`, `info`, `kid`, `serial`, and
+`message_hash`; it remains separate from the timestamp token format returned by
+`POST /sign/{kid}`.
 
 Validation rules:
 
@@ -2182,9 +2152,14 @@ Validation rules:
 - `payload.kid` must be `init-keys`.
 - `payload.info` must be `version=v1;type=vectis-config`.
 - `payload.message_hash` must match canonical `config.json` using `INTERNAL_KEYS_HASH`.
-- EdDSA and ML-DSA signatures must verify with init public keys.
+- ML-DSA and then EdDSA must verify over the exact encoded `header.payload`
+  bytes with init public keys before Vectis parses the signed header or payload.
+- The compact signature uses four non-empty base64url-without-padding segments
+  and is limited to 64 KiB.
 - The signature is not bound to the local filesystem path. Moving `config.json`
   and `config_sign.json` together is supported.
+- Older JSON timestamp-token envelopes are not accepted; run `vectis config sign`
+  after upgrading.
 - Startup with missing `config.json` uses empty sections (default routing, only root authorized).
 - Startup with invalid existing config or invalid config signature fails.
 - A reload endpoint rejects invalid signatures and keeps the previous in-memory config.

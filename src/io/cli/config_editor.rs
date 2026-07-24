@@ -1495,11 +1495,10 @@ fn validate_local_config(local: &LocalConfig) -> Result<(), DynError> {
 }
 
 fn write_local_config(local: &LocalConfig) -> Result<(), DynError> {
-    fs::write(
+    super::http::write_file_atomically(
         &local.app.config_path,
-        serde_json::to_string_pretty(&local.value)?,
-    )?;
-    Ok(())
+        &serde_json::to_string_pretty(&local.value)?,
+    )
 }
 
 async fn fetch_public_keys(remote_addr: &str, remote_kid: &str) -> Result<Value, DynError> {
