@@ -7,6 +7,13 @@ pointer showing the rule in a real codebase.
 
 The aim is plain: keep the system understandable and hard to misuse.
 
+The rules draw on three sources: the Unix and Python design philosophies
+(do one thing well, explicit over implicit, errors never pass silently),
+*A Philosophy of Software Design* (deep modules, complexity is the enemy),
+and *Designing Data-Intensive Applications* (data outlives code, partial
+failure is normal). The rules earn their place by having prevented or caught
+a real failure, not by citation.
+
 Each rule carries an **Applies** tag so you can select the subset that fits your
 project. Read every rule tagged `always`; add `networked services` rules when you
 expose an API or load operational config, and `systems handling secrets or
@@ -24,11 +31,79 @@ Rule format:
 - **How** — concrete implementation guidance.
 - **Don't apply when** — explicit exceptions (only where the rule is conditional).
 - **Rust note** — tooling/crates used in this repository.
-- **In Vectis** — where to see it working.
+- **In Vectis** — where to see it working (or the honestly declared gap).
 
-## 1. Architecture
+## Index
 
-### Rule 1 — Structure the code in three layers with one-way dependencies
+| # | Rule | Applies |
+| --- | --- | --- |
+| 1 | Declare what the system is — and is not | always |
+| 2 | Structure the code in three layers with one-way dependencies | always |
+| 3 | Isolate and discipline shared mutable state | always |
+| 4 | Build deep modules: simple interfaces over powerful implementations | always |
+| 5 | The CLI is a client of the API, not a second implementation | networked services |
+| 6 | One configuration file, one signature, one loader | networked services |
+| 7 | No fallback sources of truth | always |
+| 8 | Fixed, documented settings precedence | always |
+| 9 | Parse, don't validate | always |
+| 10 | Constrain every field | always |
+| 11 | One concept, one validation policy across all entry points | always |
+| 12 | Build structured strings through validated constructors | always |
+| 13 | Harden validation without changing valid encodings | always |
+| 14 | Treat persisted data as untrusted input | always |
+| 15 | Lenient startup, strict reload | networked services |
+| 16 | Report the state actually applied | networked services |
+| 17 | Validate an artifact against the operation it prepares | networked services |
+| 18 | Bound every input before expensive work | always |
+| 19 | Pin, minimize, and audit dependencies | always |
+| 20 | One semantic error type per application | always |
+| 21 | Map errors to public responses with an exhaustive match | networked services |
+| 22 | Never leak internals in public errors | networked services |
+| 23 | Evolve public interfaces without breaking clients | networked services |
+| 24 | Make state-changing operations idempotent and retry-safe | networked services |
+| 25 | Make schema ownership explicit; validate the schema you depend on | always |
+| 26 | Back up the system of record and rehearse the restore | always |
+| 27 | Every outbound call has a deadline; retries are explicit and bounded | networked services |
+| 28 | Shut down gracefully, within a bounded grace period | networked services |
+| 29 | Canonicalize everything you sign | secrets/crypto |
+| 30 | Verify before decrypt, bind the context | secrets/crypto |
+| 31 | Requests choose policy; they do not define trust | networked services |
+| 32 | Validate encoding before cryptographic processing | secrets/crypto |
+| 33 | Treat secrets as radioactive | secrets/crypto |
+| 34 | Model resource lifecycle explicitly | always |
+| 35 | Write the threat model, including what you refuse to defend | always |
+| 36 | Unit-test every validation function; e2e-test the contract both ways | always |
+| 37 | Inject time, randomness, and other ambient inputs | always |
+| 38 | Zero warnings, always | always |
+| 39 | Keep an executable demo, and verify against the fresh build | always |
+| 40 | Separate operational logs, audit logs, and metrics | networked services |
+| 41 | Fixed documentation set, swept on every behavior change | always |
+| 42 | Code explains itself; interfaces state their contract; documents explain the system | always |
+| 43 | Version releases and record changes | always |
+
+## 1. Scope and Architecture
+
+### Rule 1 — Declare what the system is — and is not
+
+**Applies**: always.
+
+**Why**: scope creep is invisible while it happens. Without a written boundary,
+every plausible feature request looks in-scope, the system drifts toward doing
+several things poorly, and users build on capabilities you never intended to
+guarantee.
+
+**How**: state in one place what job the system does, and keep an explicit
+"what this is not" list naming the adjacent jobs you deliberately leave to
+other tools. Treat additions to scope as design decisions that update this
+list, not as accretion. The non-goals list is as binding as the feature list:
+a request that contradicts it needs the list changed first.
+
+**In Vectis**: the README's "What Vectis Is Not" section and the threat
+model's "Out Of Scope / Non-Goals" list (TLS, KMS, HSMs, secrets managers,
+DoS resistance) name the jobs left to other tools; rewrap/key migration was
+rejected against this boundary rather than absorbed.
+
+### Rule 2 — Structure the code in three layers with one-way dependencies
 
 **Applies**: always.
 
@@ -54,7 +129,7 @@ workspace, make the layers separate crates so the compiler enforces direction.
 `core/remote_routes.rs` and `ops` converts it, instead of `core` importing
 `ops::contracts`.
 
-### Rule 1A — Isolate and discipline shared mutable state
+### Rule 3 — Isolate and discipline shared mutable state
 
 **Applies**: always.
 
@@ -77,26 +152,55 @@ CPU-bound work; hold guards for the shortest scope possible.
 `tokio::sync::RwLock`; blocking cryptography runs through `spawn_blocking_crypto`
 (`core/blocking.rs`) so it never stalls the async runtime.
 
-### Rule 2 — The CLI is a client of the API, not a second implementation
+### Rule 4 — Build deep modules: simple interfaces over powerful implementations
+
+**Applies**: always.
+
+**Why**: a module's cost to its users is its interface, not its implementation.
+Many shallow modules — thin wrappers, pass-through functions, interfaces that
+expose every internal decision — spread complexity to every caller instead of
+absorbing it once.
+
+**How**:
+
+- design each module so a caller needs to know little to use it correctly:
+  few functions, few parameters, obvious defaults, no required call order;
+- pull complexity downward — the module handles the hard cases (encoding,
+  ordering, edge conditions) so callers cannot get them wrong;
+- define errors out of existence where possible: make the API's normal path
+  absorb cases callers would otherwise have to check;
+- treat a pass-through function or a config knob that merely re-exposes an
+  internal choice as a design smell — either absorb the decision or own it.
+
+**In Vectis**: `build_validated_aad` gives every subsystem one call that
+validates, orders, and encodes context strings so no caller hand-assembles
+AAD; `spawn_blocking_crypto` hides the runtime-offload decision; ops modules
+expose `send`/`receive`-shaped entry points while hiding the KEM, AEAD, and
+signature sequencing behind them.
+
+### Rule 5 — The CLI is a client of the API, not a second implementation
 
 **Applies**: networked services.
 
 **Why**: two implementations of the same operation drift apart; bugs get fixed
 in one path and survive in the other.
 
-**How**: every CLI command calls the same HTTP API the service exposes. Only
-bootstrap operations that must work offline (init, local key generation) run
-locally.
+**How**: runtime CLI commands call the same HTTP API the service exposes.
+Bootstrap operations and management of local, signed configuration may run
+locally when they must work before the service starts or prepare artifacts the
+service later consumes.
 
 **Don't apply when**: the project is a library or a pure CLI tool with no
 service behind it — then the CLI *is* the implementation and this rule is moot.
 
-**In Vectis**: `io/cli/http.rs` is an HTTP client; only `init` and
-`apikey create` are local.
+**In Vectis**: runtime commands in `io/cli/http.rs` use the HTTP API. Bootstrap
+commands (`init`, `apikey create`) and signed-config management (`config init`,
+editors, `list`, `validate`, and `sign`) run locally; `config reload` calls the
+service API.
 
 ## 2. Single Source of Truth
 
-### Rule 3 — One configuration file, one signature, one loader
+### Rule 6 — One configuration file, one signature, one loader
 
 **Applies**: networked services.
 
@@ -107,12 +211,13 @@ N reload paths — triplicated code and inconsistent failure modes.
 single versioned document, protected by a single integrity mechanism, loaded by
 a single code path that validates every section.
 
-**In Vectis**: `config.json` (`version`, `routes`, `remote_routes`,
-`permissions`, plus optional `fpe_profiles`, `tokenization_profiles`, and
-`mac_profiles`) signed as one unit; `core/config_file.rs` is the only loader.
-The unification collapsed 6 sign/verify functions into 2 and 3 loaders into 1.
+**In Vectis**: `config.json` contains `version`, `routes`, `remote_routes`, and
+`permissions`, plus optional capability profiles (currently FPE, tokenization,
+MAC, masking, commitments, and sharing), all signed as one unit;
+`core/config_file.rs` is the only loader. The unification collapsed 6
+sign/verify functions into 2 and 3 loaders into 1.
 
-### Rule 4 — No fallback sources of truth
+### Rule 7 — No fallback sources of truth
 
 **Applies**: always.
 
@@ -132,7 +237,7 @@ fine; deriving *trust* from a second source is not.
 the runtime fetch from remote `/pub` (trust-on-first-use) was removed. Sending
 to or receiving from an unregistered peer returns `403`.
 
-### Rule 5 — Fixed, documented settings precedence
+### Rule 8 — Fixed, documented settings precedence
 
 **Applies**: always.
 
@@ -151,7 +256,7 @@ documented in `doc/ENV.md` with `env.dist`.
 Core lesson: every externally supplied value must have an owner, a validator, a
 bound, tests, and one consistent policy across config, CLI, and HTTP.
 
-### Rule 6 — Parse, don't validate
+### Rule 9 — Parse, don't validate
 
 **Applies**: always.
 
@@ -172,7 +277,7 @@ return owned domain types; newtypes (e.g. a parsed id) carry the proof.
 `KeyId::parse` as proof-carrying newtype; `validate_permission_clients` builds
 `PermissionsState`.
 
-### Rule 7 — Constrain every field
+### Rule 10 — Constrain every field
 
 **Applies**: always.
 
@@ -199,7 +304,7 @@ report a misleading validation error.
 `validate_ref`, `validate_config_name`); statuses like
 `active`/`disabled`/`revoked` are closed lists.
 
-### Rule 7A — One concept, one validation policy across all entry points *(refines Rule 7)*
+### Rule 11 — One concept, one validation policy across all entry points *(refines Rule 10)*
 
 **Applies**: always.
 
@@ -215,7 +320,7 @@ convenience; server-side validation remains the trust boundary.
 policy in signed config and HTTP requests; batch `ref` values are bounded by a
 single `validate_ref` rule instead of being arbitrary strings.
 
-### Rule 7B — Build structured strings through validated constructors *(refines Rule 7)*
+### Rule 12 — Build structured strings through validated constructors *(refines Rule 10)*
 
 **Applies**: always.
 
@@ -235,7 +340,7 @@ constructing strings used by FPE, tokenization, keys, messages, init, key
 validation, and config signing. `validate_labels` remains the validator for
 complete user-authored label strings.
 
-### Rule 7C — Harden validation without changing valid encodings *(refines Rule 7)*
+### Rule 13 — Harden validation without changing valid encodings *(refines Rule 10)*
 
 **Applies**: always.
 
@@ -252,7 +357,7 @@ records that were already valid.
 legacy `build_aad` output for valid fields, while adding delimiter and
 over-limit rejection tests for invalid fields.
 
-### Rule 7D — Treat persisted data as untrusted input *(refines Rule 7)*
+### Rule 14 — Treat persisted data as untrusted input *(refines Rule 10)*
 
 **Applies**: always.
 
@@ -270,7 +375,7 @@ as proof that a value has a safe shape.
 encrypted Base64 envelopes on every read and write before ops-key or token
 decryption.
 
-### Rule 8 — Lenient startup, strict reload
+### Rule 15 — Lenient startup, strict reload
 
 **Applies**: networked services.
 
@@ -290,7 +395,7 @@ degraded state. Choose per project which failure is worse.
 **In Vectis**: `load_config_state` (lenient) vs `reload_config_state` (strict)
 in `core/config_file.rs`, both covered by unit tests.
 
-### Rule 8A — Report the state actually applied *(refines Rule 8)*
+### Rule 16 — Report the state actually applied *(refines Rule 15)*
 
 **Applies**: networked services.
 
@@ -307,7 +412,7 @@ applied.
 content and reports the still-loaded profile counts rather than pretending the
 unsigned config was applied.
 
-### Rule 8B — Validate an artifact against the operation it prepares *(refines Rule 8)*
+### Rule 17 — Validate an artifact against the operation it prepares *(refines Rule 15)*
 
 **Applies**: networked services.
 
@@ -323,29 +428,37 @@ be used. Do not write or sign the artifact when that validation fails.
 **In Vectis**: `config validate` loads local storage and keys; `config sign`
 runs the same strong validation before writing `config_sign.json`.
 
-### Rule 9 — Bound config and file parsing before expensive work
+### Rule 18 — Bound every input before expensive work
 
-**Applies**: networked services.
+**Applies**: always.
 
-**Why**: unbounded reads let a malformed or oversized file consume memory, CPU,
-or cryptographic verification time before the application knows whether it is
-safe to process.
+**Why**: unbounded reads let a malformed or oversized input consume memory,
+CPU, or cryptographic verification time before the application knows whether
+it is safe to process. This holds for operator files, request bodies, batch
+sizes, and individual fields alike.
 
-**How**: before reading, parsing, canonicalizing, signing, or verifying an
-operator-controlled file, validate that the path exists when required, points to
-a regular file, and stays under a documented size limit. Startup can fall back
-to a safe empty state; runtime reload must reject the new file and keep the
-previous state.
+**How**:
+
+- before reading, parsing, canonicalizing, signing, or verifying an
+  operator-controlled file, validate that the path exists when required,
+  points to a regular file, and stays under a documented size limit;
+- give every request body, batch, and field an explicit, documented maximum —
+  own the limit rather than inheriting an undocumented framework default;
+- startup can fall back to a safe empty state; runtime reload must reject the
+  new input and keep the previous state;
+- centralize the limits as named constants so all paths share them.
 
 **Rust note**: use `fs::metadata` before `read_to_string`, keep `NotFound`
 distinguishable when missing files are allowed, and centralize the helper so all
 load/sign/list paths share the same limits.
 
-**In Vectis**: `config.json` and `config_sign.json` have explicit maximum
-sizes enforced through `core/config_file.rs` and constants in `core/config.rs`
-before config load, reload, list, sign, and verification paths.
+**In Vectis**: `config.json` and `config_sign.json` have explicit maximum sizes
+enforced through `core/config_file.rs`; field, batch, and HTTP body caps live as
+constants in `core/config.rs` (`INTERNAL_REF_MAX_CHARS`,
+`STORAGE_ENVELOPE_MAX_CHARS`, `INTERNAL_HTTP_MAX_SIZE`, batch item limits).
+The router applies the HTTP cap before `JsonBody` buffers or parses a request.
 
-### Rule 9A — Pin, minimize, and audit dependencies
+### Rule 19 — Pin, minimize, and audit dependencies
 
 **Applies**: always.
 
@@ -372,7 +485,7 @@ reproducible from a committed `Cargo.lock`.
 
 ## 4. Centralized, Typed Errors
 
-### Rule 10 — One semantic error type per application
+### Rule 20 — One semantic error type per application
 
 **Applies**: always.
 
@@ -392,7 +505,7 @@ allow migrating call sites without touching signatures.
 **In Vectis**: `VectisError` in `src/error.rs`; 148 sites migrated from
 fabricated `io::Error` kinds with zero signature changes.
 
-### Rule 11 — Map errors to public responses with an exhaustive match
+### Rule 21 — Map errors to public responses with an exhaustive match
 
 **Applies**: networked services.
 
@@ -407,7 +520,7 @@ at compile time. Never `contains()` on error prose.
 string-matching block preserved a typo ("recipent") in the public API until the
 migration removed it.
 
-### Rule 12 — Never leak internals in public errors
+### Rule 22 — Never leak internals in public errors
 
 **Applies**: networked services.
 
@@ -422,7 +535,7 @@ treat them as contract.
 **In Vectis**: `public_error_message_for_error`; `RemoteUnreachable` maps to a
 fixed public message; `doc/API.md` error examples mirror `src` strings.
 
-### Rule 12A — Evolve public interfaces without breaking clients
+### Rule 23 — Evolve public interfaces without breaking clients
 
 **Applies**: networked services.
 
@@ -438,13 +551,13 @@ in production.
   request bodies, ignore only where forward-compatibility demands it;
 - when a break is unavoidable, version the interface and support the old shape
   through a deprecation window;
-- documented request/response examples are part of the contract (Rule 12).
+- documented request/response examples are part of the contract (Rule 41).
 
 **In Vectis**: request `*Input` structs use `deny_unknown_fields`; the wire
-protocol carries an explicit version and payloads bind it (Rule 13). During
+protocol carries an explicit version and payloads bind it (Rule 29). During
 pre-release, breaking changes are allowed but stay deliberate and documented.
 
-### Rule 12B — Make state-changing operations idempotent and retry-safe
+### Rule 24 — Make state-changing operations idempotent and retry-safe
 
 **Applies**: networked services.
 
@@ -460,35 +573,129 @@ double-apply an effect (double charge, duplicate record, replayed message).
 - distinguish "already done" from "failed" so a safe retry returns success, not
   a spurious error.
 - for batch APIs, require a client-supplied reference per item and preserve it
-  in the response; order is an implementation detail, while a unique reference
-  is the caller's durable correlation key.
+  in the response; the reference is a durable correlation key, not an
+  idempotency or deduplication key unless the operation explicitly defines it
+  that way.
 
-**In Vectis**: message identity and lifecycle guards make replays observable
-rather than silently reprocessed; object replay is an explicit, documented
-assumption (Rule 17).
+**In Vectis**: blind-index creation is idempotent because duplicate
+`(kid, digest)` inserts do not change storage. Batch `ref` values provide
+correlation only. Token creation, key creation, and message delivery do not
+provide general idempotency; object replay and exactly-once processing remain
+the consumer's responsibility in `v1` (Rule 35).
 
-## 5. Security Defaults
+## 5. Data and State Over Time
 
-### Rule 13 — Canonicalize everything you sign
+Data outlives code. Schemas, backups, deadlines, and shutdowns are where a
+correct program meets an unreliable world; each needs an explicit owner and a
+rehearsed procedure, not an assumption.
+
+### Rule 25 — Make schema ownership explicit; validate the schema you depend on
+
+**Applies**: always (any project with persistent storage).
+
+**Why**: a schema changed by "whoever touched it last" is how data outlives the
+code that understands it. Silent auto-migration destroys operator control;
+assumed schemas turn a missing table into a runtime surprise deep inside a
+request.
+
+**How**: decide and document who owns schema changes — either the application
+applies versioned, ordered migration scripts, or the operator applies them and
+the application ships the reference DDL. In both models the application
+validates at startup (and on read paths, Rule 14) that the schema it depends
+on is actually present, and fails with an error naming exactly what is
+missing. Never create or alter tables implicitly as a side effect of serving
+requests.
+
+**In Vectis**: the operator owns the schema — Vectis ships SQL reference files
+under `src/db` and never applies migrations or creates tables at runtime
+(documented in `doc/ENV.md` and `doc/Clustering.md`); a missing table fails
+closed with a named error ("sqlite schema is missing opskeys table").
+
+### Rule 26 — Back up the system of record and rehearse the restore
+
+**Applies**: always (any project holding data that cannot be regenerated).
+
+**Why**: an untested backup is a hope, not a control. The classic failure is
+discovering at restore time that the backup is incomplete — missing the one
+companion secret or file that makes the data readable.
+
+**How**: identify the system of record and every companion artifact required
+to make a restore usable (key material, config, signatures — not just the
+database). Document the backup and restore procedure, then rehearse it: a
+scripted restore into a clean environment, verified by real reads, on a
+schedule. Track restore time so recovery objectives are numbers, not guesses.
+
+**In Vectis**: `doc/HA_DR.md` documents backups, restore, and recovery limits,
+including the trap this rule exists for: a PostgreSQL backup without the
+matching init material cannot decrypt anything (`doc/Clustering.md`). Known
+gap: scripted backup/restore tests are still listed as missing.
+
+### Rule 27 — Every outbound call has a deadline; retries are explicit and bounded
+
+**Applies**: networked services.
+
+**Why**: a remote peer that never answers must not hang your request handlers,
+and an eager automatic retry loop can amplify an outage into a self-inflicted
+flood. Partial failure is the normal case, not the exception.
+
+**How**: every outbound request carries an explicit timeout with a documented,
+configurable default. Decide retry policy per operation and write it down:
+either no automatic retries (the caller decides, backed by idempotent
+handlers, Rule 24) or a bounded count with backoff. Surface timeout failures
+as their own error category so operators can tell "slow peer" from "wrong
+request".
+
+**In Vectis**: all HTTP clients have a deadline and perform no automatic
+retries. The CLI defaults to 30 seconds and is configurable through
+`VECTIS_TIMEOUT_SECONDS`; node-to-node and final-app calls currently use a
+fixed 30-second timeout in `core/http_client.rs`. Remote delivery failures map
+to a dedicated error category (Rule 22), but configurable service-client
+timeouts and a distinct semantic timeout error remain known gaps.
+
+### Rule 28 — Shut down gracefully, within a bounded grace period
+
+**Applies**: networked services.
+
+**Why**: a process killed mid-request drops in-flight work and can leave
+half-applied state; a process that drains forever turns every deploy into a
+hung rollout. Both failure modes come from not deciding what shutdown means.
+
+**How**: handle the platform's stop signals explicitly. On shutdown, stop
+accepting new work, let in-flight requests finish, and enforce a bounded grace
+period after which the process exits anyway. Anything that cannot complete
+within the grace period must be safe to retry (Rule 24).
+
+**In Vectis**: `io/http/app.rs` listens for SIGTERM and Ctrl-C in both modes.
+HTTPS drains through `graceful_shutdown` with a 10-second bound; HTTP in
+development mode drains without an explicit bound. Applying one bounded policy
+to both modes remains a known gap.
+
+## 6. Security Defaults
+
+### Rule 29 — Canonicalize everything you sign
 
 **Applies**: systems handling secrets or cryptography.
 
 **Why**: signing non-canonical encodings makes signatures depend on key order
 and whitespace; two semantically equal documents verify differently.
 
-**How**: apply the RFC 8785 JSON Canonicalization Scheme (or an equivalent
-deterministic encoding: sorted keys, no insignificant whitespace) before
-hashing or signing. Put the protocol version **inside** the signed payload and
-require it to match the envelope version — this closes version-downgrade
-splits.
+**How**: use RFC 8785 when standard cross-language JSON interoperability is
+required. Otherwise define a deterministic encoding with explicit ordering,
+number, string, and whitespace rules, give it a protocol version, and prove
+byte-for-byte stability before hashing or signing. Put the protocol version
+**inside** the signed payload and require it to match the envelope version —
+this closes version-downgrade splits.
 
-**Rust note**: `serde_json::to_value` + `to_vec` yields sorted-key compact JSON
-without extra dependencies.
+**Rust note**: `serde_json::to_value` + `to_vec` can implement a project-defined
+sorted-key compact encoding for restricted data types; it must not be described
+as RFC 8785 without implementing and testing the complete standard.
 
-**In Vectis**: `core/canonical.rs` (`canonical_json_v1`), `core/protocol.rs`;
-envelope/payload version match enforced in `ops/sign.rs`.
+**In Vectis**: `core/canonical.rs` defines the project-specific,
+versioned `canonical_json_v1` encoding; `core/protocol.rs` and `ops/sign.rs`
+enforce protocol and signed-payload version binding. Vectis does not claim that
+`canonical_json_v1` implements RFC 8785.
 
-### Rule 14 — Verify before decrypt, bind the context
+### Rule 30 — Verify before decrypt, bind the context
 
 **Applies**: systems handling secrets or cryptography.
 
@@ -506,7 +713,7 @@ structurally impossible.
 `open_message_cipher`; the AAD binds 8 context fields; ephemeral XECDH +
 fresh ML-KEM encapsulation per message.
 
-### Rule 14A — Requests choose policy; they do not define trust *(refines Rule 14)*
+### Rule 31 — Requests choose policy; they do not define trust *(refines Rule 30)*
 
 **Applies**: networked services.
 
@@ -525,7 +732,7 @@ peer keys are operator-approved; crypto algorithms come from profiles; callers
 select registered FPE/tokenization profiles rather than redefining cryptography
 in the request.
 
-### Rule 14B — Validate encoding before cryptographic processing *(refines Rule 14)*
+### Rule 32 — Validate encoding before cryptographic processing *(refines Rule 30)*
 
 **Applies**: systems handling secrets or cryptography.
 
@@ -544,7 +751,7 @@ succeeds.
 before ML-DSA then EdDSA verification; stored AEAD envelopes validate their
 three Base64 segments, nonce size, tag minimum, and AAD UTF-8 before decrypt.
 
-### Rule 15 — Treat secrets as radioactive
+### Rule 33 — Treat secrets as radioactive
 
 **Applies**: systems handling secrets or cryptography (the logging and
 comparison points apply to any app with credentials).
@@ -570,7 +777,7 @@ permission lookup while `authenticate_hash` still compares credential hashes
 with `constant_time_eq`; kid-binding via `validate_key_id_matches_keys`;
 dedicated audit stream with request ids and no payload contents.
 
-### Rule 16 — Model resource lifecycle explicitly
+### Rule 34 — Model resource lifecycle explicitly
 
 **Applies**: always (any resource with more than two states).
 
@@ -589,7 +796,7 @@ from the lifecycle model, but the decision must live in one place.
 `require_lifecycle_for_public_keys` enforce the model, including blocking
 `/pub` for retired keys.
 
-### Rule 17 — Write the threat model, including what you refuse to defend
+### Rule 35 — Write the threat model, including what you refuse to defend
 
 **Applies**: always.
 
@@ -600,14 +807,19 @@ someone else's audit.
 **How**: maintain a threat model document with: assets, trust model, threats
 addressed (threat → mitigation → mechanism), **explicit assumptions** (what you
 deliberately do not defend and why), out-of-scope items, and residual risks
-with operational mitigations. Update it when the trust model changes.
+with operational mitigations. When a control is delegated to the deployment
+(rate limiting to a proxy, freshness to the consumer, rollback protection to
+the operator), name the control and who now owns it — a delegated control
+without a named owner is an unowned control. Update the document when the
+trust model changes.
 
 **In Vectis**: `doc/ThreatModel.md` — e.g. object replay and config rollback
-are documented assumptions with operational mitigations, not silent gaps.
+are documented assumptions with operational mitigations, and assumption 2
+delegates throttling to a reverse proxy by name.
 
-## 6. Testing and Tooling Discipline
+## 7. Testing and Tooling Discipline
 
-### Rule 18 — Unit-test every validation function; e2e-test the contract both ways
+### Rule 36 — Unit-test every validation function; e2e-test the contract both ways
 
 **Applies**: always.
 
@@ -636,7 +848,7 @@ signing; `tests/http_positive.py` and `tests/http_negative.py` assert runtime
 contracts; `http_fuzz.py`, cargo-fuzz targets, and Schemathesis cover mutation
 and OpenAPI contract behavior.
 
-### Rule 18A — Inject time, randomness, and other ambient inputs
+### Rule 37 — Inject time, randomness, and other ambient inputs
 
 **Applies**: always.
 
@@ -654,13 +866,13 @@ non-deterministic; that same call is where subtle security bugs hide
   insecure RNG.
 
 **Rust note**: thread a `CryptoRng`/timestamp provider through functions;
-validation functions already take injected closures (Rule 18).
+validation functions already take injected closures (Rule 36).
 
 **In Vectis**: cryptographic randomness goes through a single `core/crypto.rs`
 helper; validation functions accept injected dependencies so unit tests run
 without real services.
 
-### Rule 19 — Zero warnings, always
+### Rule 38 — Zero warnings, always
 
 **Applies**: always.
 
@@ -676,7 +888,7 @@ mechanical cleanups.
 
 **In Vectis**: every change in the repository lands with clippy and fmt clean.
 
-### Rule 20 — Keep an executable demo, and verify against the fresh build
+### Rule 39 — Keep an executable demo, and verify against the fresh build
 
 **Applies**: always.
 
@@ -692,9 +904,9 @@ the running binary is the one you just built.
 A session lesson stands as the cautionary example: suites once passed against a
 server started *before* the rebuild — the results were discarded and re-run.
 
-## 7. Observability Contract
+## 8. Observability Contract
 
-### Rule 21 — Separate operational logs, audit logs, and metrics
+### Rule 40 — Separate operational logs, audit logs, and metrics
 
 **Applies**: networked services.
 
@@ -713,9 +925,9 @@ low-cardinality labels only.
 `/metrics`; labels avoid KIDs, actors, remote addresses, payloads, and free-form
 errors.
 
-## 8. Documentation Contract
+## 9. Documentation Contract
 
-### Rule 22 — Fixed documentation set, swept on every behavior change
+### Rule 41 — Fixed documentation set, swept on every behavior change
 
 **Applies**: always.
 
@@ -732,22 +944,57 @@ relative links and that documented examples match code literally.
 `doc/Reference.md`; removing runtime peer-key fetch required sweeping four
 documents that described the old fallback.
 
-### Rule 23 — Code explains itself; documents explain the system
+### Rule 42 — Code explains itself; interfaces state their contract; documents explain the system
 
 **Applies**: always.
 
-**Why**: explanatory comments duplicate the code and drift from it; the
-information either belongs in a name/type or in a document with an owner.
+**Why**: explanatory comments duplicate the code and drift from it — but a
+public interface has obligations its signature cannot express (units, ordering,
+error conditions, ownership of returned state). Leaving those unstated forces
+every caller to read the implementation, which is the definition of a shallow
+module (Rule 4).
 
-**How**: avoid redundant comments that restate the code. Express normal intent
-through names, types, and small functions. Use short comments only for
-non-obvious security, protocol, fallback, or invariant behavior. Design
-rationale and system flows live in the documentation set (Rule 22), which is
-reviewed and kept consistent.
+**How**: three levels, three homes.
 
-**In Vectis**: comments are reserved for small pieces of non-obvious protocol or
-fallback behavior; broader rationale lives in `doc/Reference.md` and this
-document.
+- **Implementation**: no comments that restate the code. Express normal intent
+  through names, types, and small functions. Use short comments only for
+  non-obvious security, protocol, fallback, or invariant behavior.
+- **Interfaces**: the public surface (exported functions, types, modules, HTTP
+  endpoints) carries a contract the signature alone cannot state — what it
+  does, its preconditions, and its failure modes — as doc comments or, for
+  endpoints, as the API reference's field tables.
+- **System**: design rationale and cross-cutting flows live in the
+  documentation set (Rule 41), which is reviewed and kept consistent.
+
+**Rust note**: `///` doc comments on the public surface; `cargo doc` output is
+part of the deliverable; `#[deny(missing_docs)]` once the surface stabilizes.
+
+**In Vectis**: implementation comments follow the discipline (comments are
+reserved for non-obvious protocol behavior); HTTP contracts live in
+`doc/API.md` field tables. Known gap: the Rust public surface carries no `///`
+doc comments yet.
+
+### Rule 43 — Version releases and record changes
+
+**Applies**: always.
+
+**Why**: without tagged versions and a change record, "what are you running?"
+has no answer, bug reports are unreproducible, and interface-evolution
+promises (Rule 23) have no unit of time to attach to.
+
+**How**: tag releases with semantic versions; keep a changelog that records
+behavior changes, breaking changes, and security-relevant fixes per release;
+the protocol/config version inside signed material (Rule 29) and the release
+version evolve together deliberately.
+
+**Don't apply when**: the project is pre-release and explicitly experimental —
+then breaking changes are allowed without ceremony, but they stay deliberate
+and documented (commit history as the interim change record), and this rule
+activates at the first tagged release.
+
+**In Vectis**: pre-release — the wire protocol and config carry an explicit
+`v1`, breaking changes are allowed but documented; tagging and a changelog
+begin with the first release.
 
 ## How to Apply This to a New Project
 
@@ -757,39 +1004,46 @@ add `systems handling secrets or cryptography` rules if you hold key material or
 sign/encrypt data. Then follow the bootstrap order — each step makes the next
 one cheaper:
 
-1. **Layout**: create the three layers (`core`, `ops`, `io`) empty, with the
-   dependency rule and a shared-state/concurrency policy written down
-   (Rules 1, 1A).
-2. **Errors first**: define the semantic error enum and constructor helpers
-   before writing the first fallible function (Rules 10-12).
-3. **Validation module**: `core/validation` with generic validators for names,
+1. **Scope**: write what the system is and the non-goals list before the first
+   module (Rule 1).
+2. **Layout**: create the three layers (`core`, `ops`, `io`) empty, with the
+   dependency rule and a shared-state/concurrency policy written down; design
+   each module deep from the start (Rules 2-4).
+3. **Errors first**: define the semantic error enum and constructor helpers
+   before writing the first fallible function (Rules 20-22).
+4. **Validation module**: `core/validation` with generic validators for names,
    refs, labels, encoded material, host/path fields, and structured strings;
    every new input type gets its `*Input` → domain conversion, and every
    external value gets an owner, a bound, injected time/randomness where needed,
-   and tests (Rules 6-7C, 18A).
-4. **Config loader**: one settings precedence (env → file → defaults) and, if
+   and tests (Rules 9-14, 18, 37).
+5. **Config loader**: one settings precedence (env → file → defaults) and, if
    the project has operational config, one unified file with one bounded loader
-   and lenient-startup/strict-reload semantics (Rules 3, 5, 8-9).
-5. **Supply chain + CI from day one**: commit a lockfile, pin and audit
+   and lenient-startup/strict-reload semantics (Rules 6, 8, 15-18).
+6. **Supply chain + CI from day one**: commit a lockfile, pin and audit
    dependencies, and wire format + lint (zero warnings) + unit tests + negative
    e2e as the pipeline; every endpoint adds validators, limits, unit tests,
    idempotency, compatible-evolution discipline, and negative contract coverage
-   at the same time (Rules 9A, 12A-12B, 18-19).
-6. **Lifecycle model**: if the project manages sensitive resources, define
+   at the same time (Rules 19, 23-24, 36, 38).
+7. **Data over time**: decide schema ownership, write the backup/restore
+   procedure, set outbound deadlines, and handle stop signals before the first
+   deployment holds real state (Rules 25-28).
+8. **Lifecycle model**: if the project manages sensitive resources, define
    states, transitions, and centralized operation guards before exposing the
-   first mutation endpoint (Rule 16).
-7. **Observability from day one**: create operational logs, audit events, and
-   metrics as separate channels with a no-secrets rule (Rule 21).
-8. **Threat model from day one**: even three lines of explicit assumptions
-   beat a perfect document written after the audit (Rule 17).
-9. **Docs as contract**: README + API + ENV skeletons created with the first
-   endpoint; sweep them on every behavior change, especially validation,
-   permission, lifecycle, config, and error-contract changes (Rules 22-23).
-10. When a second source of truth appears — a cache, a fallback, a convenience
-   fetch — delete it unless it is a pure performance cache of the authoritative
-   source (Rule 4).
+   first mutation endpoint (Rule 34).
+9. **Observability from day one**: create operational logs, audit events, and
+   metrics as separate channels with a no-secrets rule (Rule 40).
+10. **Threat model from day one**: even three lines of explicit assumptions
+    beat a perfect document written after the audit (Rule 35).
+11. **Docs as contract**: README + API + ENV skeletons created with the first
+    endpoint; sweep them on every behavior change, especially validation,
+    permission, lifecycle, config, and error-contract changes (Rules 41-43).
+12. When a second source of truth appears — a cache, a fallback, a convenience
+    fetch — delete it unless it is a pure performance cache of the
+    authoritative source (Rule 7).
 
 ## Revision
 
-Distilled from the Vectis codebase as of 2026-07-24. Update when a rule is
-learned, invalidated, or superseded by a better one.
+Distilled from the Vectis codebase as of 2026-07-24. Renumbered flat (former
+lettered refinements promoted) and extended with Rules 1, 4, 25-28, and 43
+after an audit against the document's sources. Update when a rule is learned,
+invalidated, or superseded by a better one.
