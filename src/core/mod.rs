@@ -13,6 +13,7 @@ pub mod mac;
 pub mod masking;
 pub mod metrics;
 pub mod permissions;
+pub mod project;
 pub mod protocol;
 pub mod remote_routes;
 pub mod routes;

@@ -1273,6 +1273,18 @@ pub(super) fn print_response(payload: &str, output: OutputFormat) -> Result<(), 
     Ok(())
 }
 
+pub(super) fn print_serializable_response<T: Serialize>(
+    value: &T,
+    output: OutputFormat,
+) -> Result<(), DynError> {
+    match output {
+        OutputFormat::Json => println!("{}", serde_json::to_string_pretty(value)?),
+        OutputFormat::Yaml => print!("{}", yaml_serde::to_string(value)?),
+    }
+
+    Ok(())
+}
+
 pub(super) fn invalid_input(message: impl Into<String>) -> DynError {
     crate::error::invalid_input(message.into())
 }

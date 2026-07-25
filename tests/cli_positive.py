@@ -71,48 +71,49 @@ def config_validate_case(env):
 
 def version_case(env):
     response = run_cli_json(["version"], env)
+    require(response["name"] == "vectis", "version must include package name")
     require(isinstance(response["version"], str), "version must include crate version")
     require(response["protocol_version"] == "v1", "version must include protocol v1")
+    require(response["license"] == "Apache-2.0", "version must include package license")
     require(
-        "hybrid-performance-v1" in response["crypto_profiles"],
+        response["copyright"] == "Copyright 2026 Eduardo Lopez",
+        "version must include project copyright",
+    )
+    require(
+        response["project"] == "https://github.com/liesware/Vectis",
+        "version must include official project repository",
+    )
+    require(
+        response["build_status"] == "Experimental Build",
+        "version must include build maturity status",
+    )
+    require(
+        "hybrid-performance-v1" in response["profiles"],
         "version must include supported crypto profiles",
     )
     require(
-        "hybrid-standard-v1" in response["crypto_profiles"],
+        "hybrid-standard-v1" in response["profiles"],
         "version must include standard crypto profile",
     )
     require(
-        "profile-only" in response["crypto_policies"],
-        "version must include supported crypto policies",
+        "protected-messages" in response["capabilities"],
+        "version must include protected messages",
     )
-    primitives = response["internal_primitives"]
-    require(primitives["hash"] == "BLAKE2b(256)", "version must include internal hash")
-    require(primitives["hkdf"] == "HKDF(BLAKE2b(256))", "version must include internal HKDF")
-    require(primitives["hmac"] == "HMAC(BLAKE2b(256))", "version must include internal HMAC")
-    require(primitives["cipher"] == "AES-256/GCM", "version must include internal cipher")
-    algorithms = response["algorithms"]
-    require("SHA-256" in algorithms["hash"], "version must include supported hashes")
-    require(
-        "AES-256/GCM" in algorithms["symmetric"],
-        "version must include supported symmetric ciphers",
-    )
-    require("Ed448" in algorithms["eddsa"], "version must include supported EdDSA algorithms")
-    require("X448" in algorithms["xecdh"], "version must include supported XECDH algorithms")
-    require("ML-DSA-87" in algorithms["ml_dsa"], "version must include supported ML-DSA variants")
-    require("ML-KEM-1024" in algorithms["ml_kem"], "version must include supported ML-KEM variants")
-    require("fpe-ff1-2025" in algorithms["fpe"], "version must include supported FPE versions")
-    require(
-        "token-random-v1" in algorithms["tokenization"],
-        "version must include supported tokenization versions",
-    )
-    require(
-        "HMAC(<ops-key-hash>)" in algorithms["mac"],
-        "version must include HMAC MAC algorithm",
-    )
-    require("KMAC-224" in algorithms["mac"], "version must include KMAC-224")
-    require("KMAC-256" in algorithms["mac"], "version must include supported MAC algorithms")
-    require("KMAC-384" in algorithms["mac"], "version must include KMAC-384")
-    require("KMAC-512" in algorithms["mac"], "version must include KMAC-512")
+    for capability in [
+        "hybrid-signatures",
+        "internal-encryption",
+        "fpe",
+        "tokenization",
+        "mac",
+        "blind-indexes",
+        "masking",
+        "commitments",
+        "secret-sharing",
+    ]:
+        require(
+            capability in response["capabilities"],
+            f"version must include {capability}",
+        )
 
 
 def route_cases(env):

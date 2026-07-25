@@ -1,26 +1,28 @@
-use crate::core::{config, crypto, fpe, mac, protocol, tokenization, validation};
+// Copyright 2026 Eduardo Lopez
+// SPDX-License-Identifier: Apache-2.0
+
+use crate::core::{config, project, protocol, validation};
 use crate::error::DynError;
 use crate::io::cli::{
     help_catalog,
-    http::{OutputFormat, invalid_input, print_response},
+    http::{OutputFormat, invalid_input, print_serializable_response},
 };
-use serde_json::{Value, json};
+use serde::Serialize;
 
 const PROGRAM_NAME: &str = "vectis";
 
-pub const EDDSA_ALGORITHMS: &[&str] = &["Ed25519", "Ed448"];
-pub const XECDH_ALGORITHMS: &[&str] = &["X25519", "X448"];
-pub const ML_DSA_VARIANTS: &[&str] = &["ML-DSA-44", "ML-DSA-65", "ML-DSA-87"];
-pub const ML_KEM_VARIANTS: &[&str] = &["ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"];
-pub const FPE_VERSIONS: &[&str] = &[fpe::FPE_VERSION_FF1_2025];
-pub const TOKENIZATION_VERSIONS: &[&str] = &[tokenization::TOKENIZATION_VERSION_RANDOM_V1];
-pub const MAC_ALGORITHMS: &[&str] = &[
-    "HMAC(<ops-key-hash>)",
-    mac::MAC_ALGORITHM_KMAC_224,
-    mac::MAC_ALGORITHM_KMAC_256,
-    mac::MAC_ALGORITHM_KMAC_384,
-    mac::MAC_ALGORITHM_KMAC_512,
-];
+#[derive(Serialize)]
+struct VersionOutput {
+    name: &'static str,
+    build_status: &'static str,
+    version: &'static str,
+    protocol_version: &'static str,
+    license: &'static str,
+    copyright: &'static str,
+    project: &'static str,
+    profiles: &'static [&'static str],
+    capabilities: &'static [&'static str],
+}
 
 pub fn run(args: Vec<String>) -> Result<(), DynError> {
     let (output, rest) = parse_output_option(args)?;
@@ -30,34 +32,21 @@ pub fn run(args: Vec<String>) -> Result<(), DynError> {
     }
     expect_no_args(&rest)?;
 
-    let payload = version_payload();
-    print_response(&serde_json::to_string(&payload)?, output)
+    print_serializable_response(&version_payload(), output)
 }
 
-pub fn version_payload() -> Value {
-    json!({
-        "version": env!("CARGO_PKG_VERSION"),
-        "protocol_version": protocol::PROTOCOL_VERSION_V1,
-        "internal_primitives": {
-            "cipher": config::INTERNAL_KEYS_CIPHER,
-            "hash": config::INTERNAL_KEYS_HASH,
-            "hkdf": config::INTERNAL_KEYS_HKDF,
-            "hmac": config::INTERNAL_KEYS_HMAC,
-        },
-        "crypto_profiles": config::CRYPTO_PROFILES,
-        "crypto_policies": config::CRYPTO_POLICIES,
-        "algorithms": {
-            "hash": crypto::HASH_ALGORITHMS,
-            "symmetric": crypto::SYMMETRIC_ALGORITHMS,
-            "eddsa": EDDSA_ALGORITHMS,
-            "xecdh": XECDH_ALGORITHMS,
-            "ml_dsa": ML_DSA_VARIANTS,
-            "ml_kem": ML_KEM_VARIANTS,
-            "fpe": FPE_VERSIONS,
-            "tokenization": TOKENIZATION_VERSIONS,
-            "mac": MAC_ALGORITHMS,
-        }
-    })
+fn version_payload() -> VersionOutput {
+    VersionOutput {
+        name: project::NAME,
+        build_status: project::BUILD_STATUS,
+        version: project::VERSION,
+        protocol_version: protocol::PROTOCOL_VERSION_V1,
+        license: project::LICENSE,
+        copyright: project::COPYRIGHT,
+        project: project::REPOSITORY,
+        profiles: config::CRYPTO_PROFILES,
+        capabilities: project::CAPABILITIES,
+    }
 }
 
 fn parse_output_option(args: Vec<String>) -> Result<(OutputFormat, Vec<String>), DynError> {
@@ -130,81 +119,48 @@ mod tests {
     #[test]
     fn version_payload_contains_crate_and_protocol_versions() {
         let payload = version_payload();
-        assert_eq!(payload["version"], env!("CARGO_PKG_VERSION"));
-        assert_eq!(payload["protocol_version"], protocol::PROTOCOL_VERSION_V1);
-        assert_eq!(
-            payload["internal_primitives"]["hkdf"],
-            config::INTERNAL_KEYS_HKDF
-        );
-        assert_eq!(
-            payload["internal_primitives"]["hmac"],
-            config::INTERNAL_KEYS_HMAC
-        );
+        assert_eq!(payload.name, project::NAME);
+        assert_eq!(payload.build_status, project::BUILD_STATUS);
+        assert_eq!(payload.version, project::VERSION);
+        assert_eq!(payload.protocol_version, protocol::PROTOCOL_VERSION_V1);
+        assert_eq!(payload.license, project::LICENSE);
+        assert_eq!(payload.copyright, project::COPYRIGHT);
+        assert_eq!(payload.project, project::REPOSITORY);
     }
 
     #[test]
-    fn version_payload_lists_supported_profiles_and_algorithms() {
+    fn version_payload_lists_supported_profiles_and_capabilities() {
         let payload = version_payload();
-        assert_eq!(payload["crypto_profiles"][0], config::CRYPTO_PROFILES[0]);
-        assert_eq!(payload["crypto_policies"][0], config::CRYPTO_POLICIES[0]);
-        assert!(
-            payload["algorithms"]["hash"]
-                .as_array()
-                .unwrap()
-                .contains(&json!("SHA-256"))
-        );
-        assert!(
-            payload["algorithms"]["symmetric"]
-                .as_array()
-                .unwrap()
-                .contains(&json!("AES-256/GCM"))
-        );
-        assert!(
-            payload["algorithms"]["eddsa"]
-                .as_array()
-                .unwrap()
-                .contains(&json!("Ed448"))
-        );
-        assert!(
-            payload["algorithms"]["xecdh"]
-                .as_array()
-                .unwrap()
-                .contains(&json!("X448"))
-        );
-        assert!(
-            payload["algorithms"]["ml_dsa"]
-                .as_array()
-                .unwrap()
-                .contains(&json!("ML-DSA-87"))
-        );
-        assert!(
-            payload["algorithms"]["ml_kem"]
-                .as_array()
-                .unwrap()
-                .contains(&json!("ML-KEM-1024"))
-        );
-        assert_eq!(payload["algorithms"]["fpe"][0], fpe::FPE_VERSION_FF1_2025);
-        assert_eq!(
-            payload["algorithms"]["tokenization"][0],
-            tokenization::TOKENIZATION_VERSION_RANDOM_V1
-        );
-        assert!(
-            payload["algorithms"]["mac"]
-                .as_array()
-                .unwrap()
-                .contains(&json!(mac::MAC_ALGORITHM_KMAC_256))
-        );
-        assert!(
-            payload["algorithms"]["mac"]
-                .as_array()
-                .unwrap()
-                .contains(&json!(mac::MAC_ALGORITHM_KMAC_384))
-        );
-        assert!(
-            payload["algorithms"]["mac"]
-                .as_array()
-                .unwrap()
-                .contains(&json!(mac::MAC_ALGORITHM_KMAC_512))
-        );
+        assert_eq!(payload.profiles, config::CRYPTO_PROFILES);
+        assert_eq!(payload.capabilities, project::CAPABILITIES);
+    }
+
+    #[test]
+    fn serialized_version_fields_follow_contract_order() {
+        let payload = version_payload();
+        let json = serde_json::to_string(&payload).unwrap();
+        let yaml = yaml_serde::to_string(&payload).unwrap();
+        let expected_fields = [
+            "name",
+            "build_status",
+            "version",
+            "protocol_version",
+            "license",
+            "copyright",
+            "project",
+            "profiles",
+            "capabilities",
+        ];
+
+        for output in [&json, &yaml] {
+            let mut previous = 0;
+            for field in expected_fields {
+                let position = output
+                    .find(field)
+                    .unwrap_or_else(|| panic!("missing field {field}"));
+                assert!(position >= previous, "{field} is out of order");
+                previous = position;
+            }
+        }
     }
 }

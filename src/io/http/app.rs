@@ -1,9 +1,12 @@
+// Copyright 2026 Eduardo Lopez
+// SPDX-License-Identifier: Apache-2.0
+
 use artbox::{
     Alignment, Artbox, Color, ColorStop, Fill, LinearGradient, RenderTarget, Renderer, fonts,
 };
 
 use crate::core::validation;
-use crate::core::{config, storage::StorageState};
+use crate::core::{config, project, protocol, storage::StorageState};
 use crate::error::DynError;
 use crate::ops::init::ValidatedInitState;
 use crate::ops::keys;
@@ -195,11 +198,17 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
     let target = RenderTarget::new(30, 6);
     let rendered = art.render_text("Vectis", target)?;
     println!("--------------------------------------------------------------");
-    println!("\nLicensed under the Apache License, Version 2.0");
+    println!("\nLicense: {}", project::LICENSE);
     print!("{}", rendered.to_ansi_string());
-    println!("\nCryptographic Data Protection Toolkit");
-    println!("\nLiesware Corp. | First Commit - June 18 2026");
-    println!("Version 0.9.5 · Protocol v1 · Experimental Build");
+    println!("\nOpen Source Advanced Data Protection Service");
+    println!("\n{}", project::COPYRIGHT);
+    println!("Developed by {}", project::DEVELOPER);
+    println!(
+        "Version {} | Protocol {} | {}",
+        project::VERSION,
+        protocol::PROTOCOL_VERSION_V1,
+        project::BUILD_STATUS
+    );
     println!("\n--------------------------------------------------------------");
     println!("\n[OK] Loaded cryptographic runtime");
     println!("[OK] Verified signed configuration");
@@ -207,11 +216,11 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
     println!("[OK] Loaded operational key material");
     println!("[OK] Started audit and metrics subsystems");
     println!("\nDo one thing and do it well.");
-    println!("A toolkit for protecting data.");
+    println!("Protect sensitive data.");
     println!("\nComplexity is inevitable,");
     println!("Simplicity is intentional.");
     println!("\n--------------------------------------------------------------");
-    println!("\nvectis> runing...");
+    println!("\nvectis> running...");
 
     let handle = axum_server::Handle::new();
     tokio::spawn(graceful_shutdown_on(
