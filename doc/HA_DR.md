@@ -54,7 +54,8 @@ Each Vectis node keeps its own in-memory state:
 
 - loaded operational keys in `KeysDbState`;
 - signed config state for routes, remote routes, and permissions;
-- signed config state for FPE, tokenization, and MAC profiles;
+- signed config state for FPE, tokenization, MAC, commitment, sharing, and
+  masking profiles;
 - local HTTP runtime state.
 
 If one node creates or updates a key, PostgreSQL stores the durable row. Other

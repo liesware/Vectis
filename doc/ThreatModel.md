@@ -32,26 +32,34 @@ decrypt it.
 The diagram above covers only the inter-instance path. Vectis also provides
 **local, single-instance field protection** that never involves a peer or a
 protected message: format-preserving encryption (FPE) over field values,
-reversible random tokenization, and MAC create/verify. These operations are governed by the same signed
-config, the same `kid` binding, and the same lifecycle enforcement as the
-messaging path (`ops/fpe.rs`, `ops/tokenization.rs`, `ops/mac.rs`).
+reversible random tokenization, MAC create/verify, blind indexes, display
+masking, keyed commitments, and authenticated Shamir secret sharing. These
+operations are governed by the same signed config, `kid` binding, permission,
+and lifecycle enforcement as the messaging path.
 
 ## Assets
 
 In order of importance:
 
 1. **Protected payloads**: the sensitive records moving between instances.
-2. **Token vault**: the `tokens` table, holding the reversible mapping from a
+2. **Token vault and blind-index store**: the `tokens` table holds the reversible mapping from a
    token to its original plaintext (plus optional metadata), AEAD-encrypted at
-   rest. The database only ever sees `kid`, `hashid`, and the encrypted `data`.
+   rest. The database only ever sees `kid`, `hashid`, and encrypted `data`.
+   The `indexes` table holds only deterministic `(kid, digest)` membership
+   entries; it contains no plaintext or profile data.
 3. **Key material**: encrypted init keys (`init.json`), operational keys
    (encrypted at rest in storage), HKDF-derived internal keys, and the per-profile
    keys derived from an operational key for FPE (the field key), tokenization
-   (the `hash_key` and `data_key`), and MAC (the MAC key).
+   (the `hash_key` and `data_key`), MAC/indexes (the MAC key), commitments
+   (the commitment key), and secret sharing (share-authentication key material).
 4. **Signed configuration**: routes, remote routes, peer public keys, API-key
-   permissions, and the `fpe_profiles`, `tokenization_profiles`, and `mac_profiles` in
+   permissions, and `fpe_profiles`, `tokenization_profiles`, `mac_profiles`,
+   `commitment_profiles`, `sharing_profiles`, and `masking_profiles` in
    `config.json`.
-5. **Credentials**: the root API key and per-client API keys.
+5. **Transient sensitive outputs**: commitment openings and plaintext secrets
+   returned by share combination, plus self-contained authenticated shares held
+   by callers. Vectis does not persist these values.
+6. **Credentials**: the root API key and per-client API keys.
 
 ## Trust Model
 
@@ -72,6 +80,11 @@ In order of importance:
   signed `permissions` section (per-kid actions, global actions, admin).
 - **Final applications trust their local Vectis instance.** They authenticate
   with client API keys and receive only locally re-encrypted deliveries.
+- **Local profile operations trust signed policy.** Masking reveals only the
+  configured visible characters; commitments rely on callers protecting their
+  openings; blind indexes intentionally expose deterministic membership; and
+  share reconstruction trusts only authenticated, compatible shares meeting the
+  configured threshold.
 
 ## Threats Addressed
 
@@ -79,7 +92,7 @@ In order of importance:
 | --- | --- | --- |
 | Payload exposure beyond the TLS session (queues, logs, intermediate storage) | Object-level protection independent of transport | Hybrid XECDH + ML-KEM key establishment, AEAD encryption, local re-encryption before final delivery (`ops/message.rs`) |
 | Sender impersonation between instances | Dual signatures verified before decryption | EdDSA and ML-DSA over the canonical JSON payload; both must verify (`verify_message_signatures`, verify-then-decrypt order) |
-| Cross-protocol and cross-context confusion (token/message type mixing, version downgrade) | Context binding and versioning inside the signed material | For messages, AAD binds `version`, `type`, `created_at`, `sender_host`, `sender_kid`, `recipient_kid`, `kem_alg`, `cipher_alg`, and the protocol version is inside the signed payload and must match the envelope. Each local subsystem binds its own context too: FPE keys derive from `profile`/`kid`/`fpe_version` and the FF1 tweak is `tweak_aad`; the tokenization `tokens.data` AAD binds `version`, `type`, `kid`, `profile`, fixed internal scheme, `hashid`, and `cipher`; MAC derives per profile/KID/context and applies signed context |
+| Cross-protocol and cross-context confusion (token/message type mixing, version downgrade) | Context binding and versioning inside the signed material | For messages, AAD binds `version`, `type`, `created_at`, `sender_host`, `sender_kid`, `recipient_kid`, `kem_alg`, `cipher_alg`, and the protocol version is inside the signed payload and must match the envelope. Each local subsystem binds its signed profile context: FPE derives a field key from profile/KID and uses `tweak_aad`; tokenization binds profile/KID/internal scheme/hashid/cipher in `tokens.data`; MAC and indexes bind profile/KID/context; commitments bind profile/KID/context/opening; sharing authenticates profile/KID/context/set metadata before interpolation |
 | "Harvest now, decrypt later" quantum adversary | Hybrid post-quantum cryptography | ML-KEM alongside XECDH for key establishment; ML-DSA alongside EdDSA for signatures; security holds if either component holds |
 | Nonce reuse under a long-lived key | Fresh key per message | Ephemeral XECDH key and fresh ML-KEM encapsulation per message; the HKDF-derived message key is used once |
 | Configuration tampering (routes, permissions, peer keys) | Mandatory config signature | `vectis-config` timestamp token over canonical JSON, verified on load and on every reload (`ops/sign.rs`, `core/config_file.rs`) |
@@ -100,9 +113,10 @@ satisfy them need compensating controls.
    implement idempotency or replay tracking themselves.
 2. **Vectis runs on a trusted internal network.** Expensive Botan operations are
    isolated from Tokio async workers with blocking tasks, but this is not rate
-   limiting. There is no built-in request throttling, timeout policy, or CPU
-   budget enforcement. Exposing a Vectis instance publicly requires a reverse
-   proxy, gateway, or ingress providing those controls.
+   limiting. Outbound peer and final-app calls have a bounded internal deadline,
+   but there is no built-in request throttling, inbound request execution
+   deadline, or CPU budget enforcement. Exposing a Vectis instance publicly
+   requires a reverse proxy, gateway, or ingress providing those controls.
 3. **Config rollback protection is the operator's responsibility.** The config
    signature proves authenticity and integrity, not freshness. An attacker who
    can replace both `config.json` and `config_sign.json` with an older, validly
@@ -126,6 +140,22 @@ satisfy them need compensating controls.
    replace AEAD message encryption. Use it where equality leakage is acceptable
    (for example, values that are already unique), and prefer tokenization when
    unlinkability is required.
+8. **Blind indexes deliberately reveal deterministic membership.** The same
+   profile/context/plaintext produces the same digest, so an observer with
+   access to the `indexes` table can correlate equal indexed values within that
+   domain. An index is not encryption and must not be used as a confidentiality
+   boundary.
+9. **Commitment openings are sensitive.** Random openings prevent equality
+   leakage between commitments for the same plaintext, but a party that holds
+   the opening and plaintext can verify the commitment. Callers must protect
+   openings according to their own disclosure workflow.
+10. **Secret-share custody belongs to callers.** Vectis authenticates and
+    validates shares before reconstruction but does not store, distribute, or
+    revoke them. Any threshold-sized compatible set can reconstruct the secret;
+    operators must control which parties receive shares and invoke combine.
+11. **Masking is controlled disclosure, not cryptographic protection.** It
+    reveals configured prefix/suffix characters and cannot recover a plaintext
+    once returned to a caller.
 
 ## Out Of Scope / Non-Goals
 
@@ -136,12 +166,14 @@ Vectis is not, and does not replace:
 - protection against a malicious operator (the operator is the root of trust);
 - protection against compromise of the host or the process memory;
 - a secure channel or a message-encryption substitute for the local field
-  operations: FPE, reversible tokenization, MAC, commitments, and blind indexes protect field
-  values within a single instance, not data in transit between instances.
+  operations: FPE, reversible tokenization, MAC, blind indexes, masking,
+  commitments, and secret sharing protect or transform values within a single
+  instance, not data in transit between instances.
   Tokenization additionally persists a reversible token-to-plaintext mapping
-  (FPE, MAC, and commitments store nothing; blind indexes store deterministic digests), so an
-  attacker holding both the `tokens` table and the operational key could recover
-  plaintexts — the host and operator boundary above applies;
+  (FPE, MAC, masking, commitments, and sharing store nothing; blind indexes
+  store deterministic digests), so an attacker holding both the `tokens` table
+  and the operational key could recover plaintexts — the host and operator
+  boundary above applies;
 - automatic runtime state propagation between nodes; clustered instances share
   durable storage (PostgreSQL) but not in-memory state, and cross-node changes
   become visible only through explicit reload, restart, or lazy-load (see
@@ -159,9 +191,14 @@ Vectis is not, and does not replace:
 | Client-side API key storage | Known gap | Restrict file permissions; use per-client keys for applications; rotate keys when exposure is suspected |
 | No key rotation flow | Known gap | Create a successor key, update routes, retire the old key manually |
 | FPE equality and frequency leakage (assumption 7) | Accepted for v1 | Apply FPE only where equality leakage is acceptable, such as already-unique identifiers; use reversible tokenization when unlinkability is required |
+| Blind-index equality and membership leakage (assumption 8) | Accepted for v1 | Use a narrowly scoped signed MAC profile/context; do not expose the index table or treat its digests as encrypted values |
+| Commitment opening exposure (assumption 9) | Caller responsibility | Store and disclose openings only through the intended evidence workflow |
+| Threshold share custody or combine misuse (assumption 10) | Caller responsibility | Distribute shares through independent protected channels; restrict `share-combine` to the minimum trusted clients |
+| Masked-value disclosure (assumption 11) | Accepted for v1 | Choose conservative visible prefix/suffix counts and treat masked output as sensitive display data |
 
 ## Revision
 
-This document reflects the design of protocol `v1` as of 2026-07-16, including the
-local FPE, reversible tokenization, and MAC operations. Update it whenever the protocol
-version, trust model, or any explicit assumption changes.
+This document reflects the design of protocol `v1` as of 2026-07-24, including
+local FPE, tokenization, MAC, blind indexes, masking, commitments, and secret
+sharing. Update it whenever the protocol version, trust model, or any explicit
+assumption changes.

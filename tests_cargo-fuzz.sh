@@ -8,6 +8,7 @@ TOOLCHAIN="${TOOLCHAIN-nightly}"
 TARGETS=(
   fuzz_canonical_json
   fuzz_sign_input
+  fuzz_compact_signature
   fuzz_timestamp_token
   fuzz_message_inputs
   fuzz_config_file
@@ -19,6 +20,7 @@ TARGETS=(
   fuzz_mac_index_inputs
   fuzz_masking_commitment_inputs
   fuzz_sharing_inputs
+  fuzz_share_envelope
 )
 
 fail() {

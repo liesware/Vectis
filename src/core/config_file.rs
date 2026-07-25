@@ -1,11 +1,9 @@
 use crate::core::{
-    canonical, commitments, config, fpe, mac, masking, permissions, protocol, remote_routes,
+    canonical, commitments, config, files, fpe, mac, masking, permissions, protocol, remote_routes,
     routes, sharing, tokenization,
 };
 use crate::error::DynError;
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 use zeroize::{Zeroize, Zeroizing};
@@ -133,11 +131,11 @@ pub fn validate_config_content(
 }
 
 pub fn read_config_file(path: &Path) -> Result<String, DynError> {
-    read_limited_config_file(path, config::CONFIG_FILE_MAX_SIZE_BYTES, "config file")
+    read_bounded_required_file(path, config::CONFIG_FILE_MAX_SIZE_BYTES, "config file")
 }
 
 pub fn read_config_signature_file(path: &Path) -> Result<String, DynError> {
-    read_limited_config_file(
+    read_bounded_required_file(
         path,
         config::CONFIG_SIGN_FILE_MAX_SIZE_BYTES,
         "config signature file",
@@ -350,38 +348,18 @@ fn empty_config_state(config: &config::AppConfig) -> ConfigState {
     }
 }
 
-fn read_limited_config_file(
+fn read_bounded_required_file(
     path: &Path,
     max_size_bytes: u64,
     label: &str,
 ) -> Result<String, DynError> {
-    let metadata = fs::metadata(path).map_err(|err| {
-        if err.kind() == io::ErrorKind::NotFound {
-            crate::error::not_found(format!("{label} does not exist"))
-        } else {
-            crate::error::internal(format!("{label} could not be read"))
-        }
-    })?;
-
-    if !metadata.is_file() {
-        return Err(crate::error::invalid_input(format!(
-            "{label} must point to a file"
-        )));
-    }
-
-    if metadata.len() > max_size_bytes {
-        return Err(crate::error::invalid_input(format!(
-            "{label} exceeds maximum allowed size"
-        )));
-    }
-
-    fs::read_to_string(path).map_err(|err| match err.kind() {
-        io::ErrorKind::NotFound => crate::error::not_found(format!("{label} does not exist")),
-        io::ErrorKind::InvalidData => {
-            crate::error::invalid_input(format!("{label} is not valid UTF-8"))
-        }
-        _ => crate::error::internal(format!("{label} could not be read")),
-    })
+    files::read_bounded_utf8_file(
+        path,
+        label,
+        max_size_bytes,
+        files::MissingFilePolicy::Required,
+    )?
+    .ok_or_else(|| crate::error::internal("required file unexpectedly absent"))
 }
 
 #[cfg(test)]
@@ -389,6 +367,7 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
     use serde_json::json;
+    use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn unique_path(tag: &str) -> PathBuf {

@@ -1,4 +1,4 @@
-use crate::core::validation;
+use crate::core::{config, files, validation};
 use crate::error::DynError;
 use std::env;
 use std::fs;
@@ -48,23 +48,26 @@ fn read_file_unseal_key() -> Result<Option<Zeroizing<String>>, DynError> {
         Err(err) => return Err(err),
     }
 
-    match fs::read_to_string(&path) {
-        Ok(value) => {
-            info!(path = %path.display(), "reading init unseal key from file");
-            let key = Zeroizing::new(value.trim().to_string());
-            validation::validate_symmetric_key("VECTIS_UNSEAL_KEY_FILE", &key, 32)?;
+    let missing_policy = if explicit_path {
+        files::MissingFilePolicy::Required
+    } else {
+        files::MissingFilePolicy::Optional
+    };
+    let Some(value) = files::read_bounded_utf8_file(
+        &path,
+        "unseal key file",
+        config::UNSEAL_KEY_FILE_MAX_SIZE_BYTES,
+        missing_policy,
+    )?
+    else {
+        return Ok(None);
+    };
 
-            Ok(Some(key))
-        }
-        Err(err) if err.kind() == io::ErrorKind::NotFound && !explicit_path => Ok(None),
-        Err(err) => Err(Box::new(io::Error::new(
-            err.kind(),
-            format!(
-                "VECTIS_UNSEAL_KEY_FILE could not be read from {}: {err}",
-                path.display()
-            ),
-        ))),
-    }
+    info!(path = %path.display(), "reading init unseal key from file");
+    let key = Zeroizing::new(value.trim().to_string());
+    validation::validate_symmetric_key("VECTIS_UNSEAL_KEY_FILE", &key, 32)?;
+
+    Ok(Some(key))
 }
 
 fn read_prompt_unseal_key(prompt: &str) -> Result<Zeroizing<String>, DynError> {
@@ -130,29 +133,7 @@ fn is_not_found(err: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
 }
 
 fn env_file_value(key: &str) -> Result<Option<String>, DynError> {
-    let content = match fs::read_to_string(".env") {
-        Ok(content) => content,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(Box::new(err)),
-    };
-
-    for line in content.lines() {
-        let line = line.trim();
-
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-
-        let Some((env_key, value)) = line.split_once('=') else {
-            continue;
-        };
-
-        if env_key.trim() == key {
-            return Ok(Some(crate::core::config::clean_env_value(value.trim())));
-        }
-    }
-
-    Ok(None)
+    Ok(config::load_env_file(".env")?.get(key).cloned())
 }
 
 #[cfg(test)]
@@ -347,6 +328,21 @@ mod tests {
 
             assert!(read_file_unseal_key().is_err());
 
+            let _ = fs::remove_file(path);
+        });
+    }
+
+    #[test]
+    fn unseal_key_file_rejects_content_over_limit() {
+        with_isolated_env(|| {
+            let path = unique_path("oversized");
+            write_unseal_key_file(
+                &path,
+                &"a".repeat((config::UNSEAL_KEY_FILE_MAX_SIZE_BYTES + 1) as usize),
+            );
+            unsafe { env::set_var("VECTIS_UNSEAL_KEY_FILE", &path) };
+
+            assert!(read_file_unseal_key().is_err());
             let _ = fs::remove_file(path);
         });
     }

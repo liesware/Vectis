@@ -40,7 +40,9 @@ At the current stage, Vectis provides:
 - authenticated encryption for protected messages;
 - local re-encryption before final application delivery;
 - a hybrid timestamp/signature protocol;
-- signed runtime configuration for routes, remote routes, permissions, FPE profiles, tokenization profiles, and MAC profiles;
+- signed runtime configuration for routes, remote routes, permissions, FPE
+  profiles, tokenization profiles, MAC profiles, commitment profiles, sharing
+  profiles, and masking profiles;
 - local format-preserving encryption for signed field profiles;
 - local reversible random tokenization for signed token profiles;
 - SQLite/PostgreSQL-backed storage behind a storage abstraction;
@@ -85,7 +87,8 @@ The signed config controls:
 - non-root API key permissions.
 - local FPE field profiles.
 - local tokenization profiles.
-- local MAC profiles.
+- local MAC profiles and blind indexes that reuse them.
+- local commitment, sharing, and masking profiles.
 
 ### Cryptographic Material Has Lifecycle
 
@@ -605,6 +608,16 @@ same plaintext differ when their openings differ.
 Blind indexes reuse `mac_profiles`: `/mac` computes a deterministic digest,
 while `/index` computes that same digest and stores or verifies membership in
 the `indexes` table. The database stores only `kid` and digest.
+
+## Secret Sharing Profiles
+
+Vectis exposes stateless authenticated Shamir secret sharing through
+`/shares/split/{kid}` and `/shares/combine`. `sharing_profiles` bind the KID,
+threshold, total share count, maximum UTF-8 secret length, and signed context.
+Split returns self-contained authenticated shares; combine accepts only a
+compatible threshold-sized set. Vectis stores neither shares nor plaintext, so
+share custody and reconstruction of a threshold set remain caller
+responsibilities.
 
 ## Masking Profiles
 

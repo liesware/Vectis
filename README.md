@@ -6,9 +6,9 @@
 
 Vectis is an **open source advanced data protection service**:
 format-preserving encryption, reversible tokenization, masking, MACs, blind
-indexes, commitments, and post-quantum protected messaging/signing — governed by an
-operator-signed configuration, served through a consistent HTTP and CLI
-interface.
+indexes, commitments, secret sharing, and post-quantum protected
+messaging/signing — governed by an operator-signed configuration, served through
+a consistent HTTP and CLI interface.
 
 **TLS protects the connection. Vectis protects the data.** Sensitive data often
 continues moving through applications, services, queues, storage, logs, workers,
@@ -93,7 +93,8 @@ protection primitives and workflows.
 
 - protected messages between Vectis instances, verified before decryption;
 - one operator-signed config file (routes, remote routes, permissions, FPE
-  profiles, tokenization profiles, MAC profiles, commitment profiles, and masking profiles); its registered
+  profiles, tokenization profiles, MAC profiles, commitment profiles, sharing
+  profiles, and masking profiles); its registered
   `remote_routes` are the only source of peer public keys — no trust-on-first-use
   path;
 - local re-encryption before final app delivery: the receiving application
@@ -105,8 +106,10 @@ protection primitives and workflows.
 - local MAC create/verify for signed MAC profiles;
 - local keyed cryptographic commitments with random openings;
 - local blind indexes that reuse signed MAC profiles and persist deterministic
-  membership digests.
-- local display masking for signed masking profiles.
+  membership digests;
+- local display masking for signed masking profiles;
+- local stateless authenticated Shamir secret sharing for signed sharing
+  profiles.
 
 **Key management**
 
@@ -447,7 +450,8 @@ native `cargo-fuzz` targets.
 - [doc/Design.md](doc/Design.md): reusable design principles distilled from this project.
 - [demo/message/README.md](demo/message/README.md): clinical data exchange demo.
 - [demo/local/README.md](demo/local/README.md): local FPE, tokenization, MAC,
-  blind indexes, internal message, and sign demo.
+  masking, commitments, secret sharing, blind indexes, internal message, and
+  sign demo.
 - [charts/vectis/README.md](charts/vectis/README.md): Kubernetes Helm chart.
 
 ## What Vectis Is Not
@@ -482,6 +486,15 @@ production secrets, financial records, or other sensitive data yet.
 The threat model, explicit assumptions, and known limitations are documented in
 [doc/ThreatModel.md](doc/ThreatModel.md).
 
+## Enterprise
+
+Supported Stable and LTS binaries, private builds, custom integrations, and
+enterprise support are available directly from the project author.
+
+Contact: [liesware@protonmail.com](mailto:liesware@protonmail.com)
+
 ## License
 
-Licensed under the Apache License, Version 2.0
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
+
+Copyright and attribution notices are available in [NOTICE](NOTICE).

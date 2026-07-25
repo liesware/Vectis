@@ -38,7 +38,8 @@ Important `core` responsibilities:
 - cryptographic helper functions;
 - external input validators;
 - signed config loading;
-- routes, remote routes, permissions, FPE profiles, tokenization profiles, and MAC profiles;
+- routes, remote routes, permissions, FPE profiles, tokenization profiles, MAC
+  profiles, commitment profiles, sharing profiles, and masking profiles;
 - storage abstraction and SQLite/PostgreSQL backends;
 - HTTP client construction;
 - operational logs, audit logs, and metrics;
@@ -52,7 +53,7 @@ Important `ops` responsibilities:
 - public key output;
 - hybrid timestamp signing and verification;
 - protected message send, receive, decrypt, and internal message encryption;
-- reversible token encode/decode flows;
+- FPE, tokenization, MAC/index, commitment, sharing, and masking operations;
 - API key generation.
 
 Important `io/http` responsibilities:
@@ -129,7 +130,8 @@ Reload boundaries are explicit:
 
 - `POST /keys/reload` refreshes loaded key state from storage.
 - `POST /config/reload` refreshes signed routes, remote routes, permissions,
-  FPE profiles, tokenization profiles, and MAC profiles.
+  FPE profiles, tokenization profiles, MAC profiles, commitment profiles,
+  sharing profiles, and masking profiles.
 - missing-key lazy-load loads one key from storage if a request references a
   valid `kid` not present in memory.
 

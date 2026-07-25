@@ -6,8 +6,6 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use tracing::warn;
 
-const DEFAULT_TIMEOUT_SECONDS: u64 = 30;
-
 struct HttpClientState {
     client: reqwest::Client,
     config: config::HttpClientConfig,
@@ -59,15 +57,26 @@ fn client_state() -> Result<&'static HttpClientState, DynError> {
         warn!("VECTIS_TLS_SKIP_VERIFY=true; outbound TLS certificate verification is disabled");
     }
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECONDS))
-        .danger_accept_invalid_certs(config.tls_skip_verify)
-        .build()?;
+    let client = build_runtime_http_client(runtime_http_timeout(), config.tls_skip_verify)?;
     let _ = HTTP_CLIENT.set(HttpClientState { client, config });
 
     HTTP_CLIENT
         .get()
         .ok_or_else(|| crate::error::internal("HTTP client could not be initialized"))
+}
+
+fn runtime_http_timeout() -> Duration {
+    Duration::from_secs(config::INTERNAL_HTTP_TIMEOUT_SEC)
+}
+
+fn build_runtime_http_client(
+    timeout: Duration,
+    tls_skip_verify: bool,
+) -> Result<reqwest::Client, DynError> {
+    Ok(reqwest::Client::builder()
+        .timeout(timeout)
+        .danger_accept_invalid_certs(tls_skip_verify)
+        .build()?)
 }
 
 fn http_url(scheme: &str, host: &str, path: &str) -> Result<String, DynError> {
@@ -103,5 +112,99 @@ fn error_for_status(status: StatusCode) -> DynError {
         401 | 403 => crate::error::forbidden(message),
         404 => crate::error::not_found(message),
         _ => crate::error::internal(message),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{Router, routing::get};
+    use std::net::SocketAddr;
+    use tokio::task::JoinHandle;
+    use tokio::time::timeout;
+
+    async fn start_test_server() -> (
+        axum_server::Handle,
+        JoinHandle<std::io::Result<()>>,
+        SocketAddr,
+    ) {
+        let app = Router::new().route("/fast", get(|| async { "ok" })).route(
+            "/slow",
+            get(|| async {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                "late"
+            }),
+        );
+        let handle = axum_server::Handle::new();
+        let server_handle = handle.clone();
+        let server_task = tokio::spawn(async move {
+            axum_server::bind("127.0.0.1:0".parse().expect("test address must parse"))
+                .handle(server_handle)
+                .serve(app.into_make_service())
+                .await
+        });
+        let addr = timeout(Duration::from_secs(1), handle.listening())
+            .await
+            .expect("test server must start within one second")
+            .expect("test server must report its listening address");
+
+        (handle, server_task, addr)
+    }
+
+    async fn stop_test_server(
+        handle: axum_server::Handle,
+        server_task: JoinHandle<std::io::Result<()>>,
+    ) {
+        handle.shutdown();
+        timeout(Duration::from_secs(1), server_task)
+            .await
+            .expect("test server must stop within one second")
+            .expect("test server task must not panic")
+            .expect("test server must stop cleanly");
+    }
+
+    #[test]
+    fn runtime_timeout_uses_internal_constant() {
+        assert_eq!(
+            runtime_http_timeout(),
+            Duration::from_secs(config::INTERNAL_HTTP_TIMEOUT_SEC)
+        );
+        assert_eq!(runtime_http_timeout(), Duration::from_secs(10));
+    }
+
+    #[tokio::test]
+    async fn runtime_client_completes_response_within_timeout() {
+        let (handle, server_task, addr) = start_test_server().await;
+        let client = build_runtime_http_client(Duration::from_millis(500), false)
+            .expect("test client must build");
+
+        let response = client
+            .get(format!("http://{addr}/fast"))
+            .send()
+            .await
+            .expect("fast response must complete");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.text().await.expect("response body must read"),
+            "ok"
+        );
+
+        stop_test_server(handle, server_task).await;
+    }
+
+    #[tokio::test]
+    async fn runtime_client_times_out_slow_response() {
+        let (handle, server_task, addr) = start_test_server().await;
+        let client = build_runtime_http_client(Duration::from_millis(25), false)
+            .expect("test client must build");
+
+        let err = client
+            .get(format!("http://{addr}/slow"))
+            .send()
+            .await
+            .expect_err("slow response must exceed the client timeout");
+        assert!(err.is_timeout());
+
+        stop_test_server(handle, server_task).await;
     }
 }

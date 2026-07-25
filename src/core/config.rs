@@ -1,4 +1,4 @@
-use crate::core::{crypto, validation};
+use crate::core::{crypto, files, validation};
 use crate::error::DynError;
 use std::collections::HashMap;
 use std::env;
@@ -25,6 +25,9 @@ pub const INTERNAL_MASK_BATCH: usize = 128;
 pub const INTERNAL_COMMIT_BATCH: usize = 128;
 pub const INTERNAL_SHARE_MAX: usize = 32;
 pub const INTERNAL_REF_MAX_CHARS: usize = 128;
+pub const INTERNAL_HTTP_MAX_SIZE: usize = 2 * 1024 * 1024;
+pub const INTERNAL_HTTP_GRACE_SEC: u64 = 30;
+pub const INTERNAL_HTTP_TIMEOUT_SEC: u64 = 30;
 pub const STORAGE_ENVELOPE_MAX_CHARS: usize = 32_768;
 pub const STORAGE_INDEX_DIGEST_MAX_CHARS: usize = 128;
 pub const CONFIG_NAME_MAX_CHARS: usize = 128;
@@ -41,6 +44,9 @@ pub const VECTIS_MODES: &[&str] = &["dev", "prod"];
 pub const DEFAULT_INIT_KEYS_FILE: &str = "init.json";
 pub const CONFIG_FILE_MAX_SIZE_BYTES: u64 = 8 * 1024 * 1024;
 pub const CONFIG_SIGN_FILE_MAX_SIZE_BYTES: u64 = 1024 * 1024;
+pub const INIT_KEYS_FILE_MAX_SIZE_BYTES: u64 = 64 * 1024;
+pub const UNSEAL_KEY_FILE_MAX_SIZE_BYTES: u64 = 1024;
+pub const ENV_FILE_MAX_SIZE_BYTES: u64 = 64 * 1024;
 
 #[derive(Clone)]
 pub struct AppConfig {
@@ -444,11 +450,13 @@ fn default_sqlite_path() -> String {
 }
 
 pub fn load_env_file(path: &str) -> Result<HashMap<String, String>, DynError> {
-    let content = match fs::read_to_string(path) {
-        Ok(content) => content,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
-        Err(err) => return Err(Box::new(err)),
-    };
+    let content = files::read_bounded_utf8_file(
+        Path::new(path),
+        "environment file",
+        ENV_FILE_MAX_SIZE_BYTES,
+        files::MissingFilePolicy::Optional,
+    )?
+    .unwrap_or_default();
 
     let mut values = HashMap::new();
 
@@ -466,7 +474,9 @@ pub fn load_env_file(path: &str) -> Result<HashMap<String, String>, DynError> {
         let key = key.trim();
         let value = clean_env_value(value.trim());
 
-        values.insert(key.to_string(), value);
+        // First occurrence wins: a later duplicate must not silently override an
+        // earlier value (e.g. the unseal key file path).
+        values.entry(key.to_string()).or_insert(value);
     }
 
     Ok(values)
@@ -494,6 +504,36 @@ pub fn clean_env_value(value: &str) -> String {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    use std::fs;
+
+    #[test]
+    fn env_file_rejects_content_over_limit() {
+        let path =
+            std::env::temp_dir().join(format!("vectis-env-size-test-{}", std::process::id()));
+        fs::write(&path, "a".repeat((ENV_FILE_MAX_SIZE_BYTES + 1) as usize))
+            .expect("write oversized env file");
+
+        assert!(load_env_file(path.to_str().expect("temporary path must be UTF-8")).is_err());
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn env_file_duplicate_keys_keep_first_occurrence() {
+        let path = std::env::temp_dir().join(format!("vectis-env-dup-test-{}", std::process::id()));
+        fs::write(
+            &path,
+            "VECTIS_UNSEAL_KEY_FILE=/a\nVECTIS_UNSEAL_KEY_FILE=/b\n",
+        )
+        .expect("write env file with duplicate key");
+
+        let values =
+            load_env_file(path.to_str().expect("temporary path must be UTF-8")).expect("load env");
+        assert_eq!(
+            values.get("VECTIS_UNSEAL_KEY_FILE").map(String::as_str),
+            Some("/a")
+        );
+        let _ = fs::remove_file(path);
+    }
 
     #[test]
     fn dev_mode_uses_http() {

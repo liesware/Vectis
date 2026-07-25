@@ -8,6 +8,9 @@ The `vectis` CLI is an HTTP client for the runtime API, except for `vectis init`
 
 - Default base URL: `http://127.0.0.1:3000`
 - Requests with a body use `Content-Type: application/json`.
+- Request bodies are limited to 2 MiB (`2,097,152` bytes) by the internal
+  `INTERNAL_HTTP_MAX_SIZE` policy. Larger bodies are rejected before
+  authentication, authorization, storage, or cryptographic processing.
 - Timestamps are encoded as Unix epoch seconds in a string.
 - `kid` values are hex strings derived with Vectis' internal hash (`INTERNAL_KEYS_HASH`, currently `BLAKE2b(256)`), so they are normally 64 hex characters.
 - Binary fields (`ctx`, `nonce`, signatures, public keys) are encoded as hex.
@@ -17,6 +20,14 @@ The `vectis` CLI is an HTTP client for the runtime API, except for `vectis init`
 ```json
 {
   "error": "invalid request"
+}
+```
+
+An oversized request body returns `413 Payload Too Large`:
+
+```json
+{
+  "error": "request body exceeds maximum allowed size"
 }
 ```
 
@@ -483,6 +494,9 @@ Allowed `status` values:
 - `compromised`
 - `destroyed`
 
+`reason` is required, must not contain control characters, and is limited to
+128 characters.
+
 Lifecycle behavior:
 
 - `active`: normal use.
@@ -539,6 +553,7 @@ Response:
   "tokenization_profiles_loaded": 1,
   "mac_profiles_loaded": 1,
   "commitment_profiles_loaded": 1,
+  "sharing_profiles_loaded": 1,
   "masking_profiles_loaded": 1
 }
 ```
@@ -656,7 +671,7 @@ Permission mapping:
 | `mask` | `POST /mask/{kid}`, `POST /mask/batch/{kid}` |
 | `metrics` | `GET /metrics` with `kid: "*"` |
 
-Root always passes permission checks. Routes operations require root or `admin`; there is no granular `routes` action. FPE, tokenization, MAC, and blind-index actions require explicit KID-scoped grants; `kid: "*"` is rejected for those actions.
+Root always passes permission checks. Routes operations require root or `admin`; there is no granular `routes` action. FPE, tokenization, MAC, blind-index, commitment, sharing, and masking actions require explicit KID-scoped grants; `kid: "*"` is rejected for those actions.
 
 Permissions file shape:
 

@@ -4,6 +4,13 @@ Vectis reads configuration from process environment variables first and then fro
 
 Do not store secrets in `.env` for production. In particular, `VECTIS_UNSEAL_KEY` is intentionally not listed in `env.dist`.
 
+## Local File Limits
+
+Vectis reads local UTF-8 inputs with bounded readers before parsing them. The
+limits are 64 KiB for `init.json`, 1 KiB for `.unseal_key`, 64 KiB for `.env`,
+and 2 MiB for CLI `--file` JSON input. `config.json` and `config_sign.json`
+retain their separate 8 MiB and 1 MiB limits.
+
 ## Resolution Order
 
 For most configuration values:
@@ -197,7 +204,7 @@ Recommended admin permission:
 }
 ```
 
-If any permission entry contains `admin`, Vectis treats the whole client as admin and ignores `kid` plus any other actions for that client. Non-admin KID-scoped permissions must reference KIDs already loaded in memory. Global permissions such as `metrics` use `kid: "*"`. FPE, tokenization, MAC, commitments, blind-index, and masking permissions require explicit KIDs; `kid: "*"` is rejected for those actions.
+If any permission entry contains `admin`, Vectis treats the whole client as admin and ignores `kid` plus any other actions for that client. Non-admin KID-scoped permissions must reference KIDs already loaded in memory. Global permissions such as `metrics` use `kid: "*"`. FPE, tokenization, MAC, commitments, secret sharing, blind-index, and masking permissions require explicit KIDs; `kid: "*"` is rejected for those actions.
 
 Allowed actions:
 

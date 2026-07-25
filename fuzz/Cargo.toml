@@ -30,6 +30,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "fuzz_compact_signature"
+path = "fuzz_targets/fuzz_compact_signature.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "fuzz_timestamp_token"
 path = "fuzz_targets/fuzz_timestamp_token.rs"
 test = false
@@ -102,6 +109,13 @@ bench = false
 [[bin]]
 name = "fuzz_sharing_inputs"
 path = "fuzz_targets/fuzz_sharing_inputs.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_share_envelope"
+path = "fuzz_targets/fuzz_share_envelope.rs"
 test = false
 doc = false
 bench = false

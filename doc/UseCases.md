@@ -34,15 +34,16 @@ For the exact request/response schema of every endpoint, see
 | Detect **tampering** of a value (integrity + authenticity) | **MAC** |
 | **Search** protected data by equality without storing plaintext | **Blind Index** |
 | **Commit** to a value now and reveal it later (hiding + binding) | **Commitments** |
+| Split a secret so only a threshold of holders can recover it | **Secret Sharing** |
 | Show only **part** of a value on screen (e.g. last 4 digits) | **Masking** |
 | Move a record to **another service or organization** | **Protected Messages** |
 | Protect a payload **locally at rest** | **Internal encrypt/decrypt** |
 | Prove a document's **authenticity and time** | **Signatures** |
 
-All field-level operations (FPE, Tokenization, MAC, Blind Index, Commitments,
-Masking) are **profile-driven**: profiles live only in the operator-signed
-`config.json` and requests select one by name. The request cannot smuggle in
-algorithm parameters — those come from signed config.
+All local data-protection operations (FPE, Tokenization, MAC, Blind Index,
+Commitments, Secret Sharing, Masking) are **profile-driven**: profiles live
+only in the operator-signed `config.json` and requests select one by name. The
+request cannot smuggle in algorithm parameters — those come from signed config.
 
 ---
 

@@ -564,7 +564,7 @@ const LIFECYCLE_HELP: CommandHelp = CommandHelp {
             title: "Options:",
             lines: &[
                 "  --status <status>     active, disabled, retired, compromised, or destroyed",
-                "  --reason <reason>     Non-empty reason for the lifecycle change",
+                "  --reason <reason>     Non-empty reason (maximum 128 characters)",
             ],
         },
         HelpSection {

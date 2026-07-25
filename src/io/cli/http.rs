@@ -1,4 +1,4 @@
-use crate::core::{config, storage::StorageState, validation};
+use crate::core::{config, files, storage::StorageState, validation};
 use crate::error::DynError;
 use crate::io::cli::{config_editor, help_catalog, init};
 use crate::ops;
@@ -1076,7 +1076,11 @@ fn parse_lifecycle_body(args: Vec<String>) -> Result<Value, DynError> {
             }
             "--reason" => {
                 let value = next_flag_value(&args, index, "--reason")?;
-                validation::validate_text_field("reason", value)?;
+                validation::validate_bounded_text_field(
+                    "reason",
+                    value,
+                    config::INTERNAL_REF_MAX_CHARS,
+                )?;
                 reason = Some(value.to_string());
                 index += 2;
             }
@@ -1108,15 +1112,13 @@ fn parse_json_source(args: Vec<String>) -> Result<Value, DynError> {
         })?,
         "--file" => {
             let path = Path::new(&args[1]);
-            let metadata = fs::metadata(path).map_err(|err| {
-                invalid_input(format!("--file must point to a readable file: {err}"))
-            })?;
-            if !metadata.is_file() {
-                return Err(invalid_input("--file must point to a file"));
-            }
-            let content = fs::read_to_string(path).map_err(|err| {
-                invalid_input(format!("--file must point to a readable UTF-8 file: {err}"))
-            })?;
+            let content = files::read_bounded_utf8_file(
+                path,
+                "--file",
+                config::INTERNAL_HTTP_MAX_SIZE as u64,
+                files::MissingFilePolicy::Required,
+            )?
+            .ok_or_else(|| crate::error::internal("required CLI input file unexpectedly absent"))?;
             serde_json::from_str::<Value>(&content).map_err(|err| {
                 invalid_input(format!("--file must contain a valid JSON object: {err}"))
             })?
@@ -1354,6 +1356,7 @@ fn flag_consumes_value(flag: &str) -> bool {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+    use std::fs;
 
     fn dispatch_names() -> Vec<&'static str> {
         HTTP_COMMANDS.iter().map(|command| command.name).collect()
@@ -1391,6 +1394,26 @@ mod tests {
         assert!(!missing_parent_target.exists());
 
         std::fs::remove_dir_all(directory).expect("temporary directory must be removed");
+    }
+
+    #[test]
+    fn json_file_source_uses_http_body_size_limit() {
+        let path =
+            std::env::temp_dir().join(format!("vectis-cli-json-size-test-{}", std::process::id()));
+        let prefix = r#"{"value":""#;
+        let suffix = "\"}";
+        let valid = format!(
+            "{prefix}{}{}",
+            "a".repeat(config::INTERNAL_HTTP_MAX_SIZE - prefix.len() - suffix.len()),
+            suffix
+        );
+        fs::write(&path, &valid).expect("write maximum-sized JSON file");
+        assert!(parse_json_source(strings(&["--file", path.to_str().unwrap()])).is_ok());
+
+        fs::write(&path, "a".repeat(config::INTERNAL_HTTP_MAX_SIZE + 1))
+            .expect("write oversized JSON file");
+        assert!(parse_json_source(strings(&["--file", path.to_str().unwrap()])).is_err());
+        let _ = fs::remove_file(path);
     }
 
     #[test]

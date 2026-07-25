@@ -660,7 +660,11 @@ pub fn parse_update_lifecycle_input(request: Value) -> Result<UpdateLifecycleInp
     let input: UpdateLifecycleInput = serde_json::from_value(request)
         .map_err(|err| crate::error::invalid_input(format!("invalid lifecycle request: {err}")))?;
     validate_lifecycle_status("status", &input.status)?;
-    validation::validate_text_field("reason", &input.reason)?;
+    validation::validate_bounded_text_field(
+        "reason",
+        &input.reason,
+        config::INTERNAL_REF_MAX_CHARS,
+    )?;
 
     Ok(input)
 }
@@ -970,7 +974,11 @@ fn validate_ops_key_properties(properties: &OpsKeyProperties) -> Result<(), DynE
     validation::validate_text_field("properties.tag", &properties.tag)?;
     validation::validate_text_field("properties.created_at", &properties.created_at)?;
     validate_lifecycle_status("properties.lifecycle.status", &properties.lifecycle.status)?;
-    validation::validate_text_field("properties.lifecycle.reason", &properties.lifecycle.reason)?;
+    validation::validate_bounded_text_field(
+        "properties.lifecycle.reason",
+        &properties.lifecycle.reason,
+        config::INTERNAL_REF_MAX_CHARS,
+    )?;
     validation::validate_text_field(
         "properties.lifecycle.changed_at",
         &properties.lifecycle.changed_at,
@@ -1293,6 +1301,34 @@ mod tests {
         loaded_key.id = id.to_string();
 
         loaded_key
+    }
+
+    #[test]
+    fn lifecycle_reason_uses_ref_max_chars_limit() {
+        let max = config::INTERNAL_REF_MAX_CHARS;
+        assert!(
+            parse_update_lifecycle_input(json!({
+                "status": "disabled",
+                "reason": "a".repeat(max),
+            }))
+            .is_ok()
+        );
+
+        let err = match parse_update_lifecycle_input(json!({
+            "status": "disabled",
+            "reason": "a".repeat(max + 1),
+        })) {
+            Ok(_) => panic!("overlong lifecycle reason must fail"),
+            Err(err) => err,
+        };
+        assert_eq!(
+            err.to_string(),
+            "reason exceeds maximum allowed length: 128"
+        );
+
+        let mut properties = loaded_key_with_lifecycle("active").properties.clone();
+        properties.lifecycle.reason = "a".repeat(max + 1);
+        assert!(validate_ops_key_properties(&properties).is_err());
     }
 
     fn empty_keys_state() -> KeysDbState {

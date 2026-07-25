@@ -7,6 +7,7 @@ use crate::core::{config, storage::StorageState};
 use crate::error::DynError;
 use crate::ops::init::ValidatedInitState;
 use crate::ops::keys;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, warn};
@@ -132,6 +133,8 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         log_dir = %logging.dir,
         log_file = %logging.file,
         tls_skip_verify = config.tls_skip_verify,
+        http_grace_seconds = config::INTERNAL_HTTP_GRACE_SEC,
+        http_timeout_seconds = config::INTERNAL_HTTP_TIMEOUT_SEC,
         postgres_configured = !config.postgres_dsn.is_empty(),
         "http service configuration loaded"
     );
@@ -210,6 +213,13 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
     println!("\n--------------------------------------------------------------");
     println!("\nvectis> runing...");
 
+    let handle = axum_server::Handle::new();
+    tokio::spawn(graceful_shutdown_on(
+        handle.clone(),
+        shutdown_signal(),
+        http_grace_period(),
+    ));
+
     if config.server_scheme == "https" {
         let cert_path = config.tls_cert_path.as_ref().ok_or_else(|| {
             crate::error::invalid_input("VECTIS_TLS_CERT_PATH is required when VECTIS_MODE=prod")
@@ -219,12 +229,6 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         })?;
         let tls_config =
             axum_server::tls_rustls::RustlsConfig::from_pem_file(cert_path, key_path).await?;
-        let handle = axum_server::Handle::new();
-        let shutdown_handle = handle.clone();
-        tokio::spawn(async move {
-            shutdown_signal().await;
-            shutdown_handle.graceful_shutdown(Some(Duration::from_secs(10)));
-        });
 
         info!(addr = %config.http_bind_addr, scheme = %config.server_scheme, "server listening");
         axum_server::bind_rustls(config.http_bind_addr, tls_config)
@@ -233,15 +237,31 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
             .await?;
     } else {
         warn!("server running without TLS because VECTIS_MODE=dev");
-        let listener = tokio::net::TcpListener::bind(config.http_bind_addr).await?;
 
         info!(addr = %config.http_bind_addr, scheme = %config.server_scheme, "server listening");
-        axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal())
+        axum_server::bind(config.http_bind_addr)
+            .handle(handle)
+            .serve(app.into_make_service())
             .await?;
     }
 
     Ok(())
+}
+
+fn http_grace_period() -> Duration {
+    Duration::from_secs(config::INTERNAL_HTTP_GRACE_SEC)
+}
+
+async fn graceful_shutdown_on<F>(handle: axum_server::Handle, shutdown: F, grace_period: Duration)
+where
+    F: Future<Output = ()>,
+{
+    shutdown.await;
+    info!(
+        grace_seconds = grace_period.as_secs(),
+        "graceful shutdown started"
+    );
+    handle.graceful_shutdown(Some(grace_period));
 }
 
 async fn shutdown_signal() {
@@ -265,5 +285,145 @@ async fn shutdown_signal() {
     tokio::select! {
         _ = sigint => tracing::info!("shutdown signal received: SIGINT"),
         _ = sigterm => tracing::info!("shutdown signal received: SIGTERM"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{Router, routing::get};
+    use std::net::SocketAddr;
+    use tokio::sync::Notify;
+    use tokio::task::JoinHandle;
+    use tokio::time::{Instant, timeout};
+
+    async fn start_test_server(
+        app: Router,
+    ) -> (
+        axum_server::Handle,
+        JoinHandle<std::io::Result<()>>,
+        SocketAddr,
+    ) {
+        let handle = axum_server::Handle::new();
+        let server_handle = handle.clone();
+        let server_task = tokio::spawn(async move {
+            axum_server::bind("127.0.0.1:0".parse().expect("test address must parse"))
+                .handle(server_handle)
+                .serve(app.into_make_service())
+                .await
+        });
+        let addr = timeout(Duration::from_secs(1), handle.listening())
+            .await
+            .expect("test server must start within one second")
+            .expect("test server must report its listening address");
+
+        (handle, server_task, addr)
+    }
+
+    async fn wait_for_server(server_task: JoinHandle<std::io::Result<()>>) -> std::io::Result<()> {
+        timeout(Duration::from_secs(1), server_task)
+            .await
+            .expect("test server must stop within one second")
+            .expect("test server task must not panic")
+    }
+
+    #[test]
+    fn http_grace_period_uses_internal_limit() {
+        assert_eq!(
+            http_grace_period(),
+            Duration::from_secs(config::INTERNAL_HTTP_GRACE_SEC)
+        );
+        assert_eq!(http_grace_period(), Duration::from_secs(10));
+    }
+
+    #[tokio::test]
+    async fn request_finishing_within_grace_period_completes() {
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let app = Router::new().route(
+            "/slow",
+            get({
+                let entered = entered.clone();
+                let release = release.clone();
+                move || {
+                    let entered = entered.clone();
+                    let release = release.clone();
+                    async move {
+                        entered.notify_one();
+                        release.notified().await;
+                        "complete"
+                    }
+                }
+            }),
+        );
+        let (handle, server_task, addr) = start_test_server(app).await;
+        let request_task = tokio::spawn(async move {
+            let response = reqwest::get(format!("http://{addr}/slow")).await?;
+            let status = response.status();
+            let body = response.text().await?;
+            Ok::<_, reqwest::Error>((status, body))
+        });
+
+        timeout(Duration::from_secs(1), entered.notified())
+            .await
+            .expect("slow handler must start");
+        graceful_shutdown_on(handle, std::future::ready(()), Duration::from_millis(500)).await;
+        release.notify_one();
+
+        let (status, body) = timeout(Duration::from_secs(1), request_task)
+            .await
+            .expect("request must finish within the grace period")
+            .expect("request task must not panic")
+            .expect("request must complete successfully");
+        assert_eq!(status, reqwest::StatusCode::OK);
+        assert_eq!(body, "complete");
+        wait_for_server(server_task)
+            .await
+            .expect("server must stop cleanly after draining");
+    }
+
+    #[tokio::test]
+    async fn request_exceeding_grace_period_is_terminated() {
+        let entered = Arc::new(Notify::new());
+        let never_release = Arc::new(Notify::new());
+        let app = Router::new().route(
+            "/blocked",
+            get({
+                let entered = entered.clone();
+                let never_release = never_release.clone();
+                move || {
+                    let entered = entered.clone();
+                    let never_release = never_release.clone();
+                    async move {
+                        entered.notify_one();
+                        never_release.notified().await;
+                        "unreachable"
+                    }
+                }
+            }),
+        );
+        let (handle, server_task, addr) = start_test_server(app).await;
+        let request_task =
+            tokio::spawn(async move { reqwest::get(format!("http://{addr}/blocked")).await });
+
+        timeout(Duration::from_secs(1), entered.notified())
+            .await
+            .expect("blocked handler must start");
+        let grace_period = Duration::from_millis(50);
+        let started = Instant::now();
+        graceful_shutdown_on(handle, std::future::ready(()), grace_period).await;
+
+        wait_for_server(server_task)
+            .await
+            .expect("server must stop after the grace period");
+        assert!(started.elapsed() >= grace_period);
+        let request_result = timeout(Duration::from_secs(1), request_task)
+            .await
+            .expect("terminated request must return")
+            .expect("request task must not panic");
+        assert!(request_result.is_err());
+
+        let new_request = reqwest::get(format!("http://{addr}/blocked")).await;
+        assert!(new_request.is_err());
     }
 }

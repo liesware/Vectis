@@ -1,5 +1,6 @@
 use axum::Json;
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use std::sync::Arc;
@@ -31,7 +32,7 @@ mod test;
 mod token;
 
 use crate::core::commitments::CommitmentProfile;
-use crate::core::config::AppConfig;
+use crate::core::config::{AppConfig, INTERNAL_HTTP_MAX_SIZE};
 use crate::core::config_file::ConfigState;
 use crate::core::fpe::FpeProfile;
 use crate::core::mac::MacProfile;
@@ -646,6 +647,7 @@ pub fn router(state: HttpState) -> Router {
         .route("/message/decrypt", post(message::decrypt_endpoint))
         .route("/message", post(message::receive_endpoint))
         .route("/message/{sender_kid}", post(message::send_endpoint))
+        .layer(DefaultBodyLimit::max(INTERNAL_HTTP_MAX_SIZE))
         .layer(axum::middleware::from_fn(middleware::request_context))
         .with_state(state)
 }

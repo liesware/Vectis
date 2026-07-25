@@ -1,4 +1,4 @@
-use crate::core::{config, unseal};
+use crate::core::{config, files, unseal};
 use crate::error::DynError;
 use crate::io::cli::sensitive;
 use crate::ops;
@@ -53,12 +53,22 @@ pub fn load_init_state() -> Result<ops::init::ValidatedInitState, DynError> {
     let init_keys_path = config::init_keys_file_path()?;
     let key_hex = unseal::read_unseal_key("VECTIS_UNSEAL_KEY:")?;
     validate_init_keys_file_permissions(&init_keys_path)?;
-    let encrypted_json = fs::read_to_string(&init_keys_path)?;
+    let encrypted_json = read_init_keys_file(&init_keys_path)?;
     let init_state = ops::init::load_validated_init_state(&encrypted_json, &key_hex)?;
 
     info!(path = %init_keys_path.display(), "init keys validated");
 
     Ok(init_state)
+}
+
+fn read_init_keys_file(path: &Path) -> Result<String, DynError> {
+    files::read_bounded_utf8_file(
+        path,
+        "init keys file",
+        config::INIT_KEYS_FILE_MAX_SIZE_BYTES,
+        files::MissingFilePolicy::Required,
+    )?
+    .ok_or_else(|| crate::error::internal("required init keys file unexpectedly absent"))
 }
 
 fn validate_init_keys_file_permissions(path: &Path) -> Result<(), DynError> {
@@ -80,6 +90,7 @@ fn validate_init_keys_file_permissions(path: &Path) -> Result<(), DynError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn sensitive_file_modes_allow_owner_and_group_read() {
@@ -93,5 +104,19 @@ mod tests {
         for mode in [0o644, 0o660, 0o700, 0o750, 0o604, 0o610] {
             assert_ne!(mode & SENSITIVE_FILE_FORBIDDEN_MODE_BITS, 0);
         }
+    }
+
+    #[test]
+    fn init_keys_file_rejects_content_over_limit() {
+        let path =
+            std::env::temp_dir().join(format!("vectis-init-size-test-{}", std::process::id()));
+        fs::write(
+            &path,
+            "a".repeat((config::INIT_KEYS_FILE_MAX_SIZE_BYTES + 1) as usize),
+        )
+        .expect("write oversized init file");
+
+        assert!(read_init_keys_file(&path).is_err());
+        let _ = fs::remove_file(path);
     }
 }

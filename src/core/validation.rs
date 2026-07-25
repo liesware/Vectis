@@ -265,6 +265,21 @@ pub fn validate_text_field(field: &str, value: &str) -> Result<(), DynError> {
     Ok(())
 }
 
+pub fn validate_bounded_text_field(
+    field: &str,
+    value: &str,
+    max_chars: usize,
+) -> Result<(), DynError> {
+    validate_text_field(field, value)?;
+    if value.chars().count() > max_chars {
+        return Err(crate::error::invalid_input(format!(
+            "{field} exceeds maximum allowed length: {max_chars}"
+        )));
+    }
+
+    Ok(())
+}
+
 pub fn validate_config_name(field: &str, value: &str) -> Result<(), DynError> {
     validate_text_field(field, value)?;
     let max = crate::core::config::CONFIG_NAME_MAX_CHARS;
@@ -331,13 +346,7 @@ pub fn validate_labels(field: &str, value: &str, max_chars: usize) -> Result<(),
 }
 
 pub fn validate_ref(value: &str) -> Result<String, DynError> {
-    validate_text_field("ref", value)?;
-    let max = crate::core::config::INTERNAL_REF_MAX_CHARS;
-    if value.chars().count() > max {
-        return Err(crate::error::invalid_input(format!(
-            "ref exceeds maximum allowed length: {max}"
-        )));
-    }
+    validate_bounded_text_field("ref", value, crate::core::config::INTERNAL_REF_MAX_CHARS)?;
 
     Ok(value.to_string())
 }
@@ -563,6 +572,17 @@ mod tests {
             );
         }
         assert!(validate_text_field("field", &"a".repeat(100_000)).is_ok());
+    }
+
+    #[test]
+    fn validate_bounded_text_field_enforces_character_limit() {
+        assert!(validate_bounded_text_field("reason", &"a".repeat(128), 128).is_ok());
+        let err = validate_bounded_text_field("reason", &"a".repeat(129), 128)
+            .expect_err("overlong text must fail");
+        assert_eq!(
+            err.to_string(),
+            "reason exceeds maximum allowed length: 128"
+        );
     }
 
     #[test]

@@ -436,6 +436,8 @@ Allowed statuses:
 - `compromised`
 - `destroyed`
 
+`--reason` is required and limited to 128 characters.
+
 ### `vectis routes`
 
 Lists final app routes currently loaded in memory.
@@ -633,6 +635,8 @@ The CLI validates inputs before sending HTTP requests when it can:
 - KIDs must be hex and match the internal KID length.
 - `--profile` must be one of the supported crypto profiles.
 - lifecycle status must be one of the supported lifecycle values.
+- lifecycle `--reason` must be non-empty, free of control characters, and at
+  most 128 characters.
 - JSON input must be a JSON object.
 - `--file` must point to a readable UTF-8 file.
 - `VECTIS_API_URL` must be an HTTP or HTTPS URL.

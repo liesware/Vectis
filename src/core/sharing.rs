@@ -456,22 +456,7 @@ pub(crate) fn decode_share(
     profile: &SharingProfile,
     encoded: &str,
 ) -> Result<(String, RawShare), DynError> {
-    if encoded.len() > SHARE_ENVELOPE_MAX_CHARS {
-        return Err(crate::error::invalid_input(
-            "share exceeds maximum allowed length",
-        ));
-    }
-    let encoded = encoded
-        .strip_prefix(SHARE_PREFIX)
-        .ok_or_else(|| crate::error::invalid_input("share must use vectis-sss-v1 encoding"))?;
-    let bytes = Zeroizing::new(URL_SAFE_NO_PAD.decode(encoded).map_err(|_| {
-        crate::error::invalid_input("share contains invalid vectis-sss-v1 encoding")
-    })?);
-    let envelope: ShareEnvelope = serde_json::from_slice(&bytes).map_err(|err| {
-        crate::error::invalid_input(format!(
-            "share contains invalid vectis-sss-v1 envelope: {err}"
-        ))
-    })?;
+    let envelope = parse_share_envelope(encoded)?;
     validate_envelope(profile, &envelope)?;
     let unsigned = UnsignedShareEnvelope {
         version: "sss-v1",
@@ -502,6 +487,31 @@ pub(crate) fn decode_share(
     };
     validate_raw_share(profile, &raw_share)?;
     Ok((envelope.set_id, raw_share))
+}
+
+pub fn validate_share_envelope_encoding(encoded: &str) -> Result<(), DynError> {
+    parse_share_envelope(encoded).map(|_| ())
+}
+
+fn parse_share_envelope(encoded: &str) -> Result<ShareEnvelope, DynError> {
+    if encoded.len() > SHARE_ENVELOPE_MAX_CHARS {
+        return Err(crate::error::invalid_input(
+            "share exceeds maximum allowed length",
+        ));
+    }
+    let encoded = encoded
+        .strip_prefix(SHARE_PREFIX)
+        .ok_or_else(|| crate::error::invalid_input("share must use vectis-sss-v1 encoding"))?;
+    let bytes = Zeroizing::new(URL_SAFE_NO_PAD.decode(encoded).map_err(|_| {
+        crate::error::invalid_input("share contains invalid vectis-sss-v1 encoding")
+    })?);
+    let envelope: ShareEnvelope = serde_json::from_slice(&bytes).map_err(|err| {
+        crate::error::invalid_input(format!(
+            "share contains invalid vectis-sss-v1 envelope: {err}"
+        ))
+    })?;
+
+    Ok(envelope)
 }
 
 fn validate_secret(profile: &SharingProfile, secret: &[u8]) -> Result<(), DynError> {
@@ -737,6 +747,20 @@ mod tests {
         assert_eq!(actual_set_id, set_id);
         assert_eq!(decoded.index, shares[0].index);
         assert_eq!(&*decoded.value, &*shares[0].value);
+    }
+
+    #[test]
+    fn share_envelope_encoding_validator_rejects_invalid_structures() {
+        let envelope = format!(
+            "{SHARE_PREFIX}{}",
+            URL_SAFE_NO_PAD.encode(
+                r#"{"version":"sss-v1","set_id":"AAAAAAAAAAAAAAAAAAAAAA","profile":"profile","kid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","threshold":3,"shares":5,"index":1,"share":"AA","tag":"00"}"#
+            )
+        );
+        assert!(validate_share_envelope_encoding(&envelope).is_ok());
+        assert!(validate_share_envelope_encoding("invalid").is_err());
+        assert!(validate_share_envelope_encoding(&format!("{SHARE_PREFIX}!")).is_err());
+        assert!(validate_share_envelope_encoding(&format!("{SHARE_PREFIX}e30")).is_err());
     }
 
     #[test]

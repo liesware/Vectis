@@ -60,9 +60,9 @@ Rule format:
 | 21 | Map errors to public responses with an exhaustive match | networked services |
 | 22 | Never leak internals in public errors | networked services |
 | 23 | Evolve public interfaces without breaking clients | networked services |
-| 24 | Make state-changing operations idempotent and retry-safe | networked services |
+| 24 | Define retry semantics; use idempotency where required | networked services |
 | 25 | Make schema ownership explicit; validate the schema you depend on | always |
-| 26 | Back up the system of record and rehearse the restore | always |
+| 26 | Back up the system of record with its recovery artifacts | always |
 | 27 | Every outbound call has a deadline; retries are explicit and bounded | networked services |
 | 28 | Shut down gracefully, within a bounded grace period | networked services |
 | 29 | Canonicalize everything you sign | secrets/crypto |
@@ -73,13 +73,11 @@ Rule format:
 | 34 | Model resource lifecycle explicitly | always |
 | 35 | Write the threat model, including what you refuse to defend | always |
 | 36 | Unit-test every validation function; e2e-test the contract both ways | always |
-| 37 | Inject time, randomness, and other ambient inputs | always |
-| 38 | Zero warnings, always | always |
-| 39 | Keep an executable demo, and verify against the fresh build | always |
-| 40 | Separate operational logs, audit logs, and metrics | networked services |
-| 41 | Fixed documentation set, swept on every behavior change | always |
-| 42 | Code explains itself; interfaces state their contract; documents explain the system | always |
-| 43 | Version releases and record changes | always |
+| 37 | Zero warnings, always | always |
+| 38 | Keep an executable demo, and verify against the fresh build | always |
+| 39 | Separate operational logs, audit logs, and metrics | networked services |
+| 40 | Fixed documentation set, swept on every behavior change | always |
+| 41 | Code explains itself; documents state the contracts and system design | always |
 
 ## 1. Scope and Architecture
 
@@ -432,10 +430,10 @@ runs the same strong validation before writing `config_sign.json`.
 
 **Applies**: always.
 
-**Why**: unbounded reads let a malformed or oversized input consume memory,
-CPU, or cryptographic verification time before the application knows whether
-it is safe to process. This holds for operator files, request bodies, batch
-sizes, and individual fields alike.
+**Why**: unbounded reads let a malformed or oversized input accepted by a
+Vectis contract consume memory, CPU, or cryptographic verification time before
+the application knows whether it is safe to process. This holds for operator
+files, inbound request bodies, batch sizes, and individual fields alike.
 
 **How**:
 
@@ -551,43 +549,53 @@ in production.
   request bodies, ignore only where forward-compatibility demands it;
 - when a break is unavoidable, version the interface and support the old shape
   through a deprecation window;
-- documented request/response examples are part of the contract (Rule 41).
+- documented request/response examples are part of the contract (Rule 40).
 
 **In Vectis**: request `*Input` structs use `deny_unknown_fields`; the wire
 protocol carries an explicit version and payloads bind it (Rule 29). During
 pre-release, breaking changes are allowed but stay deliberate and documented.
 
-### Rule 24 — Make state-changing operations idempotent and retry-safe
+### Rule 24 — Define retry semantics; use idempotency where required
 
 **Applies**: networked services.
 
-**Why**: networks retry. A client that times out and retries must not
-double-apply an effect (double charge, duplicate record, replayed message).
+**Why**: a timeout leaves the caller uncertain whether an operation completed.
+Retrying may be harmless, may produce a new random result, or may repeat an
+external side effect. Treating every endpoint as idempotent hides those
+differences and can create stronger guarantees than the system actually
+provides.
 
 **How**:
 
-- make writes idempotent by construction (deterministic ids, upserts, or dedup
-  keys) or guard them with an idempotency token;
-- define retry semantics explicitly (at-least-once vs exactly-once) and make
-  handlers safe under at-least-once;
-- distinguish "already done" from "failed" so a safe retry returns success, not
-  a spurious error.
+- classify each operation as read-only, deterministic, random-output,
+  state-changing, or externally delivered, and document what a retry means;
+- prefer idempotency by construction when it follows naturally from the data
+  model, such as deterministic identifiers, upserts, or conflict-safe inserts;
+- add deduplication or idempotency storage only when the public contract
+  requires that guarantee and its retention, security, and failure semantics
+  are explicitly designed;
+- do not automatically retry operations whose effects can be duplicated or
+  whose output is intentionally fresh;
 - for batch APIs, require a client-supplied reference per item and preserve it
-  in the response; the reference is a durable correlation key, not an
-  idempotency or deduplication key unless the operation explicitly defines it
-  that way.
+  in the response; the reference is a correlation key, not an idempotency or
+  deduplication key unless the operation explicitly defines it that way.
 
-**In Vectis**: blind-index creation is idempotent because duplicate
-`(kid, digest)` inserts do not change storage. Batch `ref` values provide
-correlation only. Token creation, key creation, and message delivery do not
-provide general idempotency; object replay and exactly-once processing remain
-the consumer's responsibility in `v1` (Rule 35).
+**In Vectis**: there is no general idempotency-key or exactly-once contract.
+Blind-index creation is idempotent by construction because duplicate
+`(kid, digest)` inserts do not change storage. Lifecycle compare-and-swap
+protects concurrent state changes but does not promise response replay after a
+lost response. Token and key creation produce new persisted objects when
+repeated; commitment creation and share splitting intentionally produce fresh
+random outputs; message delivery may be observed more than once. Vectis does
+not retry these operations automatically. Batch `ref` values provide
+correlation only, and object replay or deduplication remains the consumer's
+responsibility in `v1` (Rule 35).
 
 ## 5. Data and State Over Time
 
 Data outlives code. Schemas, backups, deadlines, and shutdowns are where a
 correct program meets an unreliable world; each needs an explicit owner and a
-rehearsed procedure, not an assumption.
+documented procedure, not an assumption.
 
 ### Rule 25 — Make schema ownership explicit; validate the schema you depend on
 
@@ -611,24 +619,21 @@ under `src/db` and never applies migrations or creates tables at runtime
 (documented in `doc/ENV.md` and `doc/Clustering.md`); a missing table fails
 closed with a named error ("sqlite schema is missing opskeys table").
 
-### Rule 26 — Back up the system of record and rehearse the restore
+### Rule 26 — Back up the system of record with its recovery artifacts
 
 **Applies**: always (any project holding data that cannot be regenerated).
 
-**Why**: an untested backup is a hope, not a control. The classic failure is
-discovering at restore time that the backup is incomplete — missing the one
-companion secret or file that makes the data readable.
+**Why**: backing up only the database can leave an incomplete recovery set
+missing the companion secret or file that makes the data readable.
 
 **How**: identify the system of record and every companion artifact required
 to make a restore usable (key material, config, signatures — not just the
-database). Document the backup and restore procedure, then rehearse it: a
-scripted restore into a clean environment, verified by real reads, on a
-schedule. Track restore time so recovery objectives are numbers, not guesses.
+database). Document the backup and restore order, ownership, prerequisites, and
+known recovery limits.
 
 **In Vectis**: `doc/HA_DR.md` documents backups, restore, and recovery limits,
 including the trap this rule exists for: a PostgreSQL backup without the
-matching init material cannot decrypt anything (`doc/Clustering.md`). Known
-gap: scripted backup/restore tests are still listed as missing.
+matching init material cannot decrypt anything (`doc/Clustering.md`).
 
 ### Rule 27 — Every outbound call has a deadline; retries are explicit and bounded
 
@@ -638,19 +643,16 @@ gap: scripted backup/restore tests are still listed as missing.
 and an eager automatic retry loop can amplify an outage into a self-inflicted
 flood. Partial failure is the normal case, not the exception.
 
-**How**: every outbound request carries an explicit timeout with a documented,
-configurable default. Decide retry policy per operation and write it down:
-either no automatic retries (the caller decides, backed by idempotent
-handlers, Rule 24) or a bounded count with backoff. Surface timeout failures
-as their own error category so operators can tell "slow peer" from "wrong
-request".
+**How**: every outbound request carries an explicit timeout with a documented
+default. Decide retry policy per operation and write it down:
+either no automatic retries or a bounded count with backoff only where the
+operation's retry semantics permit it (Rule 24).
 
 **In Vectis**: all HTTP clients have a deadline and perform no automatic
 retries. The CLI defaults to 30 seconds and is configurable through
-`VECTIS_TIMEOUT_SECONDS`; node-to-node and final-app calls currently use a
-fixed 30-second timeout in `core/http_client.rs`. Remote delivery failures map
-to a dedicated error category (Rule 22), but configurable service-client
-timeouts and a distinct semantic timeout error remain known gaps.
+`VECTIS_TIMEOUT_SECONDS`; node-to-node and final-app calls share a fixed
+10-second deadline defined by the internal `INTERNAL_HTTP_TIMEOUT_SEC`
+constant. Remote delivery failures map to a dedicated error category (Rule 22).
 
 ### Rule 28 — Shut down gracefully, within a bounded grace period
 
@@ -663,12 +665,13 @@ hung rollout. Both failure modes come from not deciding what shutdown means.
 **How**: handle the platform's stop signals explicitly. On shutdown, stop
 accepting new work, let in-flight requests finish, and enforce a bounded grace
 period after which the process exits anyway. Anything that cannot complete
-within the grace period must be safe to retry (Rule 24).
+within the grace period must have documented retry or reconciliation semantics
+(Rule 24).
 
 **In Vectis**: `io/http/app.rs` listens for SIGTERM and Ctrl-C in both modes.
-HTTPS drains through `graceful_shutdown` with a 10-second bound; HTTP in
-development mode drains without an explicit bound. Applying one bounded policy
-to both modes remains a known gap.
+HTTP and HTTPS share one `axum_server::Handle` shutdown path with a 10-second
+grace period defined by the internal `INTERNAL_HTTP_GRACE_SEC` constant. The
+limit is intentionally not configurable through environment or signed config.
 
 ## 6. Security Defaults
 
@@ -848,31 +851,7 @@ signing; `tests/http_positive.py` and `tests/http_negative.py` assert runtime
 contracts; `http_fuzz.py`, cargo-fuzz targets, and Schemathesis cover mutation
 and OpenAPI contract behavior.
 
-### Rule 37 — Inject time, randomness, and other ambient inputs
-
-**Applies**: always.
-
-**Why**: code that reads the clock or RNG directly is untestable and
-non-deterministic; that same call is where subtle security bugs hide
-(predictable nonces, expiry off-by-one).
-
-**How**:
-
-- pass clocks, random sources, and environment as parameters or injected
-  dependencies, not as global calls buried in logic;
-- unit tests supply fixed time and seeded/typed randomness; production supplies
-  the real source;
-- centralize secure randomness behind one helper so no path reaches for an
-  insecure RNG.
-
-**Rust note**: thread a `CryptoRng`/timestamp provider through functions;
-validation functions already take injected closures (Rule 36).
-
-**In Vectis**: cryptographic randomness goes through a single `core/crypto.rs`
-helper; validation functions accept injected dependencies so unit tests run
-without real services.
-
-### Rule 38 — Zero warnings, always
+### Rule 37 — Zero warnings, always
 
 **Applies**: always.
 
@@ -888,7 +867,7 @@ mechanical cleanups.
 
 **In Vectis**: every change in the repository lands with clippy and fmt clean.
 
-### Rule 39 — Keep an executable demo, and verify against the fresh build
+### Rule 38 — Keep an executable demo, and verify against the fresh build
 
 **Applies**: always.
 
@@ -906,7 +885,7 @@ server started *before* the rebuild — the results were discarded and re-run.
 
 ## 8. Observability Contract
 
-### Rule 40 — Separate operational logs, audit logs, and metrics
+### Rule 39 — Separate operational logs, audit logs, and metrics
 
 **Applies**: networked services.
 
@@ -927,7 +906,7 @@ errors.
 
 ## 9. Documentation Contract
 
-### Rule 41 — Fixed documentation set, swept on every behavior change
+### Rule 40 — Fixed documentation set, swept on every behavior change
 
 **Applies**: always.
 
@@ -944,57 +923,26 @@ relative links and that documented examples match code literally.
 `doc/Reference.md`; removing runtime peer-key fetch required sweeping four
 documents that described the old fallback.
 
-### Rule 42 — Code explains itself; interfaces state their contract; documents explain the system
+### Rule 41 — Code explains itself; documents state the contracts and system design
 
 **Applies**: always.
 
-**Why**: explanatory comments duplicate the code and drift from it — but a
-public interface has obligations its signature cannot express (units, ordering,
-error conditions, ownership of returned state). Leaving those unstated forces
-every caller to read the implementation, which is the definition of a shallow
-module (Rule 4).
+**Why**: explanatory comments duplicate the code and drift from it, while
+cross-cutting behavior and HTTP contracts need a stable home outside individual
+implementations.
 
-**How**: three levels, three homes.
+**How**: keep two levels distinct.
 
 - **Implementation**: no comments that restate the code. Express normal intent
   through names, types, and small functions. Use short comments only for
   non-obvious security, protocol, fallback, or invariant behavior.
-- **Interfaces**: the public surface (exported functions, types, modules, HTTP
-  endpoints) carries a contract the signature alone cannot state — what it
-  does, its preconditions, and its failure modes — as doc comments or, for
-  endpoints, as the API reference's field tables.
-- **System**: design rationale and cross-cutting flows live in the
-  documentation set (Rule 41), which is reviewed and kept consistent.
-
-**Rust note**: `///` doc comments on the public surface; `cargo doc` output is
-part of the deliverable; `#[deny(missing_docs)]` once the surface stabilizes.
+- **Contracts and system**: HTTP behavior, design rationale, and cross-cutting
+  flows live in the documentation set (Rule 40), which is reviewed and kept
+  consistent.
 
 **In Vectis**: implementation comments follow the discipline (comments are
 reserved for non-obvious protocol behavior); HTTP contracts live in
-`doc/API.md` field tables. Known gap: the Rust public surface carries no `///`
-doc comments yet.
-
-### Rule 43 — Version releases and record changes
-
-**Applies**: always.
-
-**Why**: without tagged versions and a change record, "what are you running?"
-has no answer, bug reports are unreproducible, and interface-evolution
-promises (Rule 23) have no unit of time to attach to.
-
-**How**: tag releases with semantic versions; keep a changelog that records
-behavior changes, breaking changes, and security-relevant fixes per release;
-the protocol/config version inside signed material (Rule 29) and the release
-version evolve together deliberately.
-
-**Don't apply when**: the project is pre-release and explicitly experimental —
-then breaking changes are allowed without ceremony, but they stay deliberate
-and documented (commit history as the interim change record), and this rule
-activates at the first tagged release.
-
-**In Vectis**: pre-release — the wire protocol and config carry an explicit
-`v1`, breaking changes are allowed but documented; tagging and a changelog
-begin with the first release.
+`doc/API.md` field tables, and system behavior lives in the documentation set.
 
 ## How to Apply This to a New Project
 
@@ -1014,8 +962,7 @@ one cheaper:
 4. **Validation module**: `core/validation` with generic validators for names,
    refs, labels, encoded material, host/path fields, and structured strings;
    every new input type gets its `*Input` → domain conversion, and every
-   external value gets an owner, a bound, injected time/randomness where needed,
-   and tests (Rules 9-14, 18, 37).
+   external value gets an owner, a bound, and tests (Rules 9-14, 18).
 5. **Config loader**: one settings precedence (env → file → defaults) and, if
    the project has operational config, one unified file with one bounded loader
    and lenient-startup/strict-reload semantics (Rules 6, 8, 15-18).
@@ -1023,7 +970,7 @@ one cheaper:
    dependencies, and wire format + lint (zero warnings) + unit tests + negative
    e2e as the pipeline; every endpoint adds validators, limits, unit tests,
    idempotency, compatible-evolution discipline, and negative contract coverage
-   at the same time (Rules 19, 23-24, 36, 38).
+   at the same time (Rules 19, 23-24, 36-37).
 7. **Data over time**: decide schema ownership, write the backup/restore
    procedure, set outbound deadlines, and handle stop signals before the first
    deployment holds real state (Rules 25-28).
@@ -1031,19 +978,18 @@ one cheaper:
    states, transitions, and centralized operation guards before exposing the
    first mutation endpoint (Rule 34).
 9. **Observability from day one**: create operational logs, audit events, and
-   metrics as separate channels with a no-secrets rule (Rule 40).
+   metrics as separate channels with a no-secrets rule (Rule 39).
 10. **Threat model from day one**: even three lines of explicit assumptions
     beat a perfect document written after the audit (Rule 35).
 11. **Docs as contract**: README + API + ENV skeletons created with the first
     endpoint; sweep them on every behavior change, especially validation,
-    permission, lifecycle, config, and error-contract changes (Rules 41-43).
+    permission, lifecycle, config, and error-contract changes (Rules 40-41).
 12. When a second source of truth appears — a cache, a fallback, a convenience
     fetch — delete it unless it is a pure performance cache of the
     authoritative source (Rule 7).
 
 ## Revision
 
-Distilled from the Vectis codebase as of 2026-07-24. Renumbered flat (former
-lettered refinements promoted) and extended with Rules 1, 4, 25-28, and 43
-after an audit against the document's sources. Update when a rule is learned,
+Distilled from the Vectis codebase as of 2026-07-24 and maintained against the
+project's current design and operational scope. Update when a rule is learned,
 invalidated, or superseded by a better one.

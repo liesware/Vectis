@@ -26,6 +26,7 @@ VALID_KEY_REQUEST = {
 VALID_MESSAGE = b"Vectis negative workflow test"
 CONFIG_PATH = Path("config.json")
 CONFIG_SIGN_PATH = Path("config_sign.json")
+HTTP_MAX_SIZE = 2 * 1024 * 1024
 
 _CONFIG = {
     "version": "v1",
@@ -463,6 +464,31 @@ def main():
     atexit.register(restore_file, CONFIG_SIGN_PATH, config_sign_backup)
     rows = []
     print("HTTP negative:", flush=True)
+
+    def oversized_request_body():
+        before_status, before = client.get("/keys", auth=True)
+        require_status("GET /keys before oversized request", before_status, 200)
+
+        status, body, headers = client.post_with_headers(
+            "/keys",
+            {"padding": "a" * (HTTP_MAX_SIZE + 1)},
+        )
+        require_status("POST /keys oversized request body", status, 413)
+        require(
+            body == {"error": "request body exceeds maximum allowed size"},
+            f"oversized request must return the fixed JSON error, got {body!r}",
+        )
+        require(
+            headers.get_content_type() == "application/json",
+            "oversized request must return application/json",
+        )
+        require_request_id(headers)
+
+        after_status, after = client.get("/keys", auth=True)
+        require_status("GET /keys after oversized request", after_status, 200)
+        require(after == before, "oversized request must not change key storage")
+
+    run_case(rows, "POST oversized request body", oversized_request_body)
 
     def keys_without_auth():
         status, _, headers = client.post_with_headers("/keys", VALID_KEY_REQUEST)

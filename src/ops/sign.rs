@@ -357,6 +357,10 @@ fn split_compact_signature(signature: &str) -> Result<CompactSignatureParts<'_>,
     })
 }
 
+pub fn validate_compact_signature_encoding(signature: &str) -> Result<(), DynError> {
+    split_compact_signature(signature).map(|_| ())
+}
+
 fn decode_compact_segment(segment: &str) -> Result<Vec<u8>, DynError> {
     URL_SAFE_NO_PAD.decode(segment).map_err(|_| {
         crate::error::invalid_signature("compact signature contains invalid base64url")
@@ -905,6 +909,13 @@ mod tests {
                 "compact signature contains invalid base64url"
             );
         }
+    }
+
+    #[test]
+    fn compact_signature_encoding_validator_accepts_valid_segments() {
+        let signature = "eyJ2ZXJzaW9uIjoidmVjdGlzLXNpZ25hdHVyZS12MSJ9.e30.AA.AA";
+
+        assert!(validate_compact_signature_encoding(signature).is_ok());
     }
 
     #[test]

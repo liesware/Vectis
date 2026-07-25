@@ -161,10 +161,12 @@ mutations, and drives a table of targets (`--target`): `token`, `message`,
 `message_send`, `internal`, `internal_encrypt`, `keys`, `sign_body`,
 `lifecycle`, `decrypt`, `config`, `fpe`, `fpe_batch`, `tokenization`,
 `tokenization_batch`, `mac`, `mac_batch`, `commitment`, `commitment_batch`, `index`, `index_batch`, `pubkid` (fuzzes the `{kid}` path
-segment), `no_body`, and `headers` (fuzzes `X-API-Key` and the HTTP method).
-The `fpe`, `tokenization`, `mac`, `commitment`, and `index` targets cover the single-item endpoints,
-while `fpe_batch`, `tokenization_batch`, `mac_batch`, `commitment_batch`, and `index_batch` cover the
-all-or-nothing batch endpoints. The `no_body` target checks endpoints called
+segment), `masking`, `masking_batch`, `sharing`, `no_body`, and `headers`
+(fuzzes `X-API-Key` and the HTTP method). The `fpe`, `tokenization`, `mac`,
+`commitment`, `index`, `masking`, and `sharing` targets cover the single-item
+endpoints, while `fpe_batch`, `tokenization_batch`, `mac_batch`,
+`commitment_batch`, `index_batch`, and `masking_batch` cover the all-or-nothing
+batch endpoints. Secret sharing has no batch endpoint. The `no_body` target checks endpoints called
 without a body where that shape is useful. Beyond crash/status hygiene it runs
 semantic oracles that flag verification, AEAD, FPE, tokenization, and
 config-integrity bypasses; `--self-check` tests
@@ -299,7 +301,8 @@ The script runs:
 
 - `fuzz_canonical_json`
 - `fuzz_sign_input`
-- `fuzz_timestamp_token`
+- `fuzz_compact_signature`
+- `fuzz_timestamp_token` (the compact `{kid, signature}` verification request)
 - `fuzz_message_inputs`
 - `fuzz_config_file`
 - `fuzz_keys_inputs`
@@ -310,14 +313,17 @@ The script runs:
 - `fuzz_mac_index_inputs`
 - `fuzz_masking_commitment_inputs`
 - `fuzz_sharing_inputs`
+- `fuzz_share_envelope`
 
 These targets intentionally avoid invoking Botan, SQLite, networking, and
 server startup inside the fuzz loop. They focus on parser safety, validation
-boundaries, canonical JSON determinism, and config parsing robustness. The five
-data-protection input targets stop at the `ops` parse/validate boundary: they do
-not load keys or profiles, execute cryptographic operations, or exercise HTTP.
-Hash output validation that depends on Botan remains covered by Rust unit tests
-and `tests/crypto_integration.rs`, rather than `fuzz_validation`.
+boundaries, canonical JSON determinism, config parsing robustness, compact
+signature encoding, and share-envelope encoding. The data-protection input
+targets stop at the `ops` parse/validate boundary; compact signatures and share
+envelopes stop before signature or share-tag authentication. They do not load
+keys or profiles, execute cryptographic operations, or exercise HTTP. Hash
+output validation and cryptographic verification remain covered by Rust unit
+tests, `tests/crypto_integration.rs`, and `tests/http_fuzz.py`.
 
 ### Error message hygiene
 

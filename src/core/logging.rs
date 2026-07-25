@@ -1,3 +1,4 @@
+use crate::core::config;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -114,7 +115,13 @@ pub fn init_logging() -> LoggingGuards {
 }
 
 pub fn logging_config() -> LoggingConfig {
-    let env_file = load_env_file(".env").unwrap_or_default();
+    // Runs during logging bootstrap, before the tracing subscriber exists, so a
+    // rejected .env (oversized or invalid UTF-8) is reported to stderr rather
+    // than silently falling back to default logging.
+    let env_file = config::load_env_file(".env").unwrap_or_else(|err| {
+        eprintln!("warning: failed to read .env for logging configuration, using defaults: {err}");
+        HashMap::new()
+    });
     let level_text = config_value(&env_file, "VECTIS_LOG_LEVEL", DEFAULT_LOG_LEVEL);
     let level = parse_log_level(&level_text);
     let dir = config_value(&env_file, "VECTIS_LOG_DIR", DEFAULT_LOG_DIR);
@@ -160,48 +167,11 @@ fn parse_log_target(value: &str) -> LogTarget {
     }
 }
 
-fn load_env_file(path: &str) -> Result<HashMap<String, String>, std::io::Error> {
-    let content = match fs::read_to_string(path) {
-        Ok(content) => content,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
-        Err(err) => return Err(err),
-    };
-
-    let mut values = HashMap::new();
-
-    for line in content.lines() {
-        let line = line.trim();
-
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-
-        values.insert(key.trim().to_string(), clean_env_value(value.trim()));
-    }
-
-    Ok(values)
-}
-
 fn config_value(env_file: &HashMap<String, String>, key: &str, default: &str) -> String {
     env::var(key)
         .ok()
         .or_else(|| env_file.get(key).cloned())
         .unwrap_or_else(|| default.to_string())
-}
-
-fn clean_env_value(value: &str) -> String {
-    let quoted = (value.starts_with('"') && value.ends_with('"'))
-        || (value.starts_with('\'') && value.ends_with('\''));
-
-    if quoted && value.len() >= 2 {
-        value[1..value.len() - 1].to_string()
-    } else {
-        value.to_string()
-    }
 }
 
 #[cfg(test)]

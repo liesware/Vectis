@@ -192,8 +192,8 @@ The trimmed value must be one 64-character hex string.
   invalid `remote_addr`.
 - A permissions client has an invalid API key hash or references an unloaded
   KID.
-- An FPE, tokenization, or MAC profile references an unloaded KID or has invalid
-  profile fields.
+- An FPE, tokenization, MAC, commitment, sharing, or masking profile references
+  an unloaded KID or has invalid profile fields.
 
 ### Checks
 
@@ -586,6 +586,7 @@ vectis_fpe_profiles_loaded
 vectis_tokenization_profiles_loaded
 vectis_mac_profiles_loaded
 vectis_commitment_profiles_loaded
+vectis_sharing_profiles_loaded
 vectis_masking_profiles_loaded
 vectis_config_reload_total
 vectis_message_total
