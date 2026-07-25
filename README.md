@@ -131,6 +131,36 @@ protection primitives and workflows.
 ## High-Level Flow
 
 ```text
+Application / CLI
+        |
+        | operation + bounded input
+        v
+      Vectis
+        |
+        | validate input
+        | authenticate and authorize
+        | resolve signed policy and profiles
+        | enforce key lifecycle
+        v
+Cryptographic capability
+        |
+        +-- FPE / tokenization / masking
+        +-- MAC / blind indexes / commitments
+        +-- secret sharing / signatures
+        +-- internal encryption / protected messages
+        v
+Protected output / verification result / shares / peer delivery
+```
+
+FPE, masking, MAC, commitments, and secret sharing return their results directly.
+Tokenization stores the plaintext in encrypted form, while blind indexes persist
+deterministic digests for membership checks. Protected messaging resolves
+authorized peers from signed configuration and locally re-encrypts a verified
+message before final application delivery.
+
+## Protected Messaging Flow
+
+```text
 Application A
     |
     | private record / sensitive payload
