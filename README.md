@@ -10,10 +10,13 @@ indexes, commitments, secret sharing, and post-quantum protected
 messaging/signing — governed by an operator-signed configuration, served through
 a consistent HTTP and CLI interface.
 
-**TLS protects the connection. Vectis protects the data.** Sensitive data often
-continues moving through applications, services, queues, storage, logs, workers,
-and final systems after the transport session is over; Vectis protects the data
-object or payload itself after it leaves the transport layer.
+**Sensitive input in, safe representation out.** Every Vectis operation
+exchanges a sensitive value for a representation that is safe to store, move,
+index, display, or share — and keeps only the properties your workflow needs:
+a ciphertext that preserves the original format, a token you can reverse
+under policy, a digest you can search without revealing, a commitment you can
+prove later, shares no single holder can read, a protected message only the
+registered peer can open.
 
 > In Latin, *vectis* can mean a lever, crowbar, fastening bar, or carrying pole:
 > a simple tool used to move something heavy with controlled force.
@@ -23,6 +26,20 @@ object or payload itself after it leaves the transport layer.
 > repository, free and Apache-2.0 licensed — use it, self-host it, break it,
 > and open an issue with what you find. For production use, see
 > [Security Status](#security-status).
+
+## Origins
+
+Vectis exists because of a licensing gap. Format-preserving encryption,
+reversible tokenization, masking, and encryption as a service have been
+available in commercial data-protection platforms for years — but almost
+always as enterprise add-ons, licensed separately, with implementations that
+were never open source for a community to inherit, audit, or build on.
+
+Vectis is not a fork of anything. It is an independent, from-scratch, open
+source implementation of that category, with its own trust model and its own
+scope. The jobs those platforms do well — secrets management, key custody,
+transport security — remain deliberately out of Vectis's scope: it is
+designed to run alongside them, not against them.
 
 ## Why Vectis?
 
@@ -45,6 +62,10 @@ Vectis answers a different question:
 
 > What if sensitive data stayed protected as a data object while it moves
 > through an application workflow?
+
+**TLS protects the connection. Vectis protects the data object itself** —
+before it is stored, after it is queued, while it is logged, wherever it
+moves once the transport session is over.
 
 Advanced data protection — tokenization, format-preserving encryption, masking,
 encryption as a service — has traditionally shipped as expensive enterprise
