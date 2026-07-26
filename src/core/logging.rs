@@ -14,8 +14,6 @@ const DEFAULT_LOG_FILE: &str = "vectis.log";
 const DEFAULT_AUDIT_LOG_FILE: &str = "audit.log";
 const DEFAULT_LOG_TARGET: &str = "file";
 
-pub const AUDIT_TARGET: &str = "vectis::audit";
-
 pub struct LoggingConfig {
     pub level: Level,
     pub dir: String,
@@ -41,13 +39,12 @@ impl std::fmt::Display for LogTarget {
 
 pub struct LoggingGuards {
     _operational: WorkerGuard,
-    _audit: WorkerGuard,
 }
 
 pub fn init_logging() -> LoggingGuards {
     let config = logging_config();
 
-    let (operational_writer, operational_guard, audit_writer, audit_guard) = match config.target {
+    let (operational_writer, operational_guard) = match config.target {
         LogTarget::File => {
             fs::create_dir_all(&config.dir).expect("failed to create log directory");
 
@@ -55,27 +52,12 @@ pub fn init_logging() -> LoggingGuards {
             let (operational_writer, operational_guard) =
                 tracing_appender::non_blocking(operational_appender);
 
-            let audit_appender = tracing_appender::rolling::daily(&config.dir, &config.audit_file);
-            let (audit_writer, audit_guard) = tracing_appender::non_blocking(audit_appender);
-
-            (
-                operational_writer,
-                operational_guard,
-                audit_writer,
-                audit_guard,
-            )
+            (operational_writer, operational_guard)
         }
         LogTarget::Stdout => {
             let (operational_writer, operational_guard) =
                 tracing_appender::non_blocking(std::io::stdout());
-            let (audit_writer, audit_guard) = tracing_appender::non_blocking(std::io::stdout());
-
-            (
-                operational_writer,
-                operational_guard,
-                audit_writer,
-                audit_guard,
-            )
+            (operational_writer, operational_guard)
         }
     };
 
@@ -83,20 +65,12 @@ pub fn init_logging() -> LoggingGuards {
     let operational_layer = fmt::layer()
         .json()
         .with_writer(operational_writer)
+        // Spans always pass so request_id/method/path correlation survives at WARN+.
         .with_filter(filter_fn(move |metadata| {
-            metadata.is_span() || (metadata.target() != AUDIT_TARGET && *metadata.level() <= level)
+            metadata.is_span() || *metadata.level() <= level
         }));
 
-    let audit_layer = fmt::layer()
-        .json()
-        .with_writer(audit_writer)
-        .with_filter(filter_fn(|metadata| {
-            metadata.is_span() || metadata.target() == AUDIT_TARGET
-        }));
-
-    let subscriber = tracing_subscriber::registry()
-        .with(operational_layer)
-        .with(audit_layer);
+    let subscriber = tracing_subscriber::registry().with(operational_layer);
 
     tracing::subscriber::set_global_default(subscriber).expect("failed to set tracing subscriber");
     info!(
@@ -110,7 +84,6 @@ pub fn init_logging() -> LoggingGuards {
 
     LoggingGuards {
         _operational: operational_guard,
-        _audit: audit_guard,
     }
 }
 

@@ -1,7 +1,40 @@
 use crate::core::permissions::AuthenticatedClient;
-use tracing::{Level, event};
+use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
-pub const TARGET: &str = crate::core::logging::AUDIT_TARGET;
+tokio::task_local! {
+    static REQUEST_AUDIT: RequestAudit;
+}
+
+#[derive(Clone)]
+pub struct RequestAudit {
+    id: String,
+    failure: Arc<Mutex<Option<String>>>,
+    enqueued: Arc<AtomicBool>,
+}
+
+impl RequestAudit {
+    pub fn new(id: String) -> Self {
+        Self {
+            id,
+            failure: Arc::new(Mutex::new(None)),
+            enqueued: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn enqueued(&self) -> bool {
+        self.enqueued.load(Ordering::Acquire)
+    }
+
+    pub fn failure_cell(&self) -> &Arc<Mutex<Option<String>>> {
+        &self.failure
+    }
+
+    pub fn failure(&self) -> Option<String> {
+        self.failure.lock().ok().and_then(|cell| cell.clone())
+    }
+}
 
 pub struct Actor<'a> {
     pub name: &'a str,
@@ -99,6 +132,13 @@ pub fn operation_failed(
     );
 }
 
+pub async fn with_request_context<F>(context: RequestAudit, future: F) -> F::Output
+where
+    F: Future,
+{
+    REQUEST_AUDIT.scope(context, future).await
+}
+
 fn audit_event(
     event_name: &str,
     outcome: &str,
@@ -108,23 +148,33 @@ fn audit_event(
     action: Option<&str>,
     reason: Option<&str>,
 ) {
-    let actor_name = actor.map(|actor| actor.name).unwrap_or("");
-    let actor_fp = actor.map(|actor| actor.fingerprint).unwrap_or("");
-    let root = actor.is_some_and(|actor| actor.root);
-    let admin = actor.is_some_and(|actor| actor.admin);
-
-    event!(
-        target: TARGET,
-        Level::INFO,
-        event = %event_name,
-        outcome = %outcome,
-        actor = %actor_name,
-        actor_fp = %actor_fp,
-        root = root,
-        admin = admin,
-        kid = %kid.unwrap_or(""),
-        remote_kid = %remote_kid.unwrap_or(""),
-        action = %action.unwrap_or(""),
-        reason = %reason.unwrap_or(""),
-    );
+    let context = REQUEST_AUDIT.try_with(Clone::clone).ok();
+    let event = crate::core::audit_chain::AuditEvent {
+        event: event_name.to_string(),
+        outcome: outcome.to_string(),
+        actor: actor.map(|actor| actor.name).unwrap_or("").to_string(),
+        actor_fp: actor
+            .map(|actor| actor.fingerprint)
+            .unwrap_or("")
+            .to_string(),
+        root: actor.is_some_and(|actor| actor.root),
+        admin: actor.is_some_and(|actor| actor.admin),
+        kid: kid.unwrap_or("").to_string(),
+        remote_kid: remote_kid.unwrap_or("").to_string(),
+        action: action.unwrap_or("").to_string(),
+        reason: reason.unwrap_or("").to_string(),
+        request_id: context
+            .as_ref()
+            .map(|context| context.id.clone())
+            .unwrap_or_default(),
+    };
+    match context {
+        Some(context) => {
+            context.enqueued.store(true, Ordering::Release);
+            crate::core::audit_chain::record(event, &context.failure);
+        }
+        // Off the request task (CLI, startup, detached sub-task): still persist the event
+        // for a complete audit trail, ungated since there is no response to fail closed.
+        None => crate::core::audit_chain::record(event, &Arc::new(Mutex::new(None))),
+    }
 }

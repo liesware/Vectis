@@ -136,8 +136,9 @@ Important modules:
 - `core/storage/postgres.rs`: PostgreSQL implementation.
 - `core/blocking.rs`: helper for isolating CPU-bound crypto from async workers.
 - `core/http_client.rs`: outbound HTTP client construction.
-- `core/logging.rs`: structured JSON logging and audit log setup.
-- `core/audit.rs`: security audit events.
+- `core/logging.rs`: structured JSON operational logging setup.
+- `core/audit.rs`: typed security audit event facade.
+- `core/audit_chain.rs`: local hash-chained audit JSONL writer and offline verifier.
 - `core/metrics.rs`: metrics helpers.
 
 ### `ops`
@@ -894,8 +895,9 @@ Examples:
 
 ## Logging, Audit, And Metrics
 
-Vectis uses structured JSON logs with configurable level. Logs can be written to
-daily rolling files or to stdout with `VECTIS_LOG_TARGET`.
+Vectis uses structured JSON logs with configurable level. Operational logs can
+be written to daily rolling files or stdout with `VECTIS_LOG_TARGET`; audit
+records use a separate append-only hash-chained JSONL writer.
 
 Operational logs should show:
 
@@ -909,8 +911,11 @@ Operational logs should show:
 
 Audit logs are separate from operational logs and intended for security-relevant
 events. In file mode this separation is physical. In stdout mode both streams go
-to stdout and audit is selected by `target: "vectis::audit"`. Audit records
-stable security event names such as `auth.success`,
+to stdout and audit is selected by `version: "audit-chain-v1"`. The audit writer
+assembles each record and its newline into one buffer before writing to reduce
+avoidable interleaving, but stdout is not durable local evidence and does not
+provide universal write atomicity. Audit records are hash-chained locally and
+use stable security event names such as `auth.success`,
 `permission.denied`, `config.reload.failed`, `key.create.success`,
 `message.receive.denied`, `message.internal.encrypt.success`, and
 `verify.failed`. Remote sends use `message.send.*`; local internal encryption
@@ -1215,7 +1220,7 @@ Vectis is still experimental. Important boundaries:
 - no custom CA bundle support yet;
 - no mTLS support yet;
 - no Vault, KMS, or HSM auto-unseal yet;
-- no Merkle proofs or tamper-evident audit chains yet;
+- no Merkle proofs or externally checkpointed tamper-proof audit chains yet;
 - no SLH-DSA support yet;
 - production TLS policy exists, but deployment hardening still needs more work;
 - config reload is whole-file, not per-section transactional;
@@ -1234,7 +1239,7 @@ Likely future work:
 - stronger cluster-aware key loading and cache invalidation;
 - custom trust store / CA bundle support;
 - Merkle-based batch verification;
-- tamper-evident audit export built on signed roots;
+- signed audit checkpoints and tamper-evident export built on published roots;
 - SLH-DSA support if it fits the profile model;
 - Vault/KMS/HSM-backed auto-unseal;
 - mTLS for deployments that need transport-level client identity;

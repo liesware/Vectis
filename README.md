@@ -123,7 +123,7 @@ protection primitives and workflows.
 **Operations and observability**
 
 - startup, liveness, and readiness health probes;
-- a dedicated security audit log stream with per-request correlation ids;
+- a hash-chained security audit JSONL log with per-request correlation ids and offline verification;
 - a Prometheus `/metrics` endpoint for operational observability;
 - local CLI commands plus CLI commands that act as an HTTP API client;
 - OpenAPI and environment variable documentation.
@@ -496,8 +496,8 @@ Vectis is not a replacement for:
 - access control;
 - traditional DLP products.
 
-Vectis does not currently provide Merkle proofs, tamper-evident audit chains,
-SLH-DSA, Vault/KMS/HSM auto-unseal, or mTLS.
+Vectis does not currently provide Merkle proofs, externally checkpointed or
+tamper-proof audit logs, SLH-DSA, Vault/KMS/HSM auto-unseal, or mTLS.
 
 Vectis is intended to complement existing security controls by providing
 cryptographic protection for sensitive data workflows. It should work with

@@ -431,16 +431,21 @@ Vectis separates three observability channels:
 - audit logs;
 - metrics.
 
-`VECTIS_LOG_TARGET=file` writes operational and audit logs to separate files.
-`VECTIS_LOG_TARGET=stdout` writes both streams to stdout as JSON lines. Audit
-events remain distinguishable by `target: "vectis::audit"`.
+`VECTIS_LOG_TARGET=file` writes operational logs and a separate append-only
+hash-chained audit JSONL file. `VECTIS_LOG_TARGET=stdout` emits both streams to
+stdout; collectors must identify audit records by `version: "audit-chain-v1"`.
+The audit writer assembles each record and its trailing newline into one buffer
+before writing to reduce avoidable interleaving. This does not provide universal
+atomicity or durability across the operating system and collector; the
+synchronized audit file remains the locally verifiable destination.
 
 Operational logs are for running and debugging the service. They can include
 request path, status, request ID, non-secret input summaries, and operational
 errors.
 
-Audit logs are for security-relevant events. They use stable event names and
-logical identity fields such as:
+Audit logs are for security-relevant events. A single writer assigns a local
+sequence and hashes each canonical record with the prior record hash. They use
+stable event names and logical identity fields such as:
 
 - `actor`;
 - `actor_fp`;
@@ -456,7 +461,10 @@ Audit logs must not include plaintext, ciphertext bodies, API keys, unseal keys,
 private keys, shared secrets, or full sensitive payloads.
 
 Every HTTP response includes `X-Request-Id`. The same ID is present in request
-logs so a caller can report a failing request without exposing payloads.
+and audit logs so a caller can report a failing request without exposing
+payloads. `vectis audit verify --file <path>` validates record hashes and local
+chain continuity; it does not protect against an attacker rewriting the entire
+file without an external signed checkpoint.
 
 Metrics are Prometheus-compatible. Labels must stay low-cardinality. Allowed
 labels are stable dimensions such as method, endpoint route template, status,

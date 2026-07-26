@@ -7,6 +7,7 @@ pub(crate) const EXECUTABLE_COMMANDS: &[&str] = &[
     "serve",
     "init",
     "apikey",
+    "audit",
     "version",
     "health",
     "test",
@@ -232,6 +233,7 @@ const ROOT_HELP: CommandHelp = CommandHelp {
                 "  serve                 Start the HTTP service",
                 "  init                  Generate local key material in VECTIS_INIT_KEYS_FILE",
                 "  apikey                Create additional local API keys",
+                "  audit                 Verify a local hash-chained audit log",
                 "  version               Print local build and compatibility information",
                 "  health                Call the health probe endpoints",
                 "  test                  Call protected test endpoints through HTTP",
@@ -414,6 +416,21 @@ const APIKEY_HELP: CommandHelp = CommandHelp {
         },
     ],
     output: false,
+};
+
+const AUDIT_HELP: CommandHelp = CommandHelp {
+    key: "audit",
+    heading: "Usage:",
+    usage: &["vectis audit verify --file logs/audit.log [--output <yaml|json>]"],
+    summary: Some("Verifies a local hash-chained audit JSONL file without contacting Vectis."),
+    sections: &[HelpSection {
+        title: "Behavior:",
+        lines: &[
+            "Validates record canonicalization, hash links, sequences, and every independent chain in the file.",
+            "A valid result detects local modifications within a chain; it is not a signed external checkpoint.",
+        ],
+    }],
+    output: true,
 };
 
 const VERSION_HELP: CommandHelp = CommandHelp {
@@ -1441,6 +1458,7 @@ const COMMAND_HELPS: &[CommandHelp] = &[
     SERVE_HELP,
     INIT_HELP,
     APIKEY_HELP,
+    AUDIT_HELP,
     VERSION_HELP,
     HEALTH_HELP,
     TEST_HELP,

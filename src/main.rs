@@ -9,6 +9,7 @@ enum RootCommandKind {
     Serve,
     Init,
     Apikey,
+    Audit,
     Version,
     Http,
 }
@@ -22,6 +23,7 @@ const ROOT_COMMANDS: &[RootCommand] = &[
     RootCommand::new("serve", RootCommandKind::Serve),
     RootCommand::new("init", RootCommandKind::Init),
     RootCommand::new("apikey", RootCommandKind::Apikey),
+    RootCommand::new("audit", RootCommandKind::Audit),
     RootCommand::new("version", RootCommandKind::Version),
     RootCommand::new("health", RootCommandKind::Http),
     RootCommand::new("test", RootCommandKind::Http),
@@ -138,6 +140,7 @@ async fn run_root_command(
         RootCommandKind::Serve => run_serve_command(args).await,
         RootCommandKind::Init => run_init(args),
         RootCommandKind::Apikey => io::cli::apikey::run(args),
+        RootCommandKind::Audit => io::cli::audit::run(args),
         RootCommandKind::Version => io::cli::version::run(args),
         RootCommandKind::Http => io::cli::http::run(name, args).await,
     }

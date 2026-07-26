@@ -899,10 +899,12 @@ resource, action, outcome, and reason, but no secrets or payloads. Metrics expos
 runtime health and behavior using counters/gauges/histograms with
 low-cardinality labels only.
 
-**In Vectis**: JSON operational logs, a dedicated audit stream through
-`core/audit.rs`, and Prometheus metrics through `core/metrics.rs` and
-`/metrics`; labels avoid KIDs, actors, remote addresses, payloads, and free-form
-errors.
+**In Vectis**: JSON operational logs, a dedicated hash-chained audit JSONL
+stream through `core/audit.rs` and `core/audit_chain.rs`, and Prometheus metrics
+through `core/metrics.rs` and `/metrics`; labels avoid KIDs, actors, remote
+addresses, payloads, and free-form errors. The chain detects local record
+tampering but needs external signed checkpoints before it can resist complete
+log replacement.
 
 ## 9. Documentation Contract
 

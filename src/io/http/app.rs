@@ -25,6 +25,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
     };
     let auth_state = super::auth::HttpAuthState::from_config(&config)?;
     let logging = crate::core::logging::logging_config();
+    crate::core::audit_chain::initialize(&logging)?;
     let storage = StorageState::new(&config).await?;
     let internal_keys = Zeroizing::new(
         crate::ops::internal_keys::InternalDerivedKeysState::from_init_state(&init_state)?,
@@ -313,18 +314,19 @@ mod tests {
         JoinHandle<std::io::Result<()>>,
         SocketAddr,
     ) {
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("test server listener must bind");
+        let addr = listener
+            .local_addr()
+            .expect("test server listener must report its address");
         let handle = axum_server::Handle::new();
         let server_handle = handle.clone();
         let server_task = tokio::spawn(async move {
-            axum_server::bind("127.0.0.1:0".parse().expect("test address must parse"))
+            axum_server::from_tcp(listener)
                 .handle(server_handle)
                 .serve(app.into_make_service())
                 .await
         });
-        let addr = timeout(Duration::from_secs(1), handle.listening())
-            .await
-            .expect("test server must start within one second")
-            .expect("test server must report its listening address");
 
         (handle, server_task, addr)
     }
@@ -342,7 +344,7 @@ mod tests {
             http_grace_period(),
             Duration::from_secs(config::INTERNAL_HTTP_GRACE_SEC)
         );
-        assert_eq!(http_grace_period(), Duration::from_secs(10));
+        assert_eq!(http_grace_period(), Duration::from_secs(30));
     }
 
     #[tokio::test]

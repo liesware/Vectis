@@ -350,12 +350,12 @@ The init symmetric key is a root key. Vectis derives separate internal keys from
 | Variable | Default | Expected value | Purpose |
 | --- | --- | --- | --- |
 | `VECTIS_LOG_LEVEL` | `info` | `trace`, `debug`, `info`, `warn`, `warning`, or `error` | Maximum tracing level. Invalid values fall back to `info`. |
-| `VECTIS_LOG_TARGET` | `file` | `file` or `stdout` | Destination for both operational logs and audit events. `file` writes daily rolling files. `stdout` writes JSON lines to stdout and is recommended for Kubernetes. |
-| `VECTIS_LOG_DIR` | `logs` | Directory path | Directory for daily rolling JSON logs. Created automatically if missing. |
+| `VECTIS_LOG_TARGET` | `file` | `file` or `stdout` | Destination for operational logs and the audit chain. Operational file logs rotate daily; audit files append to one JSONL file. `stdout` writes JSON lines and is recommended for Kubernetes. |
+| `VECTIS_LOG_DIR` | `logs` | Directory path | Directory for JSON logs. Created automatically if missing. |
 | `VECTIS_LOG_FILE` | `vectis.log` | File name | Base log file name used by daily rotation. |
-| `VECTIS_AUDIT_LOG_FILE` | `audit.log` | File name | Base file name for the dedicated audit log stream. Security audit events are written here, separate from the operational log. |
+| `VECTIS_AUDIT_LOG_FILE` | `audit.log` | File name | Append-only local hash-chained audit JSONL file, separate from the operational log. |
 
-Logging is JSON by default. With `VECTIS_LOG_TARGET=file`, operational events go to `VECTIS_LOG_FILE`; security events go to a dedicated audit stream (`VECTIS_AUDIT_LOG_FILE`) under `VECTIS_LOG_DIR`. With `VECTIS_LOG_TARGET=stdout`, both streams are written to stdout as JSON lines. Audit events remain logically separate through `target: "vectis::audit"`, so collectors can filter that target for the audit trail.
+Logging is JSON by default. With `VECTIS_LOG_TARGET=file`, operational events go to `VECTIS_LOG_FILE`; security events go to a dedicated append-only audit chain (`VECTIS_AUDIT_LOG_FILE`) under `VECTIS_LOG_DIR`. With `VECTIS_LOG_TARGET=stdout`, both streams are written to stdout as JSON lines. Each audit record and its trailing newline are assembled into one buffer before writing to reduce avoidable interleaving with operational logs, but stdout and the external collector remain best-effort transports rather than durable local evidence. Audit records carry `version: "audit-chain-v1"`; collectors can filter that field and verify file exports with `vectis audit verify --file <path>`. File mode flushes and synchronizes every accepted audit record and is the locally verifiable mode.
 
 The Helm chart sets `VECTIS_LOG_TARGET=stdout` by default because Kubernetes
 expects containers to write logs to stdout/stderr.

@@ -542,7 +542,7 @@ grep '<request-id>' logs/audit.log
 ```
 
 If `VECTIS_LOG_TARGET=stdout`, search the container logs or log collector for
-the same request ID. Audit events are JSON records with `target: "vectis::audit"`.
+the same request ID. Audit records are JSON lines with `version: "audit-chain-v1"`.
 
 ### Recovery
 
@@ -633,7 +633,13 @@ grep '<request-id>' logs/vectis.log
 ```
 
 If `VECTIS_LOG_TARGET=stdout`, query container logs or the central collector
-instead. Filter audit records with `target: "vectis::audit"`.
+instead. Filter audit records with `version: "audit-chain-v1"`.
+
+Verify a file-backed audit chain before relying on it for an investigation:
+
+```sh
+vectis audit verify --file logs/audit.log --output yaml
+```
 
 Look for:
 

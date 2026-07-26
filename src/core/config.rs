@@ -47,6 +47,9 @@ pub const CONFIG_SIGN_FILE_MAX_SIZE_BYTES: u64 = 1024 * 1024;
 pub const INIT_KEYS_FILE_MAX_SIZE_BYTES: u64 = 64 * 1024;
 pub const UNSEAL_KEY_FILE_MAX_SIZE_BYTES: u64 = 1024;
 pub const ENV_FILE_MAX_SIZE_BYTES: u64 = 64 * 1024;
+pub const AUDIT_CHAIN_RECORD_MAX_BYTES: usize = 16 * 1024;
+pub const AUDIT_CHAIN_REASON_MAX_CHARS: usize = 256;
+pub const AUDIT_CHAIN_CHANNEL_CAPACITY: usize = 1024;
 
 #[derive(Clone)]
 pub struct AppConfig {

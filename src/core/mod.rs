@@ -1,4 +1,5 @@
 pub mod audit;
+pub mod audit_chain;
 pub mod blocking;
 pub mod canonical;
 pub mod commitments;

@@ -1,4 +1,5 @@
 pub mod apikey;
+pub mod audit;
 mod config_editor;
 mod help_catalog;
 pub mod http;

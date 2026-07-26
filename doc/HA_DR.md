@@ -180,8 +180,9 @@ Recovery:
 
 ### Audit Logs Lost
 
-Expected behavior: Vectis can continue running, but the security trail is
-incomplete.
+Expected behavior: Vectis fails closed for HTTP operations after audit-chain
+persistence fails; it does not return successful protected operations without
+an audit record.
 
 Recovery:
 
@@ -193,7 +194,7 @@ When `VECTIS_LOG_TARGET=stdout`, audit events are mixed with operational logs in
 the container stream and are distinguished by:
 
 ```json
-"target": "vectis::audit"
+"version": "audit-chain-v1"
 ```
 
 ## RPO And RTO

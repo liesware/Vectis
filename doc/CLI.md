@@ -19,6 +19,7 @@ Local commands do not require the HTTP service:
 
 - `vectis init`
 - `vectis apikey create`
+- `vectis audit verify --file <path>`
 - `vectis config sign`
 - `vectis config list`
 
@@ -93,6 +94,19 @@ Current unseal providers are:
 There is no configurable unseal provider selector yet.
 
 ## Local Bootstrap Commands
+
+## Audit Verification
+
+Verify a local hash-chained audit JSONL file without contacting the service:
+
+```sh
+vectis audit verify --file logs/audit.log
+vectis audit verify --file logs/audit.log --output json
+```
+
+The verifier checks JSON canonicalization, record hashes, sequence continuity,
+and each independent chain in the file. It detects local modifications within a
+chain, but it does not replace externally published signed checkpoints.
 
 ### `vectis init`
 

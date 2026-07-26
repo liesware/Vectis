@@ -98,7 +98,7 @@ In order of importance:
 | Configuration tampering (routes, permissions, peer keys) | Mandatory config signature | `vectis-config` timestamp token over canonical JSON, verified on load and on every reload (`ops/sign.rs`, `core/config_file.rs`) |
 | Storage theft or row substitution in the database | Encryption at rest with identity binding | Operational keys encrypted with an HKDF-derived key and AAD; the `kid` is re-verified against the hash of the encrypted payload on load (`validate_key_id_matches_keys`). Token vault rows are protected separately: `tokens.data` is AEAD-encrypted with AAD binding `kid`, `profile`, and `hashid`, so a stolen or substituted row cannot decrypt outside its own `(kid, profile, hashid)` context. Blind indexes store only deterministic MAC digests in `indexes` for membership checks |
 | API key brute force and timing attacks | Hashed verification with constant-time comparison where credentials are compared | Server stores keyed hashes; root verification compares in constant time, and permission clients are indexed by hash for lookup (`core/permissions.rs`, `crypto::constant_time_eq`) |
-| Information leakage through errors and telemetry | Typed error boundary and disciplined observability | `VectisError` variants decide HTTP status and public messages (no internal detail on 5xx); logs and metrics avoid secrets and high-cardinality labels; dedicated audit stream with request ids |
+| Information leakage through errors and telemetry | Typed error boundary and disciplined observability | `VectisError` variants decide HTTP status and public messages (no internal detail on 5xx); logs and metrics avoid secrets and high-cardinality labels; hash-chained audit records carry request ids without payloads |
 | Use of retired or destroyed keys | Runtime lifecycle enforcement | Lifecycle states (`active`, `disabled`, `retired`, `compromised`, `destroyed`) gate every operation class (`ops/keys.rs`) |
 
 ## Explicit Assumptions
@@ -178,7 +178,7 @@ Vectis is not, and does not replace:
   durable storage (PostgreSQL) but not in-memory state, and cross-node changes
   become visible only through explicit reload, restart, or lazy-load (see
   `doc/Clustering.md`);
-- Merkle proofs, tamper-evident audit chains, SLH-DSA, Vault/KMS/HSM
+- Merkle proofs, externally checkpointed tamper-proof audit chains, SLH-DSA, Vault/KMS/HSM
   auto-unseal, and mTLS;
 - denial-of-service resistance.
 

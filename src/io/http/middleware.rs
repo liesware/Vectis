@@ -1,7 +1,7 @@
 use axum::extract::{MatchedPath, Request};
 use axum::http::{HeaderName, HeaderValue};
 use axum::middleware::Next;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -30,7 +30,34 @@ pub async fn request_context(request: Request, next: Next) -> Response {
     );
 
     let start = std::time::Instant::now();
-    let mut response = next.run(request).instrument(span).await;
+    let audit = crate::core::audit::RequestAudit::new(request_id.clone());
+    let mut response =
+        crate::core::audit::with_request_context(audit.clone(), next.run(request).instrument(span))
+            .await;
+    // Fail-closed only for requests that actually emitted audit events: probes and
+    // /metrics enqueue nothing, so they never wait on the writer nor 500 on its failure.
+    if audit.enqueued() {
+        crate::core::audit_chain::confirm(audit.failure_cell()).await;
+        if audit.failure().is_some() {
+            let error = crate::error::internal("audit log persistence failed");
+            let (status, payload) = super::error::error_response(error.as_ref());
+            let mut failure_response = (status, payload).into_response();
+            if !request_id.is_empty()
+                && let Ok(value) = HeaderValue::from_str(&request_id)
+            {
+                failure_response
+                    .headers_mut()
+                    .insert(HeaderName::from_static("x-request-id"), value);
+            }
+            metrics::record_http_request(
+                method.as_str(),
+                &endpoint,
+                failure_response.status().as_u16(),
+                start.elapsed().as_secs_f64(),
+            );
+            return failure_response;
+        }
+    }
     if !request_id.is_empty()
         && let Ok(value) = HeaderValue::from_str(&request_id)
     {
