@@ -472,6 +472,7 @@ def main():
     kid = env["LOCAL_KID"]
     api_key = env["VECTIS_APIKEY"]
     init_json = load_json(SITE_DIR / "init.json")
+    init_pub_json = load_json(SITE_DIR / "init_pub.json")
     config_json = load_json(SITE_DIR / "config.json")
     config_sign_json = load_json(SITE_DIR / "config_sign.json")
     personaldata = load_json(PERSONALDATA_PATH)
@@ -482,6 +483,7 @@ def main():
     print(f"kid: {kid}", flush=True)
     print(flush=True)
     print_yaml_block("init.json", init_json)
+    print_yaml_block("init_pub.json", init_pub_json)
     print_yaml_block("config.json", config_json)
     print_yaml_block("config_sign.json", config_sign_json)
     wait_for_start()

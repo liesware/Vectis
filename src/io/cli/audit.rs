@@ -1,6 +1,6 @@
 use crate::core::{audit_chain, validation};
 use crate::error::DynError;
-use crate::io::cli::{help_catalog, http};
+use crate::io::cli::{help_catalog, http, init};
 use std::path::PathBuf;
 
 pub fn run(args: Vec<String>) -> Result<(), DynError> {
@@ -16,7 +16,8 @@ pub fn run(args: Vec<String>) -> Result<(), DynError> {
     }
     let file =
         file.ok_or_else(|| crate::error::invalid_input("audit verify requires --file <path>"))?;
-    let result = audit_chain::verify_file(&file)?;
+    let init_public_state = init::load_init_public_state()?;
+    let result = audit_chain::verify_file(&file, &init_public_state)?;
     http::print_serializable_response(&result, output)
 }
 

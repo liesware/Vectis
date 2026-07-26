@@ -282,6 +282,29 @@ where
     }
 }
 
+pub(crate) fn verify_compact_hybrid_signature_with_public_keys_strict<T>(
+    signature: &str,
+    eddsa_public_key_der_hex: &str,
+    ml_dsa_public_key_der_hex: &str,
+) -> Result<T, DynError>
+where
+    T: DeserializeOwned + Serialize,
+{
+    match verify_compact_hybrid_signature_with_public_keys(
+        signature,
+        eddsa_public_key_der_hex,
+        ml_dsa_public_key_der_hex,
+    )? {
+        CompactSignatureVerification::Valid(payload) => Ok(payload),
+        CompactSignatureVerification::Invalid(CompactSignatureFailure::MlDsaFailed) => Err(
+            crate::error::invalid_signature("compact signature ML-DSA verification failed"),
+        ),
+        CompactSignatureVerification::Invalid(CompactSignatureFailure::EdDsaFailed) => Err(
+            crate::error::invalid_signature("compact signature EdDSA verification failed"),
+        ),
+    }
+}
+
 fn verify_compact_hybrid_signature_with_public_keys<T>(
     signature: &str,
     eddsa_public_key_der_hex: &str,

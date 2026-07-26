@@ -2,6 +2,7 @@ internal/
 /target
 .env
 init.json
+init_pub.json
 .unseal_key
 *.db
 *.log

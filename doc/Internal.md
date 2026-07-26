@@ -432,8 +432,9 @@ Vectis separates three observability channels:
 - metrics.
 
 `VECTIS_LOG_TARGET=file` writes operational logs and a separate append-only
-hash-chained audit JSONL file. `VECTIS_LOG_TARGET=stdout` emits both streams to
-stdout; collectors must identify audit records by `version: "audit-chain-v1"`.
+audit JSONL stream. `VECTIS_LOG_TARGET=stdout` emits the same audit stream to
+stdout; collectors must retain both `version: "audit-chain-v1"` records and
+`version: "audit-checkpoint-v1"` checkpoint lines.
 The audit writer assembles each record and its trailing newline into one buffer
 before writing to reduce avoidable interleaving. This does not provide universal
 atomicity or durability across the operating system and collector; the
@@ -462,9 +463,15 @@ private keys, shared secrets, or full sensitive payloads.
 
 Every HTTP response includes `X-Request-Id`. The same ID is present in request
 and audit logs so a caller can report a failing request without exposing
-payloads. `vectis audit verify --file <path>` validates record hashes and local
-chain continuity; it does not protect against an attacker rewriting the entire
-file without an external signed checkpoint.
+payloads. The audit writer signs a checkpoint with init-key EdDSA + ML-DSA after
+10,000 events and during orderly shutdown; an idle server emits no checkpoints.
+`vectis audit verify --file <path>` loads local init public keys to validate
+record hashes, chain continuity, and checkpoints without accessing private init
+material. A local checkpoint does not protect against an attacker rewriting both
+the file and public verification keys; preserve both in an independent collector.
+If the public artifact is lost, `vectis init pub` reconstructs it from encrypted
+init material using the normal unseal flow; audit verification never performs
+that recovery automatically.
 
 Metrics are Prometheus-compatible. Labels must stay low-cardinality. Allowed
 labels are stable dimensions such as method, endpoint route template, status,

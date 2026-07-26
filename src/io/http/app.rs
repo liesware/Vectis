@@ -25,7 +25,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
     };
     let auth_state = super::auth::HttpAuthState::from_config(&config)?;
     let logging = crate::core::logging::logging_config();
-    crate::core::audit_chain::initialize(&logging)?;
+    crate::core::audit_chain::initialize(&logging, &init_state)?;
     let storage = StorageState::new(&config).await?;
     let internal_keys = Zeroizing::new(
         crate::ops::internal_keys::InternalDerivedKeysState::from_init_state(&init_state)?,
@@ -230,7 +230,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         http_grace_period(),
     ));
 
-    if config.server_scheme == "https" {
+    let server_result = if config.server_scheme == "https" {
         let cert_path = config.tls_cert_path.as_ref().ok_or_else(|| {
             crate::error::invalid_input("VECTIS_TLS_CERT_PATH is required when VECTIS_MODE=prod")
         })?;
@@ -244,7 +244,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         axum_server::bind_rustls(config.http_bind_addr, tls_config)
             .handle(handle)
             .serve(app.into_make_service())
-            .await?;
+            .await
     } else {
         warn!("server running without TLS because VECTIS_MODE=dev");
 
@@ -252,9 +252,12 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         axum_server::bind(config.http_bind_addr)
             .handle(handle)
             .serve(app.into_make_service())
-            .await?;
-    }
+            .await
+    };
 
+    let audit_result = crate::core::audit_chain::shutdown().await;
+    server_result?;
+    audit_result?;
     Ok(())
 }
 

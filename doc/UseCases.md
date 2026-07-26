@@ -10,11 +10,12 @@ For every feature it answers three questions in the same shape:
 Each entry also includes a short example and a **When not to use it** note, because
 several of these primitives look similar but solve different problems.
 
-> **Status: experimental.** Vectis is a work in progress: incomplete, not audited,
-> and not production-ready. **Do not use Vectis with real patient data, production
-> secrets, financial records, or any other real sensitive data.** The scenarios
-> below are illustrative, not deployment guidance. See
-> [README.md](../README.md) and [doc/ThreatModel.md](ThreatModel.md).
+> **Status: in progress.** Vectis is under active development and has not yet
+> completed an external security audit. The scenarios below are illustrative,
+> not deployment guidance — run Vectis as one layer in a defense-in-depth
+> architecture, and see the README's
+> [Security Status](../README.md#security-status) for production use. Design
+> deployments against [doc/ThreatModel.md](ThreatModel.md).
 
 Vectis's job is narrow: TLS protects the *connection*, but sensitive data keeps
 moving through applications, queues, storage, logs, and workers after the

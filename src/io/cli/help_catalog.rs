@@ -350,19 +350,23 @@ const SERVE_HELP: CommandHelp = CommandHelp {
 const INIT_HELP: CommandHelp = CommandHelp {
     key: "init",
     heading: "Usage:",
-    usage: &["vectis init"],
+    usage: &["vectis init", "vectis init pub"],
     summary: Some(
-        "Generates local bootstrap key material and writes encrypted VECTIS_INIT_KEYS_FILE.",
+        "Generates local bootstrap key material and writes encrypted VECTIS_INIT_KEYS_FILE plus public VECTIS_INIT_PUBLIC_KEYS_FILE.",
     ),
     sections: &[
         HelpSection {
             title: "Behavior:",
-            lines: &["If the file already exists, init refuses to overwrite it."],
+            lines: &[
+                "init creates new encrypted and public init key files; it refuses to overwrite either.",
+                "init pub regenerates only a missing public verification file from encrypted init material.",
+            ],
         },
         HelpSection {
             title: "Output:",
             lines: &[
                 "  VECTIS_INIT_KEYS_FILE Encrypted key file, default init.json",
+                "  VECTIS_INIT_PUBLIC_KEYS_FILE Public verification key file, default init_pub.json",
                 "  VECTIS_UNSEAL_KEY=... Key used later by serve to decrypt the configured init keys file",
                 "  VECTIS_APIKEY=...     Client API key for protected HTTP endpoints",
                 "  VECTIS_APIKEY_HASH=... Server-side API key hash for protected HTTP endpoints",
@@ -373,6 +377,7 @@ const INIT_HELP: CommandHelp = CommandHelp {
             lines: &[
                 "  Delete the configured init keys file manually before reinitializing.",
                 "  Do not store VECTIS_UNSEAL_KEY in .env for production.",
+                "  init pub requires unseal material and refuses to overwrite an existing public file.",
             ],
         },
     ],
@@ -422,14 +427,22 @@ const AUDIT_HELP: CommandHelp = CommandHelp {
     key: "audit",
     heading: "Usage:",
     usage: &["vectis audit verify --file logs/audit.log [--output <yaml|json>]"],
-    summary: Some("Verifies a local hash-chained audit JSONL file without contacting Vectis."),
-    sections: &[HelpSection {
-        title: "Behavior:",
-        lines: &[
-            "Validates record canonicalization, hash links, sequences, and every independent chain in the file.",
-            "A valid result detects local modifications within a chain; it is not a signed external checkpoint.",
-        ],
-    }],
+    summary: Some("Verifies local hash-chained audit JSONL and hybrid-signed checkpoints."),
+    sections: &[
+        HelpSection {
+            title: "Behavior:",
+            lines: &[
+                "Validates record canonicalization, hash links, sequences, and every independent chain in the file.",
+                "Verifies hybrid-signed checkpoints with local init public keys and reports the latest checkpoint per chain.",
+            ],
+        },
+        HelpSection {
+            title: "Required public material:",
+            lines: &[
+                "  VECTIS_INIT_PUBLIC_KEYS_FILE Public init verification keys, default init_pub.json",
+            ],
+        },
+    ],
     output: true,
 };
 

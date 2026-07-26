@@ -174,19 +174,30 @@ async fn run_serve() -> Result<(), DynError> {
 }
 
 fn run_init(args: Vec<String>) -> Result<(), DynError> {
-    match args.first().map(String::as_str) {
-        Some("help" | "-h" | "--help") => io::cli::http::print_help("init"),
-        Some(command) => {
-            eprintln!("unknown init command: {command}\n");
-            io::cli::http::print_help("init");
-        }
-        None => {
+    match args.as_slice() {
+        [] => {
             info!("initializing local key material");
             let path = io::cli::init::run_init()?;
 
             println!("created {path}");
             info!(path, "init completed successfully");
         }
+        [command] if matches!(command.as_str(), "help" | "-h" | "--help") => {
+            io::cli::http::print_help("init");
+        }
+        [command] if command == "pub" => {
+            let path = io::cli::init::run_init_public()?;
+            println!("created {path}");
+            info!(path, "init public keys regenerated");
+        }
+        [command, help]
+            if command == "pub" && matches!(help.as_str(), "help" | "-h" | "--help") =>
+        {
+            io::cli::http::print_help("init");
+        }
+        [command, ..] => Err(crate::error::invalid_input(format!(
+            "unknown init command: {command}; run `vectis init --help` for usage"
+        )))?,
     }
 
     Ok(())

@@ -94,6 +94,7 @@ stop_vectis() {
 
 rm -f \
   "${SITE_DIR}/init.json" \
+  "${SITE_DIR}/init_pub.json" \
   "${SITE_DIR}/config.json" \
   "${SITE_DIR}/config_sign.json" \
   "${SITE_DIR}/.unseal_key"

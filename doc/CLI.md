@@ -77,6 +77,7 @@ Common HTTP client variables:
 Common local bootstrap variables:
 
 - `VECTIS_INIT_KEYS_FILE`: encrypted init key material, default `init.json`.
+- `VECTIS_INIT_PUBLIC_KEYS_FILE`: public init verification keys, default `init_pub.json`.
 - `VECTIS_UNSEAL_KEY`: unseal key from process environment.
 - `VECTIS_UNSEAL_KEY_FILE`: file containing the unseal key, default
   `.unseal_key`. The file must have `0600` permissions.
@@ -97,28 +98,33 @@ There is no configurable unseal provider selector yet.
 
 ## Audit Verification
 
-Verify a local hash-chained audit JSONL file without contacting the service:
+Verify a local hash-chained audit JSONL export and its hybrid-signed checkpoints
+without contacting the service:
 
 ```sh
 vectis audit verify --file logs/audit.log
 vectis audit verify --file logs/audit.log --output json
 ```
 
-The verifier checks JSON canonicalization, record hashes, sequence continuity,
-and each independent chain in the file. It detects local modifications within a
-chain, but it does not replace externally published signed checkpoints.
+The verifier loads `init_pub.json` through `VECTIS_INIT_PUBLIC_KEYS_FILE`, then
+checks JSON canonicalization, record hashes, sequence continuity, and every
+hybrid-signed checkpoint. It does not load `init.json` or require an unseal key.
+A result reports the latest verified checkpoint for each chain. Preserve the
+public verification file and checkpoints in an independent collector to detect
+complete log replacement or truncation beyond the latest checkpoint.
 
 ### `vectis init`
 
-Creates encrypted init key material and prints:
+Creates encrypted init key material plus public init verification keys and prints:
 
 - `VECTIS_INIT_KEYS_FILE`
+- `VECTIS_INIT_PUBLIC_KEYS_FILE`
 - `VECTIS_UNSEAL_KEY`
 - `VECTIS_APIKEY`
 - `VECTIS_APIKEY_HASH`
 
-If the configured init keys file already exists, `init` refuses to overwrite it.
-There is no force flag. Delete the file manually if reinitialization is really
+If either configured init key file already exists, `init` refuses to overwrite
+them. There is no force flag. Delete both files manually if reinitialization is really
 intended.
 
 Example:
@@ -126,6 +132,16 @@ Example:
 ```sh
 vectis init
 ```
+
+Recover a missing public verification file without generating new keys:
+
+```sh
+vectis init pub
+```
+
+This command decrypts and validates `VECTIS_INIT_KEYS_FILE`, so it requires the
+normal unseal flow. It writes only a missing `VECTIS_INIT_PUBLIC_KEYS_FILE` and
+never overwrites an existing one.
 
 ### `vectis apikey create`
 

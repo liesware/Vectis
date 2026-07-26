@@ -1,5 +1,6 @@
-use crate::core::{config, crypto, validation};
+use crate::core::{config, crypto, remote_routes, validation};
 use crate::error::DynError;
+use crate::ops::contracts::{PublicDerKey, PublicKeys, PublicKeysOutput, PublicRawKey};
 use crate::ops::key_material::{KeyMaterialOutput, KeyMaterialSpec, create_key_material};
 use crate::ops::key_validation::{KeyValidationOutput, validate_key_material};
 use serde::{Deserialize, Serialize};
@@ -24,6 +25,7 @@ struct EncryptedInitInput {
 
 pub struct EncryptedInitJsonOutput {
     pub json: String,
+    pub public_json: String,
     pub encryption_key_hex: Zeroizing<String>,
     pub api_key: Zeroizing<String>,
     pub api_key_hash: Zeroizing<String>,
@@ -32,7 +34,14 @@ pub struct EncryptedInitJsonOutput {
 #[derive(Clone)]
 pub struct ValidatedInitState {
     pub(crate) init_keys: Zeroizing<InitOutput>,
+    init_aad: String,
     pub validation: InitValidationOutput,
+}
+
+#[derive(Clone)]
+pub struct ValidatedInitPublicState {
+    eddsa_public_key_der_hex: String,
+    ml_dsa_public_key_der_hex: String,
 }
 
 impl ValidatedInitState {
@@ -48,6 +57,16 @@ impl ValidatedInitState {
 
     pub fn symmetric_key_hex(&self) -> &str {
         &self.init_keys.keys.symmetric.key_hex
+    }
+}
+
+impl ValidatedInitPublicState {
+    pub fn eddsa_public_key_der_hex(&self) -> &str {
+        &self.eddsa_public_key_der_hex
+    }
+
+    pub fn ml_dsa_public_key_der_hex(&self) -> &str {
+        &self.ml_dsa_public_key_der_hex
     }
 }
 
@@ -91,16 +110,48 @@ pub fn create_encrypted_init_output_json() -> Result<EncryptedInitJsonOutput, Dy
     let encrypted_output = EncryptedInitOutput {
         keys_enc: hex::encode(ciphertext),
         nonce: hex::encode(&*nonce),
-        aad,
+        aad: aad.clone(),
     };
     let json = serde_json::to_string_pretty(&encrypted_output)?;
+    let public_json = serialize_init_public_keys_json(&output, &aad)?;
 
     Ok(EncryptedInitJsonOutput {
         json,
+        public_json,
         encryption_key_hex,
         api_key,
         api_key_hash,
     })
+}
+
+pub fn init_public_keys_json(init_state: &ValidatedInitState) -> Result<String, DynError> {
+    serialize_init_public_keys_json(&init_state.init_keys, &init_state.init_aad)
+}
+
+fn serialize_init_public_keys_json(output: &InitOutput, info: &str) -> Result<String, DynError> {
+    let keys = output.keys();
+
+    Ok(serde_json::to_string_pretty(&PublicKeysOutput {
+        info: info.to_string(),
+        keys: PublicKeys {
+            eddsa: PublicDerKey {
+                alg: keys.eddsa().variant().to_string(),
+                public_key_der_hex: keys.eddsa().public_key_der_hex().to_string(),
+            },
+            xecdh: PublicRawKey {
+                alg: keys.xecdh().variant().to_string(),
+                public_key_hex: keys.xecdh().public_key_hex().to_string(),
+            },
+            ml_dsa: PublicDerKey {
+                alg: keys.ml_dsa().variant().to_string(),
+                public_key_der_hex: keys.ml_dsa().public_key_der_hex().to_string(),
+            },
+            ml_kem: PublicDerKey {
+                alg: keys.ml_kem().variant().to_string(),
+                public_key_der_hex: keys.ml_kem().public_key_der_hex().to_string(),
+            },
+        },
+    })?)
 }
 
 fn init_keys_aad(config: &config::AppConfig) -> Result<String, DynError> {
@@ -126,7 +177,39 @@ pub fn load_validated_init_state(
 
     Ok(ValidatedInitState {
         init_keys: decrypted_init.output,
+        init_aad: decrypted_init.aad,
         validation,
+    })
+}
+
+pub fn load_validated_init_public_state(
+    public_json: &str,
+) -> Result<ValidatedInitPublicState, DynError> {
+    let output: PublicKeysOutput = serde_json::from_str(public_json)?;
+    validation::validate_text_field("init public keys info", &output.info)?;
+    let peer_keys = remote_routes::PeerPublicKeys {
+        eddsa: remote_routes::PeerDerKey {
+            alg: output.keys.eddsa.alg,
+            public_key_der_hex: output.keys.eddsa.public_key_der_hex,
+        },
+        xecdh: remote_routes::PeerRawKey {
+            alg: output.keys.xecdh.alg,
+            public_key_hex: output.keys.xecdh.public_key_hex,
+        },
+        ml_dsa: remote_routes::PeerDerKey {
+            alg: output.keys.ml_dsa.alg,
+            public_key_der_hex: output.keys.ml_dsa.public_key_der_hex,
+        },
+        ml_kem: remote_routes::PeerDerKey {
+            alg: output.keys.ml_kem.alg,
+            public_key_der_hex: output.keys.ml_kem.public_key_der_hex,
+        },
+    };
+    remote_routes::validate_peer_public_keys(&peer_keys)?;
+
+    Ok(ValidatedInitPublicState {
+        eddsa_public_key_der_hex: peer_keys.eddsa.public_key_der_hex,
+        ml_dsa_public_key_der_hex: peer_keys.ml_dsa.public_key_der_hex,
     })
 }
 
@@ -183,6 +266,7 @@ fn decrypt_encrypted_init_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     #[test]
     fn init_keys_aad_keeps_legacy_format_for_valid_fields() {
@@ -209,5 +293,34 @@ mod tests {
         config.sender_hostname = String::from("node=a");
         let err = init_keys_aad(&config).expect_err("sender hostname delimiter must fail");
         assert!(err.to_string().contains("must not contain ';' or '='"));
+    }
+
+    #[test]
+    fn init_public_output_contains_only_validated_public_material() {
+        let output = create_encrypted_init_output_json().expect("init output must be created");
+        let value: Value = serde_json::from_str(&output.public_json).unwrap();
+        let rendered = output.public_json.as_str();
+
+        assert!(value.get("info").is_some());
+        assert!(value.get("keys").is_some());
+        assert!(!rendered.contains("private_key"));
+        assert!(!rendered.contains("\"key_hex\""));
+        assert!(load_validated_init_public_state(&output.public_json).is_ok());
+
+        let mut invalid = value;
+        invalid["unexpected"] = Value::Bool(true);
+        assert!(load_validated_init_public_state(&invalid.to_string()).is_err());
+    }
+
+    #[test]
+    fn reconstructs_identical_public_output_from_validated_init_state() {
+        let output = create_encrypted_init_output_json().expect("init output must be created");
+        let init_state =
+            load_validated_init_state(&output.json, &output.encryption_key_hex).unwrap();
+
+        assert_eq!(
+            init_public_keys_json(&init_state).unwrap(),
+            output.public_json
+        );
     }
 }

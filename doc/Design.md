@@ -900,11 +900,12 @@ runtime health and behavior using counters/gauges/histograms with
 low-cardinality labels only.
 
 **In Vectis**: JSON operational logs, a dedicated hash-chained audit JSONL
-stream through `core/audit.rs` and `core/audit_chain.rs`, and Prometheus metrics
-through `core/metrics.rs` and `/metrics`; labels avoid KIDs, actors, remote
-addresses, payloads, and free-form errors. The chain detects local record
-tampering but needs external signed checkpoints before it can resist complete
-log replacement.
+stream through `core/audit.rs` and `core/audit_chain.rs`, hybrid-signed
+checkpoints using init keys, and Prometheus metrics through `core/metrics.rs`
+and `/metrics`; labels avoid KIDs, actors, remote addresses, payloads, and
+free-form errors. The chain and its checkpoints detect local record tampering;
+an independently retained collector is still required to resist complete log
+replacement or truncation.
 
 ## 9. Documentation Contract
 

@@ -24,8 +24,8 @@ This document complements:
 
 ## What Vectis Does
 
-Vectis is an experimental **cryptographic data protection toolkit for sensitive
-data workflows**. TLS protects a network connection, but sensitive data often
+Vectis is an **advanced data protection service for sensitive data
+workflows**, under active development. TLS protects a network connection, but sensitive data often
 continues moving through applications, queues, services, storage, logs, jobs,
 and final systems after the TLS session ends. Vectis provides object-level
 protection: the data itself is encrypted, signed, routed, verified,
@@ -50,8 +50,8 @@ At the current stage, Vectis provides:
 - startup, liveness, readiness, metrics, structured logs, and audit logs;
 - a CLI that mostly behaves as an HTTP client for the runtime service.
 
-Vectis is experimental. It does not replace TLS, KMS, HSMs, mature DLP systems,
-secrets managers, or audited cryptographic products.
+Vectis does not replace TLS, KMS, HSMs, mature DLP systems, secrets managers,
+or audited cryptographic products.
 
 ## Core Model
 
@@ -138,7 +138,7 @@ Important modules:
 - `core/http_client.rs`: outbound HTTP client construction.
 - `core/logging.rs`: structured JSON operational logging setup.
 - `core/audit.rs`: typed security audit event facade.
-- `core/audit_chain.rs`: local hash-chained audit JSONL writer and offline verifier.
+- `core/audit_chain.rs`: local hash-chained audit JSONL writer, hybrid checkpoint signer, and offline verifier.
 - `core/metrics.rs`: metrics helpers.
 
 ### `ops`
@@ -200,12 +200,13 @@ process shutdown or when a reload replaces a state value.
 
 ### `vectis init`
 
-`vectis init` creates local encrypted init key material. It writes to
-`VECTIS_INIT_KEYS_FILE`, defaulting to `init.json`.
+`vectis init` creates local encrypted init key material and a matching public
+verification artifact. It writes to `VECTIS_INIT_KEYS_FILE`, defaulting to
+`init.json`, and `VECTIS_INIT_PUBLIC_KEYS_FILE`, defaulting to `init_pub.json`.
 
-The command must not overwrite existing init material. If the configured init
-file already exists, the command aborts before generating or printing secrets.
-Reinitialization is intentionally manual: delete the configured file first.
+The command must not overwrite existing init material. If either configured
+init file already exists, the command aborts before generating or printing
+secrets. Reinitialization is intentionally manual: delete both files first.
 
 The init material includes fixed internal key families:
 
@@ -911,7 +912,8 @@ Operational logs should show:
 
 Audit logs are separate from operational logs and intended for security-relevant
 events. In file mode this separation is physical. In stdout mode both streams go
-to stdout and audit is selected by `version: "audit-chain-v1"`. The audit writer
+to stdout and audit is selected by `version: "audit-chain-v1"` or
+`version: "audit-checkpoint-v1"`. The audit writer
 assembles each record and its newline into one buffer before writing to reduce
 avoidable interleaving, but stdout is not durable local evidence and does not
 provide universal write atomicity. Audit records are hash-chained locally and
@@ -1213,14 +1215,14 @@ Rebuild confidence with:
 
 ## Current Known Boundaries
 
-Vectis is still experimental. Important boundaries:
+Vectis is under active development. Important boundaries:
 
 - SQLite and PostgreSQL storage are implemented; PostgreSQL is schema-managed by
   the operator, not migrated by Vectis;
 - no custom CA bundle support yet;
 - no mTLS support yet;
 - no Vault, KMS, or HSM auto-unseal yet;
-- no Merkle proofs or externally checkpointed tamper-proof audit chains yet;
+- no Merkle proofs or externally published tamper-proof audit chains yet;
 - no SLH-DSA support yet;
 - production TLS policy exists, but deployment hardening still needs more work;
 - config reload is whole-file, not per-section transactional;
@@ -1239,7 +1241,7 @@ Likely future work:
 - stronger cluster-aware key loading and cache invalidation;
 - custom trust store / CA bundle support;
 - Merkle-based batch verification;
-- signed audit checkpoints and tamper-evident export built on published roots;
+- publication of signed audit checkpoints and tamper-evident export built on published roots;
 - SLH-DSA support if it fits the profile model;
 - Vault/KMS/HSM-backed auto-unseal;
 - mTLS for deployments that need transport-level client identity;

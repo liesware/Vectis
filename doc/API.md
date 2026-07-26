@@ -2072,7 +2072,7 @@ Main variables:
 - `VECTIS_CRYPTO_POLICY`: controls whether `POST /keys` accepts request-level algorithm overrides.
 - `VECTIS_HASH`, `VECTIS_SYMMETRIC`, `VECTIS_EDDSA`, `VECTIS_XECDH`, `VECTIS_ML_DSA_VARIANT`, `VECTIS_ML_KEM_VARIANT`: validated legacy/dev algorithm settings; profiles are the source of key-generation defaults.
 - `VECTIS_LOG_LEVEL`, `VECTIS_LOG_DIR`, `VECTIS_LOG_FILE`: operational logging configuration.
-- `VECTIS_AUDIT_LOG_FILE`: append-only local hash-chained security audit JSONL file. Verify it with `vectis audit verify --file <path>`; v1 has no external signed checkpoints.
+- `VECTIS_AUDIT_LOG_FILE`: append-only local audit JSONL stream containing hash-chained security records and hybrid-signed checkpoints. Verify it with `vectis audit verify --file <path>` using `VECTIS_INIT_PUBLIC_KEYS_FILE`; preserve checkpoints and the public verification file outside the node to detect complete replacement or truncation.
 
 Internal defaults for `init` key material:
 

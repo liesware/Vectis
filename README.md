@@ -19,9 +19,10 @@ object or payload itself after it leaves the transport layer.
 > a simple tool used to move something heavy with controlled force.
 
 > **Status: in progress.** Vectis is under active development and has not yet
-> completed an external security audit. It is suitable for evaluation, demos,
-> and design-partner PoCs, but should not be used as the sole protection layer
-> for production sensitive data yet.
+> completed an external security audit. Everything Vectis does is in this
+> repository, free and Apache-2.0 licensed — use it, self-host it, break it,
+> and open an issue with what you find. For production use, see
+> [Security Status](#security-status).
 
 ## Why Vectis?
 
@@ -123,7 +124,7 @@ protection primitives and workflows.
 **Operations and observability**
 
 - startup, liveness, and readiness health probes;
-- a hash-chained security audit JSONL log with per-request correlation ids and offline verification;
+- a hash-chained security audit JSONL stream with hybrid-signed checkpoints, per-request correlation ids, and offline verification;
 - a Prometheus `/metrics` endpoint for operational observability;
 - local CLI commands plus CLI commands that act as an HTTP API client;
 - OpenAPI and environment variable documentation.
@@ -286,6 +287,7 @@ The command prints:
 
 - `VECTIS_UNSEAL_KEY`: used to decrypt the configured init keys file;
 - `VECTIS_INIT_KEYS_FILE`: encrypted init key material path, default `init.json`;
+- `VECTIS_INIT_PUBLIC_KEYS_FILE`: public verification key path, default `init_pub.json`;
 - `VECTIS_APIKEY`: client secret generated with a cryptographic random number
   generator and sent as `X-API-Key`;
 - `VECTIS_APIKEY_HASH`: server-side verifier for protected HTTP endpoints.
@@ -295,6 +297,13 @@ For local development, save the unseal key in `.unseal_key`:
 ```sh
 printf '%s\n' '<VECTIS_UNSEAL_KEY>' > .unseal_key
 chmod 600 .unseal_key
+```
+
+If `init_pub.json` is lost, recover it from the encrypted init material without
+creating new keys:
+
+```sh
+cargo run -- init pub
 ```
 
 Create a SQLite database file and schema:
@@ -382,6 +391,7 @@ The essentials to get a local instance running:
 - `VECTIS_HTTP_BIND_ADDR`: listen address, default `127.0.0.1:3000`;
 - `VECTIS_MODE`: `dev` (HTTP) or `prod` (HTTPS, requires TLS cert and key);
 - `VECTIS_INIT_KEYS_FILE`: encrypted init key material, default `init.json`;
+- `VECTIS_INIT_PUBLIC_KEYS_FILE`: public init verification keys, default `init_pub.json`;
 - `VECTIS_UNSEAL_KEY_FILE`: unseal key file, default `.unseal_key`;
 - `VECTIS_STORAGE`: `sqlite` by default, or `postgres` for shared storage;
 - `VECTIS_SQLITE_PATH`: SQLite operational key storage, default `src/db/data.db`
@@ -496,8 +506,8 @@ Vectis is not a replacement for:
 - access control;
 - traditional DLP products.
 
-Vectis does not currently provide Merkle proofs, externally checkpointed or
-tamper-proof audit logs, SLH-DSA, Vault/KMS/HSM auto-unseal, or mTLS.
+Vectis does not currently provide Merkle proofs, external anchoring for its
+audit-chain checkpoints, SLH-DSA, Vault/KMS/HSM auto-unseal, or mTLS.
 
 Vectis is intended to complement existing security controls by providing
 cryptographic protection for sensitive data workflows. It should work with
@@ -505,21 +515,41 @@ other tools, not absorb their responsibilities.
 
 ## Security Status
 
-Vectis is currently experimental and under active development. It has not yet
-completed an external security audit, and its APIs and operational model may
-still change as the project matures.
+Vectis is under active development. It has not yet completed an external
+security audit, and its APIs and operational model may still evolve as the
+project matures.
 
-Use Vectis for evaluation, demos, internal testing, and design-partner PoCs. Do
-not rely on it as the only protection layer for production patient data,
-production secrets, financial records, or other sensitive data yet.
+Today, Vectis is a natural fit for evaluation, demos, internal testing, and
+PoCs. If you take it further, follow the same practice you would with any
+security tool, audited or not: run it as one layer in a defense-in-depth
+architecture, never as the only control in front of sensitive data. The
+threat model, explicit assumptions, and known limitations are documented in
+[doc/ThreatModel.md](doc/ThreatModel.md) — deployments designed against it
+do better.
 
-The threat model, explicit assumptions, and known limitations are documented in
-[doc/ThreatModel.md](doc/ThreatModel.md).
+For production deployments with support — stable builds, a deployment review
+against the threat model, and a direct line to the author — see
+[Enterprise](#enterprise).
+
+## Community
+
+Issues, questions, and experience reports are welcome — breaking Vectis in
+interesting ways is a contribution. If you're evaluating it for your use
+case and something is unclear, open an issue: unclear docs are bugs too.
 
 ## Enterprise
 
-Supported Stable and LTS binaries, private builds, custom integrations, and
-enterprise support are available directly from the project author.
+Vectis is fully open source: every feature lives in this repository, and that
+will not change. What the author offers commercially is what cannot be
+downloaded — time and accountability:
+
+- **Stable and LTS binaries** with backported security fixes;
+- **private builds and custom integrations** (storage backends, SDKs,
+  deployment tooling);
+- **deployment review** of your architecture against the threat model;
+- **priority support** with a direct line to the author;
+- **design-partner program**: early access, roadmap influence, and joint
+  prioritization of the external security audit.
 
 Contact: [liesware@protonmail.com](mailto:liesware@protonmail.com)
 

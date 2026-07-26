@@ -30,6 +30,7 @@ def isolated_env(tmpdir):
     env["VECTIS_CONFIG_PATH"] = str(tmpdir / "config.json")
     env["VECTIS_CONFIG_SIGN_PATH"] = str(tmpdir / "config_sign.json")
     env["VECTIS_INIT_KEYS_FILE"] = str(tmpdir / "init.json")
+    env["VECTIS_INIT_PUBLIC_KEYS_FILE"] = str(tmpdir / "init_pub.json")
     env["VECTIS_UNSEAL_KEY_FILE"] = str(tmpdir / ".unseal_key")
     env["VECTIS_STORAGE"] = "sqlite"
     env["VECTIS_SQLITE_PATH"] = str(tmpdir / "data.db")
@@ -80,8 +81,11 @@ def init_config(env):
 
 def init_material(env):
     init_path = Path(env["VECTIS_INIT_KEYS_FILE"])
+    init_public_path = Path(env["VECTIS_INIT_PUBLIC_KEYS_FILE"])
     unseal_path = Path(env["VECTIS_UNSEAL_KEY_FILE"])
     if init_path.exists() and unseal_path.exists():
+        if not init_public_path.exists():
+            run_cli(["init", "pub"], env)
         ensure_sqlite_schema(env)
         return
     result = run_cli(["init"], env)

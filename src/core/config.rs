@@ -42,14 +42,17 @@ pub const CRYPTO_POLICIES: &[&str] = &["profile-only", "allow-overrides"];
 pub const HTTP_SCHEMES: &[&str] = &["http", "https"];
 pub const VECTIS_MODES: &[&str] = &["dev", "prod"];
 pub const DEFAULT_INIT_KEYS_FILE: &str = "init.json";
+pub const DEFAULT_INIT_PUBLIC_KEYS_FILE: &str = "init_pub.json";
 pub const CONFIG_FILE_MAX_SIZE_BYTES: u64 = 8 * 1024 * 1024;
 pub const CONFIG_SIGN_FILE_MAX_SIZE_BYTES: u64 = 1024 * 1024;
 pub const INIT_KEYS_FILE_MAX_SIZE_BYTES: u64 = 64 * 1024;
+pub const INIT_PUBLIC_KEYS_FILE_MAX_SIZE_BYTES: u64 = 64 * 1024;
 pub const UNSEAL_KEY_FILE_MAX_SIZE_BYTES: u64 = 1024;
 pub const ENV_FILE_MAX_SIZE_BYTES: u64 = 64 * 1024;
 pub const AUDIT_CHAIN_RECORD_MAX_BYTES: usize = 16 * 1024;
 pub const AUDIT_CHAIN_REASON_MAX_CHARS: usize = 256;
 pub const AUDIT_CHAIN_CHANNEL_CAPACITY: usize = 1024;
+pub const AUDIT_CHECKPOINT_EVENT_COUNT: u64 = 10_000;
 
 #[derive(Clone)]
 pub struct AppConfig {
@@ -286,6 +289,19 @@ pub fn init_keys_file_path() -> Result<PathBuf, DynError> {
     validate_config_path(
         "VECTIS_INIT_KEYS_FILE",
         &config_value(&env_file, "VECTIS_INIT_KEYS_FILE", DEFAULT_INIT_KEYS_FILE),
+    )
+}
+
+pub fn init_public_keys_file_path() -> Result<PathBuf, DynError> {
+    let env_file = load_env_file(".env")?;
+
+    validate_config_path(
+        "VECTIS_INIT_PUBLIC_KEYS_FILE",
+        &config_value(
+            &env_file,
+            "VECTIS_INIT_PUBLIC_KEYS_FILE",
+            DEFAULT_INIT_PUBLIC_KEYS_FILE,
+        ),
     )
 }
 

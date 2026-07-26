@@ -59,7 +59,7 @@ cargo test
 
 `cargo test` covers unit and property tests for validation, canonical JSON,
 config loading, permissions, routes, remote routes, lifecycle policy, signing
-input parsing, hash-chained audit records and verification, and related
+input parsing, hash-chained audit records, hybrid-signed checkpoints, and their verification, and related
 internal behavior.
 
 ## Rust Crypto Integration Tests

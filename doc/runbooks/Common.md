@@ -26,8 +26,9 @@ PostgreSQL tables. Vectis does not auto-reload signed config after file changes.
 ### Checks
 
 ```sh
-ls -l init.json .unseal_key config.json config_sign.json
+ls -l init.json init_pub.json .unseal_key config.json config_sign.json
 chmod 600 init.json
+chmod 644 init_pub.json
 chmod 600 .unseal_key
 cargo run -- serve
 ```
@@ -54,6 +55,16 @@ vectis serve
 - Do not copy init material from another environment without understanding the
   recovery boundary.
 - Do not bypass config signature validation.
+
+`init_pub.json` is not secret, but it is a verification trust root. Preserve it
+with audit exports and do not allow group or other write access.
+
+If only `init_pub.json` is missing and `init.json` plus unseal material are
+available, restore the public artifact without rotating keys:
+
+```sh
+vectis init pub
+```
 
 ## Init File Permissions Are Too Open
 
@@ -542,7 +553,8 @@ grep '<request-id>' logs/audit.log
 ```
 
 If `VECTIS_LOG_TARGET=stdout`, search the container logs or log collector for
-the same request ID. Audit records are JSON lines with `version: "audit-chain-v1"`.
+the same request ID. Preserve audit record lines with `version: "audit-chain-v1"`
+and checkpoint lines with `version: "audit-checkpoint-v1"`.
 
 ### Recovery
 
@@ -633,9 +645,12 @@ grep '<request-id>' logs/vectis.log
 ```
 
 If `VECTIS_LOG_TARGET=stdout`, query container logs or the central collector
-instead. Filter audit records with `version: "audit-chain-v1"`.
+instead. Export both audit records with `version: "audit-chain-v1"` and
+checkpoints with `version: "audit-checkpoint-v1"`.
 
-Verify a file-backed audit chain before relying on it for an investigation:
+Verify a file-backed audit export and its checkpoints before relying on it for
+an investigation. This requires local init public verification material, not an
+unseal key:
 
 ```sh
 vectis audit verify --file logs/audit.log --output yaml

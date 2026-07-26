@@ -2,9 +2,11 @@
 
 ## Scope And Status
 
-Vectis is an experimental cryptographic data protection toolkit for sensitive
-data workflows. It is not audited and not production-ready. Do not use it to
-protect real sensitive data.
+Vectis is a cryptographic data protection service under active development.
+It has not yet completed an external security audit. Run it as one layer in a
+defense-in-depth architecture, never as the only control in front of sensitive
+data, and design deployments against the explicit assumptions below (see the
+README's Security Status section for production use).
 
 This document describes the design intent of protocol `v1`: the threats Vectis
 is built to address, the assumptions it depends on, and the risks it explicitly
@@ -47,7 +49,7 @@ In order of importance:
    rest. The database only ever sees `kid`, `hashid`, and encrypted `data`.
    The `indexes` table holds only deterministic `(kid, digest)` membership
    entries; it contains no plaintext or profile data.
-3. **Key material**: encrypted init keys (`init.json`), operational keys
+3. **Key material**: encrypted init keys (`init.json`), public init verification keys (`init_pub.json`), operational keys
    (encrypted at rest in storage), HKDF-derived internal keys, and the per-profile
    keys derived from an operational key for FPE (the field key), tokenization
    (the `hash_key` and `data_key`), MAC/indexes (the MAC key), commitments
@@ -67,6 +69,10 @@ In order of importance:
   the init keys (`vectis-config` token over the hash of the canonical JSON).
   Everything the config asserts — routes, permissions, peer public keys — is
   trusted because the operator signed it.
+- **`init_pub.json` is an audit verification trust root.** It contains no
+  private material, but an offline verifier trusts its EdDSA and ML-DSA public
+  keys. Preserve it independently with audit exports; replacing both can forge
+  a locally verifiable history.
 - **A `kid` is not self-certifying.** It is a hash of encrypted private key
   material, so possession of a kid proves nothing. Trust in a remote peer's
   public keys is anchored by the operator registering them under
@@ -98,7 +104,7 @@ In order of importance:
 | Configuration tampering (routes, permissions, peer keys) | Mandatory config signature | `vectis-config` timestamp token over canonical JSON, verified on load and on every reload (`ops/sign.rs`, `core/config_file.rs`) |
 | Storage theft or row substitution in the database | Encryption at rest with identity binding | Operational keys encrypted with an HKDF-derived key and AAD; the `kid` is re-verified against the hash of the encrypted payload on load (`validate_key_id_matches_keys`). Token vault rows are protected separately: `tokens.data` is AEAD-encrypted with AAD binding `kid`, `profile`, and `hashid`, so a stolen or substituted row cannot decrypt outside its own `(kid, profile, hashid)` context. Blind indexes store only deterministic MAC digests in `indexes` for membership checks |
 | API key brute force and timing attacks | Hashed verification with constant-time comparison where credentials are compared | Server stores keyed hashes; root verification compares in constant time, and permission clients are indexed by hash for lookup (`core/permissions.rs`, `crypto::constant_time_eq`) |
-| Information leakage through errors and telemetry | Typed error boundary and disciplined observability | `VectisError` variants decide HTTP status and public messages (no internal detail on 5xx); logs and metrics avoid secrets and high-cardinality labels; hash-chained audit records carry request ids without payloads |
+| Information leakage through errors and telemetry | Typed error boundary and disciplined observability | `VectisError` variants decide HTTP status and public messages (no internal detail on 5xx); logs and metrics avoid secrets and high-cardinality labels; hash-chained audit records and hybrid-signed checkpoints carry request ids without payloads |
 | Use of retired or destroyed keys | Runtime lifecycle enforcement | Lifecycle states (`active`, `disabled`, `retired`, `compromised`, `destroyed`) gate every operation class (`ops/keys.rs`) |
 
 ## Explicit Assumptions
@@ -178,7 +184,7 @@ Vectis is not, and does not replace:
   durable storage (PostgreSQL) but not in-memory state, and cross-node changes
   become visible only through explicit reload, restart, or lazy-load (see
   `doc/Clustering.md`);
-- Merkle proofs, externally checkpointed tamper-proof audit chains, SLH-DSA, Vault/KMS/HSM
+- Merkle proofs, externally published tamper-proof audit chains, SLH-DSA, Vault/KMS/HSM
   auto-unseal, and mTLS;
 - denial-of-service resistance.
 

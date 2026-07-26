@@ -95,6 +95,7 @@ prepare_site() {
   init_db "${site_dir}"
   rm -f \
     "${site_dir}/init.json" \
+    "${site_dir}/init_pub.json" \
     "${site_dir}/config.json" \
     "${site_dir}/config_sign.json" \
     "${site_dir}/pub.json" \

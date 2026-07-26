@@ -69,12 +69,14 @@ pub(crate) struct VerificationStatus {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PublicKeysOutput {
     pub(crate) info: String,
     pub(crate) keys: PublicKeys,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct PublicKeys {
     pub(crate) eddsa: PublicDerKey,
     pub(crate) xecdh: PublicRawKey,
@@ -85,12 +87,14 @@ pub(crate) struct PublicKeys {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct PublicDerKey {
     pub(crate) alg: String,
     pub(crate) public_key_der_hex: String,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct PublicRawKey {
     pub(crate) alg: String,
     pub(crate) public_key_hex: String,

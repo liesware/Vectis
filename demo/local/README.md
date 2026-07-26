@@ -51,7 +51,7 @@ bash demo/local/configure-config.sh
 ```
 
 The scripts create local state under `demo/local/site`, including SQLite
-storage, `init.json`, `.unseal_key`, an app API key, and signed FPE, masking,
+storage, `init.json`, `init_pub.json`, `.unseal_key`, an app API key, and signed FPE, masking,
 tokenization, MAC, commitment, and sharing config profiles. Blind indexes reuse the MAC
 profiles and are enabled by the same local config. The operational key is
 created with the `hybrid-standard-v1` crypto profile.
@@ -73,7 +73,7 @@ uv run demo/local/run-demo.py
 The runner prints each operation as it happens, including full synthetic request
 and response payloads. It also prints request headers, including `X-API-Key`, so
 run it only in a local demo terminal. Before sending requests, it pauses before
-printing each file, shows `init.json`, `config.json`, and `config_sign.json` as
+printing each file, shows `init.json`, `init_pub.json`, `config.json`, and `config_sign.json` as
 YAML, then waits at:
 
 ```text

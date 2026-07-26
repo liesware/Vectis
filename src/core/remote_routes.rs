@@ -202,7 +202,7 @@ pub(crate) fn validate_remote_routes(
     Ok(validated)
 }
 
-fn validate_peer_public_keys(keys: &PeerPublicKeys) -> Result<(), DynError> {
+pub(crate) fn validate_peer_public_keys(keys: &PeerPublicKeys) -> Result<(), DynError> {
     validation::validate_allowed_value(
         "remote_routes.public_keys.eddsa.alg",
         &keys.eddsa.alg,
