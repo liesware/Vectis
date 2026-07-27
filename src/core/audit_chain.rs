@@ -126,6 +126,7 @@ enum WriterCommand {
     Record {
         event: Box<AuditEvent>,
         failure: Arc<Mutex<Option<String>>>,
+        standalone: bool,
     },
     Barrier {
         failure: Arc<Mutex<Option<String>>>,
@@ -208,14 +209,24 @@ pub fn initialize(
         .map_err(|_| crate::error::internal("audit chain runtime was initialized concurrently"))
 }
 
-pub fn record(event: AuditEvent, failure: &Arc<Mutex<Option<String>>>) {
+// A deferred record is written but not fsynced until a later commit; the caller MUST
+// follow it with confirm() (or a Barrier) for durability. Callers without a guaranteed
+// confirm must use record_standalone(), which commits on its own.
+pub(crate) fn record(event: AuditEvent, failure: &Arc<Mutex<Option<String>>>) {
     let Some(runtime) = RUNTIME.get() else {
         return;
     };
-    runtime.record(event, failure);
+    runtime.record(event, failure, false);
 }
 
-pub async fn confirm(failure: &Arc<Mutex<Option<String>>>) {
+pub(crate) fn record_standalone(event: AuditEvent, failure: &Arc<Mutex<Option<String>>>) {
+    let Some(runtime) = RUNTIME.get() else {
+        return;
+    };
+    runtime.record(event, failure, true);
+}
+
+pub(crate) async fn confirm(failure: &Arc<Mutex<Option<String>>>) {
     if let Some(runtime) = RUNTIME.get() {
         runtime.confirm(failure).await;
     }
@@ -419,12 +430,13 @@ impl AuditRuntime {
         })
     }
 
-    fn record(&self, event: AuditEvent, failure: &Arc<Mutex<Option<String>>>) {
+    fn record(&self, event: AuditEvent, failure: &Arc<Mutex<Option<String>>>, standalone: bool) {
         if self
             .sender
             .try_send(WriterCommand::Record {
                 event: Box::new(event),
                 failure: Arc::clone(failure),
+                standalone,
             })
             .is_err()
         {
@@ -567,76 +579,89 @@ fn writer_loop_with_policy(
     // Once a write fails the chain state and the file could diverge, so the writer stops
     // appending permanently: any further append could reuse a sequence and poison verify.
     let mut poisoned: Option<String> = None;
-    let mut barriers: Vec<PendingBarrier> = Vec::new();
+    let mut dirty = false;
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .expect("audit writer runtime must initialize");
-    runtime.block_on(async {
-        loop {
-            let first = receiver.recv().await;
-            let Some(first) = first else {
-                break;
-            };
-            // Group commit: absorb every command already queued into one batch, append all
-            // their records, fsync once, then release every barrier. One fsync is amortized
-            // across all concurrent requests instead of one fsync per request.
-            let mut next = Some(first);
-            let mut wrote = false;
-            let mut shutdown_reply = None;
+    loop {
+        let first = receiver.blocking_recv();
+        let Some(first) = first else {
+            break;
+        };
+        let mut barriers: Vec<PendingBarrier> = Vec::new();
+        // Group commit: append a bounded number of queued records, fsync only at a
+        // durability boundary, then release every barrier included in that commit.
+        let mut next = Some(first);
+        let mut processed = 0usize;
+        let mut commit_requested = false;
+        let mut shutdown_reply = None;
 
-            while let Some(command) = next {
-                match command {
-                    WriterCommand::Record { event, failure } => {
-                        if let Some(reason) = &poisoned {
-                            set_failure(&failure, reason);
-                        } else if let Err(err) = write_event(&mut sink, &mut state, *event) {
-                            let reason = err.to_string();
-                            set_failure(&failure, &reason);
-                            poisoned = Some(reason);
-                        } else {
-                            wrote = true;
-                        }
-                    }
-                    WriterCommand::Barrier { failure, reply } => {
-                        barriers.push(PendingBarrier { failure, reply });
-                    }
-                    WriterCommand::Shutdown { reply } => {
-                        shutdown_reply = Some(reply);
+        while let Some(command) = next {
+            processed += 1;
+            match command {
+                WriterCommand::Record {
+                    event,
+                    failure,
+                    standalone,
+                } => {
+                    if let Some(reason) = &poisoned {
+                        set_failure(&failure, reason);
+                    } else if let Err(err) = write_event(&mut sink, &mut state, *event) {
+                        let reason = err.to_string();
+                        set_failure(&failure, &reason);
+                        poisoned = Some(reason);
+                    } else {
+                        dirty = true;
+                        commit_requested |= standalone;
                     }
                 }
-                next = receiver.try_recv().ok();
+                WriterCommand::Barrier { failure, reply } => {
+                    barriers.push(PendingBarrier { failure, reply });
+                    commit_requested = true;
+                }
+                WriterCommand::Shutdown { reply } => {
+                    shutdown_reply = Some(reply);
+                    commit_requested = true;
+                }
             }
+            // On shutdown, ignore the batch cap and drain everything already queued so
+            // events enqueued after the Shutdown command are still persisted.
+            if shutdown_reply.is_none() && processed >= config::AUDIT_GROUP_COMMIT_MAX_COMMANDS {
+                break;
+            }
+            next = receiver.try_recv().ok();
+        }
 
-            if wrote
-                && poisoned.is_none()
-                && let Err(err) = sink.sync()
-            {
-                poisoned = Some(format!("cannot fsync audit log: {err}"));
-            }
-            if poisoned.is_none()
-                && ((shutdown_reply.is_some()
+        let checkpoint_due = state.events_since_checkpoint > 0
+            && (state.events_since_checkpoint >= policy.event_count
+                || (shutdown_reply.is_some()
                     && state.last_checkpoint_sequence
-                        != Some(state.next_sequence.saturating_sub(1)))
-                    || (state.events_since_checkpoint > 0
-                        && state.events_since_checkpoint >= policy.event_count))
-                && let Err(err) = write_checkpoint(&mut sink, &mut state, &signer)
-            {
-                poisoned = Some(err.to_string());
+                        != Some(state.next_sequence.saturating_sub(1))));
+        if poisoned.is_none() && checkpoint_due {
+            commit_requested = true;
+            match append_checkpoint(&mut sink, &mut state, &signer) {
+                Ok(()) => dirty = true,
+                Err(err) => poisoned = Some(err.to_string()),
             }
+        }
+        if commit_requested && dirty && poisoned.is_none() {
+            match sink.sync() {
+                Ok(()) => dirty = false,
+                Err(err) => poisoned = Some(format!("cannot fsync audit log: {err}")),
+            }
+        }
+        if commit_requested {
             for barrier in barriers.drain(..) {
                 if let Some(reason) = &poisoned {
                     set_failure(&barrier.failure, reason);
                 }
                 let _ = barrier.reply.send(());
             }
-            if let Some(reply) = shutdown_reply {
-                let result = poisoned.clone().map_or(Ok(()), Err);
-                let _ = reply.send(result);
-                break;
-            }
         }
-    });
+        if let Some(reply) = shutdown_reply {
+            let result = poisoned.clone().map_or(Ok(()), Err);
+            let _ = reply.send(result);
+            break;
+        }
+    }
     signer.zeroize();
 }
 
@@ -691,7 +716,7 @@ fn write_event(
     Ok(())
 }
 
-fn write_checkpoint(
+fn append_checkpoint(
     sink: &mut AuditSink,
     state: &mut AuditChainState,
     signer: &AuditCheckpointSigner,
@@ -724,8 +749,6 @@ fn write_checkpoint(
     }
     sink.write_record(&serialized)
         .map_err(|err| crate::error::internal(format!("cannot persist audit checkpoint: {err}")))?;
-    sink.sync()
-        .map_err(|err| crate::error::internal(format!("cannot fsync audit checkpoint: {err}")))?;
     state.events_since_checkpoint = 0;
     state.last_checkpoint_sequence = Some(payload.last_sequence);
     Ok(())
@@ -931,7 +954,7 @@ impl VerifiedChain {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     #[derive(Default)]
     struct RecordingWriter {
@@ -978,7 +1001,7 @@ mod tests {
     impl AuditRuntime {
         fn record_sync(&self, event: AuditEvent) -> Option<String> {
             let failure = Arc::new(Mutex::new(None));
-            self.record(event, &failure);
+            self.record(event, &failure, false);
             let (reply, ack) = oneshot::channel();
             if self
                 .sender
@@ -1045,7 +1068,7 @@ mod tests {
             sample_event("token.encode.success", "token-encode"),
         )
         .unwrap();
-        write_checkpoint(&mut sink, &mut state, signer).unwrap();
+        append_checkpoint(&mut sink, &mut state, signer).unwrap();
         fs::write(path, &memory.lock().unwrap().bytes).unwrap();
         state
     }
@@ -1227,6 +1250,7 @@ mod tests {
         writes: usize,
         fail_writes_after: usize,
         syncs: usize,
+        fail_sync: bool,
     }
 
     impl MemorySink {
@@ -1246,7 +1270,30 @@ mod tests {
 
         pub(super) fn sync(&mut self) -> io::Result<()> {
             self.syncs += 1;
+            if self.fail_sync {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "injected sync failure",
+                ));
+            }
             Ok(())
+        }
+    }
+
+    fn wait_for_memory<F>(memory: &Arc<Mutex<MemorySink>>, description: &str, ready: F)
+    where
+        F: Fn(&MemorySink) -> bool,
+    {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            if ready(&memory.lock().unwrap()) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for {description}"
+            );
+            thread::sleep(Duration::from_millis(1));
         }
     }
 
@@ -1256,12 +1303,13 @@ mod tests {
             .try_send(WriterCommand::Record {
                 event: Box::new(event),
                 failure: Arc::clone(&failure),
+                standalone: false,
             })
             .expect("record enqueued");
         let (reply, ack) = oneshot::channel();
         sender
             .try_send(WriterCommand::Barrier {
-                failure: Arc::new(Mutex::new(None)),
+                failure: Arc::clone(&failure),
                 reply,
             })
             .expect("barrier enqueued");
@@ -1351,6 +1399,7 @@ mod tests {
                 .try_send(WriterCommand::Record {
                     event: Box::new(sample_event("token.encode.success", "token-encode")),
                     failure: Arc::clone(&failure),
+                    standalone: false,
                 })
                 .expect("record enqueued");
             let (reply, ack) = oneshot::channel();
@@ -1373,6 +1422,263 @@ mod tests {
             memory.bytes.iter().filter(|byte| **byte == b'\n').count(),
             6,
             "genesis plus five records written"
+        );
+    }
+
+    #[test]
+    fn staggered_request_records_sync_once_at_barrier() {
+        let memory = Arc::new(Mutex::new(MemorySink {
+            fail_writes_after: usize::MAX,
+            ..MemorySink::default()
+        }));
+        let mut state = AuditChainState::new().unwrap();
+        let mut sink = AuditSink::Memory(Arc::clone(&memory));
+        write_event(&mut sink, &mut state, AuditEvent::chain_started()).unwrap();
+        sink.sync().unwrap();
+        let baseline_syncs = memory.lock().unwrap().syncs;
+
+        let (sender, receiver) = mpsc::channel(16);
+        let handle = thread::spawn(move || writer_loop(sink, state, test_signer(), receiver));
+        let failure = Arc::new(Mutex::new(None));
+        for (index, event) in [
+            sample_event("auth.success", "authenticate"),
+            sample_event("permission.allowed", "token-encode"),
+            sample_event("token.encode.success", "token-encode"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            sender
+                .try_send(WriterCommand::Record {
+                    event: Box::new(event),
+                    failure: Arc::clone(&failure),
+                    standalone: false,
+                })
+                .unwrap();
+            wait_for_memory(&memory, "staggered audit record", |sink| {
+                sink.writes >= index + 2
+            });
+            assert_eq!(
+                memory.lock().unwrap().syncs,
+                baseline_syncs,
+                "request records must wait for their barrier before syncing"
+            );
+        }
+
+        let (reply, ack) = oneshot::channel();
+        sender
+            .try_send(WriterCommand::Barrier {
+                failure: Arc::clone(&failure),
+                reply,
+            })
+            .unwrap();
+        ack.blocking_recv().expect("barrier acked");
+        assert_eq!(memory.lock().unwrap().syncs, baseline_syncs + 1);
+        assert!(failure.lock().unwrap().is_none());
+
+        let (reply, ack) = oneshot::channel();
+        sender
+            .try_send(WriterCommand::Barrier { failure, reply })
+            .unwrap();
+        ack.blocking_recv().expect("second barrier acked");
+        assert_eq!(
+            memory.lock().unwrap().syncs,
+            baseline_syncs + 1,
+            "a barrier without new records must not sync again"
+        );
+
+        drop(sender);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn standalone_record_requests_its_own_commit() {
+        let memory = Arc::new(Mutex::new(MemorySink {
+            fail_writes_after: usize::MAX,
+            ..MemorySink::default()
+        }));
+        let mut state = AuditChainState::new().unwrap();
+        let mut sink = AuditSink::Memory(Arc::clone(&memory));
+        write_event(&mut sink, &mut state, AuditEvent::chain_started()).unwrap();
+        sink.sync().unwrap();
+        let baseline_syncs = memory.lock().unwrap().syncs;
+
+        let (sender, receiver) = mpsc::channel(4);
+        let handle = thread::spawn(move || writer_loop(sink, state, test_signer(), receiver));
+        sender
+            .try_send(WriterCommand::Record {
+                event: Box::new(sample_event("config.reload.success", "config-reload")),
+                failure: Arc::new(Mutex::new(None)),
+                standalone: true,
+            })
+            .unwrap();
+        wait_for_memory(&memory, "standalone audit commit", |sink| {
+            sink.syncs == baseline_syncs + 1
+        });
+
+        drop(sender);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn shutdown_drains_commands_queued_after_shutdown() {
+        let memory = Arc::new(Mutex::new(MemorySink {
+            fail_writes_after: usize::MAX,
+            ..MemorySink::default()
+        }));
+        let mut state = AuditChainState::new().unwrap();
+        write_event(
+            &mut AuditSink::Memory(Arc::clone(&memory)),
+            &mut state,
+            AuditEvent::chain_started(),
+        )
+        .unwrap();
+
+        let (sender, receiver) = mpsc::channel(8);
+        let first = Arc::new(Mutex::new(None));
+        sender
+            .try_send(WriterCommand::Record {
+                event: Box::new(sample_event("token.encode.success", "token-encode")),
+                failure: Arc::clone(&first),
+                standalone: false,
+            })
+            .unwrap();
+        let (shutdown_reply, shutdown_ack) = oneshot::channel();
+        sender
+            .try_send(WriterCommand::Shutdown {
+                reply: shutdown_reply,
+            })
+            .unwrap();
+        // Record + barrier queued *after* the Shutdown command: they must still be drained.
+        let second = Arc::new(Mutex::new(None));
+        sender
+            .try_send(WriterCommand::Record {
+                event: Box::new(sample_event("token.decode.success", "token-decode")),
+                failure: Arc::clone(&second),
+                standalone: false,
+            })
+            .unwrap();
+        let (barrier_reply, barrier_ack) = oneshot::channel();
+        sender
+            .try_send(WriterCommand::Barrier {
+                failure: Arc::new(Mutex::new(None)),
+                reply: barrier_reply,
+            })
+            .unwrap();
+
+        let sink = AuditSink::Memory(Arc::clone(&memory));
+        let handle = thread::spawn(move || writer_loop(sink, state, test_signer(), receiver));
+        drop(sender);
+
+        assert!(
+            barrier_ack.blocking_recv().is_ok(),
+            "barrier queued after shutdown must still be answered"
+        );
+        assert_eq!(shutdown_ack.blocking_recv().unwrap(), Ok(()));
+        handle.join().unwrap();
+
+        let text = String::from_utf8(memory.lock().unwrap().bytes.clone()).unwrap();
+        let sequences: Vec<u64> = text
+            .lines()
+            .filter_map(|line| serde_json::from_str::<AuditChainRecord>(line).ok())
+            .map(|record| record.body.sequence)
+            .collect();
+        assert!(
+            sequences.contains(&1) && sequences.contains(&2),
+            "both event records must be persisted, got {sequences:?}"
+        );
+        assert!(first.lock().unwrap().is_none());
+        assert!(second.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn group_commit_drain_is_bounded() {
+        let memory = Arc::new(Mutex::new(MemorySink {
+            fail_writes_after: usize::MAX,
+            ..MemorySink::default()
+        }));
+        let mut state = AuditChainState::new().unwrap();
+        write_event(
+            &mut AuditSink::Memory(Arc::clone(&memory)),
+            &mut state,
+            AuditEvent::chain_started(),
+        )
+        .unwrap();
+
+        let pair_count = (config::AUDIT_GROUP_COMMIT_MAX_COMMANDS / 2) + 2;
+        let (sender, receiver) = mpsc::channel(config::AUDIT_GROUP_COMMIT_MAX_COMMANDS + 16);
+        let mut acks = Vec::with_capacity(pair_count);
+        for _ in 0..pair_count {
+            let failure = Arc::new(Mutex::new(None));
+            sender
+                .try_send(WriterCommand::Record {
+                    event: Box::new(sample_event("token.encode.success", "token-encode")),
+                    failure: Arc::clone(&failure),
+                    standalone: false,
+                })
+                .unwrap();
+            let (reply, ack) = oneshot::channel();
+            sender
+                .try_send(WriterCommand::Barrier { failure, reply })
+                .unwrap();
+            acks.push(ack);
+        }
+
+        let sink = AuditSink::Memory(Arc::clone(&memory));
+        let handle = thread::spawn(move || writer_loop(sink, state, test_signer(), receiver));
+        drop(sender);
+        for ack in acks {
+            ack.blocking_recv().expect("barrier acked");
+        }
+        handle.join().unwrap();
+
+        assert_eq!(
+            memory.lock().unwrap().syncs,
+            2,
+            "more than 256 commands must be committed in bounded groups"
+        );
+    }
+
+    #[test]
+    fn sync_failure_poisons_current_and_future_requests() {
+        let memory = Arc::new(Mutex::new(MemorySink {
+            fail_writes_after: usize::MAX,
+            fail_sync: true,
+            ..MemorySink::default()
+        }));
+        let mut state = AuditChainState::new().unwrap();
+        write_event(
+            &mut AuditSink::Memory(Arc::clone(&memory)),
+            &mut state,
+            AuditEvent::chain_started(),
+        )
+        .unwrap();
+
+        let (sender, receiver) = mpsc::channel(8);
+        let sink = AuditSink::Memory(Arc::clone(&memory));
+        let handle = thread::spawn(move || writer_loop(sink, state, test_signer(), receiver));
+
+        assert!(
+            send_record(
+                &sender,
+                sample_event("token.encode.success", "token-encode")
+            )
+            .is_some()
+        );
+        assert!(
+            send_record(
+                &sender,
+                sample_event("token.decode.success", "token-decode")
+            )
+            .is_some()
+        );
+
+        drop(sender);
+        handle.join().unwrap();
+        assert_eq!(
+            memory.lock().unwrap().writes,
+            2,
+            "the poisoned writer must reject the second request record"
         );
     }
 
@@ -1406,6 +1712,7 @@ mod tests {
             .try_send(WriterCommand::Record {
                 event: Box::new(sample_event("token.encode.success", "token-encode")),
                 failure,
+                standalone: false,
             })
             .unwrap();
         let (reply, ack) = oneshot::channel();
@@ -1415,8 +1722,8 @@ mod tests {
 
         assert_eq!(
             memory.lock().unwrap().syncs - genesis_syncs,
-            2,
-            "the event batch and checkpoint must each be synchronized once"
+            1,
+            "the event batch and checkpoint must be synchronized together"
         );
 
         let path = temp_path("audit-checkpoint-threshold");

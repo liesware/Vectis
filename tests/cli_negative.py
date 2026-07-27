@@ -576,6 +576,22 @@ def main():
                 ["config", "fpe", "update", "binary-id", "--min-len", "6"],
             )
 
+        def init_pub_extra_argument_reports_usage_error():
+            result = run_cli(["init", "pub", "extra"], env, expect_success=False)
+            require(result.stdout == "", "invalid init pub command must not write stdout")
+            expected = (
+                "`init pub` does not accept extra arguments; "
+                "run `vectis init --help` for usage"
+            )
+            require(
+                f"Error: {expected}" in result.stderr,
+                f"init pub error must report extra arguments: {result.stderr}",
+            )
+            require(
+                "unknown init command: pub" not in result.stderr,
+                f"init pub error must not call pub unknown: {result.stderr}",
+            )
+
         def runtime_positional_flags_are_unknown_options():
             cases = [
                 (
@@ -680,6 +696,10 @@ def main():
                     assert_config_unchanged(local_env, before)
 
         cases = [
+            (
+                "init pub extra argument reports usage error",
+                init_pub_extra_argument_reports_usage_error,
+            ),
             (
                 "runtime positional flags are rejected as unknown options",
                 runtime_positional_flags_are_unknown_options,

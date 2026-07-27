@@ -195,6 +195,9 @@ fn run_init(args: Vec<String>) -> Result<(), DynError> {
         {
             io::cli::http::print_help("init");
         }
+        [command, ..] if command == "pub" => Err(crate::error::invalid_input(
+            "`init pub` does not accept extra arguments; run `vectis init --help` for usage",
+        ))?,
         [command, ..] => Err(crate::error::invalid_input(format!(
             "unknown init command: {command}; run `vectis init --help` for usage"
         )))?,
@@ -301,6 +304,28 @@ mod tests {
         .expect_err("unknown root command must fail");
 
         assert_eq!(err.to_string(), "unknown command: definitely-not-a-command");
+    }
+
+    #[test]
+    fn init_pub_extra_argument_reports_known_command_usage_error() {
+        let err = run_init(vec![String::from("pub"), String::from("extra")])
+            .expect_err("init pub extra argument must fail");
+
+        assert_eq!(
+            err.to_string(),
+            "`init pub` does not accept extra arguments; run `vectis init --help` for usage"
+        );
+    }
+
+    #[test]
+    fn unknown_init_subcommand_keeps_unknown_command_error() {
+        let err =
+            run_init(vec![String::from("unknown")]).expect_err("unknown init subcommand must fail");
+
+        assert_eq!(
+            err.to_string(),
+            "unknown init command: unknown; run `vectis init --help` for usage"
+        );
     }
 
     #[test]

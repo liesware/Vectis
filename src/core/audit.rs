@@ -175,6 +175,6 @@ fn audit_event(
         }
         // Off the request task (CLI, startup, detached sub-task): still persist the event
         // for a complete audit trail, ungated since there is no response to fail closed.
-        None => crate::core::audit_chain::record(event, &Arc::new(Mutex::new(None))),
+        None => crate::core::audit_chain::record_standalone(event, &Arc::new(Mutex::new(None))),
     }
 }

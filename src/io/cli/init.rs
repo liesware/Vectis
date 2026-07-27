@@ -3,7 +3,7 @@ use crate::error::DynError;
 use crate::io::cli::sensitive;
 use crate::ops;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{self, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -31,12 +31,12 @@ pub fn run_init() -> Result<String, DynError> {
     }
 
     let output = ops::init::create_encrypted_init_output_json()?;
-    write_new_file_atomically(&init_keys_path, &output.json, 0o600)?;
-    if let Err(err) = write_new_file_atomically(&init_public_keys_path, &output.public_json, 0o644)
-    {
-        let _ = fs::remove_file(&init_keys_path);
-        return Err(err);
-    }
+    write_init_files(
+        &init_keys_path,
+        &output.json,
+        &init_public_keys_path,
+        &output.public_json,
+    )?;
     info!(path = %init_keys_path.display(), "init keys written");
     info!(path = %init_public_keys_path.display(), "init public keys written");
     sensitive::warn_if_stdout_is_terminal();
@@ -77,11 +77,38 @@ pub fn run_init_public() -> Result<String, DynError> {
     Ok(init_public_keys_path.display().to_string())
 }
 
+fn write_init_files(
+    init_keys_path: &Path,
+    init_keys_json: &str,
+    init_public_keys_path: &Path,
+    init_public_keys_json: &str,
+) -> Result<(), DynError> {
+    write_new_file_atomically(init_keys_path, init_keys_json, 0o600)?;
+    if let Err(err) = write_new_file_atomically(init_public_keys_path, init_public_keys_json, 0o644)
+    {
+        return Err(with_rollback_result(
+            err,
+            remove_created_file_and_sync(init_keys_path),
+        ));
+    }
+
+    Ok(())
+}
+
 fn write_new_file_atomically(path: &Path, content: &str, mode: u32) -> Result<(), DynError> {
-    let parent = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
+    write_new_file_atomically_with_finalize(path, content, mode, finalize_new_file)
+}
+
+fn write_new_file_atomically_with_finalize<F>(
+    path: &Path,
+    content: &str,
+    mode: u32,
+    finalize: F,
+) -> Result<(), DynError>
+where
+    F: FnOnce(&Path, &Path) -> io::Result<()>,
+{
+    let parent = parent_dir(path);
     let file_name = path
         .file_name()
         .ok_or_else(|| crate::error::invalid_input("init key file path must name a file"))?;
@@ -92,25 +119,110 @@ fn write_new_file_atomically(path: &Path, content: &str, mode: u32) -> Result<()
         std::process::id(),
         suffix,
     ));
-    let write_result = (|| -> Result<(), DynError> {
+    let mut temporary_created = false;
+    let mut destination_linked = false;
+    let write_result = (|| -> io::Result<()> {
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(mode)
             .open(&temporary_path)?;
+        temporary_created = true;
         file.write_all(content.as_bytes())?;
         file.sync_all()?;
         drop(file);
         fs::hard_link(&temporary_path, path)?;
-        fs::remove_file(&temporary_path)?;
-        fs::File::open(parent)?.sync_all()?;
+        destination_linked = true;
+        finalize(&temporary_path, parent)?;
         Ok(())
     })();
 
-    if write_result.is_err() {
-        let _ = fs::remove_file(&temporary_path);
+    match write_result {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let rollback = rollback_atomic_write(
+                path,
+                &temporary_path,
+                parent,
+                destination_linked,
+                temporary_created,
+            );
+            Err(with_rollback_result(Box::new(err), rollback))
+        }
     }
-    write_result
+}
+
+fn finalize_new_file(temporary_path: &Path, parent: &Path) -> io::Result<()> {
+    fs::remove_file(temporary_path)?;
+    fs::File::open(parent)?.sync_all()
+}
+
+fn rollback_atomic_write(
+    destination_path: &Path,
+    temporary_path: &Path,
+    parent: &Path,
+    destination_linked: bool,
+    temporary_created: bool,
+) -> Result<(), DynError> {
+    let mut errors = Vec::new();
+    let mut removed = false;
+
+    if destination_linked {
+        removed |= remove_file_for_rollback(destination_path, &mut errors);
+    }
+    if temporary_created {
+        removed |= remove_file_for_rollback(temporary_path, &mut errors);
+    }
+    if removed && let Err(err) = fs::File::open(parent).and_then(|directory| directory.sync_all()) {
+        errors.push(format!(
+            "cannot sync rollback directory {}: {err}",
+            parent.display()
+        ));
+    }
+
+    rollback_result(errors)
+}
+
+fn parent_dir(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+}
+
+fn remove_created_file_and_sync(path: &Path) -> Result<(), DynError> {
+    // Single-file rollback: only the destination was created, no temporary to clean up.
+    rollback_atomic_write(path, path, parent_dir(path), true, false)
+}
+
+fn remove_file_for_rollback(path: &Path, errors: &mut Vec<String>) -> bool {
+    match fs::remove_file(path) {
+        Ok(()) => true,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => false,
+        Err(err) => {
+            errors.push(format!(
+                "cannot remove {} during rollback: {err}",
+                path.display()
+            ));
+            false
+        }
+    }
+}
+
+fn rollback_result(errors: Vec<String>) -> Result<(), DynError> {
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(crate::error::internal(errors.join("; ")))
+    }
+}
+
+fn with_rollback_result(operation_error: DynError, rollback: Result<(), DynError>) -> DynError {
+    match rollback {
+        Ok(()) => operation_error,
+        Err(rollback_error) => crate::error::internal(format!(
+            "{operation_error}; rollback failed: {rollback_error}"
+        )),
+    }
 }
 
 pub fn load_init_state() -> Result<ops::init::ValidatedInitState, DynError> {
@@ -195,6 +307,16 @@ mod tests {
     use super::*;
     use std::fs;
 
+    fn test_directory(name: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "vectis-{name}-{}-{}",
+            std::process::id(),
+            INIT_WRITE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed),
+        ));
+        fs::create_dir(&path).expect("test directory must be created");
+        path
+    }
+
     #[test]
     fn sensitive_file_modes_allow_owner_and_group_read() {
         for mode in [0o600, 0o400, 0o640, 0o440] {
@@ -221,15 +343,87 @@ mod tests {
 
     #[test]
     fn new_init_file_writer_never_overwrites_existing_file() {
-        let path = std::env::temp_dir().join(format!(
-            "vectis-init-public-write-test-{}-{}",
-            std::process::id(),
-            INIT_WRITE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed),
-        ));
+        let directory = test_directory("init-public-write-test");
+        let path = directory.join("init_pub.json");
         write_new_file_atomically(&path, "first", 0o644).expect("first write succeeds");
         assert!(write_new_file_atomically(&path, "second", 0o644).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "first");
-        let _ = fs::remove_file(path);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn atomic_writer_rolls_back_failure_before_temporary_removal() {
+        let directory = test_directory("init-write-pre-remove-failure");
+        let path = directory.join("init.json");
+        let err = write_new_file_atomically_with_finalize(
+            &path,
+            "sensitive",
+            0o600,
+            |_temporary_path, _parent| Err(io::Error::other("injected finalize failure")),
+        )
+        .expect_err("post-link failure must be returned");
+
+        assert!(err.to_string().contains("injected finalize failure"));
+        assert!(!path.exists(), "published destination must be rolled back");
+        assert_eq!(
+            fs::read_dir(&directory).unwrap().count(),
+            0,
+            "temporary file must be rolled back"
+        );
+        fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    fn atomic_writer_rolls_back_failure_after_temporary_removal() {
+        let directory = test_directory("init-write-post-remove-failure");
+        let path = directory.join("init.json");
+        let err = write_new_file_atomically_with_finalize(
+            &path,
+            "sensitive",
+            0o600,
+            |temporary_path, _parent| {
+                fs::remove_file(temporary_path)?;
+                Err(io::Error::other("injected directory sync failure"))
+            },
+        )
+        .expect_err("post-link failure must be returned");
+
+        assert!(err.to_string().contains("injected directory sync failure"));
+        assert!(!path.exists(), "published destination must be rolled back");
+        assert_eq!(
+            fs::read_dir(&directory).unwrap().count(),
+            0,
+            "removed temporary file must stay absent"
+        );
+        fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    fn init_file_pair_rolls_back_private_file_without_removing_existing_public_file() {
+        let directory = test_directory("init-pair-rollback");
+        let init_keys_path = directory.join("init.json");
+        let init_public_keys_path = directory.join("init_pub.json");
+        fs::write(&init_public_keys_path, "existing public material").unwrap();
+
+        assert!(
+            write_init_files(
+                &init_keys_path,
+                "private material",
+                &init_public_keys_path,
+                "new public material",
+            )
+            .is_err()
+        );
+        assert!(
+            !init_keys_path.exists(),
+            "private file must be removed when public creation fails"
+        );
+        assert_eq!(
+            fs::read_to_string(&init_public_keys_path).unwrap(),
+            "existing public material",
+            "pre-existing public file must not be removed or replaced"
+        );
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

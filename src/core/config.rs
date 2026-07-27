@@ -52,6 +52,7 @@ pub const ENV_FILE_MAX_SIZE_BYTES: u64 = 64 * 1024;
 pub const AUDIT_CHAIN_RECORD_MAX_BYTES: usize = 16 * 1024;
 pub const AUDIT_CHAIN_REASON_MAX_CHARS: usize = 256;
 pub const AUDIT_CHAIN_CHANNEL_CAPACITY: usize = 1024;
+pub const AUDIT_GROUP_COMMIT_MAX_COMMANDS: usize = 256;
 pub const AUDIT_CHECKPOINT_EVENT_COUNT: u64 = 10_000;
 
 #[derive(Clone)]
