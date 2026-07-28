@@ -293,12 +293,17 @@ parameters come from signed config:
 - `token_prefix`, a short visible prefix capped at 16 characters;
 - `token_len`;
 - `max_plaintext_len`;
+- `one_time`, which consumes a successfully decoded token when enabled;
 - bound local `kid`.
 
 Config loading derives and stores tokenization hash/data keys from the loaded
 key's symmetric key. The derivation binds profile name, KID, and the fixed
 internal tokenization scheme `token-random-v1`; `tokens.data` AAD also binds
 that scheme.
+
+For an one-time profile, Vectis decrypts the token before deleting its storage
+row, then returns plaintext only after that delete commits. Batch consumption is
+transactional: every token is consumed or none are consumed.
 
 ### MAC Flow
 

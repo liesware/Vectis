@@ -27,6 +27,7 @@ pub(crate) struct TokenizationProfileInput {
     token_prefix: String,
     token_len: usize,
     max_plaintext_len: usize,
+    one_time: bool,
 }
 
 #[derive(Clone)]
@@ -36,6 +37,7 @@ pub struct TokenizationProfile {
     token_prefix: String,
     token_len: usize,
     max_plaintext_len: usize,
+    one_time: bool,
     cipher_algorithm: String,
     hash_key: Zeroizing<Vec<u8>>,
     data_key: Zeroizing<Vec<u8>>,
@@ -70,6 +72,7 @@ impl fmt::Debug for TokenizationProfile {
             .field("token_prefix", &self.token_prefix)
             .field("token_len", &self.token_len)
             .field("max_plaintext_len", &self.max_plaintext_len)
+            .field("one_time", &self.one_time)
             .field("cipher_algorithm", &self.cipher_algorithm)
             .field("hash_key", &"<redacted>")
             .field("data_key", &"<redacted>")
@@ -104,6 +107,10 @@ impl TokenizationProfile {
 
     pub fn max_plaintext_len(&self) -> usize {
         self.max_plaintext_len
+    }
+
+    pub fn one_time(&self) -> bool {
+        self.one_time
     }
 
     pub fn cipher_algorithm(&self) -> &str {
@@ -159,6 +166,7 @@ impl Zeroize for TokenizationProfile {
         self.token_prefix.zeroize();
         self.token_len = 0;
         self.max_plaintext_len = 0;
+        self.one_time = false;
         self.cipher_algorithm.zeroize();
         self.hash_key.zeroize();
         self.data_key.zeroize();
@@ -222,6 +230,7 @@ pub(crate) fn validate_tokenization_profiles(
             token_prefix: profile.token_prefix,
             token_len: profile.token_len,
             max_plaintext_len: profile.max_plaintext_len,
+            one_time: profile.one_time,
             cipher_algorithm: derived.cipher_algorithm,
             hash_key: derived.hash_key,
             data_key: derived.data_key,
@@ -469,6 +478,7 @@ mod tests {
             token_prefix: "tok_patient".to_string(),
             token_len: TOKEN_LEN_MIN_BYTES,
             max_plaintext_len: TOKEN_PLAINTEXT_MAX_LEN,
+            one_time: false,
         }
     }
 
@@ -490,6 +500,36 @@ mod tests {
         .get("patient-id-token-v1")
         .unwrap()
         .clone()
+    }
+
+    #[test]
+    fn one_time_is_profile_policy_not_key_derivation_input() {
+        let reusable = validate_tokenization_profiles(
+            vec![input("patient-id-token-v1")],
+            |item| item == kid(),
+            |_| Ok(derived()),
+        )
+        .expect("reusable profile must load")
+        .get("patient-id-token-v1")
+        .expect("profile must exist")
+        .clone();
+
+        let mut one_time_input = input("patient-id-token-v1");
+        one_time_input.one_time = true;
+        let one_time = validate_tokenization_profiles(
+            vec![one_time_input],
+            |item| item == kid(),
+            |_| Ok(derived()),
+        )
+        .expect("one-time profile must load")
+        .get("patient-id-token-v1")
+        .expect("profile must exist")
+        .clone();
+
+        assert!(!reusable.one_time());
+        assert!(one_time.one_time());
+        assert_eq!(reusable.hash_key(), one_time.hash_key());
+        assert_eq!(reusable.data_key(), one_time.data_key());
     }
 
     #[test]

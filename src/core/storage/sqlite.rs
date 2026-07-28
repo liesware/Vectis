@@ -1,4 +1,4 @@
-use crate::core::storage::{IndexRow, OpsKeyRow, TokenRow};
+use crate::core::storage::{IndexRow, OpsKeyRow, TokenBatchConsumeError, TokenRow};
 use crate::error::DynError;
 use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
@@ -205,6 +205,66 @@ impl SqliteStorage {
             hashid: row.get("hashid"),
             data: row.get("data"),
         })
+    }
+
+    pub async fn consume_token(&self, kid: &str, hashid: &str) -> Result<(), DynError> {
+        let mut tx = self.pool.begin().await?;
+        let result = sqlx::query(
+            "
+            DELETE FROM tokens
+            WHERE kid = ?
+              AND hashid = ?
+            ",
+        )
+        .bind(kid)
+        .bind(hashid)
+        .execute(&mut *tx)
+        .await?;
+        if result.rows_affected() != 1 {
+            return Err(crate::error::not_found("token not found"));
+        }
+        tx.commit().await?;
+        info!(kid, hashid, "consumed token");
+        Ok(())
+    }
+
+    pub async fn consume_tokens_batch(
+        &self,
+        kid: &str,
+        hashids: &[String],
+    ) -> Result<(), TokenBatchConsumeError> {
+        let mut ordered = hashids.to_vec();
+        ordered.sort_unstable();
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|err| TokenBatchConsumeError::Other(Box::new(err)))?;
+        for hashid in &ordered {
+            let result = sqlx::query(
+                "
+                DELETE FROM tokens
+                WHERE kid = ?
+                  AND hashid = ?
+                ",
+            )
+            .bind(kid)
+            .bind(hashid)
+            .execute(&mut *tx)
+            .await
+            .map_err(|err| TokenBatchConsumeError::Other(Box::new(err)))?;
+            if result.rows_affected() != 1 {
+                return Err(TokenBatchConsumeError::MissingToken {
+                    hashid: hashid.clone(),
+                });
+            }
+        }
+        tx.commit()
+            .await
+            .map_err(|err| TokenBatchConsumeError::Other(Box::new(err)))?;
+        info!(kid, items_count = ordered.len(), "consumed token batch");
+        Ok(())
     }
 
     pub async fn save_index(&self, kid: &str, digest: &str) -> Result<IndexRow, DynError> {
@@ -815,6 +875,81 @@ mod tests {
         assert_eq!(found.get("hash-1").map(String::as_str), Some("data-1"));
         assert_eq!(found.get("hash-2").map(String::as_str), Some("data-2"));
         assert!(!found.contains_key("hash-missing"));
+
+        cleanup(path).await;
+    }
+
+    #[tokio::test]
+    async fn token_consume_is_single_use() {
+        let (storage, path) = test_storage("token-consume").await;
+        storage
+            .save_token("kid-1", "hash-1", "data-1")
+            .await
+            .expect("token must save");
+
+        storage
+            .consume_token("kid-1", "hash-1")
+            .await
+            .expect("first consume must succeed");
+        let err = storage
+            .consume_token("kid-1", "hash-1")
+            .await
+            .expect_err("second consume must fail");
+        assert!(is_not_found(err.as_ref()));
+
+        cleanup(path).await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_token_consumes_have_exactly_one_winner() {
+        let (storage, path) = test_storage("token-consume-concurrent").await;
+        storage
+            .save_token("kid-1", "hash-1", "data-1")
+            .await
+            .expect("token must save");
+
+        let (first, second) = tokio::join!(
+            storage.consume_token("kid-1", "hash-1"),
+            storage.consume_token("kid-1", "hash-1"),
+        );
+        assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+        let loser = first.err().or(second.err()).expect("one consume must lose");
+        assert!(is_not_found(loser.as_ref()));
+
+        cleanup(path).await;
+    }
+
+    #[tokio::test]
+    async fn token_batch_consume_rolls_back_when_one_token_is_missing() {
+        let (storage, path) = test_storage("token-consume-batch-rollback").await;
+        storage
+            .save_token("kid-1", "hash-1", "data-1")
+            .await
+            .expect("first token must save");
+        storage
+            .save_token("kid-1", "hash-2", "data-2")
+            .await
+            .expect("second token must save");
+
+        let err = storage
+            .consume_tokens_batch(
+                "kid-1",
+                &[
+                    String::from("hash-1"),
+                    String::from("hash-2"),
+                    String::from("hash-missing"),
+                ],
+            )
+            .await
+            .expect_err("missing token must roll back the batch");
+        match err {
+            TokenBatchConsumeError::MissingToken { hashid } => {
+                assert_eq!(hashid, "hash-missing");
+            }
+            TokenBatchConsumeError::Other(err) => panic!("unexpected storage error: {err}"),
+        }
+        assert!(storage.get_token("kid-1", "hash-1").await.is_ok());
+        assert!(storage.get_token("kid-1", "hash-2").await.is_ok());
 
         cleanup(path).await;
     }

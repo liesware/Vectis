@@ -328,7 +328,7 @@ lookup key is `name`. Names must be unique.
 
 ```sh
 vectis config token list
-vectis config token add --name patient-id-token-v1 --kid <kid> --token-prefix tok_patient --token-len 32 --max-plaintext-len 1024
+vectis config token add --name patient-id-token-v1 --kid <kid> --token-prefix tok_patient --token-len 32 --max-plaintext-len 1024 --one-time false
 vectis config token get patient-id-token-v1
 vectis config token update patient-id-token-v1 --max-plaintext-len 512
 vectis config token delete patient-id-token-v1
@@ -338,6 +338,9 @@ Vectis uses the fixed internal tokenization scheme `token-random-v1`.
 `token_len` is the number of random bytes before base64url encoding and must be
 at least `32`. `token_prefix` is a visible prefix, is limited to 16 characters,
 and cannot contain whitespace, control characters, `;`, or `=`. The CLI
+requires `--one-time true|false`; when true, a successful token decode consumes
+the token. This policy is evaluated from the currently loaded signed profile.
+The CLI
 validates field shape but does not check whether the KID is loaded in a running
 server. That check happens when Vectis loads the signed config.
 

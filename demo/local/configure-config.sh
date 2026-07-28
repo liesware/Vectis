@@ -88,21 +88,24 @@ cat > "${SITE_DIR}/config.json" <<JSON
       "kid": "${LOCAL_KID}",
       "token_prefix": "tok_card",
       "token_len": 32,
-      "max_plaintext_len": 128
+      "max_plaintext_len": 128,
+      "one_time": false
     },
     {
       "name": "ssn-token-v1",
       "kid": "${LOCAL_KID}",
       "token_prefix": "tok_ssn",
       "token_len": 32,
-      "max_plaintext_len": 128
+      "max_plaintext_len": 128,
+      "one_time": false
     },
     {
       "name": "bank-account-token-v1",
       "kid": "${LOCAL_KID}",
       "token_prefix": "tok_bank",
       "token_len": 32,
-      "max_plaintext_len": 128
+      "max_plaintext_len": 128,
+      "one_time": false
     }
   ],
   "mac_profiles": [

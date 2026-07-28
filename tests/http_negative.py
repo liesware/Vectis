@@ -357,6 +357,7 @@ def valid_tokenization_profile(key_id):
         "token_prefix": "tok_patient",
         "token_len": 32,
         "max_plaintext_len": 1024,
+        "one_time": False,
     }
 
 
@@ -1408,6 +1409,12 @@ def main():
         write_tokenization_profiles([profile], sign=False)
         require_config_sign_fails("token profile unknown tokenization_version field")
 
+    def token_profile_missing_one_time():
+        profile = valid_tokenization_profile(key_id)
+        del profile["one_time"]
+        write_tokenization_profiles([profile], sign=False)
+        require_config_sign_fails("token profile missing one_time")
+
     def token_profile_invalid_lengths():
         profile = valid_tokenization_profile(key_id)
         profile["token_len"] = 31
@@ -1801,6 +1808,7 @@ def main():
         ("fpe profile unloaded kid", fpe_profile_unloaded_kid),
         ("token profile duplicate name", token_profile_duplicate_name),
         ("token profile unknown version field", token_profile_unknown_version_field),
+        ("token profile missing one_time", token_profile_missing_one_time),
         ("token profile invalid lengths", token_profile_invalid_lengths),
         ("token profile unloaded kid", token_profile_unloaded_kid),
         ("mac profile duplicate name", mac_profile_duplicate_name),

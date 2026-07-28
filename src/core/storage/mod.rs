@@ -1,6 +1,7 @@
 use crate::core::{config, validation};
 use crate::error::DynError;
 use serde::Serialize;
+use std::collections::HashSet;
 
 mod postgres;
 mod sqlite;
@@ -25,6 +26,14 @@ pub struct TokenRow {
 pub struct IndexRow {
     pub kid: String,
     pub digest: String,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum TokenBatchConsumeError {
+    #[error("token not found")]
+    MissingToken { hashid: String },
+    #[error(transparent)]
+    Other(#[from] DynError),
 }
 
 pub struct StorageState {
@@ -141,6 +150,28 @@ impl StorageState {
         }?;
         validate_token_row(&row)?;
         Ok(row)
+    }
+
+    pub async fn consume_token(&self, kid: &str, hashid: &str) -> Result<(), DynError> {
+        validate_storage_kid("tokens.kid", kid)?;
+        validate_token_hashid(hashid)?;
+        match &self.backend {
+            StorageBackend::Sqlite(sqlite) => sqlite.consume_token(kid, hashid).await,
+            StorageBackend::Postgres(postgres) => postgres.consume_token(kid, hashid).await,
+        }
+    }
+
+    pub async fn consume_tokens_batch(
+        &self,
+        kid: &str,
+        hashids: &[String],
+    ) -> Result<(), TokenBatchConsumeError> {
+        validate_storage_kid("tokens.kid", kid).map_err(TokenBatchConsumeError::from)?;
+        validate_unique_token_hashids(hashids).map_err(TokenBatchConsumeError::from)?;
+        match &self.backend {
+            StorageBackend::Sqlite(sqlite) => sqlite.consume_tokens_batch(kid, hashids).await,
+            StorageBackend::Postgres(postgres) => postgres.consume_tokens_batch(kid, hashids).await,
+        }
     }
 
     pub async fn save_index(&self, kid: &str, digest: &str) -> Result<IndexRow, DynError> {
@@ -276,6 +307,19 @@ fn validate_token_row(row: &TokenRow) -> Result<(), DynError> {
     validate_token_fields(&row.kid, &row.hashid, &row.data)
 }
 
+fn validate_unique_token_hashids(hashids: &[String]) -> Result<(), DynError> {
+    let mut seen = HashSet::with_capacity(hashids.len());
+    for hashid in hashids {
+        validate_token_hashid(hashid)?;
+        if !seen.insert(hashid) {
+            return Err(crate::error::invalid_input(
+                "token batch contains duplicated token",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_index_digest(digest: &str) -> Result<(), DynError> {
     validation::validate_hex_field("indexes.digest", digest)?;
     if digest.len() > config::STORAGE_INDEX_DIGEST_MAX_CHARS {
@@ -330,5 +374,11 @@ mod tests {
         assert!(validate_token_fields(KID, &"b".repeat(64), "bad.data").is_err());
         assert!(validate_index_fields(KID, "not-hex").is_err());
         assert!(validate_index_fields(KID, &"d".repeat(130)).is_err());
+    }
+
+    #[test]
+    fn token_batch_hashids_must_be_unique() {
+        let hashid = "b".repeat(64);
+        assert!(validate_unique_token_hashids(&[hashid.clone(), hashid]).is_err());
     }
 }

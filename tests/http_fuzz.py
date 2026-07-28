@@ -893,6 +893,7 @@ def configure_tokenization_profile(client, kid):
             "token_prefix": "tok_fuzz",
             "token_len": 32,
             "max_plaintext_len": 1024,
+            "one_time": False,
         }
     ]
     CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")

@@ -69,6 +69,7 @@ enum FieldKind {
     PermissionKid,
     PermissionAction,
     Usize,
+    Bool,
     FpeProfileName,
     FpeVersion,
     FpeAlphabet,
@@ -381,6 +382,15 @@ const TOKENIZATION_PROFILES_SECTION: SectionSpec = SectionSpec {
             flag: "--max-plaintext-len",
             json_field: "max_plaintext_len",
             kind: FieldKind::Usize,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--one-time",
+            json_field: "one_time",
+            kind: FieldKind::Bool,
             cardinality: FieldCardinality::One,
             required_on_add: true,
             mutable_on_update: true,
@@ -1246,6 +1256,10 @@ fn parse_field_value(field: &FieldSpec, raw: &str) -> Result<Value, DynError> {
             Ok(Value::String(raw.to_string()))
         }
         FieldKind::Usize => Ok(Value::Number(parse_usize_flag(field.flag, raw)?.into())),
+        FieldKind::Bool => Ok(Value::Bool(config::validate_bool_field(
+            field.json_field,
+            raw,
+        )?)),
         FieldKind::FpeProfileName => {
             validation::validate_aad_config_name("fpe_profiles.name", raw)?;
             Ok(Value::String(raw.to_string()))
@@ -1960,6 +1974,8 @@ mod tests {
             String::from(token_len),
             String::from("--max-plaintext-len"),
             String::from(max_plaintext_len),
+            String::from("--one-time"),
+            String::from("false"),
         ]
     }
 
@@ -2506,6 +2522,17 @@ mod tests {
             invalid_plaintext_len.to_string(),
             "tokenization_profiles.max_plaintext_len must be between 1 and 1024"
         );
+    }
+
+    #[test]
+    fn token_profile_requires_strict_one_time_boolean() {
+        let mut missing = valid_token_profile_args("32", "1024");
+        missing.truncate(missing.len() - 2);
+        assert!(parse_section_add(&TOKENIZATION_PROFILES_SECTION, missing).is_err());
+
+        let mut invalid = valid_token_profile_args("32", "1024");
+        *invalid.last_mut().expect("one-time value must exist") = String::from("yes");
+        assert!(parse_section_add(&TOKENIZATION_PROFILES_SECTION, invalid).is_err());
     }
 
     #[test]

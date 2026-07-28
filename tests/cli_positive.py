@@ -346,6 +346,8 @@ def token_profile_cases(env):
             "32",
             "--max-plaintext-len",
             "1024",
+            "--one-time",
+            "false",
         ],
         env,
     )
@@ -358,6 +360,7 @@ def token_profile_cases(env):
         "tokenization_version" not in profile,
         "token profile must not store tokenization_version",
     )
+    require(profile["one_time"] is False, "token profile must store one_time")
 
     response = run_cli_json(["config", "token", "get", "patient-id-token-v1"], env)
     require(response["kid"] == KID_A, "token profile get must return profile")
@@ -377,6 +380,8 @@ def token_profile_cases(env):
             "patient-id-token-v1",
             "--max-plaintext-len",
             "512",
+            "--one-time",
+            "true",
         ],
         env,
     )
@@ -387,6 +392,7 @@ def token_profile_cases(env):
         profile["max_plaintext_len"] == 512,
         "token profile update must persist max_plaintext_len",
     )
+    require(profile["one_time"] is True, "token profile update must persist one_time")
 
     response = run_cli_json(["config", "token", "delete", "patient-id-token-v1"], env)
     require(response["status"] == "deleted", "token profile delete must report deleted")

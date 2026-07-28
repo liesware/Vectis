@@ -203,6 +203,8 @@ def seed_token_profile(env):
             "32",
             "--max-plaintext-len",
             "1024",
+            "--one-time",
+            "false",
         ],
         env,
     )
@@ -336,6 +338,8 @@ def main():
                     "32",
                     "--max-plaintext-len",
                     "1024",
+                    "--one-time",
+                    "false",
                 ],
             )
 
@@ -549,6 +553,8 @@ def main():
                     "32",
                     "--max-plaintext-len",
                     "1024",
+                    "--one-time",
+                    "false",
                 ],
             )
 
@@ -828,6 +834,8 @@ def main():
                         "32",
                         "--max-plaintext-len",
                         "1024",
+                        "--one-time",
+                        "false",
                     ],
                 ),
             ),

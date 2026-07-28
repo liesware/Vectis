@@ -1,4 +1,4 @@
-use crate::core::storage::{IndexRow, OpsKeyRow, TokenRow};
+use crate::core::storage::{IndexRow, OpsKeyRow, TokenBatchConsumeError, TokenRow};
 use crate::error::DynError;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::{Postgres, Row, Transaction};
@@ -190,6 +190,69 @@ impl PostgresStorage {
         })
     }
 
+    pub async fn consume_token(&self, kid: &str, hashid: &str) -> Result<(), DynError> {
+        let mut tx = self.pool.begin().await?;
+        let result = sqlx::query(
+            "
+            DELETE FROM tokens
+            WHERE kid = $1
+              AND hashid = $2
+            ",
+        )
+        .bind(kid)
+        .bind(hashid)
+        .execute(&mut *tx)
+        .await?;
+        if result.rows_affected() != 1 {
+            return Err(crate::error::not_found("token not found"));
+        }
+        tx.commit().await?;
+        info!(kid, hashid, "consumed token");
+        Ok(())
+    }
+
+    pub async fn consume_tokens_batch(
+        &self,
+        kid: &str,
+        hashids: &[String],
+    ) -> Result<(), TokenBatchConsumeError> {
+        let mut ordered = hashids.to_vec();
+        ordered.sort_unstable();
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|err| TokenBatchConsumeError::Other(Box::new(err)))?;
+        let rows = sqlx::query(
+            "
+            DELETE FROM tokens
+            WHERE kid = $1
+              AND hashid = ANY($2)
+            RETURNING hashid
+            ",
+        )
+        .bind(kid)
+        .bind(&ordered)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|err| TokenBatchConsumeError::Other(Box::new(err)))?;
+        let deleted = rows
+            .into_iter()
+            .map(|row| row.get("hashid"))
+            .collect::<HashSet<String>>();
+        if let Some(hashid) = first_missing_hashid(&ordered, &deleted) {
+            return Err(TokenBatchConsumeError::MissingToken {
+                hashid: hashid.to_string(),
+            });
+        }
+        tx.commit()
+            .await
+            .map_err(|err| TokenBatchConsumeError::Other(Box::new(err)))?;
+        info!(kid, items_count = ordered.len(), "consumed token batch");
+        Ok(())
+    }
+
     pub async fn save_index(&self, kid: &str, digest: &str) -> Result<IndexRow, DynError> {
         let mut tx = self.pool.begin().await?;
         sqlx::query(
@@ -361,6 +424,13 @@ impl PostgresStorage {
 
         Ok(())
     }
+}
+
+fn first_missing_hashid<'a>(requested: &'a [String], deleted: &HashSet<String>) -> Option<&'a str> {
+    requested
+        .iter()
+        .find(|hashid| !deleted.contains(hashid.as_str()))
+        .map(String::as_str)
 }
 
 async fn fetch_ops_keys(pool: &PgPool, kid: &str) -> Result<Option<OpsKeyRow>, DynError> {
@@ -667,5 +737,25 @@ mod tests {
             postgres_context("not a postgres url with secret"),
             "<configured postgres dsn>"
         );
+    }
+
+    #[test]
+    fn first_missing_hashid_returns_none_when_every_token_was_deleted() {
+        let requested = vec![String::from("hash-a"), String::from("hash-b")];
+        let deleted = HashSet::from([String::from("hash-a"), String::from("hash-b")]);
+
+        assert_eq!(first_missing_hashid(&requested, &deleted), None);
+    }
+
+    #[test]
+    fn first_missing_hashid_uses_the_deterministic_requested_order() {
+        let requested = vec![
+            String::from("hash-a"),
+            String::from("hash-b"),
+            String::from("hash-c"),
+        ];
+        let deleted = HashSet::from([String::from("hash-c")]);
+
+        assert_eq!(first_missing_hashid(&requested, &deleted), Some("hash-a"));
     }
 }

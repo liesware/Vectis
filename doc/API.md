@@ -1215,9 +1215,9 @@ Response:
 
 Tokenization is a local reversible random-token operation. It returns a visible random token and stores the original plaintext plus optional metadata encrypted in storage. The database only sees `kid`, `hashid`, and encrypted `data`; it never sees plaintext, metadata, profile name as a column, or the visible token.
 
-Tokenization profiles live in `config.json` under `tokenization_profiles`. Requests cannot provide `token_prefix`, `token_len`, or `max_plaintext_len`; those values come only from signed config. Vectis uses the fixed internal tokenization scheme `token-random-v1`.
+Tokenization profiles live in `config.json` under `tokenization_profiles`. Requests cannot provide `token_prefix`, `token_len`, `max_plaintext_len`, or `one_time`; those values come only from signed config. Vectis uses the fixed internal tokenization scheme `token-random-v1`.
 
-All tokenization requests include a client-defined `ref`. It is required, non-empty, at most 128 characters, and echoed in the response. Batch requests require every item `ref` to be unique within the request.
+All tokenization requests include a client-defined `ref`. It is required, non-empty, at most 128 characters, and echoed in the response. Batch requests require every item `ref` to be unique within the request. For `POST /token/decode/batch`, profiles with `one_time: true` also require each token to be unique; a duplicate fails before lookup or consumption with `batch item N failed: token batch contains duplicated token`. Profiles with `one_time: false` may decode the same token more than once in a batch when every item has a distinct `ref`.
 
 `hash_key` and `data_key` are derived from the operational key's symmetric key with `INTERNAL_KEYS_HKDF` and are prepared when config is loaded. The derivation binds the profile name, KID, and fixed internal tokenization scheme `token-random-v1`. `tokens.data` AAD also binds that internal scheme. Tokens are random and are not deterministic for the same plaintext.
 
@@ -1225,7 +1225,7 @@ Visible tokens have the form `<token_prefix>_<base64url-no-pad random bytes>`. `
 
 Encode `metadata` is optional, must be a JSON object when present, and its compact serialized JSON representation must be at most 128 characters.
 
-Batch tokenization preserves item order and is all-or-nothing. If any item fails validation, lookup, encryption, decryption, or storage insert, the response is a single error and no partial `items` are returned. `POST /token/encode/batch/{kid}` writes all token rows in one storage transaction. The maximum batch size is `INTERNAL_TOKEN_BATCH` (`128`).
+Batch tokenization preserves item order and is all-or-nothing. If any item fails validation, lookup, encryption, decryption, or storage insert, the response is a single error and no partial `items` are returned. `POST /token/encode/batch/{kid}` writes all token rows in one storage transaction. When `one_time` is true, decode consumes all batch tokens in one storage transaction only after every item decrypts successfully. A token lost to a concurrent consume returns `batch item N failed: token not found`, using its original input position. The maximum batch size is `INTERNAL_TOKEN_BATCH` (`128`).
 
 ### POST /token/encode/{kid}
 
@@ -1925,7 +1925,8 @@ Expected file shape:
       "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
       "token_prefix": "tok_patient",
       "token_len": 32,
-      "max_plaintext_len": 1024
+      "max_plaintext_len": 1024,
+      "one_time": false
     }
   ],
   "mac_profiles": [
@@ -2035,6 +2036,7 @@ Top level:
 | `token_prefix` | yes | non-empty visible token prefix, max 16 chars, no whitespace/control chars, no `;` or `=` | Prefix used in returned tokens. |
 | `token_len` | yes | integer >= 32 | Random bytes generated before base64url-no-pad encoding; decode requires this exact decoded byte length. |
 | `max_plaintext_len` | yes | integer 1..1024 | Maximum plaintext length accepted by encode. |
+| `one_time` | yes | boolean | When true, a successful decode consumes the token. The signed profile currently loaded by Vectis controls this policy. |
 
 `mac_profiles[]` entries:
 

@@ -720,9 +720,9 @@ const CONFIG_HELP: CommandHelp = CommandHelp {
         "vectis config fpe update <name> [--kid <kid>] [--alphabet <chars>] [--min-len <n>] [--max-len <n>] [--tweak-aad <aad>] [--fpe-version fpe-ff1-2025]",
         "vectis config fpe delete <name>",
         "vectis config token list",
-        "vectis config token add --name <name> --kid <kid> --token-prefix <prefix> --token-len <n> --max-plaintext-len <n>",
+        "vectis config token add --name <name> --kid <kid> --token-prefix <prefix> --token-len <n> --max-plaintext-len <n> --one-time <true|false>",
         "vectis config token get <name>",
-        "vectis config token update <name> [--kid <kid>] [--token-prefix <prefix>] [--token-len <n>] [--max-plaintext-len <n>]",
+        "vectis config token update <name> [--kid <kid>] [--token-prefix <prefix>] [--token-len <n>] [--max-plaintext-len <n>] [--one-time <true|false>]",
         "vectis config token delete <name>",
         "vectis config mac list",
         "vectis config mac add --name <name> --kid <kid> --context <labels>",
@@ -964,13 +964,14 @@ const CONFIG_TOKEN_HELP: CommandHelp = CommandHelp {
             lines: &[
                 "  edits tokenization_profiles in VECTIS_CONFIG_PATH only",
                 "  token_len must be at least 32",
+                "  one-time tokens are consumed after a successful decode",
                 "  run `vectis config sign`, then `vectis config reload` after edits",
             ],
         },
         HelpSection {
             title: "Example:",
             lines: &[
-                "  vectis config token add --name patient-id-token-v1 --kid <kid> --token-prefix tok_patient --token-len 32 --max-plaintext-len 1024",
+                "  vectis config token add --name patient-id-token-v1 --kid <kid> --token-prefix tok_patient --token-len 32 --max-plaintext-len 1024 --one-time false",
             ],
         },
     ],

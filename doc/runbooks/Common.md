@@ -336,6 +336,10 @@ CREATE TABLE indexes (
 ### Recovery
 
 - Fix the DSN, network path, credentials, or grants.
+- For one-time token profiles, grant the runtime role `DELETE` on `tokens`:
+  ```sql
+  GRANT SELECT, INSERT, DELETE ON TABLE public.tokens TO vectis_usr;
+  ```
 - Ask the DBA to apply the schema if the table is missing.
 - Restart Vectis after the database is corrected.
 

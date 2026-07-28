@@ -12,6 +12,7 @@ from http_support import (
     KEY_CASES,
     MESSAGE,
     Client,
+    StatusClient,
     FinalAppHandler,
     WorkflowError,
     _CONFIG,
@@ -890,7 +891,115 @@ def token_batch_round_trip(client, key_id):
         "token batch decode metadata order mismatch",
     )
 
+    # Reusable profiles permit one token per distinct client reference.
+    duplicate_decoded = client.post(
+        "/token/decode/batch",
+        {
+            "kid": key_id,
+            "profile": profile,
+            "items": [
+                {"ref": "token-batch-duplicate-1", "token": tokens[0]},
+                {"ref": "token-batch-duplicate-2", "token": tokens[0]},
+            ],
+        },
+        auth=True,
+    )
+    duplicate_items = duplicate_decoded.get("items")
+    require(isinstance(duplicate_items, list), "reusable token duplicate batch must return items")
+    require(
+        [item.get("ref") for item in duplicate_items]
+        == ["token-batch-duplicate-1", "token-batch-duplicate-2"],
+        "reusable token duplicate batch ref mismatch",
+    )
+    require(
+        [item.get("plaintext") for item in duplicate_items] == [plaintexts[0], plaintexts[0]],
+        "reusable token duplicate batch plaintext mismatch",
+    )
+
     return profile, [token[:16] + "..." for token in tokens], plaintexts
+
+
+def one_time_token_cases(client, key_id):
+    profile = "patient-id-token-v1"
+    status_client = StatusClient(client.base_url, client.apikey)
+
+    encoded = client.post(
+        f"/token/encode/{key_id}",
+        {"ref": "one-time-single", "profile": profile, "plaintext": "123456789"},
+        auth=True,
+    )
+    token = encoded["token"]
+    status, body = status_client.post(
+        "/token/decode/batch",
+        {
+            "kid": key_id,
+            "profile": profile,
+            "items": [
+                {"ref": "one-time-duplicate-1", "token": token},
+                {"ref": "one-time-duplicate-2", "token": token},
+            ],
+        },
+        auth=True,
+    )
+    require(
+        status == 400
+        and body.get("error") == "batch item 1 failed: token batch contains duplicated token",
+        "one-time token duplicate batch must fail before lookup",
+    )
+    decoded = client.post(
+        "/token/decode",
+        {"ref": "one-time-single", "kid": key_id, "profile": profile, "token": token},
+        auth=True,
+    )
+    require(decoded.get("plaintext") == "123456789", "one-time token must decode once")
+    status, body = status_client.post(
+        "/token/decode",
+        {"ref": "one-time-replay", "kid": key_id, "profile": profile, "token": token},
+        auth=True,
+    )
+    require(status == 404 and body.get("error") == "token not found", "one-time token replay must fail")
+
+    encoded_batch = client.post(
+        f"/token/encode/batch/{key_id}",
+        {
+            "profile": profile,
+            "items": [
+                {"ref": "one-time-batch-a", "plaintext": "111111111"},
+                {"ref": "one-time-batch-b", "plaintext": "222222222"},
+            ],
+        },
+        auth=True,
+    )
+    token_a, token_b = [item["token"] for item in encoded_batch["items"]]
+    client.post(
+        "/token/decode",
+        {"ref": "one-time-batch-b", "kid": key_id, "profile": profile, "token": token_b},
+        auth=True,
+    )
+    status, body = status_client.post(
+        "/token/decode/batch",
+        {
+            "kid": key_id,
+            "profile": profile,
+            "items": [
+                {"ref": "one-time-batch-a", "token": token_a},
+                {"ref": "one-time-batch-b", "token": token_b},
+            ],
+        },
+        auth=True,
+    )
+    require(status == 404 and "items" not in body, "one-time batch must fail without partial output")
+    decoded_a = client.post(
+        "/token/decode",
+        {"ref": "one-time-batch-a", "kid": key_id, "profile": profile, "token": token_a},
+        auth=True,
+    )
+    require(
+        decoded_a.get("plaintext") == "111111111",
+        "failed one-time batch must not consume other tokens",
+    )
+
+    return profile
 
 
 def mac_round_trip(client, key_id):
@@ -1651,6 +1760,7 @@ def main():
                 "token_prefix": "tok_patient",
                 "token_len": 32,
                 "max_plaintext_len": 1024,
+                "one_time": False,
             }
         ]
     )
@@ -1671,6 +1781,20 @@ def main():
             *token_batch_round_trip(client, created[0][0]),
         )
     ]
+    write_tokenization_profiles(
+        [
+            {
+                "name": "patient-id-token-v1",
+                "kid": created[0][0],
+                "token_prefix": "tok_patient",
+                "token_len": 32,
+                "max_plaintext_len": 1024,
+                "one_time": True,
+            }
+        ]
+    )
+    reload_config(client)
+    one_time_token_profile = one_time_token_cases(client, created[0][0])
     write_mac_profiles(
         [
             {
@@ -1871,6 +1995,7 @@ def main():
     print_fpe_batch(fpe_batch_rows)
     print_token(token_rows)
     print_token_batch(token_batch_rows)
+    print_section("one-time token", [(one_time_token_profile, "OK")])
     print_message(message_rows)
     print_internal_message(internal_message_rows)
     print_section("sign", sign_rows)
@@ -1884,6 +2009,7 @@ def main():
     passed_count += len(fpe_batch_rows)
     passed_count += len(token_rows)
     passed_count += len(token_batch_rows)
+    passed_count += 1
     passed_count += len(message_rows)
     passed_count += len(internal_message_rows)
     passed_count += len(sign_rows)

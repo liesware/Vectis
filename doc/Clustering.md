@@ -169,8 +169,10 @@ Vectis owns:
 - reporting storage readiness.
 
 For runtime access, Vectis needs `SELECT`, `INSERT`, and `UPDATE` on
-`public.opskeys`, plus `SELECT` and `INSERT` on `public.tokens` and
-`public.indexes`. It does not need schema creation privileges.
+`public.opskeys`, `SELECT`, `INSERT`, and `DELETE` on `public.tokens`, and
+`SELECT` and `INSERT` on `public.indexes`. `DELETE` is required to consume
+one-time tokens after a successful decode. It does not need schema creation
+privileges.
 
 ## Failure Modes
 
@@ -209,7 +211,7 @@ Runtime PostgreSQL grants should be limited to:
 ```sql
 GRANT USAGE ON SCHEMA public TO vectis_usr;
 GRANT SELECT, INSERT, UPDATE ON TABLE public.opskeys TO vectis_usr;
-GRANT SELECT, INSERT ON TABLE public.tokens TO vectis_usr;
+GRANT SELECT, INSERT, DELETE ON TABLE public.tokens TO vectis_usr;
 GRANT SELECT, INSERT ON TABLE public.indexes TO vectis_usr;
 ```
 
