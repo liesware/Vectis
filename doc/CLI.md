@@ -15,6 +15,20 @@ interfaces, and stay easy to inspect.
 
 ## Command Groups
 
+Time attestation is a protected runtime command:
+
+```sh
+vectis time attest
+vectis config time get
+vectis config time set --max-clock-skew-ms 1000
+vectis config time clear
+```
+
+`provider` is an operational provider name; v1 supports `cloudflare`. `time
+attest` calls the live NTS and Roughtime sources and requires the global
+`time-attest` permission. The config commands only edit signed overrides; sign
+and reload them through the normal config workflow.
+
 Local commands do not require the HTTP service:
 
 - `vectis init`
@@ -271,6 +285,15 @@ Permission editing is a two-step flow:
 ```sh
 vectis config permissions add --client "Acme App" --apikey-hash <hex> --status active
 vectis config permissions grant "Acme App" --kid "*" --action admin
+```
+
+Grant time attestation as a global action, then sign and reload the config:
+
+```sh
+vectis config permissions grant "clock-monitor" --kid "*" --action time-attest
+vectis config sign
+vectis config reload
+vectis time attest
 ```
 
 `add` and `update` manage the client record and `apikey_hash`. `grant` and

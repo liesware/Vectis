@@ -29,6 +29,7 @@ mod routes;
 mod sharing;
 mod sign;
 mod test;
+mod time;
 mod token;
 
 use crate::core::commitments::CommitmentProfile;
@@ -324,6 +325,13 @@ impl HttpState {
         config_state.sharing_profiles.get(name).cloned()
     }
 
+    async fn time_attestation_config(
+        &self,
+    ) -> crate::core::time_attestation::EffectiveTimeAttestationConfig {
+        let config_state = self.config_state.read().await;
+        config_state.time_attestation.clone()
+    }
+
     async fn reload_config_state(&self) -> Result<ConfigReloadOutcome, DynError> {
         let config_key_sources = {
             let keys_db_state = self.keys_db_state.read().await;
@@ -573,6 +581,7 @@ fn record_operation_denied_metric(event_name: &str) {
         "commit.verify.batch.denied" => record_crypto_failed("commit_verify_batch"),
         "shares.split.denied" => record_crypto_failed("share_split"),
         "shares.combine.denied" => record_crypto_failed("share_combine"),
+        "time.attest.denied" => record_crypto_failed("time_attest"),
         "sign.denied" => core_metrics::record_crypto_operation("sign", "failed"),
         "self_test.denied" => {}
         _ => {}
@@ -594,6 +603,7 @@ pub fn router(state: HttpState) -> Router {
         .route("/healthz/startup", get(health::startup_endpoint))
         .route("/healthz/live", get(health::live_endpoint))
         .route("/healthz/ready", get(health::ready_endpoint))
+        .route("/time/attest", post(time::attest_endpoint))
         .route("/metrics", get(metrics::metrics_endpoint))
         .route("/self-test/keys/{kid}", get(test::test_endpoint))
         .route("/self-test/init", get(test::init_endpoint))

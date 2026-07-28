@@ -2,6 +2,13 @@
 
 ## Purpose
 
+## Time Attestation
+
+Time attestation is an on-demand, global-permission operation (`time-attest`)
+that returns authenticated NTS timing plus verified Roughtime evidence. It is
+configured by the optional signed `time_attestation` object; absent fields use
+the compiled Cloudflare defaults. It never changes the system clock.
+
 This document explains how Vectis works. It is written for new contributors,
 maintainers, auditors, and technical project owners who need to understand the
 flows, invariants, and boundaries of the system.

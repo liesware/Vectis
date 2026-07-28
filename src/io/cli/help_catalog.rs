@@ -26,6 +26,7 @@ pub(crate) const EXECUTABLE_COMMANDS: &[&str] = &[
     "mask",
     "commit",
     "shares",
+    "time",
     "message",
 ];
 
@@ -47,6 +48,7 @@ pub(crate) const HTTP_COMMANDS: &[&str] = &[
     "mask",
     "commit",
     "shares",
+    "time",
     "message",
 ];
 
@@ -65,6 +67,7 @@ pub(crate) const CONFIG_COMMANDS: &[&str] = &[
     "masking",
     "commitment",
     "sharing",
+    "time",
 ];
 
 #[cfg(test)]
@@ -252,6 +255,7 @@ const ROOT_HELP: CommandHelp = CommandHelp {
                 "  mask                  Mask field values for controlled display through HTTP",
                 "  commit                Create or verify cryptographic commitments through HTTP",
                 "  shares                Split or combine Shamir secret shares through HTTP",
+                "  time                  Attest the server clock through HTTP",
                 "  message               Send, receive, encrypt, or decrypt messages through HTTP",
             ],
         },
@@ -274,6 +278,7 @@ const ROOT_HELP: CommandHelp = CommandHelp {
                 "  vectis index create <kid> --file index-create.json",
                 "  vectis commit create <kid> --file commit-create.json",
                 "  vectis shares split <kid> --file shares-split.json",
+                "  vectis time attest",
             ],
         },
         HelpSection {
@@ -739,6 +744,9 @@ const CONFIG_HELP: CommandHelp = CommandHelp {
         "vectis config sharing get <name>",
         "vectis config sharing update <name> [--kid <kid>] [--threshold <n>] [--shares <n>] [--max-secret-len <n>] [--context <labels>]",
         "vectis config sharing delete <name>",
+        "vectis config time get",
+        "vectis config time set [--provider <provider>] [--nts-server <host>] [--roughtime-server <host:port>] [--roughtime-public-key <base64>] [--max-clock-skew-ms <n>] [--max-round-trip-ms <n>] [--max-roughtime-radius-ms <n>]",
+        "vectis config time clear",
     ],
     summary: Some("Validates, signs, prints, reloads, or edits the unified signed config file."),
     sections: &[
@@ -759,6 +767,7 @@ const CONFIG_HELP: CommandHelp = CommandHelp {
                 "  masking               Edits local config masking profiles by unique name",
                 "  commitment            Edits local config commitment profiles by unique name",
                 "  sharing               Edits local config secret sharing profiles by unique name",
+                "  time                  Edits signed time-attestation overrides",
             ],
         },
         HelpSection {
@@ -779,6 +788,7 @@ const CONFIG_HELP: CommandHelp = CommandHelp {
                 "  config masking edits signed display masking profiles",
                 "  config commitment edits signed cryptographic commitment profiles",
                 "  config sharing edits signed Shamir secret sharing profiles",
+                "  config time overrides Cloudflare time-attestation defaults",
                 "  edit commands do not sign or reload automatically",
             ],
         },
@@ -1086,6 +1096,19 @@ const CONFIG_SHARING_HELP: CommandHelp = CommandHelp {
             ],
         },
     ],
+    output: true,
+};
+
+const CONFIG_TIME_HELP: CommandHelp = CommandHelp {
+    key: "config time",
+    heading: "Usage:",
+    usage: &[
+        "vectis config time get",
+        "vectis config time set [--provider <provider>] [--nts-server <host>] [--roughtime-server <host:port>] [--roughtime-public-key <base64>] [--max-clock-skew-ms <n>] [--max-round-trip-ms <n>] [--max-roughtime-radius-ms <n>]",
+        "vectis config time clear",
+    ],
+    summary: Some("Views or edits signed time-attestation overrides."),
+    sections: &[],
     output: true,
 };
 
@@ -1420,6 +1443,15 @@ const SHARES_HELP: CommandHelp = CommandHelp {
     output: true,
 };
 
+const TIME_HELP: CommandHelp = CommandHelp {
+    key: "time",
+    heading: "Usage:",
+    usage: &["vectis time attest"],
+    summary: Some("Requests an authenticated NTS and Roughtime clock attestation."),
+    sections: &[],
+    output: true,
+};
+
 const MESSAGE_HELP: CommandHelp = CommandHelp {
     key: "message",
     heading: "Usage:",
@@ -1490,6 +1522,7 @@ const COMMAND_HELPS: &[CommandHelp] = &[
     CONFIG_MASKING_HELP,
     CONFIG_COMMITMENT_HELP,
     CONFIG_SHARING_HELP,
+    CONFIG_TIME_HELP,
     PUB_HELP,
     SIGN_HELP,
     FPE_HELP,
@@ -1499,6 +1532,7 @@ const COMMAND_HELPS: &[CommandHelp] = &[
     MASK_HELP,
     COMMIT_HELP,
     SHARES_HELP,
+    TIME_HELP,
     MESSAGE_HELP,
 ];
 

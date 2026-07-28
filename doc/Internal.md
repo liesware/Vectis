@@ -14,6 +14,19 @@ read [doc/API.md](API.md). For testing, read [doc/Test.md](Test.md).
 
 ## Layer Map
 
+## Time Attestation
+
+`POST /time/attest` runs authenticated NTS and verified Roughtime queries in
+parallel under a fixed five-second deadline. The effective policy is the
+compiled Cloudflare default merged with the optional signed
+`time_attestation` config object. Both sources are required; the endpoint does
+not return partial evidence and does not participate in readiness.
+
+The NTS adapter uses `rkik-nts` with TLS certificate validation enabled and
+accepts only authenticated NTP responses. It does not fall back to unauthenticated
+SNTP. The response reports the authenticated offset and round-trip time; it does
+not expose NTP stratum.
+
 Vectis uses three main code layers:
 
 - `core`: reusable primitives and infrastructure;

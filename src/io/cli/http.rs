@@ -57,6 +57,7 @@ const HTTP_COMMANDS: &[HttpCommand] = &[
     HttpCommand::new("mask", command_mask),
     HttpCommand::new("commit", command_commit),
     HttpCommand::new("shares", command_shares),
+    HttpCommand::new("time", command_time),
     HttpCommand::new("message", command_message),
 ];
 
@@ -75,6 +76,7 @@ const CONFIG_COMMANDS: &[ConfigCommand] = &[
     ConfigCommand::new("masking", config_command_masking),
     ConfigCommand::new("commitment", config_command_commitment),
     ConfigCommand::new("sharing", config_command_sharing),
+    ConfigCommand::new("time", config_command_time),
 ];
 
 impl HttpCommand {
@@ -163,6 +165,7 @@ boxed_command!(command_index, run_index);
 boxed_command!(command_mask, run_mask);
 boxed_command!(command_commit, run_commit);
 boxed_command!(command_shares, run_shares);
+boxed_command!(command_time, run_time);
 boxed_command!(command_message, run_message);
 
 fn config_command_init(args: Vec<String>, output: OutputFormat) -> CommandFuture {
@@ -218,6 +221,7 @@ boxed_command!(
     config_editor::run_config_commitment
 );
 boxed_command!(config_command_sharing, config_editor::run_config_sharing);
+boxed_command!(config_command_time, config_editor::run_config_time);
 
 async fn run_health(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let target = expect_one(args, "health target")?;
@@ -742,6 +746,18 @@ async fn run_mask(args: Vec<String>, output: OutputFormat) -> Result<(), DynErro
             Some(body),
             output,
         )
+        .await
+}
+
+async fn run_time(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+    let (subcommand, rest) = split_subcommand(args, "time command")?;
+    if subcommand != "attest" {
+        return Err(invalid_input(format!("unknown time command: {subcommand}")));
+    }
+    expect_no_args(&rest, "time attest")?;
+    let client = CliHttpClient::from_env()?;
+    client
+        .send(Method::POST, "/time/attest", true, None, output)
         .await
 }
 

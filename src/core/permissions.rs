@@ -26,9 +26,10 @@ pub const PERMISSION_ACTIONS: &[&str] = &[
     "commit-verify",
     "share-split",
     "share-combine",
+    "time-attest",
     "metrics",
 ];
-const GLOBAL_PERMISSION_ACTIONS: &[&str] = &["metrics"];
+const GLOBAL_PERMISSION_ACTIONS: &[&str] = &["metrics", "time-attest"];
 
 #[derive(Clone)]
 pub struct AuthenticatedClient {

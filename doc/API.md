@@ -108,6 +108,7 @@ Endpoints requiring auth:
 - `POST /index/verify/batch`
 - `POST /mask/{kid}`
 - `POST /mask/batch/{kid}`
+- `POST /time/attest`
 
 Endpoints without auth:
 
@@ -199,6 +200,16 @@ Response:
   "routes_loaded": 1
 }
 ```
+
+### POST /time/attest
+
+Requests a complete on-demand time attestation using authenticated NTS and a
+verified Roughtime response. It requires the global `time-attest` permission
+with `kid: "*"` and has no request body. It is not part of readiness.
+
+Both sources must be available or the endpoint returns `502` without partial
+results. A `200` with `server_clock.acceptable: false` means both measurements
+were valid but did not meet the signed policy.
 
 ### GET /metrics
 
@@ -645,6 +656,7 @@ Allowed actions:
 - `index-verify`
 - `mask`
 - `metrics`
+- `time-attest`
 
 Permission mapping:
 
@@ -670,8 +682,22 @@ Permission mapping:
 | `index-verify` | `POST /index/verify`, `POST /index/verify/batch` |
 | `mask` | `POST /mask/{kid}`, `POST /mask/batch/{kid}` |
 | `metrics` | `GET /metrics` with `kid: "*"` |
+| `time-attest` | `POST /time/attest` with `kid: "*"` |
 
-Root always passes permission checks. Routes operations require root or `admin`; there is no granular `routes` action. FPE, tokenization, MAC, blind-index, commitment, sharing, and masking actions require explicit KID-scoped grants; `kid: "*"` is rejected for those actions.
+`metrics` and `time-attest` are global actions: their grants must use `kid: "*"`, and neither endpoint accepts a KID. Root always passes permission checks. Routes operations require root or `admin`; there is no granular `routes` action. FPE, tokenization, MAC, blind-index, commitment, sharing, and masking actions require explicit KID-scoped grants; `kid: "*"` is rejected for those actions.
+
+Example time-attestation grant:
+
+```json
+{
+  "client": "clock-monitor",
+  "apikey_hash": "<VECTIS_APIKEY_HASH>",
+  "status": "active",
+  "permissions": [
+    { "kid": "*", "actions": ["time-attest"] }
+  ]
+}
+```
 
 Permissions file shape:
 
@@ -1809,7 +1835,28 @@ duplicate-index, or insufficient shares. There are no batch endpoints in v1.
 
 ## Configuration File (`config.json`)
 
-Vectis loads a single signed config file (`config.json`) with `routes`, `remote_routes`, `permissions`, and optional `fpe_profiles`, `tokenization_profiles`, `mac_profiles`, `commitment_profiles`, `masking_profiles`, and `sharing_profiles` sections plus a top-level `version`. It is loaded when `vectis serve` starts and can be reloaded at runtime with `POST /config/reload`. Create/update its signature with `vectis config sign`; inspect it with `vectis config list`.
+Vectis loads a single signed config file (`config.json`) with `routes`, `remote_routes`, `permissions`, optional profile arrays, and an optional `time_attestation` singleton plus a top-level `version`. It is loaded when `vectis serve` starts and can be reloaded at runtime with `POST /config/reload`. Create/update its signature with `vectis config sign`; inspect it with `vectis config list`.
+
+`time_attestation` is optional. `provider` is a configuration name (non-empty,
+without control characters, maximum 128 characters); v1 supports only
+`cloudflare`. Missing fields use compiled Cloudflare defaults.
+It may override `provider`, `nts_server`, `roughtime_server`,
+`roughtime_public_key`, `max_clock_skew_ms`, `max_round_trip_ms`, and
+`max_roughtime_radius_ms`. The Roughtime public key is a signed trust anchor.
+
+```json
+{
+  "time_attestation": {
+    "provider": "cloudflare",
+    "nts_server": "time.cloudflare.com",
+    "roughtime_server": "roughtime.cloudflare.com:2003",
+    "roughtime_public_key": "0GD7c3yP8xEc4Zl2zeuN2SlLvDVVocjsPSL8/Rl/7zg=",
+    "max_clock_skew_ms": 1000,
+    "max_round_trip_ms": 2000,
+    "max_roughtime_radius_ms": 2000
+  }
+}
+```
 
 Default paths:
 
@@ -1965,7 +2012,7 @@ Top level:
 | `client` | yes | text, unique | Client label. |
 | `apikey_hash` | yes | 64 hex (32 bytes) | Server-side verifier for this client's `X-API-Key`. |
 | `status` | yes | `active` \| `disabled` \| `revoked` | Only `active` clients are authorized. |
-| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `fpe-encrypt`, `fpe-decrypt`, `token-encode`, `token-decode`, `mac-create`, `mac-verify`, `commit-create`, `commit-verify`, `share-split`, `share-combine`, `index-create`, `index-verify`, `mask`, `metrics`. `kid: "*"` is allowed with global actions such as `admin` and `metrics`; crypto profile actions require explicit KIDs. An `admin` action grants all endpoints and ignores kid-scoped grants. |
+| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `fpe-encrypt`, `fpe-decrypt`, `token-encode`, `token-decode`, `mac-create`, `mac-verify`, `commit-create`, `commit-verify`, `share-split`, `share-combine`, `index-create`, `index-verify`, `mask`, `metrics`, `time-attest`. `kid: "*"` is required for global actions `admin`, `metrics`, and `time-attest`; crypto profile actions require explicit KIDs. An `admin` action grants all endpoints and ignores kid-scoped grants. |
 
 `fpe_profiles[]` entries:
 

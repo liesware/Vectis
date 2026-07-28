@@ -1,6 +1,6 @@
 use crate::core::{
     canonical, commitments, config, files, fpe, mac, masking, permissions, protocol, remote_routes,
-    routes, sharing, tokenization,
+    routes, sharing, time_attestation, tokenization,
 };
 use crate::error::DynError;
 use serde::{Deserialize, Serialize};
@@ -29,6 +29,8 @@ pub struct ConfigFile {
     commitment_profiles: Vec<commitments::CommitmentProfileInput>,
     #[serde(default)]
     sharing_profiles: Vec<sharing::SharingProfileInput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    time_attestation: Option<time_attestation::TimeAttestationConfigInput>,
 }
 
 pub struct ConfigState {
@@ -41,6 +43,7 @@ pub struct ConfigState {
     pub masking_profiles: masking::MaskingProfilesState,
     pub commitment_profiles: commitments::CommitmentProfilesState,
     pub sharing_profiles: sharing::SharingProfilesState,
+    pub time_attestation: time_attestation::EffectiveTimeAttestationConfig,
 }
 
 impl Zeroize for ConfigState {
@@ -312,6 +315,8 @@ fn validate_config_file(
         hooks.hash_algorithm_for_kid,
         hooks.derive_sharing_key,
     )?;
+    let time_attestation =
+        time_attestation::resolve_time_attestation(config_file.time_attestation)?;
 
     Ok(ConfigState {
         routes: routes::RoutesState::from_parts(
@@ -327,6 +332,7 @@ fn validate_config_file(
         masking_profiles: validated_masking_profiles,
         commitment_profiles: validated_commitment_profiles,
         sharing_profiles: validated_sharing_profiles,
+        time_attestation,
     })
 }
 
@@ -345,6 +351,7 @@ fn empty_config_state(config: &config::AppConfig) -> ConfigState {
         masking_profiles: masking::MaskingProfilesState::default(),
         commitment_profiles: commitments::CommitmentProfilesState::default(),
         sharing_profiles: sharing::SharingProfilesState::default(),
+        time_attestation: time_attestation::EffectiveTimeAttestationConfig::defaults(),
     }
 }
 
@@ -733,6 +740,49 @@ mod tests {
         assert!(state.routes.is_empty());
         assert!(state.remote_routes.is_empty());
         assert!(state.permissions.is_empty());
+    }
+
+    #[test]
+    fn validate_config_content_resolves_time_attestation_overrides() {
+        let config = test_config(PathBuf::from("config.json"));
+        let state = validate_config_content(
+            r#"{"version":"v1","time_attestation":{"max_clock_skew_ms":250}}"#,
+            &config,
+            |_| true,
+            |_| Ok(dummy_fpe_key()),
+            |_| Ok(dummy_tokenization_keys()),
+            dummy_hash_algorithm,
+            dummy_mac_key,
+            dummy_commitment_key,
+            dummy_sharing_key,
+        )
+        .expect("time overrides must validate");
+        assert_eq!(state.time_attestation.max_clock_skew_ms(), 250);
+        assert_eq!(state.time_attestation.nts_server(), "time.cloudflare.com");
+    }
+
+    #[test]
+    fn validate_config_content_rejects_unsupported_time_provider() {
+        let config = test_config(PathBuf::from("config.json"));
+        let result = validate_config_content(
+            r#"{"version":"v1","time_attestation":{"provider":"ntp-pool"}}"#,
+            &config,
+            |_| true,
+            |_| Ok(dummy_fpe_key()),
+            |_| Ok(dummy_tokenization_keys()),
+            dummy_hash_algorithm,
+            dummy_mac_key,
+            dummy_commitment_key,
+            dummy_sharing_key,
+        );
+        let err = match result {
+            Ok(_) => panic!("unsupported time providers must not validate"),
+            Err(err) => err,
+        };
+        assert_eq!(
+            err.to_string(),
+            "time_attestation.provider is not supported: ntp-pool"
+        );
     }
 
     #[test]

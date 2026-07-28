@@ -1,7 +1,7 @@
 use super::http::{OutputFormat, invalid_input, print_response, reject_option_like_positional};
 use crate::core::{
-    commitments, config, config_file, fpe, mac, masking, permissions, sharing, tokenization,
-    validation,
+    commitments, config, config_file, fpe, mac, masking, permissions, sharing, time_attestation,
+    tokenization, validation,
 };
 use crate::error::DynError;
 use serde_json::{Map, Value, json};
@@ -714,6 +714,121 @@ pub async fn run_config_commitment(
 pub async fn run_config_sharing(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let (command, rest) = split_command(args, "config sharing command")?;
     run_basic_section_command(&SHARING_PROFILES_SECTION, &command, rest, output).await
+}
+
+pub async fn run_config_time(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+    let (command, rest) = split_command(args, "config time command")?;
+    match command.as_str() {
+        "get" => {
+            if !rest.is_empty() {
+                return Err(invalid_input("config time get does not accept arguments"));
+            }
+            read_config(output, |local| {
+                let overrides = local.value.get("time_attestation").cloned();
+                let parsed = overrides
+                    .clone()
+                    .map(serde_json::from_value)
+                    .transpose()
+                    .map_err(|err| invalid_input(format!("invalid time_attestation config: {err}")))?;
+                let effective = time_attestation::resolve_time_attestation(parsed)?;
+                Ok(json!({"configured": overrides.is_some(), "overrides": overrides, "effective": effective}))
+            }).await
+        }
+        "clear" => {
+            if !rest.is_empty() {
+                return Err(invalid_input("config time clear does not accept arguments"));
+            }
+            mutate_config(output, |local| {
+                let object = object_mut(&mut local.value)?;
+                object.remove("time_attestation");
+                Ok(json!({"status":"cleared","section":"time_attestation"}))
+            })
+            .await
+        }
+        "set" => {
+            let values = parse_time_options(rest)?;
+            mutate_config(output, |local| {
+                let object = object_mut(&mut local.value)?;
+                let current = object
+                    .get("time_attestation")
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .unwrap_or_default();
+                let merged = merge_and_validate_time_overrides(current, values)?;
+                object.insert("time_attestation".to_string(), merged.clone());
+                Ok(json!({"status":"updated","section":"time_attestation","overrides": merged}))
+            })
+            .await
+        }
+        _ => Err(invalid_input(format!(
+            "unknown config time command: {command}"
+        ))),
+    }
+}
+
+fn parse_time_options(args: Vec<String>) -> Result<Map<String, Value>, DynError> {
+    if args.is_empty() {
+        return Err(invalid_input(
+            "config time set requires at least one option",
+        ));
+    }
+    let mut values = Map::new();
+    let mut iter = args.into_iter();
+    while let Some(flag) = iter.next() {
+        let Some(field) = (match flag.as_str() {
+            "--provider" => Some("provider"),
+            "--nts-server" => Some("nts_server"),
+            "--roughtime-server" => Some("roughtime_server"),
+            "--roughtime-public-key" => Some("roughtime_public_key"),
+            "--max-clock-skew-ms" => Some("max_clock_skew_ms"),
+            "--max-round-trip-ms" => Some("max_round_trip_ms"),
+            "--max-roughtime-radius-ms" => Some("max_roughtime_radius_ms"),
+            _ => None,
+        }) else {
+            return Err(invalid_input(format!("unknown config time option: {flag}")));
+        };
+        let value = iter
+            .next()
+            .ok_or_else(|| invalid_input(format!("{flag} requires a value")))?;
+        reject_option_like_positional(&value, "config time set")?;
+        if values.contains_key(field) {
+            return Err(invalid_input(format!(
+                "duplicated config time option: {flag}"
+            )));
+        }
+        let value = if field.ends_with("_ms") {
+            Value::Number(
+                value
+                    .parse::<u64>()
+                    .map_err(|_| invalid_input(format!("{flag} must be an unsigned integer")))?
+                    .into(),
+            )
+        } else {
+            Value::String(value)
+        };
+        values.insert(field.to_string(), value);
+    }
+    let input: time_attestation::TimeAttestationConfigInput =
+        serde_json::from_value(Value::Object(values.clone()))
+            .map_err(|err| invalid_input(format!("invalid time_attestation config: {err}")))?;
+    time_attestation::resolve_time_attestation(Some(input))?;
+    Ok(values)
+}
+
+fn merge_and_validate_time_overrides(
+    current: Map<String, Value>,
+    values: Map<String, Value>,
+) -> Result<Value, DynError> {
+    let mut overrides = current;
+    overrides.extend(values);
+    // Revalidate the *merged* object, not just the new fields, so a pre-existing invalid
+    // override cannot be silently persisted and deferred to a later sign/reload.
+    let merged = Value::Object(overrides);
+    let parsed: time_attestation::TimeAttestationConfigInput =
+        serde_json::from_value(merged.clone())
+            .map_err(|err| invalid_input(format!("invalid time_attestation config: {err}")))?;
+    time_attestation::resolve_time_attestation(Some(parsed))?;
+    Ok(merged)
 }
 
 async fn read_config(
@@ -2851,5 +2966,64 @@ mod tests {
         let err = validate_local_config(&local)
             .expect_err("full config validation must reject the small binary domain");
         assert_eq!(err.to_string(), "fpe profile domain is too small for FF1");
+    }
+
+    #[test]
+    fn time_config_options_validate_and_reject_bad_input() {
+        let values = parse_time_options(vec![
+            String::from("--nts-server"),
+            String::from("time.example.test"),
+            String::from("--max-clock-skew-ms"),
+            String::from("250"),
+        ])
+        .expect("valid partial time overrides must parse");
+        assert_eq!(values["nts_server"], "time.example.test");
+        assert_eq!(values["max_clock_skew_ms"], 250);
+
+        let err = parse_time_options(vec![String::from("--max-round-trip-ms"), String::from("0")])
+            .expect_err("zero timeout must fail inline");
+        assert_eq!(
+            err.to_string(),
+            "time_attestation.max_round_trip_ms must be between 1 and 60000"
+        );
+
+        let err = parse_time_options(vec![String::from("--unknown"), String::from("x")])
+            .expect_err("unknown time options must fail");
+        assert_eq!(err.to_string(), "unknown config time option: --unknown");
+
+        let err = parse_time_options(vec![String::from("--provider"), String::from("ntp-pool")])
+            .expect_err("unsupported providers must fail before a config write");
+        assert_eq!(
+            err.to_string(),
+            "time_attestation.provider is not supported: ntp-pool"
+        );
+    }
+
+    #[test]
+    fn time_config_set_revalidates_merged_object() {
+        // A pre-existing hand-edited invalid override plus a valid new field must be rejected,
+        // not silently persisted.
+        let mut current = Map::new();
+        current.insert("max_round_trip_ms".to_string(), serde_json::json!(0));
+        let mut values = Map::new();
+        values.insert(
+            "nts_server".to_string(),
+            serde_json::json!("time.example.test"),
+        );
+        let err = merge_and_validate_time_overrides(current, values)
+            .expect_err("merged object with a pre-existing invalid field must be rejected");
+        assert!(err.to_string().contains("max_round_trip_ms"));
+
+        // A fully valid merge succeeds and keeps both fields.
+        let mut current = Map::new();
+        current.insert("max_clock_skew_ms".to_string(), serde_json::json!(250));
+        let mut values = Map::new();
+        values.insert(
+            "nts_server".to_string(),
+            serde_json::json!("time.example.test"),
+        );
+        let merged = merge_and_validate_time_overrides(current, values).expect("valid merge");
+        assert_eq!(merged["max_clock_skew_ms"], 250);
+        assert_eq!(merged["nts_server"], "time.example.test");
     }
 }

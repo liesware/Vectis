@@ -206,7 +206,7 @@ Recommended admin permission:
 }
 ```
 
-If any permission entry contains `admin`, Vectis treats the whole client as admin and ignores `kid` plus any other actions for that client. Non-admin KID-scoped permissions must reference KIDs already loaded in memory. Global permissions such as `metrics` use `kid: "*"`. FPE, tokenization, MAC, commitments, secret sharing, blind-index, and masking permissions require explicit KIDs; `kid: "*"` is rejected for those actions.
+If any permission entry contains `admin`, Vectis treats the whole client as admin and ignores `kid` plus any other actions for that client. Non-admin KID-scoped permissions must reference KIDs already loaded in memory. Global permissions `metrics` and `time-attest` use `kid: "*"`. FPE, tokenization, MAC, commitments, secret sharing, blind-index, and masking permissions require explicit KIDs; `kid: "*"` is rejected for those actions.
 
 Allowed actions:
 
@@ -230,6 +230,7 @@ Allowed actions:
 - `index-verify`
 - `mask`
 - `metrics`
+- `time-attest`
 
 Permission mapping summary:
 
@@ -253,6 +254,7 @@ Permission mapping summary:
 - `index-verify`: `POST /index/verify`, `POST /index/verify/batch`.
 - `mask`: `POST /mask/{kid}`, `POST /mask/batch/{kid}`.
 - `metrics`: `GET /metrics` with `kid: "*"`; this is a global permission and does not reference a loaded operational KID.
+- `time-attest`: `POST /time/attest` with `kid: "*"`; this is a global permission and does not reference a loaded operational KID.
 
 Routes operations require root or `admin`; there is no granular `routes` action.
 

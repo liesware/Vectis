@@ -15,6 +15,7 @@ servers:
 tags:
   - name: Self Test
   - name: Health
+  - name: Time Attestation
   - name: Keys
   - name: Config
   - name: Routes
@@ -34,6 +35,29 @@ tags:
 security: []
 
 paths:
+  /time/attest:
+    post:
+      tags: [Time Attestation]
+      summary: Attest the local clock with authenticated NTS and verified Roughtime
+      description: "Requires the global `time-attest` permission granted with `kid: \"*\"`; this endpoint accepts no KID and no request body. A false acceptable value is a successful measurement that does not meet policy; source failures return 502 without partial observations."
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: Complete time attestation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimeAttestationOutput"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "502":
+          $ref: "#/components/responses/Error"
+        default:
+          $ref: "#/components/responses/Error"
+
   /healthz/startup:
     get:
       tags: [Health]
@@ -1303,6 +1327,57 @@ components:
         error:
           $ref: "#/components/schemas/TextField"
           example: invalid request
+
+    TimeAttestationOutput:
+      type: object
+      required: [version, provider, sources, server_clock]
+      additionalProperties: false
+      properties:
+        version:
+          type: string
+          const: vectis-time-attestation-v1
+        provider:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Provider identifier. V1 supports cloudflare.
+        sources:
+          type: object
+          required: [system, nts, roughtime]
+          properties:
+            system:
+              type: object
+              required: [unix_us]
+              properties: { unix_us: { type: string, pattern: "^[0-9]+$" } }
+            nts:
+              type: object
+              required: [authenticated, server, offset_us, round_trip_us]
+              properties:
+                authenticated: { type: boolean, const: true }
+                server: { type: string }
+                offset_us: { type: string, pattern: "^-?[0-9]+$" }
+                round_trip_us: { type: string, pattern: "^[0-9]+$" }
+            roughtime:
+              type: object
+              required: [verified, server, midpoint_us, radius_us, earliest_us, latest_us, nonce_b64, response_b64]
+              properties:
+                verified: { type: boolean, const: true }
+                server: { type: string }
+                midpoint_us: { type: string, pattern: "^[0-9]+$" }
+                radius_us: { type: string, pattern: "^[0-9]+$" }
+                earliest_us: { type: string, pattern: "^[0-9]+$" }
+                latest_us: { type: string, pattern: "^[0-9]+$" }
+                nonce_b64: { type: string }
+                response_b64: { type: string }
+        server_clock:
+          type: object
+          required: [acceptable, max_allowed_skew_ms, local_vs_nts_skew_ms, local_within_roughtime_interval, nts_within_roughtime_interval]
+          properties:
+            acceptable: { type: boolean }
+            max_allowed_skew_ms: { type: integer, minimum: 1 }
+            local_vs_nts_skew_ms: { type: number }
+            local_within_roughtime_interval: { type: boolean }
+            nts_within_roughtime_interval: { type: boolean }
 
     StartupHealthOutput:
       type: object

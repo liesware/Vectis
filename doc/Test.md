@@ -57,6 +57,13 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test
 ```
 
+The optional live Cloudflare NTS interoperability check is intentionally ignored
+by the normal suite because it requires external network access:
+
+```sh
+cargo test cloudflare_nts_smoke_test -- --ignored
+```
+
 `cargo test` covers unit and property tests for validation, canonical JSON,
 config loading, permissions, routes, remote routes, lifecycle policy, signing
 input parsing, hash-chained audit records, hybrid-signed checkpoints, and their verification, and related
