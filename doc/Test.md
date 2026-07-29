@@ -220,54 +220,65 @@ of cryptographically valid happy paths.
 
 ## Performance Testing With k6
 
-`tests/performance/k6.js` is a manual performance smoke test. It is not part of
-`tests.sh`, and it does not replace `tests/http_positive.py`, Schemathesis, or
-fuzzing.
+`tests/performance/k6.js` is a manual local performance suite. It is not part
+of `tests.sh`, and it does not replace `tests/http_positive.py`, Schemathesis,
+or fuzzing.
 
 Prerequisites:
 
-- `k6` must be installed.
-- Vectis must already be running.
-- The final app configured for message delivery must already be running.
-- `.env` must provide `VECTIS_API_URL` and `VECTIS_APIKEY`, or those values must
-  be passed as real environment variables.
-- `config.json` must exist, be signed, be loaded in Vectis, and contain a usable
-  active `remote_routes[]` entry.
+- `k6` must be installed locally.
+- Rust, Python 3, and the Vectis build dependencies must be available.
+- Port `3020` must be free. The runner creates and removes its own SQLite,
+  init artifacts, signed config, audit stream, four KIDs, and API client below
+  `tests/performance/local/site/`.
 
-Run the default one-iteration smoke:
+Run the default four-iteration smoke (one full pass through the four crypto
+profiles):
 
 ```sh
-k6 run tests/performance/k6.js
+bash tests/performance/run.sh
 ```
 
 Run a small load test:
 
 ```sh
-k6 run --vus 20 --duration 2m tests/performance/k6.js
+K6_VUS=20 K6_DURATION=2m bash tests/performance/run.sh
 ```
 
 Override the target explicitly:
 
 ```sh
-VECTIS_API_URL=http://127.0.0.1:3000 \
-VECTIS_APIKEY=<key> \
-k6 run tests/performance/k6.js
+K6_VUS=20 K6_DURATION=2m K6_P95_MS=1000 \
+  bash tests/performance/run.sh
 ```
 
-The script exercises:
+The runner provisions one KID for each built-in crypto profile:
+
+- `hybrid-performance-v1`;
+- `hybrid-standard-v1`;
+- `hybrid-high-assurance-v1` with a one-time token profile;
+- `hybrid-long-term-v1`.
+
+Each iteration rotates between those suites and exercises local operations:
 
 - health probes: `/healthz/startup`, `/healthz/live`, `/healthz/ready`;
-- `POST /keys`;
 - `GET /pub/{kid}`;
 - `GET /self-test/keys/{kid}`;
-- `POST /sign/{kid}` and `POST /sign/verification`;
-- internal encrypt/decrypt;
-- remote message send with `POST /message/{sender_kid}`.
+- FPE, tokenization, MAC, blind indexes, masking, commitments and their batch
+  endpoints where available;
+- secret sharing split/combine;
+- internal message encrypt/decrypt;
+- compact sign/verification;
+- `/metrics` during teardown.
 
-k6 creates one key in `setup()` for crypto checks. Message sending uses a sender
-KID selected from `config.json` local routes, because message routing policy is
-config-based. The script prints only a small runtime summary with truncated KIDs
-and does not print API keys, ciphertexts, signatures, or sensitive plaintext.
+The runner stops Vectis after k6 exits and verifies the generated hash-chained
+audit log offline. It intentionally excludes remote message delivery and
+`/time/attest`: they depend on a second service or external time sources and
+would not be a local crypto baseline. Provisioning and audit verification are
+outside the measured k6 window. k6 tags every request by operation and crypto
+profile; its summary reports throughput, average, p95, and p99 for each
+operation/profile combination. `K6_P95_MS` optionally turns the aggregate p95
+into a threshold. The scripts do not print API keys or cryptographic payloads.
 
 ## Native Fuzzing With cargo-fuzz
 
@@ -410,6 +421,8 @@ uses sanitizer builds, and is heavier than the normal HTTP test suite.
 - `tests/http_positive.py`: valid end-to-end runtime workflows.
 - `tests/http_schemathesis.py`: OpenAPI contract fuzzing via Schemathesis.
 - `tests/http_support.py`: shared Python helpers for HTTP workflows.
-- `tests/performance/k6.js`: manual k6 performance/load smoke test.
+- `tests/performance/run.sh`: single entry point for the isolated local k6
+  harness.
+- `tests/performance/k6.js`: local mixed-workload k6 scenario.
 - `tests/test_config.py`: test configuration and API key loading helpers.
 - `tests_cargo-fuzz.sh`: native fuzz runner for all cargo-fuzz targets.
