@@ -3,7 +3,6 @@ use crate::error::DynError;
 use crate::ops::init::ValidatedInitState;
 use zeroize::{Zeroize, Zeroizing};
 
-const INTERNAL_HKDF_SALT: &[u8] = b"vectis/internal-keys/v1";
 const DB_KEY_INFO: &[u8] = b"vectis/db-key/v1";
 const PROPERTIES_KEY_INFO: &[u8] = b"vectis/properties-key/v1";
 const API_AUTH_KEY_INFO: &[u8] = b"vectis/api-key-auth/v1";
@@ -54,7 +53,7 @@ impl Zeroize for InternalDerivedKeysState {
 fn derive_internal_key(root_key: &[u8], info: &[u8]) -> Result<Zeroizing<Vec<u8>>, DynError> {
     Ok(Zeroizing::new(crypto::create_hkdf(
         root_key,
-        INTERNAL_HKDF_SALT,
+        config::INTERNAL_ROOT_KEY_HKDF_SALT,
         info,
         config::INTERNAL_KEYS_KEY_SIZE_BYTES,
     )?))

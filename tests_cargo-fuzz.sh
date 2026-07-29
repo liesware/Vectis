@@ -21,6 +21,10 @@ TARGETS=(
   fuzz_masking_commitment_inputs
   fuzz_sharing_inputs
   fuzz_share_envelope
+  fuzz_audit_chain_line
+  fuzz_slh_dsa_signature
+  fuzz_slh_dsa_key_files
+  fuzz_init_artifacts
 )
 
 fail() {

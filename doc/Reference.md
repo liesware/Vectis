@@ -44,6 +44,7 @@ At the current stage, Vectis provides:
 - operational key creation and lifecycle management;
 - hybrid key establishment with XECDH and ML-KEM;
 - EdDSA and ML-DSA signatures;
+- local offline SLH-DSA-SHAKE-256s artifact signing with encrypted private key files;
 - authenticated encryption for protected messages;
 - local re-encryption before final application delivery;
 - a hybrid timestamp/signature protocol;

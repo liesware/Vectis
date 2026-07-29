@@ -136,6 +136,8 @@ protection primitives and workflows.
 - local display masking for signed masking profiles;
 - local stateless authenticated Shamir secret sharing for signed sharing
   profiles.
+- local offline SLH-DSA-SHAKE-256s artifact signing with encrypted private keys
+  and public-key-only verification.
 
 **Key management**
 
@@ -372,6 +374,9 @@ Examples:
 vectis version
 vectis health ready
 vectis apikey create
+vectis slh-dsa create --out signing
+vectis slh-dsa sign --key signing-slh-dsa.enc --input settlement.json --out settlement.json.sig
+vectis slh-dsa verify --key signing-slh-dsa.pub --input settlement.json --signature settlement.json.sig
 vectis keys create --tag payments --profile hybrid-high-assurance-v1
 vectis keys list
 vectis pub <kid>
@@ -391,6 +396,10 @@ vectis message decrypt --file encrypted-message.json
 vectis config sign
 vectis config reload
 ```
+
+For `vectis slh-dsa`, `--input` is any regular file. Vectis signs a SHA-3(512)
+hash of its exact bytes and does not require JSON or interpret its content;
+`settlement.json` is only an example filename.
 
 See the full API documentation in [doc/API.md](doc/API.md).
 
@@ -532,7 +541,7 @@ Vectis is not a replacement for:
 - traditional DLP products.
 
 Vectis does not currently provide Merkle proofs, external anchoring for its
-audit-chain checkpoints, SLH-DSA, Vault/KMS/HSM auto-unseal, or mTLS.
+audit-chain checkpoints, Vault/KMS/HSM auto-unseal, or mTLS.
 
 Vectis is intended to complement existing security controls by providing
 cryptographic protection for sensitive data workflows. It should work with

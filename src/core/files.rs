@@ -1,12 +1,139 @@
 use crate::error::DynError;
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static WRITE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+pub const SENSITIVE_FILE_FORBIDDEN_MODE_BITS: u32 = 0o137;
+pub const PUBLIC_FILE_FORBIDDEN_MODE_BITS: u32 = 0o022;
+
+pub fn validate_file_mode(
+    path: &Path,
+    forbidden: u32,
+    not_regular_message: &str,
+    too_open_message: &str,
+) -> Result<(), DynError> {
+    let metadata = fs::metadata(path)?;
+    if !metadata.is_file() {
+        return Err(crate::error::invalid_input(not_regular_message));
+    }
+    if metadata.permissions().mode() & 0o777 & forbidden != 0 {
+        return Err(crate::error::invalid_input(too_open_message));
+    }
+    Ok(())
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MissingFilePolicy {
     Required,
     Optional,
+}
+
+pub fn write_new_file_atomically(
+    path: &Path,
+    content: &[u8],
+    mode: u32,
+    label: &str,
+) -> Result<(), DynError> {
+    write_new_file_atomically_with_finalize(path, content, mode, label, |temporary_path, parent| {
+        fs::remove_file(temporary_path)?;
+        fs::File::open(parent)?.sync_all()?;
+        Ok(())
+    })
+}
+
+fn write_new_file_atomically_with_finalize<F>(
+    path: &Path,
+    content: &[u8],
+    mode: u32,
+    label: &str,
+    finalize: F,
+) -> Result<(), DynError>
+where
+    F: FnOnce(&Path, &Path) -> io::Result<()>,
+{
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| crate::error::invalid_input(format!("{label} path must name a file")))?;
+    let temporary_path = parent.join(format!(
+        ".{}.{}.{}.tmp",
+        file_name.to_string_lossy(),
+        std::process::id(),
+        WRITE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut temporary_created = false;
+    let mut destination_linked = false;
+    let result = (|| -> io::Result<()> {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(mode)
+            .open(&temporary_path)?;
+        temporary_created = true;
+        file.write_all(content)?;
+        file.sync_all()?;
+        drop(file);
+        fs::hard_link(&temporary_path, path)?;
+        destination_linked = true;
+        finalize(&temporary_path, parent)?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        let mut rollback_errors = Vec::new();
+        let mut removed = false;
+        if destination_linked
+            && let Err(err) = fs::remove_file(path)
+            && err.kind() != io::ErrorKind::NotFound
+        {
+            rollback_errors.push(err.to_string());
+        } else if destination_linked {
+            removed = true;
+        }
+        if temporary_created
+            && let Err(err) = fs::remove_file(&temporary_path)
+            && err.kind() != io::ErrorKind::NotFound
+        {
+            rollback_errors.push(err.to_string());
+        } else if temporary_created {
+            removed = true;
+        }
+        if removed
+            && let Err(err) = fs::File::open(parent).and_then(|directory| directory.sync_all())
+        {
+            rollback_errors.push(err.to_string());
+        }
+        if rollback_errors.is_empty() {
+            return Err(Box::new(error));
+        }
+        return Err(crate::error::internal(format!(
+            "{error}; atomic write rollback failed: {}",
+            rollback_errors.join("; ")
+        )));
+    }
+    Ok(())
+}
+
+pub fn remove_created_file_and_sync(path: &Path, label: &str) -> Result<(), DynError> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    fs::remove_file(path)
+        .map_err(|err| crate::error::internal(format!("{label} could not be removed: {err}")))?;
+    fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|err| {
+            crate::error::internal(format!(
+                "{label} parent directory could not be synchronized: {err}"
+            ))
+        })
 }
 
 pub fn read_bounded_utf8_file(
@@ -145,5 +272,89 @@ mod tests {
             read_bounded_utf8_file(&path, "test file", 1, MissingFilePolicy::Required).is_err()
         );
         fs::remove_dir(path).expect("remove test directory");
+    }
+
+    fn unique_dir(name: &str) -> std::path::PathBuf {
+        let path = unique_path(name);
+        fs::create_dir(&path).expect("create test directory");
+        path
+    }
+
+    #[test]
+    fn atomic_writer_rolls_back_failure_before_temporary_removal() {
+        let directory = unique_dir("atomic-pre-remove-failure");
+        let path = directory.join("payload");
+        let err = write_new_file_atomically_with_finalize(
+            &path,
+            b"sensitive",
+            0o600,
+            "test file",
+            |_temporary_path, _parent| Err(io::Error::other("injected finalize failure")),
+        )
+        .expect_err("post-link failure must be returned");
+
+        assert!(err.to_string().contains("injected finalize failure"));
+        assert!(!path.exists(), "published destination must be rolled back");
+        assert_eq!(
+            fs::read_dir(&directory).unwrap().count(),
+            0,
+            "temporary file must be rolled back"
+        );
+        fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    fn atomic_writer_rolls_back_failure_after_temporary_removal() {
+        let directory = unique_dir("atomic-post-remove-failure");
+        let path = directory.join("payload");
+        let err = write_new_file_atomically_with_finalize(
+            &path,
+            b"sensitive",
+            0o600,
+            "test file",
+            |temporary_path, _parent| {
+                fs::remove_file(temporary_path)?;
+                Err(io::Error::other("injected directory sync failure"))
+            },
+        )
+        .expect_err("post-link failure must be returned");
+
+        assert!(err.to_string().contains("injected directory sync failure"));
+        assert!(!path.exists(), "published destination must be rolled back");
+        assert_eq!(
+            fs::read_dir(&directory).unwrap().count(),
+            0,
+            "removed temporary file must stay absent"
+        );
+        fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    fn atomic_writer_tolerates_missing_destination_during_rollback() {
+        let directory = unique_dir("atomic-destination-vanished");
+        let path = directory.join("payload");
+        let err = write_new_file_atomically_with_finalize(
+            &path,
+            b"sensitive",
+            0o600,
+            "test file",
+            |_temporary_path, _parent| {
+                fs::remove_file(&path)?;
+                Err(io::Error::other(
+                    "injected failure after destination vanished",
+                ))
+            },
+        )
+        .expect_err("post-link failure must be returned");
+
+        assert!(
+            err.to_string()
+                .contains("injected failure after destination vanished")
+        );
+        assert!(
+            !err.to_string().contains("rollback failed"),
+            "a destination already gone must not be reported as a rollback failure"
+        );
+        fs::remove_dir_all(directory).unwrap();
     }
 }

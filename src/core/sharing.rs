@@ -505,10 +505,8 @@ fn parse_share_envelope(encoded: &str) -> Result<ShareEnvelope, DynError> {
     let bytes = Zeroizing::new(URL_SAFE_NO_PAD.decode(encoded).map_err(|_| {
         crate::error::invalid_input("share contains invalid vectis-sss-v1 encoding")
     })?);
-    let envelope: ShareEnvelope = serde_json::from_slice(&bytes).map_err(|err| {
-        crate::error::invalid_input(format!(
-            "share contains invalid vectis-sss-v1 envelope: {err}"
-        ))
+    let envelope: ShareEnvelope = serde_json::from_slice(&bytes).map_err(|_| {
+        crate::error::invalid_input("share contains invalid vectis-sss-v1 envelope")
     })?;
 
     Ok(envelope)
@@ -761,6 +759,16 @@ mod tests {
         assert!(validate_share_envelope_encoding("invalid").is_err());
         assert!(validate_share_envelope_encoding(&format!("{SHARE_PREFIX}!")).is_err());
         assert!(validate_share_envelope_encoding(&format!("{SHARE_PREFIX}e30")).is_err());
+
+        let malformed = format!(
+            "{SHARE_PREFIX}{}",
+            URL_SAFE_NO_PAD.encode(b"{\"vers\x7fion\":\"sss-v1\"}")
+        );
+        let error = validate_share_envelope_encoding(&malformed).unwrap_err();
+        assert!(
+            !error.to_string().chars().any(char::is_control),
+            "share envelope errors must not echo control characters"
+        );
     }
 
     #[test]

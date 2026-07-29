@@ -533,6 +533,14 @@ treat them as contract.
 **In Vectis**: `public_error_message_for_error`; `RemoteUnreachable` maps to a
 fixed public message; `doc/API.md` error examples mirror `src` strings.
 
+Serde diagnostics are input too. At JSON request, config, and CLI boundaries,
+sanitize them through the shared error helper: remove control characters, bound
+the detail, and redact values from type/value mismatches while retaining safe
+field names and expected shapes. Artifacts that are sensitive or authenticated
+(`init`, encrypted storage payloads, shares, and compact signatures) use fixed
+format errors instead. Never interpolate a parser error directly into a
+user-visible message.
+
 ### Rule 23 — Evolve public interfaces without breaking clients
 
 **Applies**: networked services.

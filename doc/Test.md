@@ -322,13 +322,23 @@ The script runs:
 - `fuzz_masking_commitment_inputs`
 - `fuzz_sharing_inputs`
 - `fuzz_share_envelope`
+- `fuzz_audit_chain_line`
+- `fuzz_slh_dsa_signature`
+- `fuzz_slh_dsa_key_files`
+- `fuzz_init_artifacts`
+
+SLH-DSA artifact signing has structural fuzz coverage for compact signatures
+and key-file wrappers. Its Botan round-trip test still confirms the compiled
+variant and randomized signing mode. Audit JSONL and init artifacts likewise
+have structural fuzz coverage without loading private material.
 
 These targets intentionally avoid invoking Botan, SQLite, networking, and
 server startup inside the fuzz loop. They focus on parser safety, validation
 boundaries, canonical JSON determinism, config parsing robustness, compact
-signature encoding, and share-envelope encoding. The data-protection input
-targets stop at the `ops` parse/validate boundary; compact signatures and share
-envelopes stop before signature or share-tag authentication. They do not load
+signature encoding, audit JSONL shape, key-file wrappers, and share-envelope
+encoding. The data-protection input targets stop at the `ops` parse/validate
+boundary; compact signatures, audit checkpoints, init artifacts, SLH-DSA files,
+and share envelopes stop before cryptographic authentication. They do not load
 keys or profiles, execute cryptographic operations, or exercise HTTP. Hash
 output validation and cryptographic verification remain covered by Rust unit
 tests, `tests/crypto_integration.rs`, and `tests/http_fuzz.py`.
@@ -336,12 +346,11 @@ tests, `tests/crypto_integration.rs`, and `tests/http_fuzz.py`.
 ### Error message hygiene
 
 Some parse/validation targets assert that error messages contain no control
-characters. The **guarantee** is that the HTTP boundary sanitizes every public
-error message (`ErrorResponse::new` in `src/io/http/error.rs`, unit-tested
-there): responses always conform to the OpenAPI `TextField` contract regardless
-of what deeper code interpolates. The fuzz-target assertions are **defense in
-depth** — the `ops`/`core` layers should not gratuitously inject control
-characters into error text — not the primary guarantee.
+characters. Parser boundaries must construct safe errors themselves: request,
+config, and CLI JSON use the shared Serde-detail sanitizer, while sensitive or
+authenticated artifacts use fixed format errors. `ErrorResponse::new` in
+`src/io/http/error.rs` remains a final transport defense, not the primary
+guarantee. The fuzz-target assertions protect the same invariant outside HTTP.
 
 The runner stops after the first finding or execution failure, preserves the
 artifact under `fuzz/artifacts/<target>/`, prints a passed/failed/skipped

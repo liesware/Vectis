@@ -22,9 +22,9 @@ where
         let bytes = Bytes::from_request(req, state)
             .await
             .map_err(|rejection| body_read_error_response(rejection.into_response().status()))?;
-        let value = serde_json::from_slice(&bytes).map_err(|err| {
+        let value = serde_json::from_slice(&bytes).map_err(|error| {
             error_response(
-                crate::error::invalid_input(format!("request body must be valid JSON: {err}"))
+                crate::error::invalid_json_input("request body must be valid JSON", &error)
                     .as_ref(),
             )
             .into_response()

@@ -17,6 +17,7 @@ struct EncryptedInitOutput {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct EncryptedInitInput {
     keys_enc: String,
     nonce: String,
@@ -182,10 +183,77 @@ pub fn load_validated_init_state(
     })
 }
 
+/// Validates only the untrusted outer shape of `init.json`.
+///
+/// This deliberately stops before unseal, decryption, or key-material
+/// validation so callers such as native fuzzers can exercise the parser
+/// without handling private key material.
+pub fn validate_init_encrypted_artifact_encoding(encrypted_json: &str) -> Result<(), DynError> {
+    if encrypted_json.len() > config::INIT_KEYS_FILE_MAX_SIZE_BYTES as usize {
+        return Err(crate::error::invalid_input(
+            "init keys file exceeds maximum size",
+        ));
+    }
+    let encrypted_input: EncryptedInitInput = serde_json::from_str(encrypted_json)
+        .map_err(|_| crate::error::invalid_input("init keys file contains invalid JSON"))?;
+    validation::validate_encrypted_payload(
+        "keys_enc",
+        &encrypted_input.keys_enc,
+        "nonce",
+        &encrypted_input.nonce,
+        "aad",
+        &encrypted_input.aad,
+        config::INTERNAL_KEYS_NONCE_SIZE_BYTES,
+    )
+}
+
+/// Validates only the public JSON artifact's schema and encodings.
+///
+/// Loading DER keys and checking their algorithms remains part of
+/// `load_validated_init_public_state`; this helper intentionally avoids Botan.
+pub fn validate_init_public_artifact_encoding(public_json: &str) -> Result<(), DynError> {
+    if public_json.len() > config::INIT_PUBLIC_KEYS_FILE_MAX_SIZE_BYTES as usize {
+        return Err(crate::error::invalid_input(
+            "init public keys file exceeds maximum size",
+        ));
+    }
+    let output: PublicKeysOutput = serde_json::from_str(public_json)
+        .map_err(|_| crate::error::invalid_input("init public keys file contains invalid JSON"))?;
+    validation::validate_text_field("init public keys info", &output.info)?;
+    validation::validate_hex_field(
+        "init public keys eddsa.public_key_der_hex",
+        &output.keys.eddsa.public_key_der_hex,
+    )?;
+    validation::validate_hex_field(
+        "init public keys xecdh.public_key_hex",
+        &output.keys.xecdh.public_key_hex,
+    )?;
+    validation::validate_hex_field(
+        "init public keys ml_dsa.public_key_der_hex",
+        &output.keys.ml_dsa.public_key_der_hex,
+    )?;
+    validation::validate_hex_field(
+        "init public keys ml_kem.public_key_der_hex",
+        &output.keys.ml_kem.public_key_der_hex,
+    )?;
+
+    for (field, value) in [
+        ("init public keys eddsa.alg", &output.keys.eddsa.alg),
+        ("init public keys xecdh.alg", &output.keys.xecdh.alg),
+        ("init public keys ml_dsa.alg", &output.keys.ml_dsa.alg),
+        ("init public keys ml_kem.alg", &output.keys.ml_kem.alg),
+    ] {
+        validation::validate_text_field(field, value)?;
+    }
+
+    Ok(())
+}
+
 pub fn load_validated_init_public_state(
     public_json: &str,
 ) -> Result<ValidatedInitPublicState, DynError> {
-    let output: PublicKeysOutput = serde_json::from_str(public_json)?;
+    let output: PublicKeysOutput = serde_json::from_str(public_json)
+        .map_err(|_| crate::error::invalid_input("init public keys file contains invalid JSON"))?;
     validation::validate_text_field("init public keys info", &output.info)?;
     let peer_keys = remote_routes::PeerPublicKeys {
         eddsa: remote_routes::PeerDerKey {
@@ -228,7 +296,8 @@ fn decrypt_encrypted_init_output(
         config::INTERNAL_KEYS_KEY_SIZE_BYTES,
     )?;
 
-    let encrypted_input: EncryptedInitInput = serde_json::from_str(encrypted_json)?;
+    let encrypted_input: EncryptedInitInput = serde_json::from_str(encrypted_json)
+        .map_err(|_| crate::error::invalid_input("init keys file contains invalid JSON"))?;
     validation::validate_encrypted_payload(
         "keys_enc",
         &encrypted_input.keys_enc,
@@ -255,7 +324,8 @@ fn decrypt_encrypted_init_output(
     })?;
     let mut plaintext_bytes = Zeroizing::new(decrypted);
     let plaintext = Zeroizing::new(String::from_utf8(std::mem::take(&mut *plaintext_bytes))?);
-    let output = serde_json::from_str::<InitOutput>(&plaintext)?;
+    let output = serde_json::from_str::<InitOutput>(&plaintext)
+        .map_err(|_| crate::error::invalid_input("init keys payload is not valid JSON"))?;
 
     Ok(DecryptedInitOutput {
         aad: encrypted_input.aad,
@@ -310,6 +380,29 @@ mod tests {
         let mut invalid = value;
         invalid["unexpected"] = Value::Bool(true);
         assert!(load_validated_init_public_state(&invalid.to_string()).is_err());
+    }
+
+    #[test]
+    fn structural_init_artifact_validators_reject_unknown_fields() {
+        let encrypted = r#"{"keys_enc":"00000000000000000000000000000000","nonce":"000000000000000000000000","aad":"type=init"}"#;
+        assert!(validate_init_encrypted_artifact_encoding(encrypted).is_ok());
+        assert!(validate_init_encrypted_artifact_encoding(
+            r#"{"keys_enc":"00000000000000000000000000000000","nonce":"000000000000000000000000","aad":"type=init","extra":true}"#
+        )
+        .is_err());
+        let malformed = "{\"keys\u{7f}enc\":\"00\"}";
+        let error = validate_init_encrypted_artifact_encoding(malformed).unwrap_err();
+        assert!(
+            !error.to_string().chars().any(char::is_control),
+            "structural validation errors must not echo control characters"
+        );
+
+        let public = r#"{"info":"version=v1;hostname=node.local;type=init-keys;cipher=AES-256/GCM","keys":{"eddsa":{"alg":"Ed25519","public_key_der_hex":"aa"},"xecdh":{"alg":"X25519","public_key_hex":"aa"},"ml-dsa":{"alg":"ML-DSA-44","public_key_der_hex":"aa"},"ml-kem":{"alg":"ML-KEM-512","public_key_der_hex":"aa"}}}"#;
+        assert!(validate_init_public_artifact_encoding(public).is_ok());
+        assert!(
+            validate_init_public_artifact_encoding(r#"{"info":"valid","keys":{},"extra":true}"#)
+                .is_err()
+        );
     }
 
     #[test]

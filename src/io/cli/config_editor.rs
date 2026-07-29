@@ -739,7 +739,9 @@ pub async fn run_config_time(args: Vec<String>, output: OutputFormat) -> Result<
                     .clone()
                     .map(serde_json::from_value)
                     .transpose()
-                    .map_err(|err| invalid_input(format!("invalid time_attestation config: {err}")))?;
+                    .map_err(|error| {
+                        crate::error::invalid_json_input("invalid time_attestation config", &error)
+                    })?;
                 let effective = time_attestation::resolve_time_attestation(parsed)?;
                 Ok(json!({"configured": overrides.is_some(), "overrides": overrides, "effective": effective}))
             }).await
@@ -819,8 +821,9 @@ fn parse_time_options(args: Vec<String>) -> Result<Map<String, Value>, DynError>
         values.insert(field.to_string(), value);
     }
     let input: time_attestation::TimeAttestationConfigInput =
-        serde_json::from_value(Value::Object(values.clone()))
-            .map_err(|err| invalid_input(format!("invalid time_attestation config: {err}")))?;
+        serde_json::from_value(Value::Object(values.clone())).map_err(|error| {
+            crate::error::invalid_json_input("invalid time_attestation config", &error)
+        })?;
     time_attestation::resolve_time_attestation(Some(input))?;
     Ok(values)
 }
@@ -835,8 +838,9 @@ fn merge_and_validate_time_overrides(
     // override cannot be silently persisted and deferred to a later sign/reload.
     let merged = Value::Object(overrides);
     let parsed: time_attestation::TimeAttestationConfigInput =
-        serde_json::from_value(merged.clone())
-            .map_err(|err| invalid_input(format!("invalid time_attestation config: {err}")))?;
+        serde_json::from_value(merged.clone()).map_err(|error| {
+            crate::error::invalid_json_input("invalid time_attestation config", &error)
+        })?;
     time_attestation::resolve_time_attestation(Some(parsed))?;
     Ok(merged)
 }
@@ -1507,8 +1511,9 @@ fn parse_permission_action_fields(args: Vec<String>) -> Result<Map<String, Value
 fn load_local_config() -> Result<LocalConfig, DynError> {
     let app = config::app_config()?;
     let value = match config_file::read_config_file(&app.config_path) {
-        Ok(content) => serde_json::from_str::<Value>(&content)
-            .map_err(|err| invalid_input(format!("config file must be valid JSON: {err}")))?,
+        Ok(content) => serde_json::from_str::<Value>(&content).map_err(|error| {
+            crate::error::invalid_json_input("config file must be valid JSON", &error)
+        })?,
         Err(err) if crate::error::is_not_found(err.as_ref()) => {
             return Err(invalid_input(format!(
                 "VECTIS_CONFIG_PATH could not be read from {}; run `vectis config init` first",
@@ -1652,8 +1657,9 @@ async fn fetch_public_keys(remote_addr: &str, remote_kid: &str) -> Result<Value,
         )));
     }
 
-    let value: Value = serde_json::from_str(&payload)
-        .map_err(|err| invalid_input(format!("remote /pub response must be valid JSON: {err}")))?;
+    let value: Value = serde_json::from_str(&payload).map_err(|error| {
+        crate::error::invalid_json_input("remote /pub response must be valid JSON", &error)
+    })?;
     value
         .get("keys")
         .filter(|keys| keys.is_object())

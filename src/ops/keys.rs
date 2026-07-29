@@ -443,6 +443,7 @@ impl Zeroize for OpsKeyLifecycle {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateKeysInput {
     pub tag: Option<String>,
     pub profile: Option<String>,
@@ -608,7 +609,7 @@ fn validate_kid_matches_keys(kid: &str, keys: &str) -> Result<(), DynError> {
 }
 
 pub fn parse_create_keys_input(request: Value) -> Result<CreateKeysInput, DynError> {
-    const ALLOWED_FIELDS: &[&str] = &[
+    const STRING_FIELDS: &[&str] = &[
         "tag",
         "profile",
         "hash_algorithm",
@@ -619,32 +620,19 @@ pub fn parse_create_keys_input(request: Value) -> Result<CreateKeysInput, DynErr
         "ml_kem_variant",
     ];
 
-    let Some(object) = request.as_object() else {
-        return Err(crate::error::invalid_input(
-            "request body must be a JSON object",
-        ));
-    };
-
-    for field in object.keys() {
-        if !ALLOWED_FIELDS.contains(&field.as_str()) {
-            return Err(crate::error::invalid_input(
-                "request contains an unexpected field",
-            ));
+    if let Some(object) = request.as_object() {
+        for field in STRING_FIELDS {
+            if let Some(value) = object.get(*field)
+                && !value.is_string()
+            {
+                return Err(crate::error::invalid_input(format!(
+                    "{field} must be a string"
+                )));
+            }
         }
     }
 
-    for field in ALLOWED_FIELDS {
-        if let Some(value) = object.get(*field)
-            && !value.is_string()
-        {
-            return Err(crate::error::invalid_input(format!(
-                "{field} must be a string"
-            )));
-        }
-    }
-
-    serde_json::from_value(request)
-        .map_err(|err| crate::error::invalid_input(format!("invalid keys request: {err}")))
+    crate::ops::json::parse_json_request(request, "keys request")
 }
 
 pub fn parse_update_lifecycle_input(request: Value) -> Result<UpdateLifecycleInput, DynError> {
@@ -657,8 +645,8 @@ pub fn parse_update_lifecycle_input(request: Value) -> Result<UpdateLifecycleInp
     validate_json_string_field(object, "status")?;
     validate_json_string_field(object, "reason")?;
 
-    let input: UpdateLifecycleInput = serde_json::from_value(request)
-        .map_err(|err| crate::error::invalid_input(format!("invalid lifecycle request: {err}")))?;
+    let input: UpdateLifecycleInput =
+        crate::ops::json::parse_json_request(request, "lifecycle request")?;
     validate_lifecycle_status("status", &input.status)?;
     validation::validate_bounded_text_field(
         "reason",
@@ -825,7 +813,8 @@ fn decrypt_ops_keys_payload(
         &envelope.aad,
     )?);
     let plaintext = zeroizing_string_from_utf8(plaintext_bytes)?;
-    let output = serde_json::from_str(&plaintext)?;
+    let output = serde_json::from_str(&plaintext)
+        .map_err(|_| crate::error::invalid_input("opskeys.keys payload is not valid JSON"))?;
 
     Ok(DecryptedOpsKeys {
         aad: aad_text,
@@ -853,7 +842,8 @@ fn decrypt_ops_key_properties_payload(
         &envelope.aad,
     )?);
     let plaintext = zeroizing_string_from_utf8(plaintext_bytes)?;
-    let output = serde_json::from_str(&plaintext)?;
+    let output = serde_json::from_str(&plaintext)
+        .map_err(|_| crate::error::invalid_input("opskeys.properties payload is not valid JSON"))?;
 
     Ok(DecryptedOpsKeyProperties {
         aad: aad_text,

@@ -567,8 +567,9 @@ fn run_config_list(output: OutputFormat) -> Result<(), DynError> {
                 config.config_path.display()
             ))
         })?;
-    let value: Value = serde_json::from_str(&config_content)
-        .map_err(|err| invalid_input(format!("config file must be valid JSON: {err}")))?;
+    let value: Value = serde_json::from_str(&config_content).map_err(|error| {
+        crate::error::invalid_json_input("config file must be valid JSON", &error)
+    })?;
 
     print_response(&serde_json::to_string(&value)?, output)
 }
@@ -1123,8 +1124,8 @@ fn parse_json_source(args: Vec<String>) -> Result<Value, DynError> {
     }
 
     let value = match args[0].as_str() {
-        "--json" => serde_json::from_str::<Value>(&args[1]).map_err(|err| {
-            invalid_input(format!("--json must contain a valid JSON object: {err}"))
+        "--json" => serde_json::from_str::<Value>(&args[1]).map_err(|error| {
+            crate::error::invalid_json_input("--json must contain a valid JSON object", &error)
         })?,
         "--file" => {
             let path = Path::new(&args[1]);
@@ -1135,8 +1136,8 @@ fn parse_json_source(args: Vec<String>) -> Result<Value, DynError> {
                 files::MissingFilePolicy::Required,
             )?
             .ok_or_else(|| crate::error::internal("required CLI input file unexpectedly absent"))?;
-            serde_json::from_str::<Value>(&content).map_err(|err| {
-                invalid_input(format!("--file must contain a valid JSON object: {err}"))
+            serde_json::from_str::<Value>(&content).map_err(|error| {
+                crate::error::invalid_json_input("--file must contain a valid JSON object", &error)
             })?
         }
         value => return Err(invalid_input(format!("unknown JSON input option: {value}"))),

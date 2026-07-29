@@ -90,9 +90,7 @@ struct ConfigValidationHooks<
 }
 
 pub fn canonical_config_json(content: &str) -> Result<String, DynError> {
-    let config_file: ConfigFile = serde_json::from_str(content).map_err(|err| {
-        crate::error::invalid_input(format!("config file must be valid JSON: {err}"))
-    })?;
+    let config_file = parse_config_json(content)?;
     protocol::validate_protocol_version("config.version", &config_file.version)?;
 
     Ok(String::from_utf8(canonical::canonical_json_v1(
@@ -118,9 +116,7 @@ pub fn validate_config_content(
         sharing::SharingKeyDerivationRequest<'_>,
     ) -> Result<sharing::DerivedSharingKey, DynError>,
 ) -> Result<ConfigState, DynError> {
-    let config_file: ConfigFile = serde_json::from_str(content).map_err(|err| {
-        crate::error::invalid_input(format!("config file must be valid JSON: {err}"))
-    })?;
+    let config_file = parse_config_json(content)?;
     let hooks = ConfigValidationHooks {
         is_loaded_kid: &is_loaded_kid,
         derive_fpe_key: &derive_fpe_key,
@@ -252,10 +248,13 @@ fn load_config_file(
 ) -> Result<ConfigState, DynError> {
     let content = read_config_file(path)?;
     verify_config(path, &content)?;
-    let config_file: ConfigFile = serde_json::from_str(&content).map_err(|err| {
-        crate::error::invalid_input(format!("config file must be valid JSON: {err}"))
-    })?;
+    let config_file = parse_config_json(&content)?;
     validate_config_file(config_file, config, hooks)
+}
+
+fn parse_config_json(content: &str) -> Result<ConfigFile, DynError> {
+    serde_json::from_str(content)
+        .map_err(|error| crate::error::invalid_json_input("config file must be valid JSON", &error))
 }
 
 fn validate_config_file(
@@ -478,6 +477,17 @@ mod tests {
     #[test]
     fn canonical_config_json_rejects_invalid_json() {
         assert!(canonical_config_json("{ not json").is_err());
+    }
+
+    #[test]
+    fn config_json_parse_error_sanitizes_untrusted_field_names() {
+        let error =
+            canonical_config_json(r#"{"version":"v1","time_attestation":{"bad\u007ffield":true}}"#)
+                .expect_err("unknown time-attestation fields must fail");
+        let message = error.to_string();
+
+        assert!(!message.chars().any(char::is_control));
+        assert!(message.contains("badfield"));
     }
 
     #[test]

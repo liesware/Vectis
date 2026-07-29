@@ -249,6 +249,58 @@ pub fn verify_file(
     )
 }
 
+/// Validates one newline-stripped JSONL audit entry without verifying event
+/// hashes or checkpoint signatures. This is the parser boundary used by native
+/// fuzzing; full authenticity remains the responsibility of `verify_file`.
+pub fn validate_audit_jsonl_line_encoding(line: &str) -> Result<(), DynError> {
+    parse_structural_audit_line(line)
+}
+
+fn parse_structural_audit_line(line: &str) -> Result<(), DynError> {
+    if line.is_empty() {
+        return Err(crate::error::invalid_input("audit record is empty"));
+    }
+    if line.len() > config::AUDIT_CHAIN_RECORD_MAX_BYTES {
+        return Err(crate::error::invalid_input(
+            "audit record exceeds maximum size",
+        ));
+    }
+
+    let version = serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .and_then(|value| value.get("version")?.as_str().map(str::to_owned))
+        .ok_or_else(|| crate::error::invalid_input("audit record contains invalid JSON"))?;
+
+    match version.as_str() {
+        CHAIN_VERSION => {
+            let record: AuditChainRecord = serde_json::from_str(line)
+                .map_err(|_| crate::error::invalid_input("audit record contains invalid JSON"))?;
+            validate_record_shape(&record)?;
+            if canonical::canonical_json_v1(&record)? != line.as_bytes() {
+                return Err(crate::error::invalid_input(
+                    "audit record JSON is not canonical",
+                ));
+            }
+            Ok(())
+        }
+        CHECKPOINT_VERSION => {
+            let checkpoint: AuditCheckpointLine = serde_json::from_str(line).map_err(|_| {
+                crate::error::invalid_input("audit checkpoint contains invalid JSON")
+            })?;
+            sign::validate_compact_signature_encoding(&checkpoint.signature)?;
+            if canonical::canonical_json_v1(&checkpoint)? != line.as_bytes() {
+                return Err(crate::error::invalid_input(
+                    "audit checkpoint JSON is not canonical",
+                ));
+            }
+            Ok(())
+        }
+        _ => Err(crate::error::invalid_input(
+            "audit record version is unsupported",
+        )),
+    }
+}
+
 fn verify_file_with_verifier(
     path: &Path,
     verifier: &AuditCheckpointVerifier,
@@ -829,7 +881,7 @@ fn verify_error(line_index: usize, reason: &str) -> DynError {
     ))
 }
 
-fn validate_record(record: &AuditChainRecord) -> Result<(), DynError> {
+fn validate_record_shape(record: &AuditChainRecord) -> Result<(), DynError> {
     if record.body.version != CHAIN_VERSION || record.body.hash_alg != config::INTERNAL_KEYS_HASH {
         return Err(crate::error::invalid_input(
             "record version or hash algorithm is unsupported",
@@ -842,7 +894,7 @@ fn validate_record(record: &AuditChainRecord) -> Result<(), DynError> {
         ("prev_hash", &record.body.prev_hash),
         ("event_hash", &record.event_hash),
     ] {
-        validation::validate_hash_hex_field(field, value, config::INTERNAL_KEYS_HASH)?;
+        validation::validate_hex_field(field, value)?;
     }
     if record.body.timestamp.parse::<u64>().is_err() {
         return Err(crate::error::invalid_input("record timestamp is invalid"));
@@ -870,6 +922,17 @@ fn validate_record(record: &AuditChainRecord) -> Result<(), DynError> {
         return Err(crate::error::invalid_input(
             "record contains invalid text fields",
         ));
+    }
+    Ok(())
+}
+
+fn validate_record(record: &AuditChainRecord) -> Result<(), DynError> {
+    validate_record_shape(record)?;
+    for (field, value) in [
+        ("prev_hash", &record.body.prev_hash),
+        ("event_hash", &record.event_hash),
+    ] {
+        validation::validate_hash_hex_field(field, value, config::INTERNAL_KEYS_HASH)?;
     }
     let serialized = canonical::canonical_json_v1(record)?;
     if serialized.len() > config::AUDIT_CHAIN_RECORD_MAX_BYTES {
@@ -1114,6 +1177,42 @@ mod tests {
         assert_eq!(writer.writes, 1);
         assert_eq!(writer.flushes, 1);
         assert_eq!(writer.bytes, b"{}\n");
+    }
+
+    #[test]
+    fn structural_line_validator_accepts_canonical_shapes_without_crypto() {
+        let record = AuditChainRecord {
+            body: AuditRecordBody {
+                version: String::from(CHAIN_VERSION),
+                chain_id: "a".repeat(32),
+                sequence: 0,
+                timestamp: String::from("1"),
+                event: String::from("audit.chain.started"),
+                outcome: String::from("success"),
+                actor: String::new(),
+                actor_fp: String::new(),
+                root: true,
+                admin: false,
+                kid: String::new(),
+                remote_kid: String::new(),
+                action: String::from("chain-start"),
+                reason: String::new(),
+                request_id: String::new(),
+                hash_alg: String::from(config::INTERNAL_KEYS_HASH),
+                prev_hash: "0".repeat(64),
+            },
+            event_hash: "b".repeat(64),
+        };
+        let line = String::from_utf8(canonical::canonical_json_v1(&record).unwrap()).unwrap();
+        assert!(validate_audit_jsonl_line_encoding(&line).is_ok());
+
+        let checkpoint = AuditCheckpointLine {
+            version: String::from(CHECKPOINT_VERSION),
+            signature: String::from("e30.e30.AA.AA"),
+        };
+        let line = String::from_utf8(canonical::canonical_json_v1(&checkpoint).unwrap()).unwrap();
+        assert!(validate_audit_jsonl_line_encoding(&line).is_ok());
+        assert!(validate_audit_jsonl_line_encoding(&format!("{line} ")).is_err());
     }
 
     #[test]

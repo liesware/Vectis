@@ -57,6 +57,33 @@ fuzz_target!(|data: &[u8]| {
         VALID_AAD,
         config::INTERNAL_KEYS_NONCE_SIZE_BYTES,
     ));
+    assert_public_error_is_clean(validation::validate_base64_standard_envelope_segments(
+        "envelope", text, 10_240,
+    ));
+    assert_public_error_is_clean(validation::decode_base64_standard_envelope(
+        "envelope",
+        text,
+        10_240,
+        config::INTERNAL_KEYS_NONCE_SIZE_BYTES,
+    ));
+    assert_public_error_is_clean(validation::decode_base64_standard_envelope(
+        "envelope",
+        &format!("{text}.{VALID_NONCE}.{VALID_AAD}"),
+        10_240,
+        config::INTERNAL_KEYS_NONCE_SIZE_BYTES,
+    ));
+    assert_public_error_is_clean(validation::decode_base64_standard_envelope(
+        "envelope",
+        &format!("{VALID_CIPHERTEXT}.{text}.{VALID_AAD}"),
+        10_240,
+        config::INTERNAL_KEYS_NONCE_SIZE_BYTES,
+    ));
+    assert_public_error_is_clean(validation::decode_base64_standard_envelope(
+        "envelope",
+        &format!("{VALID_CIPHERTEXT}.{VALID_NONCE}.{text}"),
+        10_240,
+        config::INTERNAL_KEYS_NONCE_SIZE_BYTES,
+    ));
     assert_public_error_is_clean(validation::validate_encrypted_payload(
         "ciphertext",
         VALID_CIPHERTEXT,

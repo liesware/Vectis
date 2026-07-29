@@ -19,6 +19,7 @@ pub const CAPABILITIES: &[&str] = &[
     "masking",
     "commitments",
     "secret-sharing",
+    "slh-dsa-artifact-signing",
 ];
 
 #[cfg(test)]
@@ -36,5 +37,6 @@ mod tests {
         assert_eq!(BUILD_STATUS, "Experimental Build");
         assert!(CAPABILITIES.contains(&"fpe"));
         assert!(CAPABILITIES.contains(&"secret-sharing"));
+        assert!(CAPABILITIES.contains(&"slh-dsa-artifact-signing"));
     }
 }

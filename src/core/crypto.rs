@@ -5,6 +5,7 @@ use botan::{
     HashFunction, KeyDecapsulation, KeyEncapsulation, Privkey, Pubkey, RandomNumberGenerator,
     Signer, Verifier,
 };
+use std::io::Read;
 use zeroize::Zeroizing;
 
 pub type CryptoRng = RandomNumberGenerator;
@@ -50,6 +51,19 @@ pub fn hash_bytes(algorithm: &str, message: &[u8]) -> Result<Vec<u8>, botan::Err
     hash.update(message)?;
 
     hash.finish()
+}
+
+pub fn hash_reader<R: Read>(algorithm: &str, mut reader: R) -> Result<Vec<u8>, DynError> {
+    let mut hash = HashFunction::new(algorithm)?;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hash.update(&buffer[..read])?;
+    }
+    Ok(hash.finish()?)
 }
 
 pub fn create_hkdf(
@@ -194,6 +208,33 @@ pub fn create_eddsa_private_key_with_rng(
     algorithm: &str,
 ) -> Result<Privkey, botan::Error> {
     Privkey::create(algorithm, "", rng)
+}
+
+pub fn create_slh_dsa_private_key_with_rng(
+    rng: &mut CryptoRng,
+    variant: &str,
+) -> Result<Privkey, botan::Error> {
+    Privkey::create("SLH-DSA", variant, rng)
+}
+
+pub fn sign_slh_dsa_with_rng(
+    rng: &mut CryptoRng,
+    private_key: &Privkey,
+    message: &[u8],
+) -> Result<Vec<u8>, botan::Error> {
+    let mut signer = Signer::new(private_key, config::INTERNAL_SLH_DSA_SIGN_MODE)?;
+    signer.update(message)?;
+    signer.finish(rng)
+}
+
+pub fn verify_slh_dsa(
+    public_key: &Pubkey,
+    message: &[u8],
+    signature: &[u8],
+) -> Result<bool, botan::Error> {
+    let mut verifier = Verifier::new(public_key, "")?;
+    verifier.update(message)?;
+    verifier.finish(signature)
 }
 
 pub fn public_key(private_key: &Privkey) -> Result<Pubkey, botan::Error> {

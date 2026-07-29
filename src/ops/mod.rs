@@ -16,6 +16,7 @@ pub mod message;
 pub mod pubkey;
 pub mod sharing;
 pub mod sign;
+pub mod slh_dsa;
 pub mod test;
 pub mod time_attestation;
 pub mod tokenization;

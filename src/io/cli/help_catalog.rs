@@ -8,6 +8,7 @@ pub(crate) const EXECUTABLE_COMMANDS: &[&str] = &[
     "init",
     "apikey",
     "audit",
+    "slh-dsa",
     "version",
     "health",
     "test",
@@ -237,6 +238,7 @@ const ROOT_HELP: CommandHelp = CommandHelp {
                 "  init                  Generate local key material in VECTIS_INIT_KEYS_FILE",
                 "  apikey                Create additional local API keys",
                 "  audit                 Verify a local hash-chained audit log",
+                "  slh-dsa               Create and use local SLH-DSA artifact signing keys",
                 "  version               Print local build and compatibility information",
                 "  health                Call the health probe endpoints",
                 "  test                  Call protected test endpoints through HTTP",
@@ -264,6 +266,7 @@ const ROOT_HELP: CommandHelp = CommandHelp {
             lines: &[
                 "  vectis init",
                 "  vectis apikey create",
+                "  vectis slh-dsa create --out signing",
                 "  vectis version --output json",
                 "  vectis serve",
                 "  vectis health ready",
@@ -286,6 +289,7 @@ const ROOT_HELP: CommandHelp = CommandHelp {
             lines: &[
                 "  vectis help init",
                 "  vectis help apikey",
+                "  vectis help slh-dsa",
                 "  vectis help version",
                 "  vectis help health",
                 "  vectis help test",
@@ -445,6 +449,37 @@ const AUDIT_HELP: CommandHelp = CommandHelp {
             title: "Required public material:",
             lines: &[
                 "  VECTIS_INIT_PUBLIC_KEYS_FILE Public init verification keys, default init_pub.json",
+            ],
+        },
+    ],
+    output: true,
+};
+
+const SLH_DSA_HELP: CommandHelp = CommandHelp {
+    key: "slh-dsa",
+    heading: "Usage:",
+    usage: &[
+        "vectis slh-dsa create --out <prefix> [--output <yaml|json>]",
+        "vectis slh-dsa sign --key <encrypted-key> --input <artifact> --out <signature> [--output <yaml|json>]",
+        "vectis slh-dsa verify --key <public-key> --input <artifact> --signature <signature> [--output <yaml|json>]",
+    ],
+    summary: Some(
+        "Creates and uses local SLH-DSA-SHAKE-256s keys for offline artifact signatures.",
+    ),
+    sections: &[
+        HelpSection {
+            title: "Behavior:",
+            lines: &[
+                "create and sign decrypt VECTIS_INIT_KEYS_FILE using unseal material.",
+                "verify uses only the public key file; it does not load init material, storage, or the network.",
+                "create writes <prefix>-slh-dsa.enc and <prefix>-slh-dsa.pub without overwriting files.",
+            ],
+        },
+        HelpSection {
+            title: "Security:",
+            lines: &[
+                "The encrypted private key is written with mode 0600; public keys and signatures use 0644.",
+                "The public key is the verification trust root and must be distributed through a trusted channel.",
             ],
         },
     ],
@@ -1505,6 +1540,7 @@ const COMMAND_HELPS: &[CommandHelp] = &[
     INIT_HELP,
     APIKEY_HELP,
     AUDIT_HELP,
+    SLH_DSA_HELP,
     VERSION_HELP,
     HEALTH_HELP,
     TEST_HELP,

@@ -65,6 +65,7 @@ Important `ops` responsibilities:
 - operational key creation, loading, lifecycle, and storage encryption;
 - public key output;
 - hybrid timestamp signing and verification;
+- local SLH-DSA artifact key handling, compact signatures, and offline verification;
 - protected message send, receive, decrypt, and internal message encryption;
 - FPE, tokenization, MAC/index, commitment, sharing, and masking operations;
 - API key generation.

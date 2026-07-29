@@ -73,6 +73,10 @@ In order of importance:
   private material, but an offline verifier trusts its EdDSA and ML-DSA public
   keys. Preserve it independently with audit exports; replacing both can forge
   a locally verifiable history.
+- **An SLH-DSA public key file is an artifact-verification trust root.** It is
+  intentionally public, but replacing it together with an artifact and its
+  signature creates a new locally valid provenance claim. Preserve or pin it
+  through a channel independent from the signed artifact.
 - **A `kid` is not self-certifying.** It is a hash of encrypted private key
   material, so possession of a kid proves nothing. Trust in a remote peer's
   public keys is anchored by the operator registering them under
@@ -184,7 +188,7 @@ Vectis is not, and does not replace:
   durable storage (PostgreSQL) but not in-memory state, and cross-node changes
   become visible only through explicit reload, restart, or lazy-load (see
   `doc/Clustering.md`);
-- Merkle proofs, externally published tamper-proof audit chains, SLH-DSA, Vault/KMS/HSM
+- Merkle proofs, externally published tamper-proof audit chains, Vault/KMS/HSM
   auto-unseal, and mTLS;
 - denial-of-service resistance.
 
@@ -201,10 +205,11 @@ Vectis is not, and does not replace:
 | Commitment opening exposure (assumption 9) | Caller responsibility | Store and disclose openings only through the intended evidence workflow |
 | Threshold share custody or combine misuse (assumption 10) | Caller responsibility | Distribute shares through independent protected channels; restrict `share-combine` to the minimum trusted clients |
 | Masked-value disclosure (assumption 11) | Accepted for v1 | Choose conservative visible prefix/suffix counts and treat masked output as sensitive display data |
+| Artifact public-key replacement | Caller responsibility | Preserve or pin the SLH-DSA public key independently from signed artifacts |
 
 ## Revision
 
 This document reflects the design of protocol `v1` as of 2026-07-24, including
-local FPE, tokenization, MAC, blind indexes, masking, commitments, and secret
-sharing. Update it whenever the protocol version, trust model, or any explicit
+local FPE, tokenization, MAC, blind indexes, masking, commitments, secret
+sharing, and offline SLH-DSA artifact signing. Update it whenever the protocol version, trust model, or any explicit
 assumption changes.

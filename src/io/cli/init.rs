@@ -2,18 +2,15 @@ use crate::core::{config, files, unseal};
 use crate::error::DynError;
 use crate::io::cli::sensitive;
 use crate::ops;
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
+#[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::info;
 
-const SENSITIVE_FILE_FORBIDDEN_MODE_BITS: u32 = 0o137;
-const PUBLIC_FILE_FORBIDDEN_MODE_BITS: u32 = 0o022;
 const INIT_KEYS_FILE_PERMISSION_ERROR: &str = "init keys file permissions are too open; allowed modes must not grant group write, execute, or any access to others";
 const INIT_PUBLIC_KEYS_FILE_PERMISSION_ERROR: &str =
     "init public keys file permissions are too open; group and others must not have write access";
+#[cfg(test)]
 static INIT_WRITE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub fn run_init() -> Result<String, DynError> {
@@ -88,7 +85,7 @@ fn write_init_files(
     {
         return Err(with_rollback_result(
             err,
-            remove_created_file_and_sync(init_keys_path),
+            files::remove_created_file_and_sync(init_keys_path, "init key file"),
         ));
     }
 
@@ -96,124 +93,7 @@ fn write_init_files(
 }
 
 fn write_new_file_atomically(path: &Path, content: &str, mode: u32) -> Result<(), DynError> {
-    write_new_file_atomically_with_finalize(path, content, mode, finalize_new_file)
-}
-
-fn write_new_file_atomically_with_finalize<F>(
-    path: &Path,
-    content: &str,
-    mode: u32,
-    finalize: F,
-) -> Result<(), DynError>
-where
-    F: FnOnce(&Path, &Path) -> io::Result<()>,
-{
-    let parent = parent_dir(path);
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| crate::error::invalid_input("init key file path must name a file"))?;
-    let suffix = INIT_WRITE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temporary_path = parent.join(format!(
-        ".{}.{}.{}.tmp",
-        file_name.to_string_lossy(),
-        std::process::id(),
-        suffix,
-    ));
-    let mut temporary_created = false;
-    let mut destination_linked = false;
-    let write_result = (|| -> io::Result<()> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(mode)
-            .open(&temporary_path)?;
-        temporary_created = true;
-        file.write_all(content.as_bytes())?;
-        file.sync_all()?;
-        drop(file);
-        fs::hard_link(&temporary_path, path)?;
-        destination_linked = true;
-        finalize(&temporary_path, parent)?;
-        Ok(())
-    })();
-
-    match write_result {
-        Ok(()) => Ok(()),
-        Err(err) => {
-            let rollback = rollback_atomic_write(
-                path,
-                &temporary_path,
-                parent,
-                destination_linked,
-                temporary_created,
-            );
-            Err(with_rollback_result(Box::new(err), rollback))
-        }
-    }
-}
-
-fn finalize_new_file(temporary_path: &Path, parent: &Path) -> io::Result<()> {
-    fs::remove_file(temporary_path)?;
-    fs::File::open(parent)?.sync_all()
-}
-
-fn rollback_atomic_write(
-    destination_path: &Path,
-    temporary_path: &Path,
-    parent: &Path,
-    destination_linked: bool,
-    temporary_created: bool,
-) -> Result<(), DynError> {
-    let mut errors = Vec::new();
-    let mut removed = false;
-
-    if destination_linked {
-        removed |= remove_file_for_rollback(destination_path, &mut errors);
-    }
-    if temporary_created {
-        removed |= remove_file_for_rollback(temporary_path, &mut errors);
-    }
-    if removed && let Err(err) = fs::File::open(parent).and_then(|directory| directory.sync_all()) {
-        errors.push(format!(
-            "cannot sync rollback directory {}: {err}",
-            parent.display()
-        ));
-    }
-
-    rollback_result(errors)
-}
-
-fn parent_dir(path: &Path) -> &Path {
-    path.parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or(Path::new("."))
-}
-
-fn remove_created_file_and_sync(path: &Path) -> Result<(), DynError> {
-    // Single-file rollback: only the destination was created, no temporary to clean up.
-    rollback_atomic_write(path, path, parent_dir(path), true, false)
-}
-
-fn remove_file_for_rollback(path: &Path, errors: &mut Vec<String>) -> bool {
-    match fs::remove_file(path) {
-        Ok(()) => true,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => false,
-        Err(err) => {
-            errors.push(format!(
-                "cannot remove {} during rollback: {err}",
-                path.display()
-            ));
-            false
-        }
-    }
-}
-
-fn rollback_result(errors: Vec<String>) -> Result<(), DynError> {
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(crate::error::internal(errors.join("; ")))
-    }
+    files::write_new_file_atomically(path, content.as_bytes(), mode, "init key file")
 }
 
 fn with_rollback_result(operation_error: DynError, rollback: Result<(), DynError>) -> DynError {
@@ -269,37 +149,21 @@ fn read_init_public_keys_file(path: &Path) -> Result<String, DynError> {
 }
 
 fn validate_init_keys_file_permissions(path: &Path) -> Result<(), DynError> {
-    let metadata = fs::metadata(path)?;
-    if !metadata.is_file() {
-        return Err(crate::error::invalid_input(
-            "init keys file must be a regular file",
-        ));
-    }
-
-    let mode = metadata.permissions().mode() & 0o777;
-    if mode & SENSITIVE_FILE_FORBIDDEN_MODE_BITS != 0 {
-        return Err(crate::error::invalid_input(INIT_KEYS_FILE_PERMISSION_ERROR));
-    }
-
-    Ok(())
+    files::validate_file_mode(
+        path,
+        files::SENSITIVE_FILE_FORBIDDEN_MODE_BITS,
+        "init keys file must be a regular file",
+        INIT_KEYS_FILE_PERMISSION_ERROR,
+    )
 }
 
 fn validate_init_public_keys_file_permissions(path: &Path) -> Result<(), DynError> {
-    let metadata = fs::metadata(path)?;
-    if !metadata.is_file() {
-        return Err(crate::error::invalid_input(
-            "init public keys file must be a regular file",
-        ));
-    }
-
-    let mode = metadata.permissions().mode() & 0o777;
-    if mode & PUBLIC_FILE_FORBIDDEN_MODE_BITS != 0 {
-        return Err(crate::error::invalid_input(
-            INIT_PUBLIC_KEYS_FILE_PERMISSION_ERROR,
-        ));
-    }
-
-    Ok(())
+    files::validate_file_mode(
+        path,
+        files::PUBLIC_FILE_FORBIDDEN_MODE_BITS,
+        "init public keys file must be a regular file",
+        INIT_PUBLIC_KEYS_FILE_PERMISSION_ERROR,
+    )
 }
 
 #[cfg(test)]
@@ -320,24 +184,24 @@ mod tests {
     #[test]
     fn sensitive_file_modes_allow_owner_and_group_read() {
         for mode in [0o600, 0o400, 0o640, 0o440] {
-            assert_eq!(mode & SENSITIVE_FILE_FORBIDDEN_MODE_BITS, 0);
+            assert_eq!(mode & files::SENSITIVE_FILE_FORBIDDEN_MODE_BITS, 0);
         }
     }
 
     #[test]
     fn sensitive_file_modes_reject_group_write_others_or_execute() {
         for mode in [0o644, 0o660, 0o700, 0o750, 0o604, 0o610] {
-            assert_ne!(mode & SENSITIVE_FILE_FORBIDDEN_MODE_BITS, 0);
+            assert_ne!(mode & files::SENSITIVE_FILE_FORBIDDEN_MODE_BITS, 0);
         }
     }
 
     #[test]
     fn public_file_modes_allow_reads_but_reject_non_owner_writes() {
         for mode in [0o644, 0o640, 0o444] {
-            assert_eq!(mode & PUBLIC_FILE_FORBIDDEN_MODE_BITS, 0);
+            assert_eq!(mode & files::PUBLIC_FILE_FORBIDDEN_MODE_BITS, 0);
         }
         for mode in [0o664, 0o646, 0o666] {
-            assert_ne!(mode & PUBLIC_FILE_FORBIDDEN_MODE_BITS, 0);
+            assert_ne!(mode & files::PUBLIC_FILE_FORBIDDEN_MODE_BITS, 0);
         }
     }
 
@@ -349,53 +213,6 @@ mod tests {
         assert!(write_new_file_atomically(&path, "second", 0o644).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "first");
         fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn atomic_writer_rolls_back_failure_before_temporary_removal() {
-        let directory = test_directory("init-write-pre-remove-failure");
-        let path = directory.join("init.json");
-        let err = write_new_file_atomically_with_finalize(
-            &path,
-            "sensitive",
-            0o600,
-            |_temporary_path, _parent| Err(io::Error::other("injected finalize failure")),
-        )
-        .expect_err("post-link failure must be returned");
-
-        assert!(err.to_string().contains("injected finalize failure"));
-        assert!(!path.exists(), "published destination must be rolled back");
-        assert_eq!(
-            fs::read_dir(&directory).unwrap().count(),
-            0,
-            "temporary file must be rolled back"
-        );
-        fs::remove_dir(directory).unwrap();
-    }
-
-    #[test]
-    fn atomic_writer_rolls_back_failure_after_temporary_removal() {
-        let directory = test_directory("init-write-post-remove-failure");
-        let path = directory.join("init.json");
-        let err = write_new_file_atomically_with_finalize(
-            &path,
-            "sensitive",
-            0o600,
-            |temporary_path, _parent| {
-                fs::remove_file(temporary_path)?;
-                Err(io::Error::other("injected directory sync failure"))
-            },
-        )
-        .expect_err("post-link failure must be returned");
-
-        assert!(err.to_string().contains("injected directory sync failure"));
-        assert!(!path.exists(), "published destination must be rolled back");
-        assert_eq!(
-            fs::read_dir(&directory).unwrap().count(),
-            0,
-            "removed temporary file must stay absent"
-        );
-        fs::remove_dir(directory).unwrap();
     }
 
     #[test]

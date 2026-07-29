@@ -33,6 +33,7 @@ Local commands do not require the HTTP service:
 
 - `vectis init`
 - `vectis apikey create`
+- `vectis slh-dsa create|sign|verify`
 - `vectis audit verify --file <path>`
 - `vectis config sign`
 - `vectis config list`
@@ -74,6 +75,29 @@ vectis health ready --output json
 
 `vectis init` is the exception. It prints shell-style values because those values
 are usually copied into files, environment, or secret managers.
+
+## SLH-DSA Artifact Signing
+
+`vectis slh-dsa` is a local, offline artifact-signing command. `create` and
+`sign` require encrypted init material and unseal input; `verify` uses only the
+public key file and never contacts the service. It uses fixed
+`SLH-DSA-SHAKE-256s` with randomized signatures and signs a SHA-3(512) hash of
+the input file incrementally.
+
+`--input` accepts any regular file: JSON, CSV, PDF, an archive, or binary
+content. Vectis does not parse or interpret the artifact; it computes
+SHA-3(512) over its exact bytes and signs that hash. `settlement.json` below is
+only an example filename, not a required schema or file type.
+
+```sh
+vectis slh-dsa create --out signing
+vectis slh-dsa sign --key signing-slh-dsa.enc --input settlement.json --out settlement.json.sig
+vectis slh-dsa verify --key signing-slh-dsa.pub --input settlement.json --signature settlement.json.sig
+```
+
+The public key file is the verification trust root. Preserve or distribute it
+through an independent trusted channel; replacing an artifact, signature, and
+public key together defeats local provenance checking.
 
 ## Environment
 

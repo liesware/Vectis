@@ -119,3 +119,31 @@ path = "fuzz_targets/fuzz_share_envelope.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fuzz_audit_chain_line"
+path = "fuzz_targets/fuzz_audit_chain_line.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_slh_dsa_signature"
+path = "fuzz_targets/fuzz_slh_dsa_signature.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_slh_dsa_key_files"
+path = "fuzz_targets/fuzz_slh_dsa_key_files.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_init_artifacts"
+path = "fuzz_targets/fuzz_init_artifacts.rs"
+test = false
+doc = false
+bench = false
