@@ -21,26 +21,47 @@ jobs:
         shell: bash
         run: |
           mkdir -p .ci
-          python3 - <<'PY'
-          import os
-          import sqlite3
-
-          database = os.environ["VECTIS_SQLITE_PATH"]
-          schema = open("src/db/sqlite_schema.sql", encoding="utf-8").read()
-
-          connection = sqlite3.connect(database)
-          connection.executescript(schema)
-          connection.close()
-          PY
+          sqlite3 "$VECTIS_SQLITE_PATH" < src/db/sqlite_schema.sql
 
       - name: Format
         run: cargo fmt --check
 
-      - name: Build
-        run: cargo build --locked
+      - name: Check all targets
+        run: cargo check --locked --all-targets --all-features
 
-      - name: Test
-        run: cargo test --locked
+      - name: Test all targets
+        run: cargo test --locked --all-targets
 
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Validate shell scripts
+        run: |
+          bash -n tests.sh
+          bash -n tests_cargo-fuzz.sh
+          bash -n demo/local/*.sh
+          bash -n tests/ci/*.sh
+          bash -n tests/performance/*.sh
+          bash -n tests/performance/local/*.sh
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Audit dependencies
+        run: cargo audit
+
+  integration:
+    name: Python integration tests
+    needs: verify
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Run Python integration suites
+        run: bash tests/ci/run-integration.sh
