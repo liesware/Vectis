@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  VECTIS_SQLITE_PATH: ${{ github.workspace }}/.ci/vectis-test.db
 
 jobs:
   verify:
@@ -15,6 +16,22 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Prepare SQLite test storage
+        shell: bash
+        run: |
+          mkdir -p .ci
+          python3 - <<'PY'
+          import os
+          import sqlite3
+
+          database = os.environ["VECTIS_SQLITE_PATH"]
+          schema = open("src/db/sqlite_schema.sql", encoding="utf-8").read()
+
+          connection = sqlite3.connect(database)
+          connection.executescript(schema)
+          connection.close()
+          PY
 
       - name: Format
         run: cargo fmt --check
