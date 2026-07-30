@@ -522,6 +522,8 @@ native `cargo-fuzz` targets.
 - [doc/Reference.md](doc/Reference.md): architecture and design reference.
 - [doc/Internal.md](doc/Internal.md): implementation flows and internal invariants.
 - [doc/Design.md](doc/Design.md): reusable design principles distilled from this project.
+- [CHANGELOG.md](CHANGELOG.md): notable public changes by release.
+- [SECURITY.md](SECURITY.md): supported versions and private vulnerability reporting.
 - [demo/message/README.md](demo/message/README.md): clinical data exchange demo.
 - [demo/local/README.md](demo/local/README.md): local FPE, tokenization, MAC,
   masking, commitments, secret sharing, blind indexes, internal message, and
@@ -552,6 +554,10 @@ other tools, not absorb their responsibilities.
 Vectis is under active development. It has not yet completed an external
 security audit, and its APIs and operational model may still evolve as the
 project matures.
+
+For suspected vulnerabilities, follow the private reporting process in
+[SECURITY.md](SECURITY.md). Do not publish unpatched security details in a
+public issue.
 
 Today, Vectis is a natural fit for evaluation, demos, internal testing, and
 PoCs. If you take it further, follow the same practice you would with any
@@ -592,3 +598,13 @@ Contact: [liesware@protonmail.com](mailto:liesware@protonmail.com)
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
 
 Copyright and attribution notices are available in [NOTICE](NOTICE).
+
+## Afterword
+
+Vectis began with its first line of code on June 18, 2026.
+
+Dedicated to the anonymous heroes who write free software, explore mathematics,
+share knowledge, and make the world more capable without asking to be known.
+
+To everyone who believes that privacy and knowledge are things we build, not
+merely things we request.
