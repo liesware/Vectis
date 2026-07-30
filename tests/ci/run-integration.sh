@@ -26,7 +26,9 @@ test -n "$VECTIS_APIKEY"
 test -n "$VECTIS_APIKEY_HASH"
 
 server_log="$ci_dir/vectis.log"
-cargo run --quiet -- serve >"$server_log" 2>&1 &
+# The HTTP fixtures deliberately exercise documented development/test overrides.
+VECTIS_CRYPTO_POLICY=allow-overrides \
+    cargo run --quiet -- serve >"$server_log" 2>&1 &
 server_pid="$!"
 
 cleanup() {
