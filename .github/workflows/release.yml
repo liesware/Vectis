@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-binaries-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   metadata:
     name: Validate release metadata
@@ -17,6 +21,9 @@ jobs:
       release_tag: ${{ steps.metadata.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
 
       - name: Read release metadata
         id: metadata
@@ -58,6 +65,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
 
       - name: Build release binary
         run: cargo build --release --locked
