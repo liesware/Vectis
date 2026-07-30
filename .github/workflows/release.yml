@@ -66,8 +66,32 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          package_dir="${{ matrix.archive }}-${RELEASE_TAG}"
+          asset="${package_dir}.tar.gz"
           mkdir -p dist
-          tar -C target/release -czf "dist/${{ matrix.archive }}-${RELEASE_TAG}.tar.gz" vectis
+          mkdir "dist/${package_dir}"
+          install -m 755 target/release/vectis "dist/${package_dir}/vectis"
+          cp LICENSE NOTICE README.md SECURITY.md "dist/${package_dir}/"
+          tar -C dist -czf "dist/${asset}" "$package_dir"
+
+      - name: Verify release package contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_dir="${{ matrix.archive }}-${RELEASE_TAG}"
+          asset="dist/${package_dir}.tar.gz"
+          expected="$(mktemp)"
+          actual="$(mktemp)"
+          trap 'rm -f "$expected" "$actual"' EXIT
+
+          {
+            printf '%s/\n' "$package_dir"
+            for file in vectis LICENSE NOTICE README.md SECURITY.md; do
+              printf '%s/%s\n' "$package_dir" "$file"
+            done
+          } | LC_ALL=C sort > "$expected"
+          tar -tzf "$asset" | LC_ALL=C sort > "$actual"
+          diff -u "$expected" "$actual"
 
       - name: Attest binary provenance
         uses: actions/attest@v4
