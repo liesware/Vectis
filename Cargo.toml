@@ -27,7 +27,7 @@ tokio = { version = "1.48.0", features = ["io-util", "macros", "net", "rt-multi-
 tracing = "0.1.41"
 tracing-appender = "0.2.3"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
-vectis_fpe = { package = "fpe", git = "https://github.com/liesware/fpe", branch = "main" }
+vectis_fpe = { package = "fpe", git = "https://github.com/liesware/fpe", tag = "v0.1.0" }
 zeroize = "1.9.0"
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.16", default-features = false }
