@@ -21,6 +21,8 @@ jobs:
       release_tag: ${{ steps.metadata.outputs.release_tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -62,9 +64,12 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       RELEASE_TAG: ${{ needs.metadata.outputs.release_tag }}
+      PACKAGE_FILES: vectis LICENSE NOTICE README.md SECURITY.md
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -78,10 +83,14 @@ jobs:
           set -euo pipefail
           package_dir="${{ matrix.archive }}-${RELEASE_TAG}"
           asset="${package_dir}.tar.gz"
-          mkdir -p dist
-          mkdir "dist/${package_dir}"
-          install -m 755 target/release/vectis "dist/${package_dir}/vectis"
-          cp LICENSE NOTICE README.md SECURITY.md "dist/${package_dir}/"
+          mkdir -p "dist/${package_dir}"
+          for file in $PACKAGE_FILES; do
+            if [ "$file" = vectis ]; then
+              install -m 755 target/release/vectis "dist/${package_dir}/vectis"
+            else
+              cp "$file" "dist/${package_dir}/"
+            fi
+          done
           tar -C dist -czf "dist/${asset}" "$package_dir"
 
       - name: Verify release package contents
@@ -96,7 +105,7 @@ jobs:
 
           {
             printf '%s/\n' "$package_dir"
-            for file in vectis LICENSE NOTICE README.md SECURITY.md; do
+            for file in $PACKAGE_FILES; do
               printf '%s/%s\n' "$package_dir" "$file"
             done
           } | LC_ALL=C sort > "$expected"

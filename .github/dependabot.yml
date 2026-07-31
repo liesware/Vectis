@@ -3,4 +3,16 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+  - package-ecosystem: "docker"
+    directory: "/image"
+    schedule:
+      interval: "monthly"
+    groups:
+      docker:
+        patterns:
+          - "*"

@@ -1,4 +1,4 @@
-FROM debian:13 AS builder
+FROM debian:13@sha256:fac46bff2e02f51425b6e33b0e1169f55dfb053d83511ca28aa50c09fd5ed7a4 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV RUSTUP_HOME=/usr/local/rustup
@@ -45,7 +45,7 @@ RUN cargo build --release --locked \
     && cp /workspace/vectis/src/db/sqlite_schema.sql /tmp/vectis-root/opt/vectis/data/sqlite_schema.sql \
     && cp /workspace/vectis/src/db/postgres_schema.sql /tmp/vectis-root/opt/vectis/data/postgres_schema.sql
 
-FROM gcr.io/distroless/cc-debian13:nonroot AS runtime
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:d97bc0a941b8d4be647dc0ee75b264ddbb772f1ac5ba690a4309c00723b23775 AS runtime
 
 ENV VECTIS_HTTP_BIND_ADDR=0.0.0.0:3000
 ENV VECTIS_INIT_KEYS_FILE=/opt/vectis/conf/init.json
