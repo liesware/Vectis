@@ -16,7 +16,11 @@ export VECTIS_API_URL="http://127.0.0.1:3000"
 
 sqlite3 "$VECTIS_SQLITE_PATH" < src/db/sqlite_schema.sql
 
-init_output="$(cargo run --quiet -- init)"
+run_vectis() {
+    if [ -n "${VECTIS_BIN:-}" ]; then "$VECTIS_BIN" "$@"; else cargo run --quiet -- "$@"; fi
+}
+
+init_output="$(run_vectis init)"
 export VECTIS_UNSEAL_KEY="$(printf '%s\n' "$init_output" | sed -n 's/^VECTIS_UNSEAL_KEY=//p')"
 export VECTIS_APIKEY="$(printf '%s\n' "$init_output" | sed -n 's/^VECTIS_APIKEY=//p')"
 export VECTIS_APIKEY_HASH="$(printf '%s\n' "$init_output" | sed -n 's/^VECTIS_APIKEY_HASH=//p')"
@@ -28,7 +32,7 @@ test -n "$VECTIS_APIKEY_HASH"
 server_log="$ci_dir/vectis.log"
 # The HTTP fixtures deliberately exercise documented development/test overrides.
 VECTIS_CRYPTO_POLICY=allow-overrides \
-    cargo run --quiet -- serve >"$server_log" 2>&1 &
+    run_vectis serve >"$server_log" 2>&1 &
 server_pid="$!"
 
 cleanup() {

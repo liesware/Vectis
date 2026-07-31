@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: ["main"]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   VECTIS_SQLITE_PATH: ${{ github.workspace }}/.ci/vectis-test.db
@@ -15,10 +19,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: vectis-ci
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Prepare SQLite test storage
         shell: bash
@@ -29,11 +36,8 @@ jobs:
       - name: Format
         run: cargo fmt --check
 
-      - name: Check all targets
-        run: cargo check --locked --all-targets --all-features
-
       - name: Test all targets
-        run: cargo test --locked --all-targets
+        run: cargo test --locked --all-targets --all-features
 
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
@@ -48,10 +52,21 @@ jobs:
           bash -n tests/performance/local/*.sh
 
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2
+        with:
+          tool: cargo-audit
 
       - name: Audit dependencies
         run: cargo audit
+
+      - name: Build vectis binary
+        run: cargo build --locked --all-features
+
+      - name: Upload vectis binary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vectis-bin
+          path: target/debug/vectis
 
   integration:
     name: Python integration tests
@@ -59,10 +74,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+      - name: Download vectis binary
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: vectis-bin
+
+      - name: Make vectis binary executable
+        run: chmod +x vectis
 
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -70,4 +90,6 @@ jobs:
           enable-cache: true
 
       - name: Run Python integration suites
+        env:
+          VECTIS_BIN: ${{ github.workspace }}/vectis
         run: bash tests/ci/run-integration.sh
