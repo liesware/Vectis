@@ -16,6 +16,7 @@ jobs:
   metadata:
     name: Validate release metadata
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     outputs:
       version: ${{ steps.metadata.outputs.version }}
       release_tag: ${{ steps.metadata.outputs.release_tag }}
@@ -47,6 +48,7 @@ jobs:
     name: Build ${{ matrix.archive }}
     needs: metadata
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     permissions:
       contents: read
       id-token: write
@@ -76,6 +78,9 @@ jobs:
 
       - name: Build release binary
         run: cargo build --release --locked
+
+      - name: Smoke test release binary
+        run: target/release/vectis version
 
       - name: Package binary
         shell: bash
@@ -130,6 +135,7 @@ jobs:
     needs: [metadata, build-binary]
     if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     env:

@@ -23,10 +23,18 @@ jobs:
   metadata:
     name: Resolve image metadata
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     outputs:
       tag: ${{ steps.metadata.outputs.tag }}
       image_ref: ${{ steps.metadata.outputs.image_ref }}
     steps:
+      - name: Validate publish source
+        if: ${{ inputs.push_image && github.ref != 'refs/heads/main' }}
+        shell: bash
+        run: |
+          echo "::error::Images may only be published from refs/heads/main"
+          exit 1
+
       - name: Set image metadata
         id: metadata
         shell: bash
@@ -36,13 +44,24 @@ jobs:
           echo "image_ref=${IMAGE_NAME}:test" >> "$GITHUB_OUTPUT"
 
   build-image:
-    name: Build test image without publishing
+    name: Build and scan ${{ matrix.platform }}
     if: ${{ !inputs.push_image }}
     needs: metadata
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     permissions:
       contents: read
       security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            slug: amd64
+            category: trivy-image
+          - platform: linux/arm64
+            slug: arm64
+            category: trivy-image-arm64
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -55,25 +74,41 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      - name: Build image for scan (amd64)
+      - name: Build image for scan
+        id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: image/Dockerfile.tag
-          platforms: linux/amd64
+          platforms: ${{ matrix.platform }}
           load: true
           provenance: false
-          cache-from: type=gha,scope=release-image
-          cache-to: type=gha,mode=max,scope=release-image
-          tags: ${{ needs.metadata.outputs.image_ref }}
+          cache-from: type=gha,scope=release-image-${{ matrix.slug }}
+          cache-to: type=gha,mode=max,scope=release-image-${{ matrix.slug }}
+          tags: ${{ env.IMAGE_NAME }}:scan-${{ matrix.slug }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.metadata.outputs.tag }}
 
-      - name: Scan image with Trivy
+      - name: Generate readable Trivy report
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ${{ needs.metadata.outputs.image_ref }}
-          format: sarif
-          output: trivy-results.sarif
+          image-ref: ${{ env.IMAGE_NAME }}:scan-${{ matrix.slug }}
+          format: table
+          output: trivy-results-${{ matrix.slug }}.txt
           severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "0"
+
+      - name: Enforce Trivy security gate
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:scan-${{ matrix.slug }}
+          format: sarif
+          output: trivy-results-${{ matrix.slug }}.sarif
+          severity: CRITICAL,HIGH
+          limit-severities-for-sarif: true
           ignore-unfixed: true
           exit-code: "1"
 
@@ -81,30 +116,69 @@ jobs:
         if: always()
         uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4
         with:
-          sarif_file: trivy-results.sarif
-          category: trivy-image
+          sarif_file: trivy-results-${{ matrix.slug }}.sarif
+          category: ${{ matrix.category }}
 
-      - name: Build test image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+      - name: Upload Trivy reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          context: .
-          file: image/Dockerfile.tag
-          platforms: linux/amd64,linux/arm64
-          push: false
-          provenance: false
-          cache-from: type=gha,scope=release-image
-          cache-to: type=gha,mode=max,scope=release-image
-          tags: ${{ needs.metadata.outputs.image_ref }}
-          labels: |
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ needs.metadata.outputs.tag }}
+          name: trivy-image-report-${{ matrix.slug }}
+          path: |
+            trivy-results-${{ matrix.slug }}.txt
+            trivy-results-${{ matrix.slug }}.sarif
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Publish Trivy job summary
+        if: always()
+        env:
+          IMAGE_REF: ${{ env.IMAGE_NAME }}:scan-${{ matrix.slug }}
+          PLATFORM: ${{ matrix.platform }}
+          REPORT_FILE: trivy-results-${{ matrix.slug }}.txt
+        shell: bash
+        run: |
+          {
+            echo "## Trivy image scan"
+            echo
+            echo "- Image: \`$IMAGE_REF\`"
+            echo "- Platform: \`$PLATFORM\`"
+            echo "- Severities: \`CRITICAL,HIGH\`"
+            echo "- Unfixed vulnerabilities: ignored"
+            echo
+            if [[ -s "$REPORT_FILE" ]]; then
+              total_lines="$(wc -l < "$REPORT_FILE")"
+              echo '```text'
+              sed -n '1,200p' "$REPORT_FILE"
+              echo '```'
+              if (( total_lines > 200 )); then
+                echo
+                echo "Report truncated to 200 lines. Download the platform artifact for the complete output."
+              fi
+            else
+              echo "Trivy did not generate the readable report. Review the scan step logs."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run scanned image
+        env:
+          IMAGE_REF: ${{ env.IMAGE_NAME }}:scan-${{ matrix.slug }}
+          PLATFORM: ${{ matrix.platform }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --platform "$PLATFORM" \
+            --entrypoint /opt/vectis/bin/vectis \
+            "$IMAGE_REF" \
+            version
 
   publish-image:
     name: Publish and verify test image
-    if: ${{ inputs.push_image }}
+    if: ${{ inputs.push_image && github.ref == 'refs/heads/main' }}
     needs: metadata
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     environment: Release
     permissions:
       contents: read
@@ -123,35 +197,6 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      - name: Build image for scan (amd64)
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          file: image/Dockerfile.tag
-          platforms: linux/amd64
-          load: true
-          provenance: false
-          cache-from: type=gha,scope=release-image
-          cache-to: type=gha,mode=max,scope=release-image
-          tags: ${{ needs.metadata.outputs.image_ref }}
-
-      - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: ${{ needs.metadata.outputs.image_ref }}
-          format: sarif
-          output: trivy-results.sarif
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: "1"
-
-      - name: Upload Trivy SARIF
-        if: always()
-        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4
-        with:
-          sarif_file: trivy-results.sarif
-          category: trivy-image
-
       - name: Log in to Docker Hub
         uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v4.5.2
         with:
@@ -159,51 +204,336 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and publish test image
-        id: build
+      - name: Build and push AMD64 candidate by digest
+        id: build_amd64
+        continue-on-error: true
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: image/Dockerfile.tag
-          platforms: linux/amd64,linux/arm64
-          push: true
+          platforms: linux/amd64
           provenance: false
-          cache-from: type=gha,scope=release-image
-          cache-to: type=gha,mode=max,scope=release-image
-          tags: ${{ needs.metadata.outputs.image_ref }}
+          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=release-image-amd64
+          cache-to: type=gha,mode=max,scope=release-image-amd64
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ needs.metadata.outputs.tag }}
 
+      - name: Generate readable AMD64 Trivy report
+        id: report_amd64
+        if: ${{ steps.build_amd64.outcome == 'success' }}
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}@${{ steps.build_amd64.outputs.digest }}
+          format: table
+          output: trivy-results-amd64.txt
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "0"
+
+      - name: Run AMD64 Trivy security gate
+        id: gate_amd64
+        if: ${{ steps.build_amd64.outcome == 'success' }}
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}@${{ steps.build_amd64.outputs.digest }}
+          format: sarif
+          output: trivy-results-amd64.sarif
+          severity: CRITICAL,HIGH
+          limit-severities-for-sarif: true
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Build and push ARM64 candidate by digest
+        id: build_arm64
+        continue-on-error: true
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: image/Dockerfile.tag
+          platforms: linux/arm64
+          provenance: false
+          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=release-image-arm64
+          cache-to: type=gha,mode=max,scope=release-image-arm64
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.metadata.outputs.tag }}
+
+      - name: Generate readable ARM64 Trivy report
+        id: report_arm64
+        if: ${{ steps.build_arm64.outcome == 'success' }}
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}@${{ steps.build_arm64.outputs.digest }}
+          format: table
+          output: trivy-results-arm64.txt
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "0"
+
+      - name: Run ARM64 Trivy security gate
+        id: gate_arm64
+        if: ${{ steps.build_arm64.outcome == 'success' }}
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}@${{ steps.build_arm64.outputs.digest }}
+          format: sarif
+          output: trivy-results-arm64.sarif
+          severity: CRITICAL,HIGH
+          limit-severities-for-sarif: true
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Upload AMD64 Trivy SARIF
+        id: upload_sarif_amd64
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4
+        with:
+          sarif_file: trivy-results-amd64.sarif
+          category: trivy-image
+
+      - name: Upload ARM64 Trivy SARIF
+        id: upload_sarif_arm64
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4
+        with:
+          sarif_file: trivy-results-arm64.sarif
+          category: trivy-image-arm64
+
+      - name: Upload Trivy reports
+        id: upload_reports
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: trivy-image-report
+          path: |
+            trivy-results-amd64.txt
+            trivy-results-amd64.sarif
+            trivy-results-arm64.txt
+            trivy-results-arm64.sarif
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Publish Trivy job summary
+        if: always()
+        env:
+          AMD64_REF: ${{ env.IMAGE_NAME }}@${{ steps.build_amd64.outputs.digest }}
+          ARM64_REF: ${{ env.IMAGE_NAME }}@${{ steps.build_arm64.outputs.digest }}
+        shell: bash
+        run: |
+          render_report() {
+            local platform="$1"
+            local image_ref="$2"
+            local report_file="$3"
+
+            echo "### $platform"
+            echo
+            echo "- Image: \`$image_ref\`"
+            echo "- Severities: \`CRITICAL,HIGH\`"
+            echo "- Unfixed vulnerabilities: ignored"
+            echo
+
+            if [[ -s "$report_file" ]]; then
+              local total_lines
+              total_lines="$(wc -l < "$report_file")"
+              echo '```text'
+              sed -n '1,200p' "$report_file"
+              echo '```'
+              if (( total_lines > 200 )); then
+                echo
+                echo "Report truncated to 200 lines. Download the artifact for the complete output."
+              fi
+            else
+              echo "Trivy did not generate this report. Review the scan step logs."
+            fi
+            echo
+          }
+
+          {
+            echo "## Trivy image scans"
+            echo
+            render_report "linux/amd64" "$AMD64_REF" "trivy-results-amd64.txt"
+            render_report "linux/arm64" "$ARM64_REF" "trivy-results-arm64.txt"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Validate candidate builds and reports
+        if: always()
+        env:
+          BUILD_AMD64: ${{ steps.build_amd64.outcome }}
+          REPORT_AMD64: ${{ steps.report_amd64.outcome }}
+          GATE_AMD64: ${{ steps.gate_amd64.outcome }}
+          SARIF_AMD64: ${{ steps.upload_sarif_amd64.outcome }}
+          BUILD_ARM64: ${{ steps.build_arm64.outcome }}
+          REPORT_ARM64: ${{ steps.report_arm64.outcome }}
+          GATE_ARM64: ${{ steps.gate_arm64.outcome }}
+          SARIF_ARM64: ${{ steps.upload_sarif_arm64.outcome }}
+          REPORT_UPLOAD: ${{ steps.upload_reports.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          failed=0
+
+          check_outcome() {
+            local name="$1"
+            local outcome="$2"
+            if [[ "$outcome" != "success" ]]; then
+              echo "::error::$name outcome was $outcome"
+              failed=1
+            fi
+          }
+
+          check_outcome "AMD64 build" "$BUILD_AMD64"
+          check_outcome "AMD64 readable report" "$REPORT_AMD64"
+          check_outcome "AMD64 security gate" "$GATE_AMD64"
+          check_outcome "AMD64 SARIF upload" "$SARIF_AMD64"
+          check_outcome "ARM64 build" "$BUILD_ARM64"
+          check_outcome "ARM64 readable report" "$REPORT_ARM64"
+          check_outcome "ARM64 security gate" "$GATE_ARM64"
+          check_outcome "ARM64 SARIF upload" "$SARIF_ARM64"
+          check_outcome "Trivy artifact upload" "$REPORT_UPLOAD"
+
+          for report in \
+            trivy-results-amd64.txt \
+            trivy-results-amd64.sarif \
+            trivy-results-arm64.txt \
+            trivy-results-arm64.sarif
+          do
+            if [[ ! -s "$report" ]]; then
+              echo "::error::Missing or empty report: $report"
+              failed=1
+            fi
+          done
+
+          exit "$failed"
+
+      - name: Smoke test AMD64 candidate
+        id: smoke_amd64
+        continue-on-error: true
+        env:
+          IMAGE_DIGEST: ${{ steps.build_amd64.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --platform linux/amd64 \
+            --entrypoint /opt/vectis/bin/vectis \
+            "$IMAGE_NAME@$IMAGE_DIGEST" \
+            version
+
+      - name: Smoke test ARM64 candidate
+        id: smoke_arm64
+        continue-on-error: true
+        env:
+          IMAGE_DIGEST: ${{ steps.build_arm64.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --platform linux/arm64 \
+            --entrypoint /opt/vectis/bin/vectis \
+            "$IMAGE_NAME@$IMAGE_DIGEST" \
+            version
+
+      - name: Validate candidate smoke tests
+        env:
+          SMOKE_AMD64: ${{ steps.smoke_amd64.outcome }}
+          SMOKE_ARM64: ${{ steps.smoke_arm64.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SMOKE_AMD64" == "success" ]] || {
+            echo "::error::AMD64 smoke test outcome was $SMOKE_AMD64"
+            exit 1
+          }
+          [[ "$SMOKE_ARM64" == "success" ]] || {
+            echo "::error::ARM64 smoke test outcome was $SMOKE_ARM64"
+            exit 1
+          }
+
+      - name: Promote verified digests to test tag
+        id: promote
+        env:
+          AMD64_DIGEST: ${{ steps.build_amd64.outputs.digest }}
+          ARM64_DIGEST: ${{ steps.build_arm64.outputs.digest }}
+          IMAGE_REF: ${{ needs.metadata.outputs.image_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag "$IMAGE_REF" \
+            --metadata-file manifest-metadata.json \
+            "$IMAGE_NAME@$AMD64_DIGEST" \
+            "$IMAGE_NAME@$ARM64_DIGEST"
+
+          manifest_digest="$(
+            jq -er '.["containerimage.descriptor"].digest' manifest-metadata.json
+          )"
+          [[ "$manifest_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$manifest_digest" >> "$GITHUB_OUTPUT"
+
+      - name: Verify published manifest
+        env:
+          AMD64_DIGEST: ${{ steps.build_amd64.outputs.digest }}
+          ARM64_DIGEST: ${{ steps.build_arm64.outputs.digest }}
+          IMAGE_REF: ${{ needs.metadata.outputs.image_ref }}
+          MANIFEST_DIGEST: ${{ steps.promote.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_digest="$(
+            docker buildx imagetools inspect "$IMAGE_REF" \
+              | awk '$1 == "Digest:" { print $2; exit }'
+          )"
+          [[ "$tag_digest" == "$MANIFEST_DIGEST" ]]
+
+          manifest_json="$(mktemp)"
+          trap 'rm -f "$manifest_json"' EXIT
+          docker buildx imagetools inspect --raw "$IMAGE_REF" > "$manifest_json"
+          jq -e \
+            --arg amd64 "$AMD64_DIGEST" \
+            --arg arm64 "$ARM64_DIGEST" \
+            '
+              [
+                .manifests[]
+                | {
+                    digest,
+                    os: .platform.os,
+                    architecture: .platform.architecture
+                  }
+              ] as $manifests
+              | ($manifests | length == 2)
+                and (
+                  $manifests
+                  | any(
+                      .digest == $amd64
+                      and .os == "linux"
+                      and .architecture == "amd64"
+                    )
+                )
+                and (
+                  $manifests
+                  | any(
+                      .digest == $arm64
+                      and .os == "linux"
+                      and .architecture == "arm64"
+                    )
+                )
+            ' "$manifest_json" >/dev/null
+
       - name: Attest published image provenance
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4
         with:
           subject-name: ${{ env.IMAGE_NAME }}
-          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-digest: ${{ steps.promote.outputs.digest }}
           push-to-registry: true
-
-      - name: Verify published manifest
-        env:
-          IMAGE_REF: ${{ needs.metadata.outputs.image_ref }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker buildx imagetools inspect --raw "$IMAGE_REF" \
-            | jq -e '
-                [.manifests[].platform | "\(.os)/\(.architecture)"]
-                | index("linux/amd64") != null
-                  and index("linux/arm64") != null
-              ' >/dev/null
-
-      - name: Run published AMD64 image
-        env:
-          IMAGE_REF: ${{ needs.metadata.outputs.image_ref }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker pull "$IMAGE_REF"
-          docker run --rm \
-            --entrypoint /opt/vectis/bin/vectis \
-            "$IMAGE_REF" \
-            version
