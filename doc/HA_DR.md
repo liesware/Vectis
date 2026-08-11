@@ -91,6 +91,14 @@ Recommended restore order:
 7. Run explicit reloads if needed: `POST /keys/reload` and `POST /config/reload`.
 8. Validate keys, routes, permissions, and one complete message flow.
 
+### One-Time Tokens After Restore
+
+- **One-time token consumption is not rollback-resistant.**
+  Transactional deletion prevents normal and concurrent reuse, but restoring an
+  older database snapshot or reinserting an authentic historical token row can
+  make a consumed token available again. Deployments requiring consumption
+  guarantees across restore events need an external non-rollbackable ledger.
+
 After restore, assume node-local memory may be stale until reload or restart.
 Do not rely on old pods carrying correct state.
 

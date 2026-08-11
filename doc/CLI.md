@@ -151,6 +151,13 @@ A result reports the latest verified checkpoint for each chain. Preserve the
 public verification file and checkpoints in an independent collector to detect
 complete log replacement or truncation beyond the latest checkpoint.
 
+`valid` means that canonical records, hash-chain continuity, and every checkpoint
+present verified successfully. It does not mean that every record is covered by
+a checkpoint. Records after the latest checkpoint form an unsigned tail: their
+structure is verified, but their authenticity is not established by the
+checkpoint signatures. Review the reported checkpoint coverage when the audit
+export is used as security evidence.
+
 ### `vectis init`
 
 Creates encrypted init key material plus public init verification keys and prints:

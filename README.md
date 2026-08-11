@@ -555,6 +555,10 @@ Vectis is under active development. It has not yet completed an external
 security audit, and its APIs and operational model may still evolve as the
 project matures.
 
+Vectis v0.8.5 completed a source-backed security self-assessment. No Critical
+or High severity vulnerabilities were identified. See
+[Security Self-Assessment](doc/SelfAssessment.md) for its scope and limitations.
+
 For suspected vulnerabilities, follow the private reporting process in
 [SECURITY.md](SECURITY.md). Do not publish unpatched security details in a
 public issue.

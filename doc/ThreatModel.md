@@ -86,6 +86,12 @@ In order of importance:
   the recipient route to carry registered `public_keys`; receiving requires the
   sender `kid` to match an active `remote_routes` entry with `public_keys`.
   Unregistered peers are rejected. There is no trust-on-first-use path.
+- **Registered peers have node-wide inbound messaging authorization.**
+  An active peer registered with public keys in signed `remote_routes` may send
+  protected messages to any valid local recipient KID. Vectis authenticates the
+  peer but does not enforce peer-to-recipient authorization. Deployments that
+  require tenant or application isolation must use separate Vectis instances or
+  an external policy boundary.
 - **The root API key is omnipotent.** Non-root clients are constrained by the
   signed `permissions` section (per-kid actions, global actions, admin).
 - **Final applications trust their local Vectis instance.** They authenticate
@@ -166,6 +172,19 @@ satisfy them need compensating controls.
 11. **Masking is controlled disclosure, not cryptographic protection.** It
     reveals configured prefix/suffix characters and cannot recover a plaintext
     once returned to a caller.
+12. **One-time token consumption is not rollback-resistant.** Transactional
+    deletion prevents normal and concurrent reuse, but restoring an older
+    database snapshot or reinserting an authentic historical token row can make
+    a consumed token available again. Deployments requiring consumption
+    guarantees across restore events need an external non-rollbackable ledger.
+13. **Audit verification does not require complete checkpoint coverage.** Audit
+    records after the latest hybrid-signed checkpoint form an unsigned tail. A
+    structurally valid tail may be produced by normal operation or an unclean
+    shutdown, but it is not authenticated by a checkpoint. For protocol `v1`, a
+    successful verification means that canonical records, hash-chain continuity,
+    and every checkpoint present are valid; it does not mean every record is
+    covered by a signature. Preserve verified checkpoints outside the node when
+    stronger truncation or tail-authenticity evidence is required.
 
 ## Out Of Scope / Non-Goals
 
@@ -205,6 +224,8 @@ Vectis is not, and does not replace:
 | Commitment opening exposure (assumption 9) | Caller responsibility | Store and disclose openings only through the intended evidence workflow |
 | Threshold share custody or combine misuse (assumption 10) | Caller responsibility | Distribute shares through independent protected channels; restrict `share-combine` to the minimum trusted clients |
 | Masked-value disclosure (assumption 11) | Accepted for v1 | Choose conservative visible prefix/suffix counts and treat masked output as sensitive display data |
+| One-time token reuse after database rollback (assumption 12) | Accepted for v1 | Treat token consumption as part of the database recovery point; use an external non-rollbackable ledger when consumption must survive restore |
+| Audit records after the latest checkpoint (assumption 13) | Accepted for v1 | Treat an unsigned tail as structurally verified but not checkpoint-authenticated; preserve verified checkpoints in an independent collector |
 | Artifact public-key replacement | Caller responsibility | Preserve or pin the SLH-DSA public key independently from signed artifacts |
 
 ## Revision

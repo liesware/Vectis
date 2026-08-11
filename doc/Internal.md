@@ -488,6 +488,14 @@ payloads. The audit writer signs a checkpoint with init-key EdDSA + ML-DSA after
 record hashes, chain continuity, and checkpoints without accessing private init
 material. A local checkpoint does not protect against an attacker rewriting both
 the file and public verification keys; preserve both in an independent collector.
+Verification does not require the final record of every chain to be covered by a
+checkpoint. Records after the latest verified checkpoint are an unsigned tail:
+their canonical encoding and hash links are checked, but they are not
+authenticated by EdDSA + ML-DSA signatures. A successful `valid` result means
+that the chain structure and every checkpoint present are valid, not that every
+record has signed coverage. Consumers that require stronger evidence must compare
+the reported checkpoint coverage and preserve the latest verified checkpoint
+outside the node.
 If the public artifact is lost, `vectis init pub` reconstructs it from encrypted
 init material using the normal unseal flow; audit verification never performs
 that recovery automatically.
