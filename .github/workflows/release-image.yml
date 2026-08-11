@@ -8,6 +8,8 @@ on:
         required: true
         default: false
         type: boolean
+  push:
+    tags: ["v*"]
 
 permissions:
   contents: read
@@ -27,25 +29,72 @@ jobs:
     outputs:
       tag: ${{ steps.metadata.outputs.tag }}
       image_ref: ${{ steps.metadata.outputs.image_ref }}
+      publish: ${{ steps.metadata.outputs.publish }}
     steps:
-      - name: Validate publish source
-        if: ${{ inputs.push_image && github.ref != 'refs/heads/main' }}
-        shell: bash
-        run: |
-          echo "::error::Images may only be published from refs/heads/main"
-          exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Set image metadata
+      - name: Resolve image metadata
         id: metadata
+        env:
+          REQUESTED_PUSH: ${{ inputs.push_image || false }}
         shell: bash
         run: |
           set -euo pipefail
-          echo "tag=test" >> "$GITHUB_OUTPUT"
-          echo "image_ref=${IMAGE_NAME}:test" >> "$GITHUB_OUTPUT"
+
+          case "$GITHUB_EVENT_NAME" in
+            workflow_dispatch)
+              tag="test"
+              publish="$REQUESTED_PUSH"
+              if [[ "$publish" != "true" && "$publish" != "false" ]]; then
+                echo "::error::push_image must resolve to true or false"
+                exit 1
+              fi
+              if [[ "$publish" == "true" && "$GITHUB_REF" != "refs/heads/main" ]]; then
+                echo "::error::The test image may only be published from refs/heads/main"
+                exit 1
+              fi
+              ;;
+            push)
+              if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then
+                echo "::error::Automatic image publication requires a Git tag"
+                exit 1
+              fi
+              version="$(
+                cargo metadata --locked --no-deps --format-version 1 \
+                  | jq -er '.packages[] | select(.name == "vectis") | .version'
+              )"
+              expected_tag="v${version}"
+              if [[ "$GITHUB_REF_NAME" != "$expected_tag" ]]; then
+                echo "::error::Git tag $GITHUB_REF_NAME does not match Cargo version $expected_tag"
+                exit 1
+              fi
+              tag="$version"
+              publish="true"
+              ;;
+            *)
+              echo "::error::Unsupported event: $GITHUB_EVENT_NAME"
+              exit 1
+              ;;
+          esac
+
+          if (( ${#tag} > 128 )) \
+            || [[ ! "$tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]
+          then
+            echo "::error::Resolved Docker tag is not OCI-compatible: $tag"
+            exit 1
+          fi
+
+          {
+            echo "tag=$tag"
+            echo "image_ref=${IMAGE_NAME}:$tag"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
 
   build-image:
     name: Build and scan ${{ matrix.platform }}
-    if: ${{ !inputs.push_image }}
+    if: ${{ needs.metadata.outputs.publish == 'false' }}
     needs: metadata
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -174,8 +223,8 @@ jobs:
             version
 
   publish-image:
-    name: Publish and verify test image
-    if: ${{ inputs.push_image && github.ref == 'refs/heads/main' }}
+    name: Publish and verify image
+    if: ${{ needs.metadata.outputs.publish == 'true' }}
     needs: metadata
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -461,7 +510,7 @@ jobs:
             exit 1
           }
 
-      - name: Promote verified digests to test tag
+      - name: Promote verified digests to resolved tag
         id: promote
         env:
           AMD64_DIGEST: ${{ steps.build_amd64.outputs.digest }}
