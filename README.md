@@ -1,5 +1,7 @@
 # Vectis
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/liesware/Vectis/badge)](https://scorecard.dev/viewer/?uri=github.com/liesware/Vectis)
+
 <p align="left">
   <img width="300" alt="Vectis logo" src="logo.png">
 </p>
