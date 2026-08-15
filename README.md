@@ -1,6 +1,10 @@
 # Vectis
 
+[![Rust CI](https://github.com/liesware/Vectis/actions/workflows/Rust.yml/badge.svg?branch=main)](https://github.com/liesware/Vectis/actions/workflows/Rust.yml)
+[![CodeQL](https://github.com/liesware/Vectis/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/liesware/Vectis/actions/workflows/codeql.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/liesware/Vectis/badge)](https://scorecard.dev/viewer/?uri=github.com/liesware/Vectis)
+<!-- [![Release](https://img.shields.io/github/v/release/liesware/Vectis?sort=semver)](https://github.com/liesware/Vectis/releases/latest) -->
+[![License](https://img.shields.io/github/license/liesware/Vectis)](https://github.com/liesware/Vectis/blob/main/LICENSE)
 
 <p align="left">
   <img width="300" alt="Vectis logo" src="logo.png">
