@@ -5,6 +5,7 @@
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/liesware/Vectis/badge)](https://scorecard.dev/viewer/?uri=github.com/liesware/Vectis)
 <!-- [![Release](https://img.shields.io/github/v/release/liesware/Vectis?sort=semver)](https://github.com/liesware/Vectis/releases/latest) -->
 [![License](https://img.shields.io/github/license/liesware/Vectis)](https://github.com/liesware/Vectis/blob/main/LICENSE)
+[![Docker Pulls](https://img.shields.io/docker/pulls/liesware/vectis)](https://hub.docker.com/r/liesware/vectis)
 
 <p align="left">
   <img width="300" alt="Vectis logo" src="logo.png">

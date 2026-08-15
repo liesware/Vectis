@@ -46,6 +46,10 @@ and prepends its binary directory to `PATH`. This also keeps nested Cargo
 invocations on nightly when the system default comes from Homebrew or another
 package manager.
 
+GitHub Actions also runs all native fuzz targets weekly and on manual dispatch
+through `.github/workflows/cargo-fuzz.yml`. The automated run uses the pinned
+`nightly-2026-08-01` toolchain and `cargo-fuzz` 0.13.2.
+
 ## Rust Checks
 
 Run these before submitting changes:
@@ -308,8 +312,26 @@ Or bound each target by wall-clock time (seconds) for a longer hardening run:
 MAX_TOTAL_TIME=120 ./tests_cargo-fuzz.sh
 ```
 
-When both values are set, libFuzzer stops each target when either limit is
-reached. `RUNS` and `MAX_TOTAL_TIME` must be positive integers.
+`MAX_TOTAL_TIME` takes precedence: when it is set, each target runs until the
+time limit with no run-count cap; otherwise `RUNS` bounds each target. Both must
+be positive integers.
+
+By default the runner stops at the first target that reports a finding
+(fail-fast). Set `KEEP_GOING=1` to run every target regardless and still exit
+non-zero if any failed — useful for a broad sweep that collects every crash in a
+single pass:
+
+```sh
+KEEP_GOING=1 ./tests_cargo-fuzz.sh
+```
+
+Instead of fuzzing, minimize the accumulated corpus to the smallest set that
+preserves coverage (runs `cargo fuzz cmin` per target in place of `cargo fuzz
+run`):
+
+```sh
+MINIMIZE=1 ./tests_cargo-fuzz.sh
+```
 
 Committed seed inputs live in `fuzz/seeds/<target>/` and are synchronized into
 the (git-ignored) `fuzz/corpus/<target>/` before each run to bootstrap coverage
@@ -363,11 +385,23 @@ authenticated artifacts use fixed format errors. `ErrorResponse::new` in
 `src/io/http/error.rs` remains a final transport defense, not the primary
 guarantee. The fuzz-target assertions protect the same invariant outside HTTP.
 
-The runner stops after the first finding or execution failure, preserves the
-artifact under `fuzz/artifacts/<target>/`, prints a passed/failed/skipped
-summary, and returns a non-zero status. It is ready for non-interactive
-automation but remains a separate hardening tool rather than a default CI gate.
-Vectis' contract with Botan is covered by `tests/crypto_integration.rs`.
+By default the runner stops after the first finding or execution failure,
+preserves the artifact under `fuzz/artifacts/<target>/`, prints a
+passed/failed/skipped summary, and returns a non-zero status. The weekly
+workflow runs with `KEEP_GOING=1` so every target is exercised in one pass even
+if an earlier one crashes, gives every target up to 60 seconds, restores the
+most recent accumulated corpus from GitHub Actions Cache, and saves the updated
+corpus after the run. Cache availability is not required: the committed seeds
+remain the reproducible starting point.
+
+The corpus grows as libFuzzer discovers new inputs. To prune it, dispatch the
+workflow manually with the `minimize_corpus` checkbox (or run
+`MINIMIZE=1 ./tests_cargo-fuzz.sh` locally): this runs `cargo fuzz cmin` per
+target and saves the reduced corpus back to the cache as the new baseline.
+
+The workflow publishes its full log and any crash artifacts for 30 days. It is
+a scheduled hardening check, not a required pull-request gate. Vectis' contract
+with Botan is covered by `tests/crypto_integration.rs`.
 
 If a fuzz target finds a crash, keep the minimized artifact, add a regression
 test, fix the issue, and rerun the target against the artifact and the normal

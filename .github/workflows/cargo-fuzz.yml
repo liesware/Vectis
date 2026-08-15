@@ -1,0 +1,131 @@
+name: Weekly cargo-fuzz
+
+on:
+  schedule:
+    - cron: "17 6 * * 0"
+  workflow_dispatch:
+    inputs:
+      minimize_corpus:
+        description: Minimize the accumulated corpus (cargo fuzz cmin) instead of fuzzing
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cargo-fuzz-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  TOOLCHAIN: nightly-2026-08-01
+  MAX_TOTAL_TIME: 60
+  KEEP_GOING: 1
+
+jobs:
+  fuzz:
+    name: Native fuzz targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned nightly toolchain
+        shell: bash
+        run: |
+          rustup toolchain install "$TOOLCHAIN" --profile minimal
+          toolchain_cargo="$(rustup which --toolchain "$TOOLCHAIN" cargo)"
+          echo "$(dirname "$toolchain_cargo")" >> "$GITHUB_PATH"
+
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2
+        with:
+          tool: cargo-fuzz@0.13.2
+
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: cargo-fuzz-${{ env.TOOLCHAIN }}
+          workspaces: |
+            . -> target
+            fuzz -> target
+
+      - name: Restore accumulated fuzz corpus
+        id: corpus-restore
+        continue-on-error: true
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: fuzz/corpus
+          key: cargo-fuzz-corpus-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            cargo-fuzz-corpus-${{ runner.os }}-
+
+      - name: Build fuzz targets
+        shell: bash
+        run: |
+          toolchain_cargo="$(rustup which --toolchain "$TOOLCHAIN" cargo)"
+          export PATH="$(dirname "$toolchain_cargo"):$HOME/.cargo/bin:$PATH"
+          cargo fuzz build
+
+      - name: Run fuzz targets
+        id: fuzz-run
+        env:
+          MINIMIZE: ${{ inputs.minimize_corpus && '1' || '0' }}
+        shell: bash
+        run: |
+          set -o pipefail
+          ./tests_cargo-fuzz.sh 2>&1 | tee cargo-fuzz.log
+
+      - name: Save accumulated fuzz corpus
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: fuzz/corpus
+          key: cargo-fuzz-corpus-${{ runner.os }}-${{ github.run_id }}
+
+      - name: Publish fuzz summary
+        if: always()
+        env:
+          FUZZ_OUTCOME: ${{ steps.fuzz-run.outcome }}
+          MINIMIZE: ${{ inputs.minimize_corpus && '1' || '0' }}
+        shell: bash
+        run: |
+          target_count="$(grep -oE 'total=[0-9]+' cargo-fuzz.log 2>/dev/null | tail -n1 | cut -d= -f2)"
+          target_count="${target_count:-unknown}"
+          if [[ "$MINIMIZE" == "1" ]]; then mode="minimize (cmin)"; else mode="fuzz"; fi
+          {
+            echo "## Weekly cargo-fuzz"
+            echo
+            echo "- Outcome: \`$FUZZ_OUTCOME\`"
+            echo "- Mode: \`$mode\`"
+            echo "- Toolchain: \`$TOOLCHAIN\`"
+            echo "- Targets: \`$target_count\`"
+            if [[ "$MINIMIZE" != "1" ]]; then
+              echo "- Maximum time per target: \`${MAX_TOTAL_TIME}s\`"
+            fi
+            echo
+            if [[ -s cargo-fuzz.log ]]; then
+              echo '```text'
+              tail -n 30 cargo-fuzz.log
+              echo '```'
+            else
+              echo "The fuzz runner did not produce a log. Review the setup and build steps."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload fuzz evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cargo-fuzz-results-${{ github.run_id }}
+          path: |
+            cargo-fuzz.log
+            fuzz/artifacts/
+          if-no-files-found: warn
+          retention-days: 30

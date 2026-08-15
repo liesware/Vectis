@@ -733,7 +733,7 @@ dependencies = [
 [[package]]
 name = "fpe"
 version = "0.6.1"
-source = "git+https://github.com/liesware/fpe?branch=main#5a221de5fdd75e8c96e3ecbf8f46f2f18a2460d7"
+source = "git+https://github.com/liesware/fpe?tag=v0.1.0#5a221de5fdd75e8c96e3ecbf8f46f2f18a2460d7"
 dependencies = [
  "cbc",
  "cipher",
