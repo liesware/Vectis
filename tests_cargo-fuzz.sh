@@ -76,6 +76,12 @@ if ! cargo fuzz --help >/dev/null 2>&1; then
   fail "cargo-fuzz is not installed; run: cargo install cargo-fuzz"
 fi
 
+# Prebuilt cargo-fuzz binaries are musl-static and default the fuzz target to
+# their own musl triple, which ASan cannot link (static libc). Pin the build to
+# the host triple; callers may override via FUZZ_TRIPLE.
+FUZZ_TRIPLE="${FUZZ_TRIPLE:-$(rustc -vV 2>/dev/null | awk '/^host:/ { print $2 }')}"
+[[ -n "$FUZZ_TRIPLE" ]] || fail "could not determine target triple; set FUZZ_TRIPLE explicitly"
+
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_DIR" || fail "could not enter repository directory: $REPO_DIR"
 
@@ -89,6 +95,7 @@ echo
 
 echo "Configuration:"
 echo "  TOOLCHAIN=$TOOLCHAIN"
+echo "  Target: $FUZZ_TRIPLE"
 echo "  KEEP_GOING=$KEEP_GOING"
 if [[ "$MINIMIZE" == "1" ]]; then
   echo "  Mode: minimize (cargo fuzz cmin)"
@@ -136,9 +143,9 @@ for target in "${TARGETS[@]}"; do
   fi
 
   if [[ "$MINIMIZE" == "1" ]]; then
-    action=(cargo fuzz cmin "$target")
+    action=(cargo fuzz cmin --target "$FUZZ_TRIPLE" "$target")
   else
-    action=(cargo fuzz run "$target" -- "${libfuzzer_args[@]}")
+    action=(cargo fuzz run --target "$FUZZ_TRIPLE" "$target" -- "${libfuzzer_args[@]}")
   fi
 
   echo "== ${action[*]} =="

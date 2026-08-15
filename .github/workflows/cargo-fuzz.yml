@@ -20,6 +20,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   TOOLCHAIN: nightly-2026-08-01
+  FUZZ_TRIPLE: x86_64-unknown-linux-gnu
   MAX_TOTAL_TIME: 60
   KEEP_GOING: 1
 
@@ -70,7 +71,8 @@ jobs:
         run: |
           toolchain_cargo="$(rustup which --toolchain "$TOOLCHAIN" cargo)"
           export PATH="$(dirname "$toolchain_cargo"):$HOME/.cargo/bin:$PATH"
-          cargo fuzz build
+          rustup target add --toolchain "$TOOLCHAIN" "$FUZZ_TRIPLE"
+          cargo fuzz build --target "$FUZZ_TRIPLE"
 
       - name: Run fuzz targets
         id: fuzz-run
