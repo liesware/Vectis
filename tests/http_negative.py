@@ -2398,6 +2398,26 @@ def main():
             "token encode oversized metadata must fail by metadata bounds",
         )
 
+    def token_encode_metadata_reserved_key():
+        status, body = client.post(
+            f"/token/encode/{key_id}",
+            {
+                "ref": "token-reserved-metadata",
+                "profile": "patient-id-token-v1",
+                "plaintext": "123456",
+                "metadata": {
+                    "safe": True,
+                    "$serde_json::private::RawValue": "44E4444444",
+                },
+            },
+            auth=True,
+        )
+        require_status("POST /token/encode/{kid} reserved metadata key", status, 400)
+        require(
+            body.get("error") == "metadata contains a reserved JSON object key",
+            "token encode reserved metadata key must fail",
+        )
+
     def token_encode_batch_empty_items():
         status, body = client.post(
             f"/token/encode/batch/{key_id}",
@@ -2495,6 +2515,37 @@ def main():
             body.get("error")
             == "batch item 1 failed: metadata exceeds tokenization maximum length",
             "token encode batch oversized metadata must fail all-or-nothing",
+        )
+
+    def token_encode_batch_metadata_reserved_key():
+        status, body = client.post(
+            f"/token/encode/batch/{key_id}",
+            {
+                "profile": "patient-id-token-v1",
+                "items": [
+                    {"ref": "token-batch-1", "plaintext": "123456"},
+                    {
+                        "ref": "token-batch-2",
+                        "plaintext": "654321",
+                        "metadata": {
+                            "nested": {
+                                "safe": True,
+                                "$serde_json::private::Number": "44E4444444"
+                            }
+                        },
+                    },
+                ],
+            },
+            auth=True,
+        )
+        require_status(
+            "POST /token/encode/batch/{kid} reserved metadata key", status, 400
+        )
+        require("items" not in body, "token encode batch error must not return partial items")
+        require(
+            body.get("error")
+            == "batch item 1 failed: metadata contains a reserved JSON object key",
+            "token encode batch reserved metadata key must fail all-or-nothing",
         )
 
     def token_encode_batch_plaintext_too_long():
@@ -3285,6 +3336,10 @@ def main():
         ("POST /token/encode/{kid} unknown field", token_encode_unknown_field),
         ("POST /token/encode/{kid} plaintext too long", token_encode_plaintext_too_long),
         ("POST /token/encode/{kid} metadata too long", token_encode_metadata_too_long),
+        (
+            "POST /token/encode/{kid} reserved metadata key",
+            token_encode_metadata_reserved_key,
+        ),
         ("POST /token/encode/batch/{kid} empty items", token_encode_batch_empty_items),
         ("POST /token/encode/{kid} empty ref", token_encode_ref_empty),
         ("POST /token/encode/{kid} long ref", token_encode_ref_too_long),
@@ -3293,6 +3348,10 @@ def main():
         (
             "POST /token/encode/batch/{kid} metadata too long",
             token_encode_batch_metadata_too_long,
+        ),
+        (
+            "POST /token/encode/batch/{kid} reserved metadata key",
+            token_encode_batch_metadata_reserved_key,
         ),
         (
             "POST /token/encode/batch/{kid} plaintext too long",

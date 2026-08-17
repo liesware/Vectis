@@ -1,8 +1,14 @@
-use crate::error::DynError;
+use crate::{core::validation, error::DynError};
 use serde::Serialize;
 
 pub fn canonical_json_v1<T: Serialize>(value: &T) -> Result<Vec<u8>, DynError> {
     let value = serde_json::to_value(value)?;
+    // Rejecting serde_json's reserved keys keeps every successful result parseable
+    // (otherwise the key smuggles raw, unescaped JSON into the output). Note: this
+    // makes verification callers that compare `canonical_json_v1(&x)? != bytes`
+    // return Err on a reserved key instead of a plain mismatch — acceptable, as
+    // validated input never reaches this path carrying such a key.
+    validation::validate_canonical_json_value("canonical JSON", &value)?;
     Ok(serde_json::to_vec(&value)?)
 }
 
@@ -38,6 +44,46 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(r#"{"xs":["c","a","b"]}"#).unwrap();
         let canonical = canonical_json_v1(&value).unwrap();
         assert_eq!(canonical, br#"{"xs":["c","a","b"]}"#);
+    }
+
+    #[test]
+    fn rejects_serde_json_reserved_raw_value_key() {
+        let value = json!({
+            "z": 0,
+            "$serde_json::private::RawValue": "44E4444444"
+        });
+
+        let err = canonical_json_v1(&value).expect_err("reserved keys must fail");
+        assert_eq!(
+            err.to_string(),
+            "canonical JSON contains a reserved JSON object key"
+        );
+    }
+
+    #[test]
+    fn rejects_nested_serde_json_reserved_number_key() {
+        let value = json!({
+            "items": [{"$serde_json::private::Number": "44E4444444"}]
+        });
+
+        let err = canonical_json_v1(&value).expect_err("nested reserved keys must fail");
+        assert_eq!(
+            err.to_string(),
+            "canonical JSON contains a reserved JSON object key"
+        );
+    }
+
+    #[test]
+    fn accepts_similar_keys_outside_the_reserved_namespace() {
+        let value = json!({
+            "z": 0,
+            "$serde_json::public::RawValue": "44E4444444"
+        });
+
+        assert_eq!(
+            canonical_json_v1(&value).unwrap(),
+            br#"{"$serde_json::public::RawValue":"44E4444444","z":0}"#
+        );
     }
 
     proptest! {

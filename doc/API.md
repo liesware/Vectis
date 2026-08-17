@@ -1223,7 +1223,7 @@ All tokenization requests include a client-defined `ref`. It is required, non-em
 
 Visible tokens have the form `<token_prefix>_<base64url-no-pad random bytes>`. `token_len` is the number of random bytes before base64url encoding, and decode validates both the configured prefix and decoded byte length before looking up the token.
 
-Encode `metadata` is optional, must be a JSON object when present, and its compact serialized JSON representation must be at most 128 characters.
+Encode `metadata` is optional, must be a JSON object when present, and its compact serialized JSON representation must be at most 128 characters. Object keys under the reserved `$serde_json::private::` namespace are rejected at any nesting depth.
 
 Batch tokenization preserves item order and is all-or-nothing. If any item fails validation, lookup, encryption, decryption, or storage insert, the response is a single error and no partial `items` are returned. `POST /token/encode/batch/{kid}` writes all token rows in one storage transaction. When `one_time` is true, decode consumes all batch tokens in one storage transaction only after every item decrypts successfully. A token lost to a concurrent consume returns `batch item N failed: token not found`, using its original input position. The maximum batch size is `INTERNAL_TOKEN_BATCH` (`128`).
 

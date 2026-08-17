@@ -250,6 +250,7 @@ impl TokenDecodeBatchOutput {
 }
 
 pub fn parse_encode_input(request: Value) -> Result<TokenEncodeInput, DynError> {
+    validate_request_metadata(&request)?;
     crate::ops::json::parse_json_request(request, "token encode request")
 }
 
@@ -263,6 +264,13 @@ pub fn parse_encode_batch_input(request: Value) -> Result<TokenEncodeBatchInput,
         crate::core::config::INTERNAL_TOKEN_BATCH,
         "token",
     )?;
+    if let Some(items) = request.get("items").and_then(Value::as_array) {
+        for (index, item) in items.iter().enumerate() {
+            validate_request_metadata(item).map_err(|err| {
+                crate::error::with_prefix(&format!("batch item {index} failed"), err)
+            })?;
+        }
+    }
     crate::ops::json::parse_json_request(request, "token encode request")
 }
 
@@ -632,11 +640,27 @@ fn validate_metadata(metadata: &Value) -> Result<(), DynError> {
             "metadata must be a JSON object when present",
         ));
     }
+    // Reserved-key rejection already happened in validate_request_metadata,
+    // before `from_value` could collapse a magic-key object into a Number; by this
+    // point the metadata is reserved-key-free.
     let serialized = serde_json::to_string(metadata)?;
     if serialized.chars().count() > tokenization::TOKEN_METADATA_MAX_CHARS {
         return Err(crate::error::invalid_input(
             "metadata exceeds tokenization maximum length",
         ));
+    }
+
+    Ok(())
+}
+
+// Runs on the raw request before `from_value`, so it sees a `$serde_json::private::*`
+// object key before deserialization collapses it into a Number/RawValue. The shared
+// parse_json_request guard is the safety net for all endpoints; this field-scoped
+// check runs first for tokenization to return the precise "metadata ..." message
+// (and, per item, the "batch item N failed" prefix) to the API caller.
+fn validate_request_metadata(request: &Value) -> Result<(), DynError> {
+    if let Some(metadata) = request.get("metadata") {
+        validation::validate_canonical_json_value("metadata", metadata)?;
     }
 
     Ok(())
@@ -689,6 +713,13 @@ mod tests {
         }
     }
 
+    fn encode_parse_validation_error(input: Value) -> String {
+        match parse_encode_input(input).and_then(validate_encode_input) {
+            Ok(_) => panic!("token validation unexpectedly passed"),
+            Err(err) => err.to_string(),
+        }
+    }
+
     #[test]
     fn token_encode_metadata_absent_or_small_object_is_valid() {
         validate_encode_input(encode_input(None)).expect("metadata is optional");
@@ -736,6 +767,37 @@ mod tests {
             validation_error(encode_input(Some(json!(["not-object"])))),
             "metadata must be a JSON object when present"
         );
+    }
+
+    #[test]
+    fn token_encode_metadata_rejects_reserved_json_keys() {
+        for metadata in [
+            json!({"$serde_json::private::RawValue": "44E4444444"}),
+            json!({"nested": [{"$serde_json::private::Number": "1"}]}),
+        ] {
+            let err = encode_parse_validation_error(json!({
+                "ref": "reg1",
+                "profile": "patient-id-token-v1",
+                "plaintext": "123456",
+                "metadata": metadata,
+            }));
+            assert_eq!(err, "metadata contains a reserved JSON object key");
+        }
+    }
+
+    #[test]
+    fn token_encode_rejects_reserved_metadata_before_typed_deserialization() {
+        let err = encode_parse_validation_error(json!({
+            "ref": "reg1",
+            "profile": "patient-id-token-v1",
+            "plaintext": "123456",
+            "metadata": {
+                "safe": true,
+                "$serde_json::private::RawValue": "44E4444444"
+            }
+        }));
+
+        assert_eq!(err, "metadata contains a reserved JSON object key");
     }
 
     #[test]
@@ -822,6 +884,28 @@ mod tests {
         assert_eq!(
             err,
             "batch item 0 failed: metadata exceeds tokenization maximum length"
+        );
+    }
+
+    #[test]
+    fn rejects_token_batch_metadata_with_reserved_json_key() {
+        let err = encode_batch_validation_error(json!({
+            "profile": "patient-id-token-v1",
+            "items": [
+                {"ref": "reg1", "plaintext": "123456", "metadata": {"tenant": "acme"}},
+                {
+                    "ref": "reg2",
+                    "plaintext": "654321",
+                    "metadata": {
+                        "nested": {"$serde_json::private::Number": "44E4444444"}
+                    }
+                }
+            ]
+        }));
+
+        assert_eq!(
+            err,
+            "batch item 1 failed: metadata contains a reserved JSON object key"
         );
     }
 

@@ -6,6 +6,11 @@ pub fn parse_json_request<T>(request: Value, context: &str) -> Result<T, DynErro
 where
     T: DeserializeOwned,
 {
+    // Reject serde_json's reserved object keys on the raw request before
+    // `from_value` runs: deserialization collapses a `$serde_json::private::*`
+    // object into a Number/RawValue node, so the check must happen here to see
+    // the key. This guards every endpoint at the input boundary.
+    crate::core::validation::validate_canonical_json_value(context, &request)?;
     serde_json::from_value(request)
         .map_err(|error| invalid_json_input(&format!("invalid {context}"), &error))
 }

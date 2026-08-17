@@ -1,6 +1,7 @@
 use crate::core::crypto;
 use crate::error::DynError;
 use base64::{Engine as _, engine::general_purpose};
+use serde_json::Value;
 use std::collections::HashSet;
 use std::net::{IpAddr, SocketAddr};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -10,6 +11,50 @@ pub struct DecodedBase64Envelope {
     pub ciphertext: Zeroizing<Vec<u8>>,
     pub nonce: Zeroizing<Vec<u8>>,
     pub aad: Zeroizing<Vec<u8>>,
+}
+
+const SERDE_JSON_PRIVATE_KEY_PREFIX: &str = "$serde_json::private::";
+
+// Matches serde_json's default recursion limit for parsing untrusted input.
+// HTTP-sourced values are already bounded by that limit, but canonical_json_v1
+// also routes internally-built values through this walk, so bound it explicitly.
+const MAX_JSON_DEPTH: usize = 128;
+
+pub fn validate_canonical_json_value(field: &str, value: &Value) -> Result<(), DynError> {
+    validate_canonical_json_value_at_depth(field, value, 0)
+}
+
+fn validate_canonical_json_value_at_depth(
+    field: &str,
+    value: &Value,
+    depth: usize,
+) -> Result<(), DynError> {
+    if depth > MAX_JSON_DEPTH {
+        return Err(crate::error::invalid_input(format!(
+            "{field} is nested too deeply"
+        )));
+    }
+
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                validate_canonical_json_value_at_depth(field, item, depth + 1)?;
+            }
+        }
+        Value::Object(entries) => {
+            for (key, value) in entries {
+                if key.starts_with(SERDE_JSON_PRIVATE_KEY_PREFIX) {
+                    return Err(crate::error::invalid_input(format!(
+                        "{field} contains a reserved JSON object key"
+                    )));
+                }
+                validate_canonical_json_value_at_depth(field, value, depth + 1)?;
+            }
+        }
+        _ => {}
+    }
+
+    Ok(())
 }
 
 pub fn build_aad(fields: &[(&str, &str)]) -> String {
@@ -572,6 +617,34 @@ mod tests {
             );
         }
         assert!(validate_text_field("field", &"a".repeat(100_000)).is_ok());
+    }
+
+    #[test]
+    fn validate_canonical_json_value_rejects_reserved_keys_recursively() {
+        for value in [
+            serde_json::json!({"$serde_json::private::RawValue": "44E4444444"}),
+            serde_json::json!({"nested": {"$serde_json::private::Number": "1"}}),
+            serde_json::json!({"items": [{"$serde_json::private::Future": true}]}),
+        ] {
+            let err = validate_canonical_json_value("metadata", &value)
+                .expect_err("serde_json private keys must fail");
+            assert_eq!(
+                err.to_string(),
+                "metadata contains a reserved JSON object key"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_canonical_json_value_allows_similar_public_keys() {
+        let value = serde_json::json!({
+            "$serde_json::public::RawValue": "44E4444444",
+            "serde_json::private::RawValue": "ordinary metadata",
+            "nested": [1, true, null]
+        });
+
+        validate_canonical_json_value("metadata", &value)
+            .expect("non-reserved metadata keys must remain valid");
     }
 
     #[test]

@@ -2252,7 +2252,10 @@ components:
           example: "123456"
         metadata:
           type: object
-          description: Optional JSON object. Its compact serialized JSON representation must be at most 128 characters.
+          description: >-
+            Optional JSON object. Its compact serialized JSON representation must be at most 128
+            characters. Object keys under the reserved $serde_json::private:: namespace are
+            rejected at any nesting depth.
           additionalProperties: true
           example:
             tenant: acme
@@ -2285,7 +2288,10 @@ components:
           example: "123456"
         metadata:
           type: object
-          description: Optional JSON object. Its compact serialized JSON representation must be at most 128 characters.
+          description: >-
+            Optional JSON object. Its compact serialized JSON representation must be at most 128
+            characters. Object keys under the reserved $serde_json::private:: namespace are
+            rejected at any nesting depth.
           additionalProperties: true
           example:
             tenant: acme
