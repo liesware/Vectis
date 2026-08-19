@@ -142,7 +142,6 @@ pub(crate) fn test_keys_state_with_lifecycle(id: &str, status: &str) -> KeysDbSt
                 reason: String::from("test"),
                 changed_at: String::from("1"),
             },
-            access: None,
         },
     })])
 }
@@ -388,7 +387,6 @@ pub struct OpsKeyProperties {
     tag: String,
     created_at: String,
     lifecycle: OpsKeyLifecycle,
-    access: Option<Value>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -430,7 +428,6 @@ impl Zeroize for OpsKeyProperties {
         self.tag.zeroize();
         self.created_at.zeroize();
         self.lifecycle.zeroize();
-        self.access = None;
     }
 }
 
@@ -951,7 +948,6 @@ fn create_ops_key_properties(input: &ResolvedKeysInput) -> OpsKeyProperties {
             reason: String::from("initial creation"),
             changed_at: input.timestamp.clone(),
         },
-        access: None,
     }
 }
 
@@ -1281,7 +1277,6 @@ mod tests {
                     reason: String::from("test"),
                     changed_at: String::from("1"),
                 },
-                access: None,
             },
         }
     }
@@ -1319,6 +1314,39 @@ mod tests {
         let mut properties = loaded_key_with_lifecycle("active").properties.clone();
         properties.lifecycle.reason = "a".repeat(max + 1);
         assert!(validate_ops_key_properties(&properties).is_err());
+    }
+
+    #[test]
+    fn legacy_properties_with_access_remain_readable_without_reemitting_access() {
+        let legacy = json!({
+            "version": 1,
+            "profile": "hybrid-performance-v1",
+            "tag": "legacy-key",
+            "created_at": "1782058090",
+            "lifecycle": {
+                "status": "active",
+                "reason": "initial creation",
+                "changed_at": "1782058090"
+            },
+            "access": null
+        });
+
+        let properties: OpsKeyProperties =
+            serde_json::from_value(legacy).expect("legacy access field must be ignored");
+        validate_ops_key_properties(&properties).expect("legacy properties must remain valid");
+
+        let serialized =
+            serde_json::to_value(properties).expect("properties must serialize without access");
+        assert_eq!(serialized["tag"], "legacy-key");
+        assert!(serialized.get("access").is_none());
+    }
+
+    #[test]
+    fn newly_created_properties_do_not_serialize_access() {
+        let properties = create_ops_key_properties(&resolved_keys_input("new-key"));
+        let serialized = serde_json::to_value(properties).expect("new properties must serialize");
+
+        assert!(serialized.get("access").is_none());
     }
 
     fn empty_keys_state() -> KeysDbState {

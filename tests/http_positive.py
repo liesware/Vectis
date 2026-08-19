@@ -472,7 +472,7 @@ def validate_keys_properties_list(response, key_ids):
             isinstance(lifecycle.get("changed_at"), str) and lifecycle["changed_at"],
             "keys properties lifecycle.changed_at",
         )
-        require("access" in properties, "keys properties access must exist")
+        require("access" not in properties, "keys properties must not expose access")
         by_kid[kid] = properties
 
     for key_id in key_ids:
@@ -489,6 +489,7 @@ def validate_key_properties_item(response, key_id, expected_status=None):
     )
     properties = response.get("properties")
     require(isinstance(properties, dict), "key properties properties must be an object")
+    require("access" not in properties, "key properties must not expose access")
     lifecycle = properties.get("lifecycle")
     require(isinstance(lifecycle, dict), "key properties lifecycle must be an object")
     if expected_status is not None:

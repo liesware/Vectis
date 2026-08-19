@@ -408,8 +408,7 @@ Response:
           "status": "active",
           "reason": "initial creation",
           "changed_at": "1782058090"
-        },
-        "access": null
+        }
       }
     }
   ]
@@ -444,8 +443,7 @@ Response:
           "status": "active",
           "reason": "initial creation",
           "changed_at": "1782058090"
-        },
-        "access": null
+        }
       }
     }
   ]
@@ -475,8 +473,7 @@ Response:
       "status": "active",
       "reason": "initial creation",
       "changed_at": "1782058090"
-    },
-    "access": null
+    }
   }
 }
 ```
