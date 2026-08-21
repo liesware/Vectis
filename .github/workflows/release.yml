@@ -196,5 +196,6 @@ jobs:
             dist/*.tar.gz \
             dist/SHA256SUMS \
             dist/SHA256SUMS.sigstore.json \
+            --repo "$GITHUB_REPOSITORY" \
             --title "Vectis $RELEASE_TAG" \
             --generate-notes
