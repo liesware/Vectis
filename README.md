@@ -121,13 +121,6 @@ Usefulness alone is not enough to justify ownership. This criterion rejects
 borrowed responsibilities and decorative complexity, not deeper protection
 within Vectis's own boundary.
 
-For example, Vectis leaves object-level anti-replay to consumers because
-exactly-once semantics require durable application context. TLS protects the
-live channel, and fresh per-message keys prevent nonce reuse, but neither makes
-a replayed envelope a new or acceptable business operation. By contrast,
-Vectis enforces protocol downgrade protection because the envelope version is
-part of the signed material and belongs to Vectis's protocol boundary.
-
 **Vectis should grow by deepening its responsibility, not by widening it.**
 
 ## What Vectis Does Today
