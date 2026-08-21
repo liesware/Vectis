@@ -509,6 +509,16 @@ For suspected vulnerabilities, follow the private reporting process in
 [SECURITY.md](SECURITY.md). Do not publish unpatched security details in a
 public issue.
 
+The project publishes an OpenPGP public key for encrypted security
+communications and independent identity verification:
+
+- [OpenPGP public key](public-key.asc)
+- Fingerprint:
+  `B24F 5892 7262 09ED 7C7F 6A8A 367C 0B31 BA81 6201 AB79 A095 B6`
+
+Release artifacts are authenticated separately through Cosign and GitHub
+artifact attestations.
+
 Today, Vectis is a natural fit for evaluation, demos, internal testing, and
 PoCs. If you take it further, follow the same practice you would with any
 security tool, audited or not: run it as one layer in a defense-in-depth

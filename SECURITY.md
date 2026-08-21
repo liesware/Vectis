@@ -29,6 +29,11 @@ production secrets, plaintext records, API keys, unseal keys, private keys, or
 full sensitive audit data. If protected exchange is needed, request an
 appropriate channel in the initial report.
 
+Security reports may be encrypted using the project's
+[OpenPGP public key](public-key.asc). Verify its fingerprint before use:
+
+`B24F 5892 7262 09ED 7C7F 6A8A 367C 0B31 BA81 6201 AB79 A095 B6`
+
 We aim to acknowledge reports within five business days and provide status
 updates while investigating. This is not a guaranteed remediation SLA and
 Vectis does not currently offer a bug bounty program.
