@@ -134,9 +134,9 @@ proposed capability starts with one question:
 > **Does this belong in the Vectis layer, or are we taking work away from
 > something that already solves it well?**
 
-Usefulness alone is not enough to justify ownership. This criterion rejects
-borrowed responsibilities and decorative complexity, not deeper protection
-within Vectis's own boundary.
+Usefulness alone does not place a feature inside Vectis. It belongs here only
+when its security property must be enforced at Vectis's data-protection
+boundary.
 
 **Vectis should grow by deepening its responsibility, not by widening it.**
 
@@ -481,8 +481,6 @@ native `cargo-fuzz` targets.
 - [doc/HA_DR.md](doc/HA_DR.md): high availability, backups, restore, and
   recovery limits.
 - [doc/openapi.yaml](doc/openapi.yaml): OpenAPI specification.
-- [doc/ThreatModel.md](doc/ThreatModel.md): threat model, explicit assumptions,
-  and limitations.
 - [doc/Reference.md](doc/Reference.md): architecture and design reference.
 - [doc/Internal.md](doc/Internal.md): implementation flows and internal invariants.
 - [doc/Design.md](doc/Design.md): reusable design principles distilled from this project.
@@ -503,6 +501,8 @@ project matures.
 Vectis v0.8.5 completed a source-backed security self-assessment. No Critical
 or High severity vulnerabilities were identified. See
 [Security Self-Assessment](doc/SelfAssessment.md) for its scope and limitations.
+Review the [Threat Model](doc/ThreatModel.md) for assets, trust boundaries,
+mitigations, and residual risks.
 
 For suspected vulnerabilities, follow the private reporting process in
 [SECURITY.md](SECURITY.md). Do not publish unpatched security details in a
