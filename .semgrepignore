@@ -1,0 +1,17 @@
+# Public example configuration with synthetic values.
+env.dist
+
+# Generated build, coverage, and analysis output.
+target/
+fuzz/target/
+.schemathesis/
+.hypothesis/
+.uv-cache/
+*.sarif
+
+# Generated mutation and property-test corpora.
+fuzz/seeds/
+fuzz/artifacts/
+fuzz/corpus/
+tests/fuzz-corpus/
+proptest-regressions/
