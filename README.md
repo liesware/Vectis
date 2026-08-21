@@ -38,6 +38,23 @@ registered peer can open.
 > and open an issue with what you find. For production use, see
 > [Security Status](#security-status).
 
+## Contents
+
+- [Origins](#origins)
+- [Why Vectis?](#why-vectis)
+- [Philosophy And Scope](#philosophy)
+- [Current Capabilities](#what-vectis-does-today)
+- [High-Level Flow And Demos](#high-level-flow)
+- [Quick Start](#quick-start)
+- [CLI And API](#cli-and-api)
+- [Configuration](#configuration)
+- [Crypto Profiles](#crypto-profiles)
+- [Testing And Documentation](#testing)
+- [Security Status](#security-status)
+- [Community](#community)
+- [Enterprise](#enterprise)
+- [License](#license)
+
 ## Origins
 
 Vectis exists because of a licensing gap. Format-preserving encryption,
@@ -318,19 +335,6 @@ bash demo/local/start-vectis.sh
 uv run demo/local/run-demo.py
 ```
 
-## Architecture
-
-Vectis follows a simple three-layer structure:
-
-- `core`: infrastructure and reusable primitives such as configuration,
-  validation, crypto helpers, logging, storage, routes, and database access.
-- `ops`: application operations and business flows such as init, key creation,
-  signing, validation, protected messaging, FPE, tokenization, and tests.
-- `io`: input/output adapters such as HTTP endpoints and CLI commands.
-
-The intent is to keep protocol and business logic out of HTTP handlers, and to
-keep low-level reusable primitives out of higher-level operation flows.
-
 ## Quick Start
 
 Requirements:
@@ -406,59 +410,21 @@ cargo run -- keys list
 
 ## CLI And API
 
-The CLI is primarily an HTTP client for the local Vectis service.
+The CLI is primarily an HTTP client for the local Vectis service. Initialization,
+API-key creation, local config editing and signing, and offline artifact signing
+run locally.
 
-Examples:
-
-```sh
-vectis version
-vectis health ready
-vectis apikey create
-vectis slh-dsa create --out signing
-vectis slh-dsa sign --key signing-slh-dsa.enc --input settlement.json --out settlement.json.sig
-vectis slh-dsa verify --key signing-slh-dsa.pub --input settlement.json --signature settlement.json.sig
-vectis keys create --tag payments --profile hybrid-high-assurance-v1
-vectis keys list
-vectis pub <kid>
-vectis fpe encrypt <kid> --file fpe-encrypt.json
-vectis token encode <kid> --file token-encode.json
-vectis mac create <kid> --file mac-create.json
-vectis mac verify --file mac-verify.json
-vectis index create <kid> --file index-create.json
-vectis index verify --file index-verify.json
-vectis commit create <kid> --file commit-create.json
-vectis commit verify --file commit-verify.json
-vectis shares split <kid> --file shares-split.json
-vectis shares combine --file shares-combine.json
-vectis mask <kid> --file mask.json
-vectis message send <sender_kid> --file send-message.json
-vectis message decrypt --file encrypted-message.json
-vectis config sign
-vectis config reload
-```
-
-For `vectis slh-dsa`, `--input` is any regular file. Vectis signs a SHA-3(512)
-hash of its exact bytes and does not require JSON or interpret its content;
-`settlement.json` is only an example filename.
-
-See the full API documentation in [doc/API.md](doc/API.md).
+See the [CLI reference](doc/CLI.md), [API reference](doc/API.md), and
+[OpenAPI specification](doc/openapi.yaml) for the complete contracts.
 
 ## Configuration
 
-Runtime routing, remote peers, API-key permissions, FPE profiles, tokenization
-profiles, MAC profiles, commitment profiles, sharing profiles, and masking profiles live in a single **signed config file** (`config.json`,
-default path `VECTIS_CONFIG_PATH`) with `version`, `routes`, `remote_routes`,
-`permissions`, optional `fpe_profiles`, optional `tokenization_profiles`, and
-optional `mac_profiles`, `commitment_profiles`, `sharing_profiles`, and `masking_profiles` sections. Blind indexes reuse `mac_profiles`; there is
-no separate `index_profiles` section. Edit it, then sign it with
-`vectis config sign`. The full schema
-(every field, allowed values, and the optional peer `public_keys`) is documented
-under **Configuration File (`config.json`)** in [doc/API.md](doc/API.md).
+Vectis separates signed policy from process configuration. The signed
+`config.json` contains routes, peers, permissions, and capability profiles; its
+complete schema is documented in the [API reference](doc/API.md).
 
-Vectis reads process/environment settings from process environment variables
-first, then from `.env`, then from built-in defaults.
-
-All Vectis-specific variables use the `VECTIS_` prefix.
+Process settings use the `VECTIS_` prefix. Vectis reads them from process
+environment variables first, then `.env`, then built-in defaults.
 
 The essentials to get a local instance running:
 
@@ -495,48 +461,6 @@ In development and tests, individual algorithm overrides can be enabled with:
 
 ```text
 VECTIS_CRYPTO_POLICY=allow-overrides
-```
-
-## FPE, Tokenization, MAC, Commitments, Blind Indexes, Secret Sharing, And Masking
-
-FPE, tokenization, MAC, commitments, blind indexes, secret sharing, and masking are
-profile-driven. Profiles are loaded only from signed config, and requests select
-a profile by name. Commitments use random openings so repeated commitments for
-the same plaintext differ. Blind indexes reuse MAC profiles and persist the
-resulting deterministic digest.
-Masking is display-only: it reveals configured leading/trailing characters and
-replaces the middle with a configured mask character.
-Secret sharing is stateless authenticated Shamir `(t, n)` sharing: a split
-creates self-contained shares, and any compatible threshold-sized subset can
-reconstruct the original UTF-8 secret.
-
-FPE currently supports:
-
-```text
-fpe-ff1-2025
-```
-
-Tokenization currently supports:
-
-```text
-token-random-v1
-```
-
-MAC currently supports HMAC with the operational key hash algorithm, or
-`KMAC-224`, `KMAC-256`, `KMAC-384`, and `KMAC-512` when the operational key
-uses the corresponding SHA-3 hash size. MAC profile `context` values use
-structured labels such as `tenant=mx;field=pan;purpose=blind-index;version=1`.
-
-The CLI can edit these profile sections locally:
-
-```sh
-vectis config fpe add --name patient-id-decimal-v1 --kid <kid> --alphabet 0123456789 --min-len 6 --max-len 32 --tweak-aad 'tenant=acme;field=patient_id;version=1'
-vectis config token add --name patient-id-token-v1 --kid <kid> --token-prefix tok_patient --token-len 32 --max-plaintext-len 1024
-vectis config mac add --name pan-blind-index-v1 --kid <kid> --context 'tenant=mx;field=pan;purpose=blind-index;version=1'
-vectis config commitment add --name pan-commitment-v1 --kid <kid> --context 'tenant=mx;field=pan;purpose=commitment;version=1' --max-plaintext-len 128 --opening-len 32
-vectis config masking add --name pan-display-v1 --kid <kid> --visible-first 0 --visible-last 4 --mask-char '*' --min-len 12 --max-len 19
-vectis config sign
-vectis config reload
 ```
 
 ## Testing
