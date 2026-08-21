@@ -44,7 +44,7 @@ v0.9.0 will be the first official release.
 
 ### Compatibility
 
-- This is the first public release; there is no prior public release API or
+- This is the first public tag; there is no prior public release API or
   config contract to preserve.
 - API and signed-config formats remain experimental and may change in a future
   pre-1.0 release. Breaking changes will be documented here.
