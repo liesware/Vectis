@@ -2,6 +2,7 @@
 env.dist
 
 # Generated build, coverage, and analysis output.
+tests/
 target/
 fuzz/target/
 .schemathesis/
