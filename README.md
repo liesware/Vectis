@@ -11,7 +11,7 @@
   <img width="300" alt="Vectis logo" src="logo.png">
 </p>
 
-Vectis is an **open source advanced data protection service**:
+Vectis is an **open source advanced data protection toolkit**:
 format-preserving encryption, reversible tokenization, masking, MACs, blind
 indexes, commitments, secret sharing, and post-quantum protected
 messaging/signing — governed by an operator-signed configuration, served through
@@ -109,6 +109,27 @@ capabilities such as stronger clustering, HSM/KMS support, mTLS, or additional
 distributed storage should exist only when the operating environment requires
 them, not as product tiers or decorative complexity.
 
+## Scope And Boundaries
+
+The philosophy above is also the decision rule for Vectis's scope. Every
+proposed capability starts with one question:
+
+> **Does this belong in the Vectis layer, or are we taking work away from
+> something that already solves it well?**
+
+Usefulness alone is not enough to justify ownership. This criterion rejects
+borrowed responsibilities and decorative complexity, not deeper protection
+within Vectis's own boundary.
+
+For example, Vectis leaves object-level anti-replay to consumers because
+exactly-once semantics require durable application context. TLS protects the
+live channel, and fresh per-message keys prevent nonce reuse, but neither makes
+a replayed envelope a new or acceptable business operation. By contrast,
+Vectis enforces protocol downgrade protection because the envelope version is
+part of the signed material and belongs to Vectis's protocol boundary.
+
+**Vectis should grow by deepening its responsibility, not by widening it.**
+
 ## What Vectis Does Today
 
 Vectis currently provides an HTTP service and CLI for cryptographic data
@@ -158,10 +179,29 @@ protection primitives and workflows.
 **Operations and observability**
 
 - startup, liveness, and readiness health probes;
-- a hash-chained security audit JSONL stream with hybrid-signed checkpoints, per-request correlation ids, and offline verification;
+- a hash-chained security audit JSONL stream with hybrid-signed checkpoints, per-request correlation ids, and offline verification.
 - a Prometheus `/metrics` endpoint for operational observability;
 - local CLI commands plus CLI commands that act as an HTTP API client;
 - OpenAPI and environment variable documentation.
+
+## What Vectis Is Not
+
+Vectis is not a replacement for:
+
+- TLS;
+- KMS;
+- HSMs;
+- secrets managers;
+- database encryption;
+- access control;
+- traditional DLP products.
+
+Vectis does not currently provide Merkle proofs, external anchoring for its
+audit-chain checkpoints, Vault/KMS/HSM auto-unseal, or mTLS.
+
+Vectis is intended to complement existing security controls by providing
+cryptographic protection for sensitive data workflows. It should work with
+other tools, not absorb their responsibilities.
 
 ## High-Level Flow
 
@@ -537,25 +577,6 @@ native `cargo-fuzz` targets.
   sign demo.
 - [charts/vectis/README.md](charts/vectis/README.md): Kubernetes Helm chart.
 
-## What Vectis Is Not
-
-Vectis is not a replacement for:
-
-- TLS;
-- KMS;
-- HSMs;
-- secrets managers;
-- database encryption;
-- access control;
-- traditional DLP products.
-
-Vectis does not currently provide Merkle proofs, external anchoring for its
-audit-chain checkpoints, Vault/KMS/HSM auto-unseal, or mTLS.
-
-Vectis is intended to complement existing security controls by providing
-cryptographic protection for sensitive data workflows. It should work with
-other tools, not absorb their responsibilities.
-
 ## Security Status
 
 Vectis is under active development. It has not yet completed an external
@@ -588,6 +609,9 @@ Issues, questions, and experience reports are welcome — breaking Vectis in
 interesting ways is a contribution. If you're evaluating it for your use
 case and something is unclear, open an issue: unclear docs are bugs too.
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) before proposing code, protocol, or
+documentation changes.
+
 ## Enterprise
 
 Vectis is fully open source: every feature lives in this repository, and that
@@ -611,8 +635,6 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
 Copyright and attribution notices are available in [NOTICE](NOTICE).
 
 ## Afterword
-
-Vectis began with its first line of code on June 18, 2026.
 
 Dedicated to the anonymous heroes who write free software, explore mathematics,
 share knowledge, and make the world more capable without asking to be known.

@@ -96,10 +96,27 @@ other tools. Treat additions to scope as design decisions that update this
 list, not as accretion. The non-goals list is as binding as the feature list:
 a request that contradicts it needs the list changed first.
 
-**In Vectis**: the README's "What Vectis Is Not" section and the threat
-model's "Out Of Scope / Non-Goals" list (TLS, KMS, HSMs, secrets managers,
-DoS resistance) name the jobs left to other tools; rewrap/key migration was
-rejected against this boundary rather than absorbed.
+**Protect scope through composition.** Implement capabilities that directly
+protect, transform, verify, or control the system's data objects. Compose with
+established systems for transport security, identity, key custody, storage,
+replay control, and network enforcement instead of reimplementing their
+responsibilities.
+
+Every proposed feature must answer:
+
+> **Is this responsibility intrinsic to the system, or are we taking work away
+> from a layer that already solves it well?**
+
+**In Vectis**: Vectis should implement capabilities that protect, transform,
+verify, or control sensitive data objects. It should compose with established
+systems for transport security, identity, key custody, storage, replay control,
+and network enforcement instead of reimplementing them. Every proposed Vectis
+feature must answer: **Is this responsibility intrinsic to Vectis, or are we
+taking work away from a layer that already solves it well?** The README's
+"Scope And Boundaries" section makes this question the public decision gate,
+while "What Vectis Is Not" and the threat model's "Out Of Scope / Non-Goals"
+list name the jobs left to other tools. Rewrap/key migration was rejected
+against this boundary rather than absorbed.
 
 ### Rule 2 — Structure the code in three layers with one-way dependencies
 
