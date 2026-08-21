@@ -49,6 +49,32 @@ plausible impact path, or availability problems requiring resources outside the
 documented limits may receive lower priority. Good-faith reports with a clear
 security impact are still welcome.
 
+## Release Verification
+
+Official releases publish platform archives, `SHA256SUMS`, and
+`SHA256SUMS.sigstore.json`. Download the archives and both verification files,
+then verify the checksum manifest against the exact release tag:
+
+```sh
+cosign verify-blob \
+  --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity \
+    "https://github.com/liesware/Vectis/.github/workflows/release.yml@refs/tags/vX.Y.Z" \
+  --certificate-oidc-issuer \
+    "https://token.actions.githubusercontent.com" \
+  SHA256SUMS \
+  && sha256sum --ignore-missing -c SHA256SUMS
+```
+
+Replace `vX.Y.Z` with the downloaded release tag. The `&&` makes the checksum
+check run only after the signature verifies, so a tampered manifest cannot pass
+by having the checksum step run regardless. `--ignore-missing` verifies only the
+archives you actually downloaded, since `SHA256SUMS` lists every platform. The Cosign bundle authenticates
+the checksum manifest using the release workflow's GitHub OIDC identity. The
+checksum verification then binds every downloaded archive to that signed
+manifest. GitHub artifact attestations separately provide build provenance for
+each release archive.
+
 ## Disclosure
 
 Please allow time to investigate and prepare a fix before public disclosure.
