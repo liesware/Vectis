@@ -1,0 +1,160 @@
+name: Semgrep CE
+
+on:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
+  schedule:
+    - cron: "41 5 * * 4"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Keyed on the event too: schedule/push/pull_request on main share the same ref
+  # (refs/heads/main); without the event a push would cancel the weekly scan.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    name: semgrep-ce/scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Log in to Docker Hub
+        # Optional: define DOCKERHUB_USERNAME/DOCKERHUB_TOKEN repo secrets to lift
+        # Docker Hub's anonymous pull-rate limit. Without them this is a no-op and
+        # the image is pulled anonymously, as before.
+        if: env.DOCKERHUB_TOKEN != ''
+        shell: bash
+        run: printf '%s' "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
+
+      - name: Restore cached Semgrep ruleset
+        id: ruleset-cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/semgrep-ruleset
+          key: semgrep-ruleset-${{ github.run_id }}
+          restore-keys: |
+            semgrep-ruleset-
+
+      - name: Refresh Semgrep ruleset
+        id: ruleset
+        shell: bash
+        run: |
+          set -uo pipefail
+          dir="$HOME/.cache/semgrep-ruleset"
+          mkdir -p "$dir"
+          target="$dir/ruleset.yml"
+          tmp="$(mktemp)"
+
+          # Always try to download the current ruleset first, then cache it.
+          if curl -fsSL --retry 3 --retry-delay 2 --max-time 120 \
+               -A "semgrep-ce-ci" \
+               -o "$tmp" "https://semgrep.dev/c/p/default" \
+             && [ -s "$tmp" ] \
+             && head -n1 "$tmp" | grep -q '^rules:'; then
+            mv "$tmp" "$target"
+            chmod a+r "$target"
+            echo "source=fresh" >>"$GITHUB_OUTPUT"
+            echo "Downloaded fresh ruleset ($(wc -c <"$target") bytes)."
+          else
+            # Download failed: fall back to the previously downloaded ruleset.
+            rm -f "$tmp"
+            if [ -s "$target" ]; then
+              echo "source=cache" >>"$GITHUB_OUTPUT"
+              echo "Ruleset download failed; using the previously cached ruleset."
+            else
+              echo "source=none" >>"$GITHUB_OUTPUT"
+              echo "Ruleset download failed and no cached ruleset is available." >&2
+              exit 2
+            fi
+          fi
+
+      - name: Save Semgrep ruleset to cache
+        if: always() && steps.ruleset.outputs.source == 'fresh'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/semgrep-ruleset
+          key: semgrep-ruleset-${{ github.run_id }}
+
+      - name: Run Semgrep CE
+        id: semgrep
+        shell: bash
+        run: |
+          report="$(mktemp)"
+          set +e
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/src:ro" \
+            --volume "$HOME/.cache/semgrep-ruleset:/rules:ro" \
+            --workdir /src \
+            --entrypoint semgrep \
+            semgrep/semgrep:1.172.0-nonroot@sha256:d1012a3bf2acf47721216fbf7ff12d4c2971cc7f9c7b77cf6c6e9dcf006bd487 \
+            scan --config /rules/ruleset.yml --metrics off --sarif --quiet . >"$report"
+          status=$?
+          set -e
+
+          if jq -e . "$report" >/dev/null 2>&1; then
+            mv "$report" semgrep.sarif
+          else
+            rm -f "$report"
+          fi
+
+          # Surface the exit code instead of propagating it: 0 = clean, 1 = findings
+          # (both mean the scan ran), >=2 = real error. The enforce step decides.
+          echo "status=$status" >>"$GITHUB_OUTPUT"
+
+      - name: Upload SARIF report
+        # Fork PRs get a read-only GITHUB_TOKEN, so code-scanning upload would 403.
+        # Skip it there; the scan still runs and the SARIF is kept as an artifact.
+        if: always() && hashFiles('semgrep.sarif') != '' && github.event.pull_request.head.repo.fork != true
+        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep-ce
+
+      - name: Upload report artifact
+        if: always() && hashFiles('semgrep.sarif') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: semgrep-ce-report
+          path: semgrep.sarif
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Write job summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Semgrep CE"
+            echo
+            echo "- Engine: 1.172.0"
+            echo "- Rules: p/default (${{ steps.ruleset.outputs.source }})"
+            echo "- Scan exit code: ${{ steps.semgrep.outputs.status }} (0 clean, 1 findings, >=2 error)"
+            echo "- Findings: Security > Code scanning"
+            echo "- Full report: semgrep-ce-report artifact"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce successful scan
+        # Fail only on a real scan error (exit >=2). Exit 0 (clean) and 1 (findings)
+        # both mean the scan completed; findings are triaged via code scanning.
+        if: steps.semgrep.outputs.status != '0' && steps.semgrep.outputs.status != '1'
+        run: |
+          echo "Semgrep did not complete (exit ${{ steps.semgrep.outputs.status }})." >&2
+          exit 1
