@@ -3,9 +3,16 @@
 This changelog records notable public changes to Vectis. It is maintained
 manually for releases; the Git history remains the detailed engineering record.
 
-## v0.8.5 - 2026-07-29
+## Unreleased
 
-Initial public experimental release of Vectis.
+Changes staged for v0.9.0, the first official release.
+
+## v0.8.5 - 2026-08-21
+
+Pre-release of Vectis. This tag exists to exercise the release pipeline end
+to end — binary packaging, container publication, checksums, and provenance
+attestations. It ships the initial public feature set described below, but
+v0.9.0 will be the first official release.
 
 ### Added
 
