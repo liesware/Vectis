@@ -68,6 +68,14 @@ by the normal suite because it requires external network access:
 cargo test cloudflare_nts_smoke_test -- --ignored
 ```
 
+`tests/tls.sh` is the canonical local TLS happy-path test; Rust CI runs it
+through `tests/ci/test-tls.sh` using the built artifact. It starts Vectis in
+production HTTPS mode with a temporary self-signed certificate, drives the CLI
+through health checks, creates signed config and profiles, exercises local
+cryptographic operations, and verifies the audit log. The CLI disables
+certificate verification only for this ephemeral self-signed test, so the
+scenario validates HTTPS transport and CLI/server integration, not CA trust.
+
 `cargo test` covers unit and property tests for validation, canonical JSON,
 config loading, permissions, routes, remote routes, lifecycle policy, signing
 input parsing, hash-chained audit records, hybrid-signed checkpoints, and their verification, and related

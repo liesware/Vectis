@@ -22,6 +22,7 @@ pub mod sensitive;
 pub mod sharing;
 pub mod storage;
 pub mod time_attestation;
+pub mod tls;
 pub mod tokenization;
 pub mod unseal;
 pub mod validation;

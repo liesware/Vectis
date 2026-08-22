@@ -72,6 +72,7 @@ async fn main() {
 
 async fn real_main(args: Vec<String>) -> Result<(), DynError> {
     let _guard = core::logging::init_logging();
+    core::tls::ensure_crypto_provider();
 
     let mut args = args.into_iter();
     let _program = args.next();

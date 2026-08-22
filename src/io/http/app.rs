@@ -237,6 +237,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         let key_path = config.tls_key_path.as_ref().ok_or_else(|| {
             crate::error::invalid_input("VECTIS_TLS_KEY_PATH is required when VECTIS_MODE=prod")
         })?;
+        crate::core::tls::ensure_crypto_provider();
         let tls_config =
             axum_server::tls_rustls::RustlsConfig::from_pem_file(cert_path, key_path).await?;
 

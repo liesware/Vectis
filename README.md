@@ -47,6 +47,7 @@ registered peer can open.
 - [Current Capabilities](#what-vectis-does-today)
 - [High-Level Flow And Demos](#high-level-flow)
 - [Quick Start](#quick-start)
+- [Build From Source](#build-from-source)
 - [CLI And API](#cli-and-api)
 - [Configuration](#configuration)
 - [Crypto Profiles](#crypto-profiles)
@@ -340,74 +341,63 @@ uv run demo/local/run-demo.py
 
 Requirements:
 
-- Rust toolchain with `cargo`;
-- SQLite CLI (`sqlite3`).
+- [Cosign](https://docs.sigstore.dev/cosign/system_config/installation/);
+- `sha256sum`;
+- `tar`.
 
-Build the project:
+Open the [Vectis releases page](https://github.com/liesware/Vectis/releases)
+and download these three files from the release you want to install:
 
-```sh
-cargo build
-```
+- `vectis-linux-amd64-vX.Y.Z.tar.gz`;
+- `SHA256SUMS`;
+- `SHA256SUMS.sigstore.json`.
 
-Initialize local encrypted key material:
-
-```sh
-cargo run -- init
-```
-
-The command prints:
-
-- `VECTIS_UNSEAL_KEY`: used to decrypt the configured init keys file;
-- `VECTIS_INIT_KEYS_FILE`: encrypted init key material path, default `init.json`;
-- `VECTIS_INIT_PUBLIC_KEYS_FILE`: public verification key path, default `init_pub.json`;
-- `VECTIS_APIKEY`: client secret generated with a cryptographic random number
-  generator and sent as `X-API-Key`;
-- `VECTIS_APIKEY_HASH`: server-side verifier for protected HTTP endpoints.
-
-For local development, save the unseal key in `.unseal_key`:
+Place them in one directory, replace `X.Y.Z` below with the downloaded release,
+and derive its exact Git tag from the archive name:
 
 ```sh
-printf '%s\n' '<VECTIS_UNSEAL_KEY>' > .unseal_key
-chmod 600 .unseal_key
+ARCHIVE="vectis-linux-amd64-vX.Y.Z.tar.gz"
+RELEASE_TAG="${ARCHIVE#vectis-linux-amd64-}"
+RELEASE_TAG="${RELEASE_TAG%.tar.gz}"
 ```
 
-If `init_pub.json` is lost, recover it from the encrypted init material without
-creating new keys:
+Verify that the checksum manifest was signed by the Vectis release workflow:
 
 ```sh
-cargo run -- init pub
+cosign verify-blob \
+  --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity \
+    "https://github.com/liesware/Vectis/.github/workflows/release.yml@refs/tags/${RELEASE_TAG}" \
+  --certificate-oidc-issuer \
+    "https://token.actions.githubusercontent.com" \
+  SHA256SUMS
 ```
 
-Create a SQLite database file and schema:
+Verify the selected archive, extract it, and inspect the binary:
 
 ```sh
-mkdir -p src/db
-sqlite3 src/db/data.db < src/db/sqlite_schema.sql
+EXPECTED="$(awk -v file="$ARCHIVE" '$2 == file { print $1 }' SHA256SUMS)"
+test -n "$EXPECTED"
+printf '%s  %s\n' "$EXPECTED" "$ARCHIVE" | sha256sum -c -
+
+tar -xzf "$ARCHIVE"
+BIN="$(tar -tzf "$ARCHIVE" | grep -m1 '/vectis$')"
+"./${BIN}" version
 ```
 
-Start the HTTP service:
+Cosign authenticates `SHA256SUMS`; the checksum then binds the downloaded
+archive to that signed manifest. Continue with [Getting Started](doc/GettingStarted.md)
+to initialize SQLite, configure local TLS, and tour Vectis capabilities on
+Linux.
 
-```sh
-cargo run -- serve
-```
+## Build From Source
 
-Check readiness:
+Vectis uses the Rust toolchain pinned in `rust-toolchain.toml` and builds its
+vendored Botan dependency from source. Building locally is useful for
+development, but it is distinct from verifying an official release artifact.
 
-```sh
-cargo run -- health ready
-```
-
-Create an operational key:
-
-```sh
-cargo run -- keys create --tag payments --profile hybrid-performance-v1
-```
-
-List public keys loaded in memory:
-
-```sh
-cargo run -- keys list
-```
+See [Building From Source](doc/Build.md) for platform dependencies, build
+commands, tests, and the release binary location.
 
 ## CLI And API
 
@@ -472,6 +462,9 @@ native `cargo-fuzz` targets.
 
 ## Documentation
 
+- [doc/GettingStarted.md](doc/GettingStarted.md): verified binary installation,
+  local TLS/SQLite bootstrap, and capability tour.
+- [doc/Build.md](doc/Build.md): source build requirements and commands.
 - [doc/API.md](doc/API.md): HTTP API and CLI mapping.
 - [doc/UseCases.md](doc/UseCases.md): real-world use cases per feature.
 - [doc/CLI.md](doc/CLI.md): CLI behavior, commands, output, and environment.

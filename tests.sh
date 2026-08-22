@@ -1,7 +1,9 @@
 #!/bin/bash
 
-figlet Vectis
-cowsay Standard Procedure Testing
+set -euo pipefail
+
+figlet Vectis || true
+cowsay Standard Procedure Testing || true
 echo "\n###########################"
 
 echo "\n### Cargo fmt"
@@ -22,6 +24,9 @@ cargo test
 echo "\n### Cargo clippy"
 cargo clippy --all-targets --all-features -- -D warnings
 # cargo clippy --all-targets --all-features -- -W clippy::pedantic
+
+echo "\n### Cargo build"
+cargo build
 
 echo "\n\n"
 
@@ -49,3 +54,6 @@ uv run tests/http_fuzz.py
 echo "\n### HTTP Schemathesis"
 uv sync --group fuzz
 uv run tests/http_schemathesis.py --profile prepared 
+
+echo "\n### TLS happy path"
+bash tests/tls.sh

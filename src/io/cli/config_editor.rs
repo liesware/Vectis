@@ -1644,6 +1644,7 @@ async fn fetch_public_keys(remote_addr: &str, remote_kid: &str) -> Result<Value,
         "{}://{}/pub/{}",
         http_config.remote_scheme, remote_addr, remote_kid
     );
+    crate::core::tls::ensure_crypto_provider();
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECONDS))
         .danger_accept_invalid_certs(http_config.tls_skip_verify)

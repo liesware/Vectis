@@ -73,6 +73,7 @@ fn build_runtime_http_client(
     timeout: Duration,
     tls_skip_verify: bool,
 ) -> Result<reqwest::Client, DynError> {
+    crate::core::tls::ensure_crypto_provider();
     Ok(reqwest::Client::builder()
         .timeout(timeout)
         .danger_accept_invalid_certs(tls_skip_verify)

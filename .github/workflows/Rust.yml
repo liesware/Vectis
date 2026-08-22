@@ -53,6 +53,7 @@ jobs:
           bash -n tests.sh
           bash -n tests_cargo-fuzz.sh
           bash -n demo/local/*.sh
+          bash -n tests/*.sh
           bash -n tests/ci/*.sh
           bash -n tests/performance/*.sh
           bash -n tests/performance/local/*.sh
@@ -102,3 +103,8 @@ jobs:
         env:
           VECTIS_BIN: ${{ github.workspace }}/vectis
         run: bash tests/ci/run-integration.sh
+
+      - name: HTTPS health smoke test
+        env:
+          VECTIS_BIN: ${{ github.workspace }}/vectis
+        run: bash tests/ci/test-tls.sh
