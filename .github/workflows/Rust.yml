@@ -98,6 +98,10 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: true
+          # .python-version pins 3.14, which the runner does not preinstall, so
+          # uv downloads the ~34 MB CPython each run. Cache the managed interpreter
+          # so only the first run (or a version bump) pays the download.
+          cache-python: true
 
       - name: Run Python integration suites
         env:
