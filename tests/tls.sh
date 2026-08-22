@@ -49,6 +49,11 @@ chmod 755 "$LAB/vectis"
 cd "$LAB"
 mkdir -p db logs tls
 sqlite3 db/data.db < "$ROOT/src/db/sqlite_schema.sql"
+# Own the SQLite path explicitly. A VECTIS_SQLITE_PATH inherited from the CI job
+# env points at another job's runner (created only in the `verify` job), so
+# `vectis init` below would fail to open it. Override it before any vectis call;
+# the .env written later keeps `serve` on this same database.
+export VECTIS_SQLITE_PATH="$LAB/db/data.db"
 
 cat > tls/openssl.cnf <<'EOF'
 [req]
