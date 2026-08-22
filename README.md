@@ -106,6 +106,8 @@ tools that already do it well.
 Not sure which primitive solves your problem? See the how-to-choose table in
 [doc/UseCases.md](doc/UseCases.md).
 
+> *General secrets platforms charge you their full complexity even when all you need is data protection; Vectis charges you only the complexity of the problem.*
+
 ## Philosophy
 
 Vectis tries to stay close to the Unix philosophy. Peter H. Salus summarized it
@@ -127,6 +129,8 @@ plain interfaces are easier to inspect, automate, and combine. Future
 capabilities such as stronger clustering, HSM/KMS support, mTLS, or additional
 distributed storage should exist only when the operating environment requires
 them, not as product tiers or decorative complexity.
+
+> *Any complexity you meet in Vectis should belong to the problem, not the product.*
 
 ## Scope And Boundaries
 
@@ -345,50 +349,55 @@ Requirements:
 - `sha256sum`;
 - `tar`.
 
-Open the [Vectis releases page](https://github.com/liesware/Vectis/releases)
-and download these three files from the release you want to install:
+**1. Download a release.** Open the
+[Vectis releases page](https://github.com/liesware/Vectis/releases) and
+download three files into the same directory:
 
-- `vectis-linux-amd64-vX.Y.Z.tar.gz`;
+- the binary archive for your platform, e.g. `vectis-linux-amd64-vX.Y.Z.tar.gz`;
 - `SHA256SUMS`;
 - `SHA256SUMS.sigstore.json`.
 
-Place them in one directory, replace `X.Y.Z` below with the downloaded release,
-and derive its exact Git tag from the archive name:
+Wherever the steps below say `vX.Y.Z`, type the version you downloaded — the
+one in the archive's file name.
 
-```sh
-ARCHIVE="vectis-linux-amd64-vX.Y.Z.tar.gz"
-RELEASE_TAG="${ARCHIVE#vectis-linux-amd64-}"
-RELEASE_TAG="${RELEASE_TAG%.tar.gz}"
-```
-
-Verify that the checksum manifest was signed by the Vectis release workflow:
+**2. Verify that the checksum list is authentic.** This proves `SHA256SUMS`
+was produced by the Vectis release workflow on GitHub, for that exact version
+— not by someone else:
 
 ```sh
 cosign verify-blob \
   --bundle SHA256SUMS.sigstore.json \
   --certificate-identity \
-    "https://github.com/liesware/Vectis/.github/workflows/release.yml@refs/tags/${RELEASE_TAG}" \
+    "https://github.com/liesware/Vectis/.github/workflows/release.yml@refs/tags/vX.Y.Z" \
   --certificate-oidc-issuer \
     "https://token.actions.githubusercontent.com" \
   SHA256SUMS
 ```
 
-Verify the selected archive, extract it, and inspect the binary:
+You should see `Verified OK`.
+
+**3. Verify that your download matches the list.** This binds the archive you
+actually downloaded to the list you just authenticated:
 
 ```sh
-EXPECTED="$(awk -v file="$ARCHIVE" '$2 == file { print $1 }' SHA256SUMS)"
-test -n "$EXPECTED"
-printf '%s  %s\n' "$EXPECTED" "$ARCHIVE" | sha256sum -c -
-
-tar -xzf "$ARCHIVE"
-BIN="$(tar -tzf "$ARCHIVE" | grep -m1 '/vectis$')"
-"./${BIN}" version
+sha256sum --check --ignore-missing SHA256SUMS
 ```
 
-Cosign authenticates `SHA256SUMS`; the checksum then binds the downloaded
-archive to that signed manifest. Continue with [Getting Started](doc/GettingStarted.md)
-to initialize SQLite, configure local TLS, and tour Vectis capabilities on
-Linux.
+You should see `vectis-linux-amd64-vX.Y.Z.tar.gz: OK`.
+
+**4. Extract it and run Vectis.**
+
+```sh
+tar -xzf vectis-linux-amd64-vX.Y.Z.tar.gz
+./vectis-linux-amd64-vX.Y.Z/vectis version
+```
+
+The binary should print the same version you downloaded. That's the whole
+chain: Cosign authenticates the list, the checksum ties your archive to it,
+and the binary in your hands is the one the release workflow built.
+
+Continue with [Getting Started](doc/GettingStarted.md) to initialize SQLite,
+configure local TLS, and tour Vectis capabilities on Linux.
 
 ## Build From Source
 
