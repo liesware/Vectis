@@ -2,6 +2,12 @@
 
 ## Purpose
 
+Vectis is an API-first service. Applications integrate with Vectis through its
+HTTP API. The CLI exists for local bootstrap and gives administrators a
+first-party way to configure, inspect, validate, and exercise a Vectis node
+without requiring hand-written `curl` requests or something like that . It is not the
+primary integration interface for application data workflows.
+
 The Vectis CLI has two jobs:
 
 1. local bootstrap work that must happen before the HTTP service exists;
@@ -14,6 +20,58 @@ The CLI keeps the same rule as the rest of Vectis: do one thing, expose plain
 interfaces, and stay easy to inspect.
 
 ## Command Groups
+
+### Local Bootstrap And Administration
+
+- `vectis version`
+- `vectis init`
+- `vectis apikey create`
+- `vectis audit verify`
+- `vectis slh-dsa create|sign|verify`
+- `vectis config init|validate|sign|list`
+- `vectis config routes|remote-routes|permissions`
+- `vectis config fpe|token|mac|masking|commitment|sharing|time`
+
+Config edit commands modify the local signed-config source. They do not apply
+changes to a running node until the config is signed and reloaded. Remote-route
+editing may fetch peer public keys from the configured remote Vectis node.
+
+### Runtime Commands
+
+- `vectis health`
+- `vectis test`
+- `vectis keys`
+- `vectis lifecycle`
+- `vectis routes`
+- `vectis remote-routes`
+- `vectis permissions`
+- `vectis config reload`
+- `vectis pub`
+
+These commands, together with the Data Protection and Messaging And Evidence
+groups below, call the HTTP API: they require a running node and
+`VECTIS_API_URL`. Some change live node state rather than only reading it —
+`vectis keys create` / `keys reload`, `vectis lifecycle`, and `vectis config
+reload` mutate keys, key lifecycle, or the loaded config.
+
+### Data Protection
+
+- `vectis fpe`
+- `vectis token`
+- `vectis mac`
+- `vectis index`
+- `vectis mask`
+- `vectis commit`
+- `vectis shares`
+
+### Messaging And Evidence
+
+- `vectis sign`
+- `vectis message`
+- `vectis time`
+
+The CLI exposes representative single-operation workflows. Batch data
+workflows are intended for direct HTTP API integration.
 
 Time attestation is a protected runtime command:
 
@@ -28,31 +86,6 @@ vectis config time clear
 attest` calls the live NTS and Roughtime sources and requires the global
 `time-attest` permission. The config commands only edit signed overrides; sign
 and reload them through the normal config workflow.
-
-Local commands do not require the HTTP service:
-
-- `vectis init`
-- `vectis apikey create`
-- `vectis slh-dsa create|sign|verify`
-- `vectis audit verify --file <path>`
-- `vectis config sign`
-- `vectis config list`
-
-Runtime commands call the HTTP API and normally require `VECTIS_API_URL`:
-
-- `vectis health`
-- `vectis test`
-- `vectis keys`
-- `vectis lifecycle`
-- `vectis routes`
-- `vectis remote-routes`
-- `vectis permissions`
-- `vectis config reload`
-- `vectis pub`
-- `vectis sign`
-- `vectis message`
-- `vectis fpe`
-- `vectis token`
 
 Use built-in help for exact syntax:
 

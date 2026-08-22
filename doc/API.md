@@ -15,7 +15,12 @@ The `vectis` CLI is an HTTP client for the runtime API, except for `vectis init`
 - `kid` values are hex strings derived with Vectis' internal hash (`INTERNAL_KEYS_HASH`, currently `BLAKE2b(256)`), so they are normally 64 hex characters.
 - Binary fields (`ctx`, `nonce`, signatures, public keys) are encoded as hex.
 - Every HTTP response includes `X-Request-Id`, a 32-character hex request id also present in operational logs.
-- Public errors use this shape:
+
+Creation operations select the operational KID in the path. Inverse and
+verification operations carry the KID with the material being processed.
+Requests select signed profiles; they never define cryptographic policy.
+
+Public errors use this shape:
 
 ```json
 {
@@ -2132,7 +2137,8 @@ Internal defaults for `init` key material:
 
 ## CLI Mapping
 
-Runtime CLI commands call the HTTP API:
+The CLI maps runtime commands to HTTP operations and also provides local
+bootstrap and signed-config administration commands:
 
 CLI output defaults to YAML for readability. Add `--output json` to HTTP client commands and to `vectis apikey create` to print pretty JSON instead. This does not apply to `vectis init`.
 
@@ -2153,12 +2159,20 @@ CLI output defaults to YAML for readability. Add `--output json` to HTTP client 
 | `vectis routes list` | `GET /routes` | Yes |
 | `vectis remote-routes list` | `GET /remote-routes` | Yes |
 | `vectis permissions list` | `GET /permissions` | Yes |
+| `vectis config init` | Creates an empty local `config.json` skeleton | No HTTP |
+| `vectis config validate` | Validates local config against init, storage, and loaded keys | No HTTP |
 | `vectis config sign` | Local `config_sign.json` update | No HTTP |
 | `vectis config list` | Prints local `config.json` | No HTTP |
 | `vectis config routes ...` | Lists or edits local `config.json` routes | No HTTP |
 | `vectis config remote-routes ...` | Lists or edits local `config.json` remote routes; `add` and identity/address updates fetch peer public keys from `/pub/{kid}` | No HTTP for most local edits; remote `/pub` for key import |
 | `vectis config permissions ...` | Lists or edits local `config.json` permissions | No HTTP |
 | `vectis config fpe ...` | Lists or edits local `config.json` FPE profiles | No HTTP |
+| `vectis config token ...` | Lists or edits local `config.json` tokenization profiles | No HTTP |
+| `vectis config mac ...` | Lists or edits local `config.json` MAC profiles | No HTTP |
+| `vectis config masking ...` | Lists or edits local `config.json` masking profiles | No HTTP |
+| `vectis config commitment ...` | Lists or edits local `config.json` commitment profiles | No HTTP |
+| `vectis config sharing ...` | Lists or edits local `config.json` sharing profiles | No HTTP |
+| `vectis config time ...` | Views or edits local signed time-attestation overrides | No HTTP |
 | `vectis config reload` | `POST /config/reload` | Yes |
 | `vectis pub <kid>` | `GET /pub/{kid}` | No |
 | `vectis sign <kid>` | `POST /sign/{kid}` | Yes |
@@ -2168,12 +2182,31 @@ CLI output defaults to YAML for readability. Add `--output json` to HTTP client 
 | `vectis message decrypt` | `POST /message/decrypt` | Yes |
 | `vectis message internal encrypt <kid>` | `POST /message/internal/encrypt/{kid}` | Yes |
 | `vectis message internal decrypt` | `POST /message/internal/decrypt` | Yes |
+| `vectis fpe encrypt <kid>` | `POST /fpe/encrypt/{kid}` | Yes |
+| `vectis fpe decrypt` | `POST /fpe/decrypt` | Yes |
+| `vectis token encode <kid>` | `POST /token/encode/{kid}` | Yes |
+| `vectis token decode` | `POST /token/decode` | Yes |
+| `vectis mac create <kid>` | `POST /mac/{kid}` | Yes |
+| `vectis mac verify` | `POST /mac/verify` | Yes |
+| `vectis index create <kid>` | `POST /index/{kid}` | Yes |
+| `vectis index verify` | `POST /index/verify` | Yes |
+| `vectis mask <kid>` | `POST /mask/{kid}` | Yes |
+| `vectis commit create <kid>` | `POST /commit/{kid}` | Yes |
+| `vectis commit verify` | `POST /commit/verify` | Yes |
+| `vectis shares split <kid>` | `POST /shares/split/{kid}` | Yes |
+| `vectis shares combine` | `POST /shares/combine` | Yes |
+| `vectis time attest` | `POST /time/attest` | Yes |
+
+Batch endpoints are API-only. They are intended for application workflows and
+do not currently have dedicated CLI commands.
 
 Local commands:
 
 - `vectis init`: creates encrypted `VECTIS_INIT_KEYS_FILE`, default `init.json`, prints `VECTIS_UNSEAL_KEY`, `VECTIS_APIKEY`, and `VECTIS_APIKEY_HASH`. It refuses to overwrite an existing init keys file; delete it manually before reinitializing.
 - `vectis apikey create`: decrypts `VECTIS_INIT_KEYS_FILE`, derives the internal API auth key, prints a new `VECTIS_APIKEY` and matching `VECTIS_APIKEY_HASH`, and does not write files.
 - `vectis serve`: validates `VECTIS_INIT_KEYS_FILE`, loads storage/config into memory, and starts the HTTP service. Unseal key resolution order is `VECTIS_UNSEAL_KEY`, `VECTIS_UNSEAL_KEY_FILE` with default `.unseal_key`, then hidden prompt.
+- `vectis config init`: writes an empty `VECTIS_CONFIG_PATH` (default `config.json`) after checking its structure. It refuses to overwrite an existing config file; delete it manually before reinitializing. It does not sign, reload, or make any HTTP call.
+- `vectis config validate`: validates the structure and profile field constraints of the local `VECTIS_CONFIG_PATH` using placeholder key material. It does not contact storage or a running node and makes no HTTP call.
 - `vectis config sign`: reads `VECTIS_CONFIG_PATH`, signs its canonical JSON with init EdDSA and init ML-DSA, and writes `VECTIS_CONFIG_SIGN_PATH`.
 - `vectis config list`: prints `VECTIS_CONFIG_PATH` locally.
 
