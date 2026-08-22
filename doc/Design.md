@@ -7,12 +7,16 @@ pointer showing the rule in a real codebase.
 
 The aim is plain: keep the system understandable and hard to misuse.
 
-The rules draw on three sources: the Unix and Python design philosophies
+The rules draw on four sources: the Unix and Python design philosophies
 (do one thing well, explicit over implicit, errors never pass silently),
 *A Philosophy of Software Design* (deep modules, complexity is the enemy),
-and *Designing Data-Intensive Applications* (data outlives code, partial
-failure is normal). The rules earn their place by having prevented or caught
-a real failure, not by citation.
+*Designing Data-Intensive Applications* (data outlives code, partial
+failure is normal), and the OpenBSD security philosophy (correctness before
+features, safe defaults, continuous auditing — security emerges from
+discipline, not from added layers). The OpenBSD aphorism sets the tone for
+everything below: make the system smaller, make its behavior explicit, make
+the safe choice the default. The rules earn their place by having prevented
+or caught a real failure, not by citation.
 
 Each rule carries an **Applies** tag so you can select the subset that fits your
 project. Read every rule tagged `always`; add `networked services` rules when you
@@ -70,14 +74,17 @@ Rule format:
 | 31 | Requests choose policy; they do not define trust | networked services |
 | 32 | Validate encoding before cryptographic processing | secrets/crypto |
 | 33 | Treat secrets as radioactive | secrets/crypto |
-| 34 | Model resource lifecycle explicitly | always |
-| 35 | Write the threat model, including what you refuse to defend | always |
-| 36 | Unit-test every validation function; e2e-test the contract both ways | always |
-| 37 | Zero warnings, always | always |
-| 38 | Keep an executable demo, and verify against the fresh build | always |
-| 39 | Separate operational logs, audit logs, and metrics | networked services |
-| 40 | Fixed documentation set, swept on every behavior change | always |
-| 41 | Code explains itself; documents state the contracts and system design | always |
+| 34 | Make the safe choice the default; unsafe is explicit, named, and noisy | always |
+| 35 | Fix the class, not the instance | always |
+| 36 | Model resource lifecycle explicitly | always |
+| 37 | Write the threat model, including what you refuse to defend | always |
+| 38 | Unit-test every validation function; e2e-test the contract both ways | always |
+| 39 | Zero warnings, always | always |
+| 40 | Re-read one subsystem every release | always |
+| 41 | Keep an executable demo, and verify against the fresh build | always |
+| 42 | Separate operational logs, audit logs, and metrics | networked services |
+| 43 | Fixed documentation set, swept on every behavior change | always |
+| 44 | Code explains itself; documents state the contracts and system design | always |
 
 ## 1. Scope and Architecture
 
@@ -574,7 +581,7 @@ in production.
   request bodies, ignore only where forward-compatibility demands it;
 - when a break is unavoidable, version the interface and support the old shape
   through a deprecation window;
-- documented request/response examples are part of the contract (Rule 40).
+- documented request/response examples are part of the contract (Rule 43).
 
 **In Vectis**: request `*Input` structs use `deny_unknown_fields`; the wire
 protocol carries an explicit version and payloads bind it (Rule 29). During
@@ -614,7 +621,7 @@ repeated; commitment creation and share splitting intentionally produce fresh
 random outputs; message delivery may be observed more than once. Vectis does
 not retry these operations automatically. Batch `ref` values provide
 correlation only, and object replay or deduplication remains the consumer's
-responsibility in `v1` (Rule 35).
+responsibility in `v1` (Rule 37).
 
 ## 5. Data and State Over Time
 
@@ -805,7 +812,57 @@ permission lookup while `authenticate_hash` still compares credential hashes
 with `constant_time_eq`; kid-binding via `validate_key_id_matches_keys`;
 dedicated audit stream with request ids and no payload contents.
 
-### Rule 34 — Model resource lifecycle explicitly
+### Rule 34 — Make the safe choice the default; unsafe is explicit, named, and noisy
+
+**Applies**: always.
+
+**Why**: defaults are the only configuration most deployments ever run. A
+default that trades safety for convenience turns every inattentive operator
+into an insecure deployment, and a quiet escape hatch becomes permanent
+infrastructure.
+
+**How**:
+
+- every default is the safe option: encryption on, verification on,
+  deny-by-default authorization, unnecessary capabilities off;
+- an unsafe escape hatch must be opt-in, carry a name that declares its
+  danger, and make noise while active (a startup or periodic warning that the
+  setting itself cannot silence);
+- treat a new flag's default as a security decision in design review, not a
+  style choice.
+
+**Rust note**: encode the safe state in `Default` impls and config
+constructors; deny-by-default `match` arms for authorization decisions.
+
+**In Vectis**: HTTPS is the only mode — there is no plaintext listener to
+leave on; permissions are allowlists, so anything not granted is denied;
+`VECTIS_TLS_SKIP_VERIFY` is the canonical escape hatch — explicit opt-in, a
+self-describing name, and the node logs a warning while it is active.
+
+### Rule 35 — Fix the class, not the instance
+
+**Applies**: always.
+
+**Why**: a bug found is evidence of a class of bugs written. Patching the
+single instance leaves its siblings alive; proactive security means the class
+dies before any exploit for it exists.
+
+**How**:
+
+- when a defect is found, search the whole tree for the same pattern before
+  closing the issue;
+- then make the class inexpressible where possible: a validated constructor, a
+  narrower type, a lint, a guardrail with its own tests;
+- treat fuzzing and scanner findings the same way — the crash is the instance,
+  the missing bound or invariant is the class;
+- record the class, not just the fix, so reviews can watch for its return.
+
+**In Vectis**: `redact_serde_value` did not fix one leaky message — it removed
+the class "error diagnostics reflect caller values", bounded by
+`sanitize_untrusted_error_detail` and covered by its own tests; fuzz findings
+land as reusable guardrails plus regression tests (Rule 38).
+
+### Rule 36 — Model resource lifecycle explicitly
 
 **Applies**: always (any resource with more than two states).
 
@@ -824,7 +881,7 @@ from the lifecycle model, but the decision must live in one place.
 `require_lifecycle_for_public_keys` enforce the model, including blocking
 `/pub` for retired keys.
 
-### Rule 35 — Write the threat model, including what you refuse to defend
+### Rule 37 — Write the threat model, including what you refuse to defend
 
 **Applies**: always.
 
@@ -847,7 +904,7 @@ delegates throttling to a reverse proxy by name.
 
 ## 7. Testing and Tooling Discipline
 
-### Rule 36 — Unit-test every validation function; e2e-test the contract both ways
+### Rule 38 — Unit-test every validation function; e2e-test the contract both ways
 
 **Applies**: always.
 
@@ -876,7 +933,7 @@ signing; `tests/http_positive.py` and `tests/http_negative.py` assert runtime
 contracts; `http_fuzz.py`, cargo-fuzz targets, and Schemathesis cover mutation
 and OpenAPI contract behavior.
 
-### Rule 37 — Zero warnings, always
+### Rule 39 — Zero warnings, always
 
 **Applies**: always.
 
@@ -892,7 +949,26 @@ mechanical cleanups.
 
 **In Vectis**: every change in the repository lands with clippy and fmt clean.
 
-### Rule 38 — Keep an executable demo, and verify against the fresh build
+### Rule 40 — Re-read one subsystem every release
+
+**Applies**: always (any project that outlives its first release).
+
+**Why**: automated scanners find the classes they already know; only re-reading
+finds the unknown ones. Code that was secure when written can stop being secure
+when a new vulnerability class appears — and an author's blind spots are
+stable, so code that is never re-read stays effectively unaudited.
+
+**How**: keep a rotation of subsystems. Each release, re-read one of them
+completely with fresh eyes: current threat model in hand, asking what a new
+attacker class would see. Record the pass (subsystem, date, findings) in the
+project's security self-assessment; findings feed Rule 35 — remove the class,
+not the instance.
+
+**In Vectis**: `doc/SelfAssessment.md` records the assessment; the rotation
+(`core/validation`, `core/storage`, `core/audit_chain`, ...) makes it a living
+document. Honestly declared gap: adopted 2026-08, first rotation pass pending.
+
+### Rule 41 — Keep an executable demo, and verify against the fresh build
 
 **Applies**: always.
 
@@ -910,7 +986,7 @@ server started *before* the rebuild — the results were discarded and re-run.
 
 ## 8. Observability Contract
 
-### Rule 39 — Separate operational logs, audit logs, and metrics
+### Rule 42 — Separate operational logs, audit logs, and metrics
 
 **Applies**: networked services.
 
@@ -934,7 +1010,7 @@ replacement or truncation.
 
 ## 9. Documentation Contract
 
-### Rule 40 — Fixed documentation set, swept on every behavior change
+### Rule 43 — Fixed documentation set, swept on every behavior change
 
 **Applies**: always.
 
@@ -951,7 +1027,7 @@ relative links and that documented examples match code literally.
 `doc/Reference.md`; removing runtime peer-key fetch required sweeping four
 documents that described the old fallback.
 
-### Rule 41 — Code explains itself; documents state the contracts and system design
+### Rule 44 — Code explains itself; documents state the contracts and system design
 
 **Applies**: always.
 
@@ -965,7 +1041,7 @@ implementations.
   through names, types, and small functions. Use short comments only for
   non-obvious security, protocol, fallback, or invariant behavior.
 - **Contracts and system**: HTTP behavior, design rationale, and cross-cutting
-  flows live in the documentation set (Rule 40), which is reviewed and kept
+  flows live in the documentation set (Rule 43), which is reviewed and kept
   consistent.
 
 **In Vectis**: implementation comments follow the discipline (comments are
@@ -998,20 +1074,21 @@ one cheaper:
    dependencies, and wire format + lint (zero warnings) + unit tests + negative
    e2e as the pipeline; every endpoint adds validators, limits, unit tests,
    idempotency, compatible-evolution discipline, and negative contract coverage
-   at the same time (Rules 19, 23-24, 36-37).
+   at the same time (Rules 19, 23-24, 38-39).
 7. **Data over time**: decide schema ownership, write the backup/restore
    procedure, set outbound deadlines, and handle stop signals before the first
    deployment holds real state (Rules 25-28).
 8. **Lifecycle model**: if the project manages sensitive resources, define
    states, transitions, and centralized operation guards before exposing the
-   first mutation endpoint (Rule 34).
+   first mutation endpoint (Rule 36).
 9. **Observability from day one**: create operational logs, audit events, and
-   metrics as separate channels with a no-secrets rule (Rule 39).
+   metrics as separate channels with a no-secrets rule (Rule 42).
 10. **Threat model from day one**: even three lines of explicit assumptions
-    beat a perfect document written after the audit (Rule 35).
+    beat a perfect document written after the audit (Rule 37); safe defaults
+    and re-reading cadence are decided here too (Rules 34, 40).
 11. **Docs as contract**: README + API + ENV skeletons created with the first
     endpoint; sweep them on every behavior change, especially validation,
-    permission, lifecycle, config, and error-contract changes (Rules 40-41).
+    permission, lifecycle, config, and error-contract changes (Rules 43-44).
 12. When a second source of truth appears — a cache, a fallback, a convenience
     fetch — delete it unless it is a pure performance cache of the
     authoritative source (Rule 7).
@@ -1019,5 +1096,7 @@ one cheaper:
 ## Revision
 
 Distilled from the Vectis codebase as of 2026-07-24 and maintained against the
-project's current design and operational scope. Update when a rule is learned,
-invalidated, or superseded by a better one.
+project's current design and operational scope. Last revised 2026-08-21:
+added the OpenBSD security philosophy as a source and Rules 34, 35, and 40
+(safe defaults, class-level fixes, release re-reading). Update when a rule is
+learned, invalidated, or superseded by a better one.

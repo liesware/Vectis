@@ -12,6 +12,23 @@ This document describes the design intent of protocol `v1`: the threats Vectis
 is built to address, the assumptions it depends on, and the risks it explicitly
 does not cover. It is a statement of intent, not a security guarantee.
 
+## Security Posture
+
+Vectis follows the OpenBSD school: security is not a collection of features
+added to a system, it is a property that emerges from how the system is built.
+
+```text
+security != firewall + encryption + hardening
+security  = correctness + reduction + safe defaults + continuous review
+```
+
+In practice this means the security roadmap favors removing code, states, and
+configuration over adding protective layers; every default is the safe choice
+and unsafe escape hatches are explicit, named, and noisy; found defects are
+fixed as classes, not instances; and subsystems are re-read on a release
+cadence even without a known exploit. The engineering rules behind this
+posture are in [Design.md](Design.md).
+
 ## System Overview
 
 ```text
