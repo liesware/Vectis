@@ -18,10 +18,6 @@ indexes, commitments, secret sharing, and post-quantum protected
 messaging/signing — governed by an operator-signed configuration, served through
 a consistent HTTP and CLI interface.
 
-Vectis can also attest its local clock on demand with authenticated NTS and
-verified Roughtime evidence. The optional signed `time_attestation` config
-section overrides its Cloudflare defaults.
-
 **Sensitive input in, safe representation out.** Every Vectis operation
 exchanges a sensitive value for a representation that is safe to store, move,
 index, display, or share — and keeps only the properties your workflow needs:
@@ -199,6 +195,10 @@ protection primitives and workflows.
 - a Prometheus `/metrics` endpoint for operational observability;
 - local CLI commands plus CLI commands that act as an HTTP API client;
 - OpenAPI and environment variable documentation.
+
+Vectis can also attest its local clock on demand with authenticated NTS and
+verified Roughtime evidence. The optional signed `time_attestation` config
+section overrides its Cloudflare defaults.
 
 ## What Vectis Is Not
 
