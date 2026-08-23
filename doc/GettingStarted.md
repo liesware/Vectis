@@ -196,7 +196,7 @@ x509_extensions = server
 CN = localhost
 
 [server]
-keyUsage = critical, digitalSignature, keyEncipherment
+keyUsage = critical, digitalSignature
 extendedKeyUsage = serverAuth
 subjectAltName = @alt_names
 
@@ -205,14 +205,19 @@ DNS.1 = localhost
 IP.1 = 127.0.0.1
 EOF
 
-openssl req -x509 -newkey rsa:3072 -sha256 -nodes \
+openssl genpkey -algorithm EC \
+  -pkeyopt ec_paramgen_curve:prime256v1 \
+  -pkeyopt ec_param_enc:named_curve \
+  -out tls/server-key.pem
+
+chmod 600 tls/server-key.pem
+
+openssl req -new -x509 -sha256 \
   -days 30 \
-  -keyout tls/server-key.pem \
+  -key tls/server-key.pem \
   -out tls/server-cert.pem \
   -config tls/openssl.cnf \
   -extensions server
-
-chmod 600 tls/server-key.pem
 ```
 
 This is a self-signed, short-lived lab certificate. Production deployments
@@ -779,8 +784,9 @@ You now hold the complete Vectis mental model, exercised end to end:
   commands in [CLI.md](CLI.md#command-groups).
 - Create and sign offline artifacts with SLH-DSA; see
   [CLI.md](CLI.md#slh-dsa-artifact-signing).
-- Replace SQLite with PostgreSQL and review the shared-storage model in
-  [Clustering.md](Clustering.md).
+- Replace SQLite with PostgreSQL using the
+  [PostgreSQL tutorial](tutorials/PostgreSQL.md), then review the shared-storage
+  model in [Clustering.md](Clustering.md).
 - Deploy with the [Helm chart](../charts/vectis/README.md).
 - Explore protected node-to-node messaging with the
   [message demo](../demo/message/README.md).

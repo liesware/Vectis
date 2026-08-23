@@ -473,6 +473,8 @@ native `cargo-fuzz` targets.
 
 - [doc/GettingStarted.md](doc/GettingStarted.md): verified binary installation,
   local TLS/SQLite bootstrap, and capability tour.
+- [doc/tutorials/README.md](doc/tutorials/README.md): task-oriented guides,
+  beginning with PostgreSQL storage.
 - [doc/Build.md](doc/Build.md): source build requirements and commands.
 - [doc/API.md](doc/API.md): HTTP API and CLI mapping.
 - [doc/UseCases.md](doc/UseCases.md): real-world use cases per feature.

@@ -2,6 +2,10 @@
 
 This chart deploys Vectis on Kubernetes.
 
+For a complete deployment walkthrough using a separate administrative host,
+versioned runtime Secrets, multiple replicas, and PostgreSQL, see the
+[Kubernetes tutorial](../../doc/tutorials/Kubernetes.md).
+
 It is intentionally small:
 
 - PostgreSQL only;
