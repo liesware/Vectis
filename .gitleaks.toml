@@ -6,6 +6,6 @@ useDefault = true
 [allowlist]
 description = "Synthetic fixtures, documentation examples, and environment template"
 paths = [
-  '''(^|/)(tests|doc|demo|fuzz)/''',
+  '''(?i)(^|/)(tests|doc|demo|fuzz)/''',
   '''(^|/)env\.dist$''',
 ]
