@@ -21,6 +21,9 @@ one re-grounds the concepts it relies on rather than assuming you remember them.
 - [Kubernetes Deployment](Kubernetes.md): use a dedicated Vectis management
   host to publish signed policy, deploy replicas with Helm, and exercise pod
   replacement.
+- [Backup And Recovery](BackupRecovery.md): back up a node, destroy it, and
+  restore it — for both SQLite and PostgreSQL — proving recovery by decoding a
+  token created before the disaster, and keeping the unseal key encrypted.
 
 For design and operational guarantees rather than step-by-step labs, use the
 main reference documents:

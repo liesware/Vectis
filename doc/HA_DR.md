@@ -5,6 +5,11 @@
 This document explains how to keep Vectis available when something fails, and
 how to recover it after data loss, corruption, or operator error.
 
+For a hands-on walkthrough that backs up a node, destroys it, and restores it for
+both SQLite and PostgreSQL, see the
+[Backup And Recovery tutorial](tutorials/BackupRecovery.md). This document is the
+reference behind that lab.
+
 It does not replace [doc/Clustering.md](Clustering.md). Clustering explains the
 multi-node model:
 
