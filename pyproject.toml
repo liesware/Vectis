@@ -6,6 +6,9 @@ requires-python = ">=3.11"
 dependencies = []
 
 [dependency-groups]
+dast = [
+    "pyyaml==6.0.3",
+]
 fuzz = [
     "schemathesis>=4,<5",
 ]

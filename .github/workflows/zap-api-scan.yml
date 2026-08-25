@@ -1,0 +1,133 @@
+name: OWASP ZAP API Scan
+
+on:
+  schedule:
+    - cron: "47 5 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zap-api-scan-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  ZAP_VERSION: "2.17.0"
+  ZAP_DOCKER_IMAGE: ghcr.io/zaproxy/zaproxy:2.17.0@sha256:781a2bdaea47324e7bab583e2263f21d257b0aee61ed51521a5be45f5f5081ef
+
+jobs:
+  scan:
+    name: Disposable HTTPS API scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: vectis-zap-api-scan
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+          cache-python: true
+
+      - name: Build Vectis
+        run: cargo build --locked --all-features
+
+      - name: Run OWASP ZAP API scan
+        id: zap-scan
+        shell: bash
+        env:
+          VECTIS_BIN: ${{ github.workspace }}/target/debug/vectis
+          ZAP_RESULTS_DIR: ${{ github.workspace }}/zap-results
+        run: |
+          mkdir -p "$ZAP_RESULTS_DIR"
+          bash tests/ci/zap_scan.sh
+
+      - name: Publish ZAP summary
+        if: always()
+        shell: bash
+        env:
+          SCAN_OUTCOME: ${{ steps.zap-scan.outcome }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from collections import Counter
+          from pathlib import Path
+
+          results = Path("zap-results")
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          exit_path = results / "zap-exit-code.txt"
+          exit_code = exit_path.read_text(encoding="utf-8").strip() if exit_path.exists() else "unavailable"
+          counts = Counter()
+          report_path = results / "report.json"
+          report_error = None
+
+          if report_path.exists():
+              try:
+                  report = json.loads(report_path.read_text(encoding="utf-8"))
+                  for site in report.get("site", []):
+                      for alert in site.get("alerts", []):
+                          counts[str(alert.get("riskcode", "unknown"))] += 1
+              except (OSError, ValueError, TypeError) as error:
+                  report_error = str(error)
+
+          levels = [
+              ("4", "Critical"),
+              ("3", "High"),
+              ("2", "Medium"),
+              ("1", "Low"),
+              ("0", "Informational"),
+              ("unknown", "Unknown"),
+          ]
+          lines = [
+              "## OWASP ZAP API Scan",
+              "",
+              f"- Workflow outcome: `{os.environ.get('SCAN_OUTCOME', 'unknown')}`",
+              f"- ZAP version: `{os.environ.get('ZAP_VERSION', 'unknown')}`",
+              f"- Scanner exit code: `{exit_code}`",
+              "- Policy: `report-only` (findings do not fail the job; scanner failures do)",
+              "- Target: disposable Vectis HTTPS node with a limited synthetic API key",
+              "",
+          ]
+
+          if report_path.exists() and report_error is None:
+              lines.extend(["| Risk | Alert rules |", "|---|---:|"])
+              lines.extend(
+                  f"| {label} | {counts[code]} |"
+                  for code, label in levels
+                  if counts[code]
+              )
+              if not counts:
+                  lines.append("| None reported | 0 |")
+          elif report_error:
+              lines.append(f"The JSON report could not be summarized: `{report_error}`")
+          else:
+              lines.append("ZAP did not produce a JSON report. Review the uploaded logs.")
+
+          lines.extend([
+              "",
+              f"Full HTML, Markdown, JSON, XML, and logs are in `zap-api-scan-{os.environ.get('GITHUB_RUN_ID', 'unknown')}`.",
+          ])
+          with summary.open("a", encoding="utf-8") as handle:
+              handle.write("\n".join(lines) + "\n")
+          PY
+
+      - name: Upload ZAP evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: zap-api-scan-${{ github.run_id }}
+          path: zap-results/
+          if-no-files-found: warn
+          retention-days: 30

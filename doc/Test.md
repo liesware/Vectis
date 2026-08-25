@@ -16,15 +16,17 @@ the system:
   routing, and final app delivery behavior.
 - Schemathesis validates that `doc/openapi.yaml` stays aligned with the running
   API through OpenAPI-based contract fuzzing.
+- OWASP ZAP performs active dynamic security analysis against a disposable
+  HTTPS API instance.
 - k6 measures latency, throughput, and stability under load for a valid positive
   runtime flow.
 - `cargo-fuzz` validates parser, validation, and canonicalization robustness
   against arbitrary byte input.
 
 The layers are complementary. A passing HTTP workflow does not prove the OpenAPI
-contract is accurate, and OpenAPI fuzzing does not replace cryptographically
-valid happy-path tests. k6 does not prove correctness; it measures how a known
-valid flow behaves under load.
+contract is accurate, and OpenAPI fuzzing or DAST does not replace
+cryptographically valid happy-path tests. k6 does not prove correctness; it
+measures how a known valid flow behaves under load.
 
 ## Prerequisites
 
@@ -229,6 +231,47 @@ Schemathesis uses `doc/openapi.yaml` by default.
 Schemathesis helps confirm that the OpenAPI schema and backend validation stay
 in sync. It does not replace `tests/http_positive.py`, which remains the source
 of cryptographically valid happy paths.
+
+## Dynamic API Scanning With OWASP ZAP
+
+GitHub Actions runs an OWASP ZAP API Scan every Tuesday and on manual dispatch
+through `.github/workflows/zap-api-scan.yml`. This is an active DAST scan: ZAP
+imports the OpenAPI contract and sends attack payloads to the described API.
+Run it only against systems that you own and are explicitly authorized to test.
+
+The workflow never targets a deployed Vectis instance. Its dedicated
+`tests/ci/zap_scan.sh` runner creates a disposable HTTPS node with temporary
+SQLite storage, init material, signed profiles, an operational KID, and a
+synthetic application API key. That identity has only data-protection and
+signing permissions; administrative, lifecycle, messaging, routing, and time
+attestation operations remain denied. The complete laboratory is removed after
+the scan.
+
+ZAP, Schemathesis, and `tests/http_fuzz.py` answer different questions:
+
+- ZAP looks for common API and web security vulnerabilities through active and
+  passive scanner rules.
+- Schemathesis checks whether generated requests and observed responses conform
+  to `doc/openapi.yaml`.
+- `tests/http_fuzz.py` applies Vectis-specific mutations and semantic oracles.
+
+The initial ZAP policy is report-only. Scanner exit codes that indicate alerts
+do not fail the workflow, but Docker failures, scanner errors, and timeouts do.
+The workflow summary shows alert counts by risk and publishes HTML, Markdown,
+JSON, XML, ZAP logs, and Vectis logs as a 30-day artifact. The synthetic API key
+is redacted before upload.
+
+On Linux with Docker available, run the same isolated scan locally with:
+
+```sh
+cargo build --locked --all-features
+VECTIS_BIN="$PWD/target/debug/vectis" \
+ZAP_RESULTS_DIR="$PWD/zap-results" \
+bash tests/ci/zap_scan.sh
+```
+
+Review real results before adding rule suppressions. Do not point this runner at
+production, shared test environments, remote peers, or final applications.
 
 ## Performance Testing With k6
 
