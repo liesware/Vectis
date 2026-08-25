@@ -3,9 +3,8 @@ title = "Vectis Gitleaks configuration"
 [extend]
 useDefault = true
 
-[[allowlists]]
-description = "Synthetic API-key-shaped fixtures and documentation examples"
-targetRules = ["generic-api-key"]
+[allowlist]
+description = "Synthetic fixtures, documentation examples, and environment template"
 paths = [
   '''(^|/)(tests|doc|demo|fuzz)/''',
   '''(^|/)env\.dist$''',
