@@ -201,6 +201,139 @@ operator-signed inputs (the unseal key, the signed config), never from a request
 or a stored row. And no secret outlives its use: it is validated on the way in,
 kept in locked memory while live, and zeroized on the way out.
 
+## The Key Hierarchy: Every Key And Where It Comes From
+
+The previous section followed the chain of custody. This one answers the two
+questions a contributor asks next: **exactly which keys exist, and how many?**
+Vectis never stores a key it can avoid storing — almost every key is *derived*
+on demand with HKDF from a parent, using a **domain salt** (which capability)
+and an **info context** (which profile / KID / version). Two rules make the tree
+safe: **domain separation** (a different salt per purpose means the same parent
+never yields the same child twice) and **context binding** (the info ties a
+subkey to one exact profile and KID, so it is useless anywhere else).
+
+There are four levels.
+
+```
+Level 0   unseal key          1   operator-held, 32 bytes, never derived, never stored
+                              │    decrypts init.json (AEAD)
+Level 1   node root key       1   the init symmetric key ("master key")
+                              │    HKDF salt: vectis/internal-keys/v1
+                              ├──► db_key           info: vectis/db-key/v1
+Level 2   internal keys       3   ├──► properties_key    info: vectis/properties-key/v1
+          (admin side)        │    └──► api_auth_key      info: vectis/api-key-auth/v1
+                              │
+                              │    (a separate, per-KID tree lives under each operational key)
+Level 3   per-KID bundle      5   symmetric · eddsa · xecdh · ml-dsa · ml-kem   (+ hash variant)
+          (one KID)          │    the "symmetric" member is the parent for capability subkeys
+                              │    HKDF, per-capability salt + info(profile, kid, version)
+                              ├──► FPE key
+Level 4   per-operation       ├──► MAC key → HMAC subkey        (blind index reuses this)
+          subkeys             ├──► tokenization: hash_key + data_key
+                              ├──► commitment key → HMAC subkey
+                              └──► sharing key → HMAC subkey
+```
+
+### Level 1 — the master key (one)
+
+There is exactly **one** master key: the node **root symmetric key**, carried
+inside the decrypted `init` material (`ValidatedInitState`). Everything else is
+derived from it or from an operational key; nothing above it exists at runtime
+except the unseal key that decrypted it. Losing the root (by losing the unseal
+key) loses the node — by design, there is no recovery path.
+
+### Level 2 — the internal / admin keys (three)
+
+`InternalDerivedKeysState::from_init_state` ([`ops/internal_keys.rs`](../src/ops/internal_keys.rs))
+derives **three** keys from the root, all with the same salt
+(`vectis/internal-keys/v1`) but distinct info labels. These are the "admin side"
+keys — they protect the database itself, not the user's values:
+
+| internal key | derived with info | what it protects |
+|---|---|---|
+| `db_key` | `vectis/db-key/v1` | encrypts the operational **key-material bundle** stored in `opskeys.keys` (the envelope the whole per-KID tree lives in) |
+| `properties_key` | `vectis/properties-key/v1` | encrypts the **metadata** stored in `opskeys.properties` (state, timestamps, profile bindings), kept under its own key so metadata and key bytes never share one |
+| `api_auth_key` | `vectis/api-key-auth/v1` | HMACs presented **API keys** so only the hash is ever compared/stored (constant-time) |
+
+So the mental model "a key per table" is close, but the precise rule is **a key
+per purpose**: `db_key` and `properties_key` split the two columns of the
+`opskeys` table by sensitivity, and `api_auth_key` guards authentication. The
+`tokens` and `indexes` tables are protected by the per-KID keys below, not by a
+fourth admin key.
+
+### Level 3 — the operational key bundle (five per KID)
+
+An operational key (a **KID**) is not one key — `create_key_material`
+([`ops/key_material.rs`](../src/ops/key_material.rs)) generates a **bundle of
+five** freshly random keys, plus a hash-algorithm marker. This whole bundle is
+what `db_key` encrypts into `opskeys.keys`:
+
+| member | kind | used by |
+|---|---|---|
+| `symmetric` | symmetric secret | the **parent** for every Level-4 subkey (FPE, MAC, blind index, tokenization, commitment, sharing) |
+| `eddsa` | Ed25519 keypair | classical half of hybrid **signing** |
+| `xecdh` | X25519 key-agreement keypair | classical half of post-quantum **messaging** |
+| `ml-dsa` | ML-DSA keypair | post-quantum half of hybrid **signing** |
+| `ml-kem` | ML-KEM keypair | post-quantum half of **messaging** |
+
+The two signing schemes and the two messaging schemes are used **together**
+(hybrid), so one broken assumption — classical *or* post-quantum — does not break
+the guarantee.
+
+### Level 4 — the per-operation subkeys (derived on demand)
+
+The symmetric capabilities never use the KID's `symmetric` key directly. Each one
+derives its own subkey with HKDF, using a capability-specific salt and an info
+that binds the profile, the KID, and a version. This is why the same KID can back
+FPE **and** MAC **and** tokenization without any of them sharing key bytes:
+
+| capability | domain salt | subkeys | note |
+|---|---|---|---|
+| **FPE** | `vectis:fpe:ff1:v1` | 1 (the FF1 key) | info binds `(profile, kid, fpe_version)` |
+| **MAC** | `vectis/mac/v1` → `vectis/mac/hmac/v1` | 2 levels (key, then HMAC subkey) | keyed tag via `derive_keyed_tag_subkey` |
+| **Blind index** | *(reuses the MAC derivation)* | — | the digest is `mac::compute_digest`; that is why a blind index selects a MAC profile |
+| **Tokenization** | `vectis/tokenization/v1` | 2 (`hash_key` + `data_key`) | one to derive the lookup hashid, one to encrypt the token payload |
+| **Commitments** | `vectis/commitment/v1` → `vectis/commitment/hmac/v1` | 2 levels | context-bound like MAC |
+| **Secret sharing** | `vectis/sharing/v1` → `vectis/sharing/hmac/v1` | 2 levels | authenticates each share |
+| **Masking** | *(none)* | 0 | masking is a policy view, not a keyed operation |
+| **Signing / Messaging** | *(none — asymmetric)* | 0 | these use the `eddsa`/`ml-dsa` (sign) and `xecdh`/`ml-kem` (messaging) keypairs directly |
+
+The payoff of doing it this way: no capability's key is ever the same as
+another's, a subkey cannot be replayed under a different profile or KID, and every
+symmetric secret in the system traces back through exactly one derivation path to
+the single master key — which itself never leaves the node in the clear.
+
+## The Database And Its Tables
+
+Vectis stores almost nothing, and what it stores is ciphertext. The schema is
+**three tables** ([`src/db/sqlite_schema.sql`](../src/db/sqlite_schema.sql),
+[`src/db/postgres_schema.sql`](../src/db/postgres_schema.sql)) — and, importantly,
+Vectis does **not** create or migrate them: the operator applies the DDL and
+Vectis validates the shape at startup, failing closed if a table is missing
+(Rule 25). Every row is validated as untrusted input on **every** read and write
+before anything is decrypted (Rule 14).
+
+| table | columns | what it holds | protected by |
+|---|---|---|---|
+| **`opskeys`** | `kid` (PK), `keys`, `properties` | one row per operational key. `keys` is the encrypted Level-3 bundle (the five keys); `properties` is the encrypted metadata (lifecycle state, profile bindings, timestamps). | `keys` ← `db_key`, `properties` ← `properties_key` |
+| **`tokens`** | `(kid, hashid)` (PK), `data` | the tokenization vault: one row per tokenized value. `hashid` is the deterministic lookup handle (from the token `hash_key`); `data` is the encrypted original payload (under the token `data_key`). | per-KID tokenization subkeys (Level 4) |
+| **`indexes`** | `(kid, digest)` (PK), — | the blind-index set: the mere **presence** of a `(kid, digest)` row is the searchable fact. The digest is a MAC of the value; the value itself is never stored. | per-KID MAC subkey (Level 4) |
+
+Three things about this schema are the whole design in miniature:
+
+- **The composite primary keys are the security model, not just an index.**
+  `(kid, hashid)` and `(kid, digest)` mean a token or index entry is only ever
+  meaningful *within its KID* — you cannot mix rows across keys, and idempotent
+  creation falls out for free (creating the same blind index twice is a no-op by
+  the primary key, Rule 24).
+- **A blind index stores no value at all** — only a keyed digest. You can ask "is
+  there a record whose value MACs to this digest?" and get yes/no, without the
+  database ever holding the value or anything reversible to it.
+- **A stolen database is inert.** `opskeys.keys` is encrypted under `db_key`,
+  which is derived from the root, which is decrypted by the unseal key the
+  operator holds outside Vectis. Without that key the three tables are noise —
+  which is exactly what the recovery boundary in `HA_DR.md` depends on.
+
 ## The Three Layers And The Dependency Graph
 
 Vectis materializes the layers as **directories** (unlike Nadir, which keeps them
