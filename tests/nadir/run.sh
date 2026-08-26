@@ -190,10 +190,13 @@ denied_client_apikey_hash="$(printf '%s\n' "${denied_client_output}" | json_fiel
 ./vectis config permissions add --client nadir-scoped --apikey-hash "${scoped_client_apikey_hash}" --status active >/dev/null
 ./vectis config permissions grant nadir-local --kid "${kid}" --action keys >/dev/null
 ./vectis config permissions grant nadir-local --kid "${kid}" --action sign >/dev/null
+./vectis config permissions grant nadir-local --kid "${kid}" --action message >/dev/null
 ./vectis config permissions grant nadir-local --kid "${kid}" --action fpe-encrypt >/dev/null
 ./vectis config permissions grant nadir-local --kid "${kid}" --action fpe-decrypt >/dev/null
 ./vectis config permissions grant nadir-local --kid "${kid}" --action mac-create >/dev/null
 ./vectis config permissions grant nadir-local --kid "${kid}" --action mac-verify >/dev/null
+./vectis config permissions grant nadir-local --kid "${kid}" --action index-create >/dev/null
+./vectis config permissions grant nadir-local --kid "${kid}" --action index-verify >/dev/null
 ./vectis config permissions grant nadir-local --kid "${kid}" --action mask >/dev/null
 ./vectis config permissions grant nadir-local --kid "${kid}" --action token-encode >/dev/null
 ./vectis config permissions grant nadir-local --kid "${kid}" --action token-decode >/dev/null

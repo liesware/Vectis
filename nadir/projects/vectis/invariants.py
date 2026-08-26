@@ -17,6 +17,7 @@ _KEY_SHAPE = {
     "ml-dsa": "public_key_der_hex",
     "ml-kem": "public_key_der_hex",
 }
+_SYMMETRIC_VARIANTS = frozenset({"ChaCha20Poly1305", "AES-128/GCM", "AES-192/GCM", "AES-256/GCM"})
 
 
 def _finding(code: str, message: str) -> tuple[Finding, ...]:
@@ -32,6 +33,53 @@ def _json(result: HttpResult) -> object | None:
 
 def _is_hex(value: object) -> bool:
     return isinstance(value, str) and bool(value) and len(value) % 2 == 0 and _HEX.fullmatch(value) is not None
+
+
+def _internal_message(result: HttpResult, context: EvaluationContext) -> tuple[dict[str, object] | None, tuple[Finding, ...]]:
+    body = _json(result)
+    plaintext = context.variables.get("internal_message_plaintext")
+    if not isinstance(plaintext, str):
+        return None, _finding("internal-message-input-invalid", "internal message plaintext control is unavailable")
+    if plaintext.encode("utf-8") in result.body or any(plaintext in value for _, value in result.headers):
+        return None, _finding("internal-message-encrypt-leaks-plaintext", "internal message envelope exposes the plaintext")
+    if not isinstance(body, dict) or set(body) != {"timestamp", "kid", "message"}:
+        return None, _finding("internal-message-envelope-invalid", "internal message response has an invalid envelope shape")
+    timestamp, message = body.get("timestamp"), body.get("message")
+    if (
+        not isinstance(timestamp, str)
+        or not timestamp.isdigit()
+        or body.get("kid") != context.variables.get("kid")
+        or not isinstance(message, dict)
+        or set(message) != {"ctx", "nonce", "aad", "variant"}
+        or not _is_hex(message.get("ctx"))
+        or not _is_hex(message.get("nonce"))
+        or not isinstance(message.get("aad"), str)
+        or not message["aad"]
+        or message.get("variant") not in _SYMMETRIC_VARIANTS
+    ):
+        return None, _finding("internal-message-envelope-invalid", "internal message response does not contain a valid opaque envelope")
+    return body, ()
+
+
+def internal_message_encrypt_output(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+    _, findings = _internal_message(result, context)
+    return findings
+
+
+def internal_message_round_trip(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+    plaintext = context.variables.get("internal_message_plaintext")
+    if not isinstance(plaintext, str):
+        return _finding("internal-message-input-invalid", "internal message plaintext control is unavailable")
+    body = _json(result)
+    if body != {"plaintext": plaintext}:
+        return _finding("internal-message-round-trip-failed", "internal message decrypt did not restore exactly the control plaintext")
+    return ()
+
+
+def internal_message_tamper_rejected(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+    if result.failure is None and result.status is not None and 200 <= result.status < 300:
+        return _finding("mutated-internal-message-accepted", "a modified internal-message AEAD envelope decrypted successfully")
+    return ()
 
 
 def _prohibited_field(value: object) -> str | None:
@@ -190,6 +238,153 @@ def mac_create_output(result: HttpResult, context: EvaluationContext) -> tuple[F
 
 def mac_verification_failure(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
     return _mac_verification(result, context, False, "mutated-mac-accepted", "mutated MAC digest was not rejected")
+
+
+def _index_plaintext_leak(result: HttpResult, context: EvaluationContext, label: str) -> tuple[Finding, ...]:
+    """Per-index defence-in-depth: no declared index plaintext may echo back.
+
+    NoDeclaredSecrets guards these globally, but each index validator also checks
+    directly so a leak is reported with the index-specific code; this helper is the
+    single implementation the three index shapes share.
+    """
+    plaintexts = tuple(
+        value
+        for name, value in context.variables.items()
+        if name.startswith("index_") and "plaintext" in name and isinstance(value, str) and value
+    )
+    if any(value.encode("utf-8") in result.body or any(value in header for _, header in result.headers) for value in plaintexts):
+        return _finding("blind-index-response-leaks-plaintext", f"blind-index {label} exposes a declared plaintext")
+    return ()
+
+
+def _index_response(
+    result: HttpResult,
+    context: EvaluationContext,
+    *,
+    ref_variable: str,
+) -> tuple[dict[str, object] | None, tuple[Finding, ...]]:
+    """Validate the shared single-index response shape without exposing inputs."""
+    leak = _index_plaintext_leak(result, context, "response")
+    if leak:
+        return None, leak
+    body = _json(result)
+    if (
+        not isinstance(body, dict)
+        or body.get("ref") != context.variables.get(ref_variable)
+        or body.get("kid") != context.variables.get("kid")
+        or body.get("profile") != context.variables.get("index_profile")
+        or not _is_hex(body.get("index"))
+        or len(body["index"]) not in {64, 96, 128}
+    ):
+        return None, _finding("blind-index-output-invalid", "blind-index response does not satisfy its public contract")
+    return body, ()
+
+
+def blind_index_create_output(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+    body, findings = _index_response(result, context, ref_variable="index_ref")
+    if findings:
+        return findings
+    if body is None or set(body) != {"ref", "kid", "profile", "index"}:
+        return _finding("blind-index-output-invalid", "blind-index create response has an invalid shape")
+    return ()
+
+
+def blind_index_membership(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+    body, findings = _index_response(result, context, ref_variable="index_ref")
+    if findings:
+        return findings
+    if body is None or set(body) != {"ref", "kid", "profile", "matched", "index"} or body.get("matched") is not True:
+        return _finding("blind-index-membership-failed", "persisted blind index did not match its original plaintext")
+    if body.get("index") != context.variables.get("index_digest"):
+        return _finding("blind-index-digest-mismatch", "blind-index verify returned a digest different from create")
+    return ()
+
+
+def blind_index_nonmembership(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+    body, findings = _index_response(result, context, ref_variable="index_ref")
+    if findings:
+        return findings
+    if body is None or set(body) != {"ref", "kid", "profile", "matched", "index"} or body.get("matched") is not False:
+        return _finding("blind-index-nonmembership-failed", "changed blind-index plaintext unexpectedly matched")
+    if body.get("index") == context.variables.get("index_digest"):
+        return _finding("blind-index-determinism-failed", "different plaintext produced the captured blind-index digest")
+    return ()
+
+
+def blind_index_verify_nonmembership(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+    body, findings = _index_response(result, context, ref_variable="index_verify_ref")
+    if findings:
+        return findings
+    if body is None or set(body) != {"ref", "kid", "profile", "matched", "index"} or body.get("matched") is not False:
+        return _finding("blind-index-nonmembership-failed", "uncreated blind index unexpectedly matched")
+    return ()
+
+
+def _batch_index_response(result: HttpResult, context: EvaluationContext) -> tuple[list[dict[str, object]] | None, tuple[Finding, ...]]:
+    leak = _index_plaintext_leak(result, context, "batch response")
+    if leak:
+        return None, leak
+    body = _json(result)
+    expected_refs = [context.variables.get("index_batch_ref_zero"), context.variables.get("index_batch_ref_one")]
+    if (
+        not isinstance(body, dict)
+        or set(body) != {"kid", "profile", "items"}
+        or body.get("kid") != context.variables.get("kid")
+        or body.get("profile") != context.variables.get("index_profile")
+        or not isinstance(body.get("items"), list)
+        or len(body["items"]) != 2
+        or not all(isinstance(item, dict) and set(item) == {"ref", "matched", "index"} for item in body["items"])
+    ):
+        return None, _finding("blind-index-batch-output-invalid", "blind-index batch verify response has an invalid shape")
+    items = body["items"]
+    if [item["ref"] for item in items] != expected_refs or not all(_is_hex(item["index"]) for item in items):
+        return None, _finding("blind-index-batch-output-invalid", "blind-index batch verify did not preserve its item contract")
+    return items, ()
+
+
+def blind_index_batch_membership(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+    items, findings = _batch_index_response(result, context)
+    if findings:
+        return findings
+    if items is None or [item["matched"] for item in items] != [True, True]:
+        return _finding("blind-index-batch-membership-failed", "blind-index batch control values did not both match")
+    expected = [context.variables.get("index_batch_zero"), context.variables.get("index_batch_one")]
+    if [item["index"] for item in items] != expected:
+        return _finding("blind-index-batch-digest-mismatch", "blind-index batch verify digests differ from batch create")
+    return ()
+
+
+def blind_index_batch_nonmembership(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+    items, findings = _batch_index_response(result, context)
+    if findings:
+        return findings
+    if items is None or [item["matched"] for item in items] != [True, False]:
+        return _finding("blind-index-batch-nonmembership-failed", "changed second blind-index batch value did not produce [true, false]")
+    if items[0]["index"] != context.variables.get("index_batch_zero") or items[1]["index"] == context.variables.get("index_batch_one"):
+        return _finding("blind-index-batch-determinism-failed", "blind-index batch digest did not bind each plaintext")
+    return ()
+
+
+def blind_index_batch_atomicity(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+    leak = _index_plaintext_leak(result, context, "batch response")
+    if leak:
+        return leak
+    body = _json(result)
+    expected_refs = [context.variables.get("index_atomic_ref_zero"), context.variables.get("index_atomic_ref_one")]
+    if (
+        not isinstance(body, dict)
+        or set(body) != {"kid", "profile", "items"}
+        or body.get("kid") != context.variables.get("kid")
+        or body.get("profile") != context.variables.get("index_profile")
+        or not isinstance(body.get("items"), list)
+        or len(body["items"]) != 2
+        or not all(isinstance(item, dict) and set(item) == {"ref", "matched", "index"} for item in body["items"])
+        or [item["ref"] for item in body["items"]] != expected_refs
+        or [item["matched"] for item in body["items"]] != [False, False]
+        or not all(_is_hex(item["index"]) for item in body["items"])
+    ):
+        return _finding("blind-index-batch-atomicity-failed", "rejected blind-index batch left persisted membership behind")
+    return ()
 
 
 def _token_round_trip(result: HttpResult, context: EvaluationContext, prefix: str) -> tuple[Finding, ...]:

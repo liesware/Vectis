@@ -1,3 +1,4 @@
+import hashlib
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
@@ -13,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from nadir.engine import run_project
 from nadir.engine import SetupFailure
 from nadir.project import load_project
+
 
 
 KID = "a" * 64
@@ -32,7 +34,23 @@ class _VectisHandler(BaseHTTPRequestHandler):
     one_time_tokens: set[str] = set()
     token_counter = 0
     issued_tokens: dict[str, str] = {}
+    internal_messages: dict[str, str] = {}
+    internal_counter = 0
+    indexes: set[tuple[str, str]] = set()
     one_time_lock = threading.Lock()
+
+    @staticmethod
+    def _index_digest(profile: str, plaintext: str) -> str:
+        return hashlib.sha256(f"{profile}\0{plaintext}".encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _index_item(item: object) -> tuple[str, str] | None:
+        if not isinstance(item, dict) or set(item) != {"ref", "plaintext"}:
+            return None
+        ref, plaintext = item.get("ref"), item.get("plaintext")
+        if not isinstance(ref, str) or not ref or not isinstance(plaintext, str) or not plaintext:
+            return None
+        return ref, plaintext
 
     def _auth(self, *, allow_scoped=False):
         key = self.headers.get("X-API-Key")
@@ -102,6 +120,29 @@ class _VectisHandler(BaseHTTPRequestHandler):
                 # unauthenticated FF1: a tampered ciphertext decrypts to other bytes
                 self._write(200, {"ref": body.get("ref"), "plaintext": "0000000000"})
             return
+        if self.path == f"/message/internal/encrypt/{KID}":
+            if set(body) != {"plaintext"} or not isinstance(body.get("plaintext"), str) or not body["plaintext"]:
+                self._write(400, {"error": "invalid internal message request"})
+                return
+            type(self).internal_counter += 1
+            timestamp = str(type(self).internal_counter)
+            message = {
+                "ctx": f"{type(self).internal_counter:032x}",
+                "nonce": f"{type(self).internal_counter:024x}",
+                "aad": f"version=v1;type=internal-message;kid={KID};timestamp={timestamp};cipher_alg=AES-128/GCM",
+                "variant": "AES-128/GCM",
+            }
+            envelope = {"timestamp": timestamp, "kid": KID, "message": message}
+            type(self).internal_messages[json.dumps(envelope, sort_keys=True, separators=(",", ":"))] = body["plaintext"]
+            self._write(200, envelope)
+            return
+        if self.path == "/message/internal/decrypt":
+            plaintext = type(self).internal_messages.get(json.dumps(body, sort_keys=True, separators=(",", ":")))
+            if plaintext is None:
+                self._write(400, {"error": "internal message authentication failed"})
+            else:
+                self._write(200, {"plaintext": plaintext})
+            return
         if self.path == f"/mac/{KID}":
             self._write(200, {"ref": body.get("ref"), "kid": KID, "profile": body.get("profile"), "algorithm": "HMAC-SHA-256", "digest": "ab" * 32})
             return
@@ -116,12 +157,66 @@ class _VectisHandler(BaseHTTPRequestHandler):
             )
             self._write(200, {"ref": body.get("ref"), "valid": matches})
             return
+        if self.path == f"/index/{KID}":
+            item = self._index_item({"ref": body.get("ref"), "plaintext": body.get("plaintext")}) if isinstance(body, dict) and set(body) == {"ref", "profile", "plaintext"} else None
+            if item is None or body.get("profile") != "nadir-mac-v1":
+                self._write(400, {"error": "invalid blind index request"})
+                return
+            ref, plaintext = item
+            digest = self._index_digest(body["profile"], plaintext)
+            type(self).indexes.add((KID, digest))
+            self._write(200, {"ref": ref, "kid": KID, "profile": body["profile"], "index": digest})
+            return
+        if self.path == "/index/verify":
+            if not isinstance(body, dict) or set(body) != {"ref", "kid", "profile", "plaintext"}:
+                self._write(400, {"error": "invalid blind index verify request"})
+                return
+            item = self._index_item({"ref": body.get("ref"), "plaintext": body.get("plaintext")})
+            if item is None or body.get("kid") != KID or body.get("profile") != "nadir-mac-v1":
+                self._write(400, {"error": "invalid blind index verify request"})
+                return
+            ref, plaintext = item
+            digest = self._index_digest(body["profile"], plaintext)
+            self._write(200, {"ref": ref, "kid": KID, "profile": body["profile"], "matched": (KID, digest) in type(self).indexes, "index": digest})
+            return
+        if self.path == f"/index/batch/{KID}":
+            if not isinstance(body, dict) or set(body) != {"profile", "items"} or body.get("profile") != "nadir-mac-v1" or not isinstance(body.get("items"), list):
+                self._write(400, {"error": "invalid blind index batch request"})
+                return
+            items = [self._index_item(item) for item in body["items"]]
+            if not items or any(item is None for item in items) or len({item[0] for item in items if item is not None}) != len(items):
+                self._write(400, {"error": "duplicate or invalid blind index batch ref"})
+                return
+            output = []
+            for ref, plaintext in items:
+                digest = self._index_digest(body["profile"], plaintext)
+                output.append({"ref": ref, "index": digest})
+            type(self).indexes.update((KID, item["index"]) for item in output)
+            self._write(200, {"kid": KID, "profile": body["profile"], "items": output})
+            return
+        if self.path == "/index/verify/batch":
+            if not isinstance(body, dict) or set(body) != {"kid", "profile", "items"} or body.get("kid") != KID or body.get("profile") != "nadir-mac-v1" or not isinstance(body.get("items"), list):
+                self._write(400, {"error": "invalid blind index verify batch request"})
+                return
+            items = [self._index_item(item) for item in body["items"]]
+            if not items or any(item is None for item in items) or len({item[0] for item in items if item is not None}) != len(items):
+                self._write(400, {"error": "duplicate or invalid blind index batch ref"})
+                return
+            output = []
+            for ref, plaintext in items:
+                digest = self._index_digest(body["profile"], plaintext)
+                output.append({"ref": ref, "matched": (KID, digest) in type(self).indexes, "index": digest})
+            self._write(200, {"kid": KID, "profile": body["profile"], "items": output})
+            return
         if self.path == f"/mask/{KID}":
             if body.get("profile") != "nadir-mask-v1":
                 self._write(400, {"error": "unknown profile"})
             else:
                 plaintext = body.get("plaintext", "")
-                self._write(200, {"ref": body.get("ref"), "kid": KID, "profile": body["profile"], "masked": "*" * max(0, len(plaintext) - 4) + plaintext[-4:]})
+                if not isinstance(plaintext, str):
+                    self._write(400, {"error": "invalid masking request"})
+                else:
+                    self._write(200, {"ref": body.get("ref"), "kid": KID, "profile": body["profile"], "masked": "*" * max(0, len(plaintext) - 4) + plaintext[-4:]})
             return
         if self.path == f"/token/encode/{KID}":
             profile = body.get("profile")
@@ -173,6 +268,9 @@ class VectisProjectTests(unittest.TestCase):
         _VectisHandler.one_time_tokens.clear()
         _VectisHandler.issued_tokens.clear()
         _VectisHandler.token_counter = 0
+        _VectisHandler.internal_messages.clear()
+        _VectisHandler.internal_counter = 0
+        _VectisHandler.indexes.clear()
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), _VectisHandler)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
@@ -195,6 +293,20 @@ class VectisProjectTests(unittest.TestCase):
             "mac_profile": "nadir-mac-v1",
             "mac_ref": "nadir-mac-control",
             "mac_plaintext": "nadir-mac-sample-value",
+            "index_profile": "nadir-mac-v1",
+            "index_ref": "nadir-index-control",
+            "index_plaintext": "nadir-index-primary-value",
+            "index_mutated_plaintext": "nadir-index-secondary-value",
+            "index_verify_ref": "nadir-index-verify",
+            "index_verify_plaintext": "nadir-index-absent-value",
+            "index_batch_ref_zero": "nadir-index-batch-zero",
+            "index_batch_ref_one": "nadir-index-batch-one",
+            "index_batch_plaintext_zero": "nadir-index-batch-primary",
+            "index_batch_plaintext_one": "nadir-index-batch-secondary",
+            "index_atomic_ref_zero": "nadir-index-atomic-zero",
+            "index_atomic_ref_one": "nadir-index-atomic-one",
+            "index_atomic_plaintext_zero": "nadir-index-atomic-primary",
+            "index_atomic_plaintext_one": "nadir-index-atomic-secondary",
             "mask_profile": "nadir-mask-v1",
             "mask_ref": "nadir-mask-control",
             "mask_plaintext": "nadir-pan-001111",
@@ -214,6 +326,7 @@ class VectisProjectTests(unittest.TestCase):
             "token_once_ref": "nadir-once-control",
             "token_once_plaintext": "nadir-once-plaintext",
             "token_once_metadata_tenant": "nadir-once",
+            "internal_message_plaintext": "nadir-internal-message-control",
         }
         if "NADIR_API_KEY" in os.environ:
             options["api_key"] = os.environ["NADIR_API_KEY"]
@@ -268,8 +381,14 @@ class VectisProjectTests(unittest.TestCase):
                 "vectis.fpe-round-trip",
                 "vectis.fpe-ciphertext",
                 "vectis.mac-verification",
+                "vectis.blind-index-create",
+                "vectis.blind-index-membership",
+                "vectis.blind-index-batch-membership",
+                "vectis.blind-index-batch-atomicity",
                 "vectis.masking",
                 "vectis.masking-policy",
+                "vectis.internal-encrypt",
+                "vectis.internal-message-round-trip",
                 "vectis.token-round-trip",
                 "vectis.one-time-token",
                 "vectis.one-time-token-race",
@@ -278,12 +397,71 @@ class VectisProjectTests(unittest.TestCase):
                 summary = self._run(target)
                 self.assertEqual(summary.targets[0].findings, 0, target)
 
+    def test_internal_message_round_trip_uses_only_semantic_mutations(self):
+        with patch.dict(os.environ, {"NADIR_API_KEY": "test-api-key"}, clear=True):
+            encrypt_summary = self._run("vectis.internal-encrypt")
+            round_trip_summary = self._run("vectis.internal-message-round-trip")
+        self.assertEqual(encrypt_summary.targets[0].findings, 0)
+        self.assertGreaterEqual(encrypt_summary.targets[0].structured, 1)
+        self.assertGreaterEqual(encrypt_summary.targets[0].raw, 1)
+        self.assertGreaterEqual(encrypt_summary.targets[0].deser, 1)
+        self.assertEqual(round_trip_summary.targets[0].findings, 0)
+        self.assertEqual(round_trip_summary.targets[0].structured, 0)
+        self.assertEqual(round_trip_summary.targets[0].raw, 0)
+        self.assertEqual(round_trip_summary.targets[0].deser, 0)
+
+    def test_blind_index_targets_cover_persistence_batch_and_atomicity(self):
+        with patch.dict(os.environ, {"NADIR_API_KEY": "test-api-key"}, clear=True):
+            create_summary = self._run("vectis.blind-index-create")
+            membership_summary = self._run("vectis.blind-index-membership")
+            batch_summary = self._run("vectis.blind-index-batch-membership")
+            atomicity_summary = self._run("vectis.blind-index-batch-atomicity")
+        self.assertEqual(create_summary.targets[0].findings, 0)
+        self.assertGreaterEqual(create_summary.targets[0].structured, 1)
+        self.assertGreaterEqual(create_summary.targets[0].raw, 1)
+        self.assertGreaterEqual(create_summary.targets[0].deser, 1)
+        for summary in (membership_summary, batch_summary, atomicity_summary):
+            self.assertEqual(summary.targets[0].findings, 0)
+            self.assertEqual(summary.targets[0].structured, 0)
+            self.assertEqual(summary.targets[0].raw, 0)
+            self.assertEqual(summary.targets[0].deser, 0)
+
+    def test_internal_plaintext_is_artifact_only_redaction(self):
+        with self.project.fixture(
+            {
+                "base_url": self.base_url,
+                "kid": KID,
+                "api_key": "test-api-key",
+                "internal_message_plaintext": "nadir-internal-message-control",
+                "required_variables": frozenset({"api_key"}),
+            }
+        ) as fixture:
+            self.assertNotIn(b"nadir-internal-message-control", self.project.redaction_values(fixture))
+            self.assertIn(b"nadir-internal-message-control", self.project.artifact_redaction_values(fixture))
+
+    def test_blind_index_plaintexts_are_response_and_artifact_redacted(self):
+        with self.project.fixture(
+            {
+                "base_url": self.base_url,
+                "kid": KID,
+                "api_key": "test-api-key",
+                "index_plaintext": "nadir-index-primary-value",
+                "index_mutated_plaintext": "nadir-index-secondary-value",
+                "required_variables": frozenset({"api_key"}),
+            }
+        ) as fixture:
+            self.assertIn(b"nadir-index-primary-value", self.project.redaction_values(fixture))
+            self.assertIn(b"nadir-index-secondary-value", self.project.redaction_values(fixture))
+            self.assertIn(b"nadir-index-primary-value", self.project.artifact_redaction_values(fixture))
+
     def test_authorization_matrix_uses_401_and_403_per_operation(self):
         with patch.dict(os.environ, {"NADIR_API_KEY": "test-api-key", "NADIR_DENIED_API_KEY": "denied-api-key"}, clear=True):
             for target in (
                 "vectis.sign-authorization",
                 "vectis.fpe-encrypt-authorization",
                 "vectis.mac-create-authorization",
+                "vectis.blind-index-create-authorization",
+                "vectis.blind-index-verify-authorization",
                 "vectis.mask-authorization",
                 "vectis.token-encode-authorization",
             ):

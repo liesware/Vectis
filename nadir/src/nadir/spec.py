@@ -339,6 +339,7 @@ def _target(entry: Mapping[str, object], invariants: Invariants, mutators: Mutat
             control=_step("request", block, control_oracle),
             mutations=mutations,
             mutation_expectation=mutated_oracle,
+            include_generative=bool(entry.get("generative", True)),
         )
 
     producer_block, consumer_block = entry.get("producer"), entry.get("consumer")
@@ -363,4 +364,5 @@ def _target(entry: Mapping[str, object], invariants: Invariants, mutators: Mutat
         mutations=mutations,
         control_expectation=control_oracle,
         mutation_expectation=mutated_oracle,
+        include_generative=bool(entry.get("generative", True)),
     )

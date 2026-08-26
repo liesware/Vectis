@@ -57,6 +57,56 @@ targets:
       control: {status: [200], invariant: verification_success}
       mutated: {status: [200], invariant: verification_failure}
 
+  # --- Internal message AEAD --------------------------------------------------
+  # The shallow target exercises the encrypt surface under every generic input
+  # class. Its control response must be an opaque envelope: the plaintext cannot
+  # appear in any serialized response field or response header.
+  - name: vectis.internal-encrypt
+    request:
+      method: POST
+      path: "/message/internal/encrypt/{kid}"
+      auth: true
+      body: {plaintext: "{internal_message_plaintext}"}
+    mutate:
+      - {json_field: $.plaintext, name: internal-plaintext}
+    expect:
+      control: {status: [200], invariant: internal_message_encrypt_output}
+      mutated: {no_server_error: true}
+
+  # A fresh authenticated envelope is produced for every mutation. AEAD binds
+  # ciphertext, nonce, AAD, and variant, so each independent alteration must be
+  # rejected; no generic input classes run here because encrypt covers them.
+  - name: vectis.internal-message-round-trip
+    generative: false
+    producer:
+      method: POST
+      path: "/message/internal/encrypt/{kid}"
+      auth: true
+      replayable: false
+      body: {plaintext: "{internal_message_plaintext}"}
+    capture:
+      internal_timestamp: $.timestamp
+      internal_kid: $.kid
+      internal_ctx: $.message.ctx
+      internal_nonce: $.message.nonce
+      internal_aad: $.message.aad
+      internal_variant: $.message.variant
+    consumer:
+      method: POST
+      path: /message/internal/decrypt
+      auth: true
+      body:
+        {timestamp: "{internal_timestamp}", kid: "{internal_kid}", message: {ctx: "{internal_ctx}", nonce: "{internal_nonce}", aad: "{internal_aad}", variant: "{internal_variant}"}}
+    mutate:
+      - {json_field: $.message.ctx, name: internal-ctx, alphabet: "0123456789abcdef"}
+      - {json_field: $.message.nonce, name: internal-nonce, alphabet: "0123456789abcdef"}
+      - {json_field: $.message.aad, name: internal-aad}
+      - {json_field: $.message.variant, name: internal-variant}
+    producer_expect: {status: [200], invariant: internal_message_encrypt_output}
+    expect:
+      control: {status: [200], invariant: internal_message_round_trip}
+      mutated: {status: "4xx", json_error: true, invariant: internal_message_tamper_rejected}
+
   # --- Deep: deterministic FPE encrypt -> decrypt -----------------------------
   # FF1 does not authenticate ciphertext. The semantic mutation changes the
   # signed profile selector instead, which must fail rather than silently using
@@ -133,6 +183,102 @@ targets:
     expect:
       control: {status: [200], invariant: mac_verification_success}
       mutated: {status: [200], invariant: mac_verification_failure}
+
+  # --- Blind indexes: persisted deterministic membership ----------------------
+  # Indexes deliberately reuse the MAC profile. This shallow surface target
+  # exercises malformed JSON against creation while ensuring a response never
+  # reflects its input plaintext.
+  - name: vectis.blind-index-create
+    request:
+      method: POST
+      path: "/index/{kid}"
+      auth: true
+      body: {ref: "{index_ref}", profile: "{index_profile}", plaintext: "{index_plaintext}"}
+    mutate:
+      - {json_field: $.plaintext, name: blind-index-plaintext}
+    expect:
+      control: {status: [200], invariant: blind_index_create_output}
+      mutated: {no_server_error: true}
+
+  # Freshly persist a single digest, then distinguish membership from a valid
+  # different plaintext. A false match is a contract failure, not an HTTP error.
+  - name: vectis.blind-index-membership
+    generative: false
+    producer:
+      method: POST
+      path: "/index/{kid}"
+      auth: true
+      replayable: false
+      body: {ref: "{index_ref}", profile: "{index_profile}", plaintext: "{index_plaintext}"}
+    capture: {index_kid: $.kid, index_digest: $.index}
+    consumer:
+      method: POST
+      path: /index/verify
+      auth: true
+      body: {ref: "{index_ref}", kid: "{index_kid}", profile: "{index_profile}", plaintext: "{index_plaintext}"}
+    mutate:
+      - {variable: index_plaintext, from_variable: index_mutated_plaintext, name: blind-index-plaintext}
+    producer_expect: {status: [200], invariant: blind_index_create_output}
+    expect:
+      control: {status: [200], invariant: blind_index_membership}
+      mutated: {status: [200], invariant: blind_index_nonmembership}
+
+  # Batch create and verify preserve item order and bind each digest to its own
+  # plaintext. Mutate only item one, so the expected result is [true, false].
+  - name: vectis.blind-index-batch-membership
+    generative: false
+    flow:
+      - step: create-batch
+        request:
+          method: POST
+          path: "/index/batch/{kid}"
+          auth: true
+          replayable: false
+          body:
+            {profile: "{index_profile}", items: [{ref: "{index_batch_ref_zero}", plaintext: "{index_batch_plaintext_zero}"}, {ref: "{index_batch_ref_one}", plaintext: "{index_batch_plaintext_one}"}]}
+        capture: {index_batch_kid: $.kid, index_batch_zero: $.items.0.index, index_batch_one: $.items.1.index}
+        expect: {status: [200]}
+      - step: verify-batch
+        request:
+          method: POST
+          path: /index/verify/batch
+          auth: true
+          body:
+            {kid: "{index_batch_kid}", profile: "{index_profile}", items: [{ref: "{index_batch_ref_zero}", plaintext: "{index_batch_plaintext_zero}"}, {ref: "{index_batch_ref_one}", plaintext: "{index_batch_plaintext_one}"}]}
+        fuzz: true
+        mutate:
+          - {variable: index_batch_plaintext_one, from_variable: index_mutated_plaintext, name: blind-index-batch-plaintext}
+        expect: {status: [200], invariant: blind_index_batch_membership}
+        fuzz_expect: {status: [200], invariant: blind_index_batch_nonmembership}
+
+  # Duplicate refs make the create batch invalid. The following independent
+  # verify proves the entire batch rolled back instead of persisting item zero.
+  - name: vectis.blind-index-batch-atomicity
+    control: false
+    generative: false
+    flow:
+      - step: rejected-create-batch
+        request:
+          method: POST
+          path: "/index/batch/{kid}"
+          auth: true
+          replayable: false
+          body:
+            {profile: "{index_profile}", items: [{ref: "{index_atomic_ref_zero}", plaintext: "{index_atomic_plaintext_zero}"}, {ref: "{index_atomic_ref_one}", plaintext: "{index_atomic_plaintext_one}"}]}
+        fuzz: true
+        mutate:
+          - {variable: index_atomic_ref_one, from_variable: index_atomic_ref_zero, name: blind-index-batch-duplicate-ref}
+        expect: {status: [200]}
+        fuzz_expect: {status: "4xx", json_error: true}
+        continue_on_rejection: true
+      - step: verify-no-partial-write
+        request:
+          method: POST
+          path: /index/verify/batch
+          auth: true
+          body:
+            {kid: "{kid}", profile: "{index_profile}", items: [{ref: "{index_atomic_ref_zero}", plaintext: "{index_atomic_plaintext_zero}"}, {ref: "{index_atomic_ref_one}", plaintext: "{index_atomic_plaintext_one}"}]}
+        expect: {status: [200], invariant: blind_index_batch_atomicity}
 
   # --- Shallow: display masking -------------------------------------------------
   - name: vectis.masking
@@ -341,6 +487,24 @@ targets:
       - {variable: api_key, from_variable: denied_api_key, name: authz-denied, expected_status: 403}
     expect:
       control: {status: [200], invariant: mac_create_output}
+      mutated: {authorization_matrix: true, json_error: true}
+
+  - name: vectis.blind-index-create-authorization
+    request: {method: POST, path: "/index/{kid}", auth: true, body: {ref: "{index_ref}", profile: "{index_profile}", plaintext: "{index_plaintext}"}}
+    mutate:
+      - {variable: api_key, values: ["", "not-a-real-key"], name: authn-invalid}
+      - {variable: api_key, from_variable: denied_api_key, name: authz-denied, expected_status: 403}
+    expect:
+      control: {status: [200], invariant: blind_index_create_output}
+      mutated: {authorization_matrix: true, json_error: true}
+
+  - name: vectis.blind-index-verify-authorization
+    request: {method: POST, path: /index/verify, auth: true, body: {ref: "{index_verify_ref}", kid: "{kid}", profile: "{index_profile}", plaintext: "{index_verify_plaintext}"}}
+    mutate:
+      - {variable: api_key, values: ["", "not-a-real-key"], name: authn-invalid}
+      - {variable: api_key, from_variable: denied_api_key, name: authz-denied, expected_status: 403}
+    expect:
+      control: {status: [200], invariant: blind_index_verify_nonmembership}
       mutated: {authorization_matrix: true, json_error: true}
 
   - name: vectis.mask-authorization

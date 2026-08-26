@@ -268,6 +268,7 @@ class RequestTarget:
     mutation_expectation: ResponseExpectation
     weights: CaseWeights = CaseWeights()
     malformed_expectation: ResponseExpectation = DEFAULT_MALFORMED_EXPECTATION
+    include_generative: bool = True
 
     def __post_init__(self) -> None:
         if not self.mutations:
@@ -287,6 +288,7 @@ class ProducerConsumerTarget:
     mutation_expectation: ResponseExpectation
     weights: CaseWeights = CaseWeights()
     malformed_expectation: ResponseExpectation = DEFAULT_MALFORMED_EXPECTATION
+    include_generative: bool = True
 
     def __post_init__(self) -> None:
         if not self.mutations:

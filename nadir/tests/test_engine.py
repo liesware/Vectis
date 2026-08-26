@@ -11,7 +11,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from nadir.artifacts import ReproductionRecipe, load_replay_requests, load_reproduction_recipe
-from nadir.engine import _case_seed, reproduce_project, run_project
+from nadir.engine import _case_seed, _target_has_body, reproduce_project, run_project
 from nadir.http import HttpRequest, HttpResult, TransportFailure
 from nadir.mutations import JsonFieldMutation
 from nadir.workflows import AllOf, CaseRecipe, CaseWeights, Capture, EvaluationContext, ExpectNoServerCrash, ExpectStatus, Finding, HttpStep, MutationRecord, NoDeclaredSecrets, ProducerConsumerTarget, ProjectPredicate, ProjectRacePredicate, RaceTarget, RequestTarget
@@ -480,6 +480,20 @@ class EngineTests(unittest.TestCase):
         self.assertEqual((summary.semantic, summary.structured, summary.raw, summary.deser), (1, 1, 1, 1))
         self.assertEqual(summary.required_iterations, 4)
         self.assertEqual(summary.uncovered_classes, ())
+
+    def test_request_target_generative_false_suppresses_body_fuzzing(self):
+        def _request_target(include_generative):
+            return RequestTarget(
+                "synthetic.request",
+                frozenset({"base_url"}),
+                HttpStep("encrypt", "POST", "{base_url}/encrypt", json_body_template={"value": "valid"}),
+                (JsonFieldMutation("semantic", "$.value"),),
+                ExpectStatus(frozenset({200})),
+                include_generative=include_generative,
+            )
+
+        self.assertTrue(_target_has_body(_request_target(True)))
+        self.assertFalse(_target_has_body(_request_target(False)))
 
     def test_scheduler_surfaces_classes_omitted_by_small_budget(self):
         with tempfile.TemporaryDirectory() as directory:

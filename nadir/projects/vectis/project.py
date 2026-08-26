@@ -25,11 +25,21 @@ import invariants
 
 _TARGETS_FILE = _PROJECT_DIRECTORY / "targets.yaml"
 _INVARIANTS = {
+    "blind_index_batch_atomicity": invariants.blind_index_batch_atomicity,
+    "blind_index_batch_membership": invariants.blind_index_batch_membership,
+    "blind_index_batch_nonmembership": invariants.blind_index_batch_nonmembership,
+    "blind_index_create_output": invariants.blind_index_create_output,
+    "blind_index_membership": invariants.blind_index_membership,
+    "blind_index_nonmembership": invariants.blind_index_nonmembership,
+    "blind_index_verify_nonmembership": invariants.blind_index_verify_nonmembership,
     "compact_signature_output": invariants.compact_signature_output,
     "fpe_encrypt_output": invariants.fpe_encrypt_output,
     "fpe_round_trip": invariants.fpe_round_trip,
     "retired_fpe_round_trip": invariants.retired_fpe_round_trip,
     "fpe_ciphertext_integrity": invariants.fpe_ciphertext_integrity,
+    "internal_message_encrypt_output": invariants.internal_message_encrypt_output,
+    "internal_message_round_trip": invariants.internal_message_round_trip,
+    "internal_message_tamper_rejected": invariants.internal_message_tamper_rejected,
     "mac_create_output": invariants.mac_create_output,
     "mac_verification_failure": invariants.mac_verification_failure,
     "mac_verification_success": invariants.mac_verification_success,
@@ -66,7 +76,30 @@ class VectisProject:
     def redaction_values(self, fixture: object) -> tuple[bytes, ...]:
         if not isinstance(fixture, VectisFixture):
             return ()
-        return tuple(key.encode("utf-8") for key in (fixture.api_key, fixture.denied_api_key, fixture.scoped_api_key) if key is not None)
+        values = [key.encode("utf-8") for key in (fixture.api_key, fixture.denied_api_key, fixture.scoped_api_key) if key is not None]
+        extra = dict(fixture.extra)
+        for name in (
+            "index_plaintext",
+            "index_mutated_plaintext",
+            "index_verify_plaintext",
+            "index_batch_plaintext_zero",
+            "index_batch_plaintext_one",
+            "index_atomic_plaintext_zero",
+            "index_atomic_plaintext_one",
+        ):
+            value = extra.get(name)
+            if isinstance(value, str) and value:
+                values.append(value.encode("utf-8"))
+        return tuple(values)
+
+    def artifact_redaction_values(self, fixture: object) -> tuple[bytes, ...]:
+        values = list(self.redaction_values(fixture))
+        if not isinstance(fixture, VectisFixture):
+            return tuple(values)
+        plaintext = dict(fixture.extra).get("internal_message_plaintext")
+        if plaintext:
+            values.append(plaintext.encode("utf-8"))
+        return tuple(values)
 
     def primary_api_key(self, fixture: object) -> bytes | None:
         # The full-privilege key. A finding whose request used the scoped or denied

@@ -318,6 +318,8 @@ def _execute_target(target: Target, iteration, recipe, plan, variables, secrets,
 
 def _target_has_body(target: Target) -> bool:
     if isinstance(target, RequestTarget):
+        if not target.include_generative:
+            return False
         step = target.control
     elif isinstance(target, FlowTarget):
         if not target.include_generative:
@@ -326,6 +328,8 @@ def _target_has_body(target: Target) -> bool:
     elif isinstance(target, RaceTarget):
         return False
     else:
+        if not target.include_generative:
+            return False
         step = target.consumer
     return step.json_body_template is not None
 
@@ -575,6 +579,8 @@ def run_project(
         # different principal are recorded as unreplayable rather than replayed as it.
         primary_getter = getattr(project, "primary_api_key", None)
         primary_api_key = primary_getter(fixture) if callable(primary_getter) else None
+        artifact_redaction_getter = getattr(project, "artifact_redaction_values", None)
+        artifact_secrets = artifact_redaction_getter(fixture) if callable(artifact_redaction_getter) else secrets
         artifacts: list[Path] = []
         summaries: list[TargetSummary] = []
         for target in selected:
@@ -654,7 +660,7 @@ def run_project(
                             run_seed=run_seed,
                             case=case,
                             findings=findings,
-                            secrets=secrets,
+                            secrets=artifact_secrets,
                             primary_api_key=primary_api_key,
                         )
                     )
