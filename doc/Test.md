@@ -194,6 +194,32 @@ semantic oracles that flag verification, AEAD, FPE, tokenization, and
 config-integrity bypasses; `--self-check` tests
 those oracles offline.
 
+### Nadir Stateful HTTP Fuzzing
+
+Nadir is the developing replacement for the stateful and semantic parts of
+`tests/http_fuzz.py`. It models request, producer/consumer, multi-step flow,
+and race targets, then evaluates project-specific invariants across fresh
+workflow state. It remains in parallel with `http_fuzz.py` until the existing
+semantic coverage has been migrated and compared over repeated runs.
+
+Run it against a disposable, automatically provisioned Vectis node:
+
+```sh
+bash tests/nadir/run.sh --iterations 100 --seed 0
+```
+
+New finding artifacts use `nadir-finding-v4` and contain a redacted per-case
+recipe. `replay` only resends stored requests and does not evaluate oracles.
+Use the Vectis wrapper to rebuild state and verify that the original finding
+codes still appear:
+
+```sh
+bash tests/nadir/reproduce.sh tests/nadir/results/<finding.json>
+```
+
+The wrapper provisions a fresh local node, runs `nadir reproduce`, verifies the
+node's audit log, and removes the laboratory. Nadir is not yet part of CI.
+
 ## Schemathesis OpenAPI Tests
 
 Install/sync the fuzz dependency group:
@@ -501,7 +527,10 @@ uses sanitizer builds, and is heavier than the normal HTTP test suite.
   tests.
 - `tests/final_app_server.py`: mock final app receiver and decrypt helper.
 - `tests/http_all.py`: positive + negative summary runner.
-- `tests/http_fuzz.py`: targeted manual HTTP mutation tests.
+- `tests/http_fuzz.py`: targeted manual HTTP mutation tests retained during the
+  Nadir migration.
+- `tests/nadir/run.sh`: isolated Vectis harness for Nadir discovery runs.
+- `tests/nadir/reproduce.sh`: isolated Vectis harness for v4 finding reproduction.
 - `tests/http_negative.py`: invalid, denied, and error-path workflows.
 - `tests/http_positive.py`: valid end-to-end runtime workflows.
 - `tests/http_schemathesis.py`: OpenAPI contract fuzzing via Schemathesis.

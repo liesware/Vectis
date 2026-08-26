@@ -2,12 +2,14 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from nadir.cli import _options, _parser
+from nadir.cli import _options, _parser, main
+from nadir.workflows import Finding
 
 
 class CliEnvironmentTests(unittest.TestCase):
@@ -48,3 +50,54 @@ class CliEnvironmentTests(unittest.TestCase):
     def test_connection_flags_are_not_accepted(self):
         with self.assertRaises(SystemExit):
             _parser().parse_args(["check", "--project", "project.py", "--base-url", "http://127.0.0.1:3000"])
+
+    def test_reproduce_parser_requires_project_and_artifact(self):
+        args = _parser().parse_args(
+            ["reproduce", "--project", "project.py", "--artifact", "finding.json"]
+        )
+        self.assertEqual(args.command, "reproduce")
+
+    def test_reproduce_exit_codes_distinguish_fixed_and_invalid_cases(self):
+        result = SimpleNamespace(
+            target="target",
+            expected_codes=frozenset({"finding"}),
+            findings=(Finding("finding", "message"),),
+            reproduced=True,
+        )
+        arguments = ["reproduce", "--project", "project.py", "--artifact", "finding.json"]
+        with (
+            patch("nadir.cli.load_reproduction_recipe", return_value=object()),
+            patch("nadir.cli.load_project", return_value=object()),
+            patch("nadir.cli._options", return_value={}),
+            patch("nadir.cli.reproduce_project", return_value=result),
+        ):
+            main(arguments)
+
+        result.reproduced = False
+        result.findings = ()
+        with (
+            patch("nadir.cli.load_reproduction_recipe", return_value=object()),
+            patch("nadir.cli.load_project", return_value=object()),
+            patch("nadir.cli._options", return_value={}),
+            patch("nadir.cli.reproduce_project", return_value=result),
+            self.assertRaises(SystemExit) as stopped,
+        ):
+            main(arguments)
+        self.assertEqual(stopped.exception.code, 1)
+
+        with (
+            patch("nadir.cli.load_reproduction_recipe", side_effect=ValueError("invalid artifact")),
+            self.assertRaises(SystemExit) as stopped,
+        ):
+            main(arguments)
+        self.assertEqual(stopped.exception.code, 4)
+
+        with (
+            patch("nadir.cli.load_reproduction_recipe", return_value=object()),
+            patch("nadir.cli.load_project", return_value=object()),
+            patch("nadir.cli._options", return_value={}),
+            patch("nadir.cli.reproduce_project", side_effect=ValueError("missing target")),
+            self.assertRaises(SystemExit) as stopped,
+        ):
+            main(arguments)
+        self.assertEqual(stopped.exception.code, 4)

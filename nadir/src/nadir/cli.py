@@ -7,8 +7,8 @@ import os
 from pathlib import Path
 import sys
 
-from .artifacts import load_replay_requests
-from .engine import SetupFailure, run_project
+from .artifacts import load_replay_requests, load_reproduction_recipe
+from .engine import SetupFailure, reproduce_project, run_project
 from .http import HttpTransport
 from .project import load_project, load_project_environment
 
@@ -37,8 +37,11 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--iterations", type=int, default=20)
     run.add_argument("--seed", type=int, default=0)
     run.add_argument("--output-dir", type=Path, default=Path("nadir-results"))
-    replay = commands.add_parser("replay", help="send one recorded request exactly")
+    replay = commands.add_parser("replay", help="send recorded replayable requests without evaluating oracles")
     replay.add_argument("--artifact", required=True, type=Path)
+    reproduce = commands.add_parser("reproduce", help="rebuild and reevaluate one recorded workflow finding")
+    _common_arguments(reproduce)
+    reproduce.add_argument("--artifact", required=True, type=Path)
     return parser
 
 
@@ -68,7 +71,8 @@ def _print_summary(summary) -> None:
     for target in summary.targets:
         print(
             f"{target.target}: controls={target.controls} "
-            f"expected_rejections={target.expected_rejections} findings={target.findings}"
+            f"mutated_cases={target.mutated_cases} requests={target.requests} "
+            f"findings={target.findings}"
         )
         print(
             f"  classes: semantic={target.semantic} structured={target.structured} "
@@ -76,11 +80,12 @@ def _print_summary(summary) -> None:
         )
         print(
             f"  responses: 2xx={target.responses_2xx} 4xx={target.responses_4xx} "
-            f"5xx={target.responses_5xx} transport_failures={target.transport_failures}"
+            f"5xx={target.responses_5xx} other={target.responses_other} "
+            f"transport_failures={target.transport_failures}"
         )
         if target.uncovered_classes:
             print(
-                f"  coverage: incomplete requested_iterations={target.expected_rejections} "
+                f"  coverage: incomplete requested_iterations={target.mutated_cases} "
                 f"required_iterations={target.required_iterations} "
                 f"uncovered={','.join(target.uncovered_classes)}"
             )
@@ -105,6 +110,28 @@ def main(argv: list[str] | None = None) -> None:
                     print(result.failure.public_message, file=sys.stderr)
                     raise SystemExit(EXIT_REPLAY)
                 print(f"replayed {request.method} {request.url}: HTTP {result.status}")
+            return
+        if args.command == "reproduce":
+            try:
+                recipe = load_reproduction_recipe(args.artifact)
+            except ValueError as error:
+                print(str(error), file=sys.stderr)
+                raise SystemExit(EXIT_REPLAY) from error
+            project = load_project(args.project)
+            options = _options(args.project)
+            try:
+                result = reproduce_project(project, options=options, recipe=recipe)
+            except ValueError as error:
+                print(str(error), file=sys.stderr)
+                raise SystemExit(EXIT_REPLAY) from error
+            observed = sorted({finding.code for finding in result.findings})
+            expected = sorted(result.expected_codes)
+            print(f"target: {result.target}")
+            print(f"expected finding codes: {','.join(expected)}")
+            print(f"observed finding codes: {','.join(observed) if observed else 'none'}")
+            print(f"reproduced: {'yes' if result.reproduced else 'no'}")
+            if not result.reproduced:
+                raise SystemExit(EXIT_FINDINGS)
             return
         project = load_project(args.project)
         if args.command == "list":

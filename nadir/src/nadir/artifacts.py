@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import base64
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 import json
 from pathlib import Path
@@ -12,11 +12,32 @@ from uuid import uuid4
 
 from . import __version__
 from .http import HttpRequest, HttpResult
-from .workflows import Finding, StepExecution, WorkflowCase
+from .workflows import CaseRecipe, Finding, StepExecution, WorkflowCase
 
 
-ARTIFACT_VERSION = "nadir-finding-v3"
+ARTIFACT_VERSION = "nadir-finding-v4"
+REPLAY_ARTIFACT_VERSIONS = frozenset({"nadir-finding-v3", ARTIFACT_VERSION})
 _SENSITIVE_HEADERS = {"authorization", "x-api-key", "cookie", "set-cookie"}
+
+
+@dataclass(frozen=True)
+class ReproductionRecipe:
+    project: str
+    target: str
+    iteration: int
+    run_seed: int
+    case: CaseRecipe
+    finding_codes: frozenset[str]
+
+
+def _load_artifact(path: Path) -> dict[str, object]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("finding artifact is invalid") from error
+    if not isinstance(data, dict):
+        raise ValueError("finding artifact is invalid")
+    return data
 
 
 def _encode_bytes(value: bytes | None) -> dict[str, str] | None:
@@ -156,6 +177,8 @@ def write_finding(
     secrets: tuple[bytes, ...],
     primary_api_key: bytes | None = None,
 ) -> Path:
+    if case.recipe is None:
+        raise ValueError("finding case has no reproduction recipe")
     output_dir.mkdir(parents=True, exist_ok=True)
     steps: list[dict[str, object]] = []
     for step in case.steps:
@@ -168,6 +191,7 @@ def write_finding(
         "target": case.target,
         "run_seed": run_seed,
         "iteration": case.iteration,
+        "recipe": asdict(case.recipe),
         "mutation": None if case.mutation is None else _redact_mutation(asdict(case.mutation), secrets),
         "steps": steps,
         "findings": [asdict(finding) for finding in findings],
@@ -183,12 +207,59 @@ def write_finding(
     return destination
 
 
+def load_reproduction_recipe(path: Path) -> ReproductionRecipe:
+    data = _load_artifact(path)
+    if data.get("artifact_version") != ARTIFACT_VERSION:
+        if data.get("artifact_version") == "nadir-finding-v3":
+            raise ValueError("v3 artifacts support request replay only; use `nadir replay`")
+        raise ValueError("finding artifact version is unsupported")
+    project, target = data.get("project"), data.get("target")
+    iteration, run_seed = data.get("iteration"), data.get("run_seed")
+    recipe = data.get("recipe")
+    findings = data.get("findings")
+    if (
+        not isinstance(project, str)
+        or not project
+        or not isinstance(target, str)
+        or not target
+        or type(iteration) is not int
+        or iteration < 1
+        or type(run_seed) is not int
+        or not isinstance(recipe, dict)
+        or set(recipe) != {"case_class", "case_seed", "mutation_name"}
+        or not isinstance(findings, list)
+        or not findings
+    ):
+        raise ValueError("finding artifact reproduction recipe is invalid")
+    case_class = recipe["case_class"]
+    case_seed = recipe["case_seed"]
+    mutation_name = recipe["mutation_name"]
+    if (
+        case_class not in {"semantic", "structured", "raw", "deser"}
+        or type(case_seed) is not int
+        or case_seed < 0
+        or (mutation_name is not None and (not isinstance(mutation_name, str) or not mutation_name))
+        or (case_class != "semantic" and mutation_name is not None)
+    ):
+        raise ValueError("finding artifact reproduction recipe is invalid")
+    codes: set[str] = set()
+    for finding in findings:
+        if not isinstance(finding, dict) or not isinstance(finding.get("code"), str) or not finding["code"]:
+            raise ValueError("finding artifact findings are invalid")
+        codes.add(finding["code"])
+    return ReproductionRecipe(
+        project,
+        target,
+        iteration,
+        run_seed,
+        CaseRecipe(case_class, case_seed, mutation_name),
+        frozenset(codes),
+    )
+
+
 def load_replay_requests(path: Path, *, api_key: str | None = None) -> tuple[HttpRequest, ...]:
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ValueError("finding artifact is invalid") from error
-    if not isinstance(data, dict) or data.get("artifact_version") != ARTIFACT_VERSION:
+    data = _load_artifact(path)
+    if data.get("artifact_version") not in REPLAY_ARTIFACT_VERSIONS:
         raise ValueError("finding artifact version is unsupported")
     steps = data.get("steps")
     if not isinstance(steps, list) or not steps:

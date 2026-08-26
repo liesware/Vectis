@@ -1,5 +1,6 @@
 import json
 from contextlib import nullcontext
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import sys
@@ -9,11 +10,11 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from nadir.artifacts import load_replay_requests
-from nadir.engine import run_project
+from nadir.artifacts import ReproductionRecipe, load_replay_requests, load_reproduction_recipe
+from nadir.engine import _case_seed, reproduce_project, run_project
 from nadir.http import HttpRequest, HttpResult, TransportFailure
 from nadir.mutations import JsonFieldMutation
-from nadir.workflows import AllOf, CaseWeights, Capture, EvaluationContext, ExpectNoServerCrash, ExpectStatus, Finding, HttpStep, MutationRecord, ProducerConsumerTarget, ProjectPredicate, RequestTarget
+from nadir.workflows import AllOf, CaseRecipe, CaseWeights, Capture, EvaluationContext, ExpectNoServerCrash, ExpectStatus, Finding, HttpStep, MutationRecord, NoDeclaredSecrets, ProducerConsumerTarget, ProjectPredicate, ProjectRacePredicate, RaceTarget, RequestTarget
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -25,11 +26,11 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == "/sign":
-            self.producer_calls += 1
+            type(self).producer_calls += 1
             if self.headers.get("X-API-Key") != "test-key":
                 self._write(401, {"error": "unauthorized"})
             else:
-                self._write(200, {"kid": "a" * 64, "signature": "aaaa.bbbb.cccc.dddd"})
+                self._write(200, {"kid": "a" * 64, "signature": f"{type(self).producer_calls:04x}.bbbb.cccc.dddd"})
             return
         if self.path == "/verify":
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -141,6 +142,113 @@ class _DeserTimeoutTransport:
         return HttpResult(request, 200, (), b"{}", 1)
 
 
+class _FindingProject:
+    name = "synthetic-finding"
+
+    def __init__(self, base_url):
+        self.base_url = base_url
+
+    def target_names(self):
+        return ("synthetic.finding",)
+
+    def fixture(self, options):
+        return nullcontext(_Fixture(self.base_url))
+
+    def healthcheck_step(self):
+        return HttpStep("ready", "GET", "{base_url}/ready", expectation=ExpectStatus(frozenset({200})))
+
+    def redaction_values(self, fixture):
+        return ()
+
+    def self_check(self):
+        return ()
+
+    def targets(self):
+        finding = ExpectStatus(frozenset({201}))
+        return (
+            RequestTarget(
+                "synthetic.finding",
+                frozenset({"base_url", "api_key"}),
+                HttpStep(
+                    "finding",
+                    "POST",
+                    "{base_url}/sign",
+                    (("X-API-Key", "{api_key}"),),
+                    {"value": "valid"},
+                    expectation=ExpectStatus(frozenset({200})),
+                ),
+                (JsonFieldMutation("semantic", "$.value"),),
+                finding,
+                malformed_expectation=finding,
+            ),
+        )
+
+
+class _MultiFindingProject(_FindingProject):
+    def target_names(self):
+        return ("synthetic.extra", "synthetic.finding")
+
+    def targets(self):
+        finding = super().targets()[0]
+        return (replace(finding, name="synthetic.extra"), finding)
+
+
+class _RaceProject:
+    name = "synthetic-race"
+
+    def __init__(self, base_url):
+        self.base_url = base_url
+        self.report_finding = True
+
+    def target_names(self):
+        return ("synthetic.race",)
+
+    def fixture(self, options):
+        return nullcontext(_Fixture(self.base_url))
+
+    def healthcheck_step(self):
+        return HttpStep("ready", "GET", "{base_url}/ready", expectation=ExpectStatus(frozenset({200})))
+
+    def redaction_values(self, fixture):
+        return ()
+
+    def self_check(self):
+        return ()
+
+    def targets(self):
+        def race_finding(results, context):
+            return (
+                (Finding("race-finding", "synthetic race finding"),)
+                if self.report_finding
+                else ()
+            )
+
+        producer = HttpStep(
+            "sign",
+            "POST",
+            "{base_url}/sign",
+            (("X-API-Key", "{api_key}"),),
+            {},
+            expectation=ExpectStatus(frozenset({200})),
+        )
+        contender = lambda name: HttpStep(
+            name,
+            "POST",
+            "{base_url}/verify",
+            json_body_template={"signature": "{signature}"},
+        )
+        return (
+            RaceTarget(
+                "synthetic.race",
+                frozenset({"base_url", "api_key"}),
+                producer,
+                (Capture("signature", "$.signature"),),
+                (contender("a"), contender("b")),
+                ProjectRacePredicate("race", race_finding),
+            ),
+        )
+
+
 class ExpectStatusTransportTests(unittest.TestCase):
     """A mutation that yields un-sendable input is not a server finding (#4)."""
 
@@ -177,6 +285,23 @@ class ExpectStatusTransportTests(unittest.TestCase):
         request = HttpRequest("GET", "http://127.0.0.1/x", (), None)
         self.assertEqual(oracle.evaluate(HttpResult(request, 200, (), b"{}", 1, None), context), ())
 
+    def test_declared_secrets_are_detected_in_body_and_headers(self):
+        request = HttpRequest("GET", "http://127.0.0.1/x", (), None)
+        context = EvaluationContext("t", "step", None, (b"secret-value",))
+        oracle = NoDeclaredSecrets()
+        body_result = HttpResult(request, 200, (), b"secret-value", 1)
+        header_result = HttpResult(request, 200, (("X-Debug", "secret-value"),), b"{}", 1)
+        self.assertEqual([finding.code for finding in oracle.evaluate(body_result, context)], ["response-leaks-declared-secret"])
+        self.assertEqual([finding.code for finding in oracle.evaluate(header_result, context)], ["response-leaks-declared-secret"])
+
+    def test_secret_in_header_name_only_is_not_a_finding(self):
+        # A short declared secret that is a substring of a fixed header NAME (not its
+        # value) must not raise a spurious leak finding; header names carry no secrets.
+        request = HttpRequest("GET", "http://127.0.0.1/x", (), None)
+        context = EvaluationContext("t", "step", None, (b"kid1",))
+        result = HttpResult(request, 200, (("X-Kid1-Trace", "opaque"),), b"{}", 1)
+        self.assertEqual(NoDeclaredSecrets().evaluate(result, context), ())
+
 
 class EngineTests(unittest.TestCase):
     @classmethod
@@ -194,6 +319,8 @@ class EngineTests(unittest.TestCase):
         _Handler.accept_mutation = False
         summary = run_project(_Project(self.base_url), options={}, target_name=None, iterations=1, run_seed=1, output_dir=Path(tempfile.mkdtemp()))
         self.assertEqual(summary.targets[0].findings, 0)
+        self.assertEqual(summary.targets[0].mutated_cases, 1)
+        self.assertEqual(summary.targets[0].requests, 4)
 
     def test_finding_replays_only_consumer_request(self):
         _Handler.accept_mutation = True
@@ -203,6 +330,118 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(len(replay), 1)
         self.assertTrue(replay[0].url.endswith("/verify"))
         _Handler.accept_mutation = False
+
+    def test_stateful_finding_reproduction_rebuilds_dynamic_capture(self):
+        _Handler.accept_mutation = True
+        with tempfile.TemporaryDirectory() as directory:
+            summary = run_project(
+                _Project(self.base_url),
+                options={},
+                target_name=None,
+                iterations=1,
+                run_seed=1,
+                output_dir=Path(directory),
+            )
+            recipe = load_reproduction_recipe(summary.artifacts[0])
+            original_signature = json.loads(summary.artifacts[0].read_text())["steps"][0]["response"]["body"]["value"]
+            result = reproduce_project(_Project(self.base_url), options={}, recipe=recipe)
+        reproduced_signature = result.case.steps[0].result.body.decode("utf-8")
+        self.assertTrue(result.reproduced)
+        self.assertEqual(result.expected_codes, frozenset({"accepted"}))
+        self.assertNotEqual(original_signature, reproduced_signature)
+        _Handler.accept_mutation = False
+
+    def test_reproduction_returns_false_after_finding_is_fixed(self):
+        _Handler.accept_mutation = True
+        with tempfile.TemporaryDirectory() as directory:
+            summary = run_project(
+                _Project(self.base_url), options={}, target_name=None, iterations=1,
+                run_seed=1, output_dir=Path(directory),
+            )
+            recipe = load_reproduction_recipe(summary.artifacts[0])
+        _Handler.accept_mutation = False
+        result = reproduce_project(_Project(self.base_url), options={}, recipe=recipe)
+        self.assertFalse(result.reproduced)
+        self.assertEqual(result.findings, ())
+
+    def test_reproduces_every_generative_case_class(self):
+        project = _FindingProject(self.base_url)
+        for case_class in ("semantic", "structured", "raw", "deser"):
+            mutation_name = "semantic" if case_class == "semantic" else None
+            recipe = ReproductionRecipe(
+                project.name,
+                "synthetic.finding",
+                1,
+                9,
+                CaseRecipe(case_class, _case_seed(9, "synthetic.finding", 1, case_class, mutation_name), mutation_name),
+                frozenset({"unexpected-status"}),
+            )
+            result = reproduce_project(project, options={}, recipe=recipe)
+            self.assertTrue(result.reproduced, case_class)
+
+    def test_tampered_case_seed_is_rejected(self):
+        # A hand-edited artifact whose case_seed no longer matches the run seed
+        # derivation must be refused, not reproduced against the wrong mutation stream.
+        project = _FindingProject(self.base_url)
+        good = _case_seed(9, "synthetic.finding", 1, "semantic", "semantic")
+        recipe = ReproductionRecipe(
+            project.name,
+            "synthetic.finding",
+            1,
+            9,
+            CaseRecipe("semantic", good + 1, "semantic"),
+            frozenset({"unexpected-status"}),
+        )
+        with self.assertRaisesRegex(ValueError, "inconsistent"):
+            reproduce_project(project, options={}, recipe=recipe)
+
+    def test_case_recipe_is_independent_of_other_target_execution(self):
+        project = _MultiFindingProject(self.base_url)
+        with tempfile.TemporaryDirectory() as all_directory, tempfile.TemporaryDirectory() as one_directory:
+            all_summary = run_project(
+                project,
+                options={},
+                target_name=None,
+                iterations=2,
+                run_seed=41,
+                output_dir=Path(all_directory),
+            )
+            one_summary = run_project(
+                project,
+                options={},
+                target_name="synthetic.finding",
+                iterations=2,
+                run_seed=41,
+                output_dir=Path(one_directory),
+            )
+            all_recipes = [
+                load_reproduction_recipe(path).case
+                for path in all_summary.artifacts
+                if load_reproduction_recipe(path).target == "synthetic.finding"
+            ]
+            one_recipes = [load_reproduction_recipe(path).case for path in one_summary.artifacts]
+        self.assertEqual(all_recipes, one_recipes)
+
+    def test_reproduces_race_and_counts_every_contender(self):
+        project = _RaceProject(self.base_url)
+        recipe = ReproductionRecipe(
+            project.name,
+            "synthetic.race",
+            1,
+            3,
+            CaseRecipe("semantic", _case_seed(3, "synthetic.race", 1, "semantic", None)),
+            frozenset({"race-finding"}),
+        )
+        result = reproduce_project(project, options={}, recipe=recipe)
+        self.assertTrue(result.reproduced)
+        self.assertEqual(len(result.case.steps), 3)
+        project.report_finding = False
+        with tempfile.TemporaryDirectory() as directory:
+            summary = run_project(
+                project, options={}, target_name=None, iterations=1,
+                run_seed=3, output_dir=Path(directory),
+            ).targets[0]
+        self.assertEqual(summary.requests, 6)
 
     def test_deser_timeout_with_healthy_ready_is_not_a_dos_finding(self):
         with tempfile.TemporaryDirectory() as directory:

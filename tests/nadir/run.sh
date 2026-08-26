@@ -14,6 +14,12 @@ RESULTS_ROOT="${NADIR_RESULTS_DIR:-${ROOT_DIR}/tests/nadir/results}"
 mkdir -p "${RESULTS_ROOT}"
 RESULTS_DIR="$(mktemp -d "${RESULTS_ROOT}/vectis.XXXXXX")"
 SERVER_PID=""
+NADIR_COMMAND="${NADIR_COMMAND:-run}"
+
+if [[ "${NADIR_COMMAND}" != "run" && "${NADIR_COMMAND}" != "reproduce" ]]; then
+  echo "unsupported Nadir harness command: ${NADIR_COMMAND}" >&2
+  exit 2
+fi
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -85,12 +91,13 @@ cleanup() {
 
   stop_vectis
 
-  if [[ "${status}" -eq 0 ]]; then
+  if [[ "${status}" -eq 0 || "${NADIR_VERIFY_AUDIT_ALWAYS:-false}" == "true" ]]; then
     if ! (cd "${WORKSPACE}" && ./vectis audit verify --file logs/audit.jsonl >/dev/null); then
       echo "Nadir harness: audit verification failed" >&2
-      status=1
+      status=3
     fi
-  else
+  fi
+  if [[ "${status}" -ne 0 ]]; then
     echo "Nadir harness failed; Vectis log follows:" >&2
     tail -n 200 "${WORKSPACE}/logs/vectis.log" >&2 || true
   fi
@@ -208,16 +215,27 @@ denied_client_apikey_hash="$(printf '%s\n' "${denied_client_output}" | json_fiel
 retired_ciphertext="$(./vectis fpe encrypt "${retired_kid}" --json '{"ref":"nadir-retired-fpe-control","profile":"nadir-retired-fpe-v1","plaintext":"1234567890"}' --output json | json_field ciphertext)"
 ./vectis lifecycle "${retired_kid}" --status retired --reason 'nadir lifecycle fixture' --output json >/dev/null
 
-echo "Running Nadir against isolated Vectis at ${BASE_URL}"
-NADIR_BASE_URL="${BASE_URL}" \
-NADIR_KID="${kid}" \
-NADIR_API_KEY="${client_apikey}" \
-NADIR_DENIED_API_KEY="${denied_client_apikey}" \
-NADIR_SCOPED_API_KEY="${scoped_client_apikey}" \
-NADIR_RETIRED_KID="${retired_kid}" \
-NADIR_RETIRED_FPE_CIPHERTEXT="${retired_ciphertext}" \
-UV_CACHE_DIR="${ROOT_DIR}/.uv-cache" \
-uv run --project "${NADIR_PROJECT}" nadir run \
-  --project "${NADIR_VECTIS_PROJECT}" \
-  --output-dir "${RESULTS_DIR}" \
-  "$@"
+echo "Running Nadir ${NADIR_COMMAND} against isolated Vectis at ${BASE_URL}"
+common_environment=(
+  "NADIR_BASE_URL=${BASE_URL}"
+  "NADIR_KID=${kid}"
+  "NADIR_API_KEY=${client_apikey}"
+  "NADIR_DENIED_API_KEY=${denied_client_apikey}"
+  "NADIR_SCOPED_API_KEY=${scoped_client_apikey}"
+  "NADIR_RETIRED_KID=${retired_kid}"
+  "NADIR_RETIRED_FPE_CIPHERTEXT=${retired_ciphertext}"
+  "UV_CACHE_DIR=${ROOT_DIR}/.uv-cache"
+)
+
+if [[ "${NADIR_COMMAND}" == "reproduce" ]]; then
+  env "${common_environment[@]}" \
+    uv run --project "${NADIR_PROJECT}" nadir reproduce \
+      --project "${NADIR_VECTIS_PROJECT}" \
+      "$@"
+else
+  env "${common_environment[@]}" \
+    uv run --project "${NADIR_PROJECT}" nadir run \
+      --project "${NADIR_VECTIS_PROJECT}" \
+      --output-dir "${RESULTS_DIR}" \
+      "$@"
+fi

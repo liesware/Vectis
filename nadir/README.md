@@ -28,13 +28,14 @@ is not a production scanner.
 ## How Nadir works
 
 **Targets are data.** You describe endpoints and flows in a YAML file
-(`targets.yaml`); the engine executes them. There are three target shapes:
+(`targets.yaml`); the engine executes them. There are four target shapes:
 
 | Shape | Use it for |
 |-------|-----------|
 | `request` | a single endpoint (auth fuzzing, a path variable) |
 | `producer` / `consumer` | a 2-step flow (produce an artifact, tamper it, consume it) |
 | `flow` | an N-step flow — build state, break one step, observe downstream |
+| `race` | a producer followed by concurrent contenders and a cross-response invariant |
 
 **Every run mixes four case classes.** For each target Nadir runs one valid
 `control` case, then fills the remaining iterations with:
@@ -109,14 +110,14 @@ all-clear run leaves no empty result directory behind.
 A run prints a per-target summary:
 
 ```
-vectis.keys: controls=1 expected_rejections=8 findings=0
+vectis.keys: controls=1 mutated_cases=8 requests=9 findings=0
   classes: semantic=8 structured=0 raw=0
-  responses: 2xx=1 4xx=8 5xx=0 transport_failures=0
+  responses: 2xx=1 4xx=8 5xx=0 other=0 transport_failures=0
 ```
 
 Exit codes are a contract: `0` no findings, `1` findings, `2` bad
-configuration, `3` infrastructure/setup/cleanup failure, `4` bad replay
-artifact.
+configuration, `3` infrastructure/setup/cleanup failure, `4` incompatible
+replay or reproduction input.
 
 ## Adding an endpoint
 
@@ -204,8 +205,12 @@ not config.
 - {variable: kid, values: ["bad", "../x"]}          # replace a template variable
 - {json_field: $.signature}                         # flip a character in a field
 - {json_field: $.sig, delimiter: ".", segments: [0,1,2,3], name: seg}
+- {json_field: $.sig, delimiter: ".", segments: [-1], name: last-seg}
 - some-registered-group                             # a named group from the project
 ```
+
+Segment indices use Python-style indexing: `0` is the first segment and `-1`
+is the last segment.
 
 Generic `structured` and `raw` mutations are added automatically; you do not
 list them.
@@ -227,22 +232,44 @@ values from the environment instead of hardcoding them:
 `env.dist` holds committed defaults (keep them blank or synthetic). An exported
 `NADIR_*` overrides the file, so local credentials never touch Git.
 
-## Findings and replay
+## Findings, replay, and reproduction
 
 Findings are written under `nadir-results/` — the redacted step sequence, the
-mutation record, the run seed, and exact request/response bytes (Base64 when a
-value does not round-trip as UTF-8). Declared secrets are scrubbed everywhere,
-including the mutation record; if redaction ever fails, the artifact is refused.
+mutation record, the run seed, a per-case reproduction recipe, and exact
+request/response bytes (Base64 when a value does not round-trip as UTF-8).
+Declared secrets are scrubbed everywhere, including response headers and the
+mutation record; if redaction ever fails, the artifact is refused.
 
-Replay re-sends the exact recorded replayable request without generating a new
-mutation. A public artifact needs no credentials. For an authenticated artifact,
-Nadir keeps only `requires_api_key: true`; it takes a fresh `NADIR_API_KEY` from
-the environment and injects it as `X-API-Key` at replay time. The original key
-is never persisted.
+`replay` is a low-level transport tool. It re-sends exact recorded replayable
+requests, but does not rebuild state or evaluate oracles. A public artifact
+needs no credentials. For an authenticated artifact, Nadir keeps only
+`requires_api_key: true`; it takes a fresh `NADIR_API_KEY` from the environment
+and injects it as `X-API-Key` at replay time. The original key is never
+persisted. Both v3 and v4 artifacts support replay.
 
 ```sh
 NADIR_API_KEY='...' uv run nadir replay --artifact nadir-results/<finding>.json
 ```
+
+`reproduce` is the finding-level operation for v4 artifacts. It loads the
+current target, runs its producer or preamble again, captures fresh dynamic
+values, reapplies the named mutation with the recorded case seed, and reruns
+all oracles. A case is reproduced when every original finding code appears
+again; additional findings are still reported.
+
+```sh
+uv run nadir reproduce \
+  --project projects/vectis/project.py \
+  --artifact nadir-results/<finding>.json
+
+# Vectis: provision a new isolated node before reproducing the workflow
+bash tests/nadir/reproduce.sh tests/nadir/results/<finding>.json
+```
+
+For `reproduce`, exit `0` means the original finding codes reappeared, exit `1`
+means the workflow ran but they did not, and exit `4` means the artifact recipe,
+target, or named mutator is incompatible. A v3 artifact has no recipe and must
+be used with `replay`.
 
 ## Project files
 
@@ -300,7 +327,7 @@ nadir/
 │   ├── workflows.py          # declarative types: targets, steps, oracles, findings
 │   ├── mutations.py          # generic mutators + JSON navigation + bad-value vocabulary
 │   ├── spec.py               # YAML → target dataclasses (the config layer)
-│   ├── artifacts.py          # versioned, redacted finding evidence + replay
+│   ├── artifacts.py          # versioned, redacted evidence + replay/reproduction recipes
 │   └── project.py            # the Project protocol, project loader, env.dist parsing
 ├── projects/vectis/          # the Vectis integration — the only domain-aware code
 │   ├── targets.yaml          # endpoints and flows (config)
@@ -312,8 +339,8 @@ nadir/
     ├── test_architecture.py  # enforces src/nadir never imports project code
     ├── test_mutations.py     # deterministic + generative mutators
     ├── test_spec.py          # YAML loader: shapes, required vars, validation
-    ├── test_artifacts.py     # byte round-trip, mandatory redaction, replay
-    ├── test_engine.py        # producer→consumer execution and replay
+    ├── test_artifacts.py     # byte round-trip, mandatory redaction, recipes, replay
+    ├── test_engine.py        # workflows, races, metrics, and reproduction
     ├── test_flow.py          # N-step flow: preamble, broken step, downstream catch
     ├── test_cli.py           # command wiring and exit codes
     ├── test_invariants.py    # Vectis oracle self-checks
@@ -324,13 +351,13 @@ nadir/
 
 | File | Purpose |
 |------|---------|
-| `cli.py` | The command-line boundary. Parses `list`/`check`/`run`/`replay`, loads the project module, turns every `NADIR_*` value into a template variable, and maps results to exit codes. Contains no fuzzing logic. |
-| `engine.py` | The heart. Renders request templates once, guarantees every semantic and applicable structured/raw/deserialization class before weighted draws, executes `request`, `producer→consumer`, and `flow` targets, threads captures through a flow, and reports classes omitted by a small iteration budget. |
+| `cli.py` | The command-line boundary. Parses `list`/`check`/`run`/`replay`/`reproduce`, loads the project module, turns every `NADIR_*` value into a template variable, and maps results to exit codes. Contains no fuzzing logic. |
+| `engine.py` | The heart. Renders request templates once, guarantees every semantic and applicable structured/raw/deserialization class before weighted draws, executes request, producer/consumer, flow, and race targets, threads captures through workflows, and reproduces findings from per-case recipes. |
 | `http.py` | The only place that talks HTTP. Sends bounded requests, captures exact bytes, classifies transport failures (dns/tls/refused/reset/timeout/…), and refuses non-loopback hosts by default. |
 | `workflows.py` | The shared vocabulary the engine and projects both speak: target types, `HttpStep`, `Capture`, the composable oracles (`ExpectStatus`, `ExpectAuthorizationMatrix`, `ExpectNoServerError`, `NoDeclaredSecrets`, `ProjectPredicate`, `AllOf`), `Finding`, and `MutationRecord`. No behavior beyond oracle evaluation. |
 | `mutations.py` | Generic mutators: deterministic ones (template value, JSON field) and generative ones (`StructuredMutation`, `RawBodyMutation`), plus JSON path navigation and the bad-value vocabulary. Knows no domain concepts. |
 | `spec.py` | Translates `targets.yaml` into the dataclasses in `workflows.py`. Resolves generic oracles inline and named invariants against a project-supplied registry. The single YAML↔engine translation layer. |
-| `artifacts.py` | Owns durable evidence: version, redaction (including the mutation record), lossless byte encoding, atomic write, and exact replay. Refuses to publish if a declared secret survives redaction. |
+| `artifacts.py` | Owns durable evidence: version, redaction, lossless byte encoding, atomic write, exact replay, and deterministic reproduction recipes. Refuses to publish if a declared secret survives redaction. |
 | `project.py` | Defines the `Project` protocol, loads a project from an explicit path, and parses `env.dist` with process-environment overrides. |
 
 ### Project integration (`projects/vectis/`)

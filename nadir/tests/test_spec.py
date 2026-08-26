@@ -96,3 +96,18 @@ targets:
         (target,) = load_targets(document, invariants={})
         self.assertEqual(target.required_variables, frozenset({"base_url", "api_key", "denied_api_key"}))
         self.assertEqual([mutation.name for mutation in target.mutations], ["authn-invalid-0", "authz-denied"])
+
+    def test_duplicate_mutation_names_are_rejected(self):
+        document = """
+targets:
+  - name: demo.duplicate
+    request: {method: POST, path: /test, body: {first: a, second: b}}
+    mutate:
+      - {json_field: $.first, name: duplicate}
+      - {json_field: $.second, name: duplicate}
+    expect:
+      control: {status: [200]}
+      mutated: {status: [400]}
+"""
+        with self.assertRaisesRegex(ValueError, "duplicate mutation names"):
+            load_targets(document, invariants={})

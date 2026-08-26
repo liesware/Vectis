@@ -243,13 +243,13 @@ class VectisProjectTests(unittest.TestCase):
         with patch.dict(os.environ, {"NADIR_API_KEY": "test-api-key", "NADIR_DENIED_API_KEY": "denied-api-key"}, clear=True):
             summary = self._run("vectis.keys")
         self.assertEqual(summary.targets[0].findings, 0)
-        self.assertGreater(summary.targets[0].expected_rejections, 0)
+        self.assertGreater(summary.targets[0].mutated_cases, 0)
 
     def test_sign_target_requires_environment_api_key_and_checks_all_segments(self):
         with patch.dict(os.environ, {"NADIR_API_KEY": "test-api-key"}, clear=True):
             summary = self._run("vectis.sign-verification")
         self.assertEqual(summary.targets[0].findings, 0)
-        self.assertEqual(summary.targets[0].expected_rejections, 5)
+        self.assertEqual(summary.targets[0].mutated_cases, 5)
 
     def test_sign_target_fails_before_requests_without_api_key(self):
         with patch.dict(os.environ, {}, clear=True):

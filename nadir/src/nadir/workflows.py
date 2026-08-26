@@ -94,7 +94,12 @@ class ExpectJsonShape:
 class NoDeclaredSecrets:
     def evaluate(self, result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
         for secret in context.declared_secrets:
-            if secret and secret in result.body:
+            if not secret:
+                continue
+            # Header names are fixed protocol tokens, never secret material; scanning
+            # them produces false positives when a short secret is a substring of a name.
+            leaked_in_headers = any(secret in value.encode("utf-8") for _, value in result.headers)
+            if secret in result.body or leaked_in_headers:
                 return (Finding("response-leaks-declared-secret", f"{context.step} response contains a declared secret"),)
         return ()
 
@@ -225,6 +230,13 @@ class RequestMutation(Protocol):
     def apply(self, variables: Mapping[str, object], body: object | None) -> tuple[dict[str, object], object | None, MutationRecord]: ...
 
 
+def _validate_mutation_names(target: str, mutations: tuple[RequestMutation, ...]) -> None:
+    names = [mutation.name for mutation in mutations]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        raise ValueError(f"target {target} has duplicate mutation names: {', '.join(duplicates)}")
+
+
 @dataclass(frozen=True)
 class CaseWeights:
     """Relative weights for generative case classes past the curated semantic set."""
@@ -260,6 +272,7 @@ class RequestTarget:
     def __post_init__(self) -> None:
         if not self.mutations:
             raise ValueError(f"target {self.name} must declare at least one mutation")
+        _validate_mutation_names(self.name, self.mutations)
 
 
 @dataclass(frozen=True)
@@ -278,6 +291,7 @@ class ProducerConsumerTarget:
     def __post_init__(self) -> None:
         if not self.mutations:
             raise ValueError(f"target {self.name} must declare at least one mutation")
+        _validate_mutation_names(self.name, self.mutations)
 
 
 @dataclass(frozen=True)
@@ -312,6 +326,7 @@ class FlowTarget:
     def __post_init__(self) -> None:
         if not self.mutations:
             raise ValueError(f"flow {self.name} must declare at least one mutation")
+        _validate_mutation_names(self.name, self.mutations)
         fuzz_steps = [index for index, step in enumerate(self.steps) if step.fuzz]
         if len(fuzz_steps) != 1:
             raise ValueError(f"flow {self.name} must mark exactly one step with fuzz: true")
@@ -342,8 +357,16 @@ class StepExecution:
 
 
 @dataclass(frozen=True)
+class CaseRecipe:
+    case_class: str
+    case_seed: int
+    mutation_name: str | None = None
+
+
+@dataclass(frozen=True)
 class WorkflowCase:
     target: str
     iteration: int
     mutation: MutationRecord | None
     steps: tuple[StepExecution, ...]
+    recipe: CaseRecipe | None = None
