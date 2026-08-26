@@ -25,14 +25,24 @@ import invariants
 
 _TARGETS_FILE = _PROJECT_DIRECTORY / "targets.yaml"
 _INVARIANTS = {
+    "compact_signature_output": invariants.compact_signature_output,
+    "fpe_encrypt_output": invariants.fpe_encrypt_output,
     "fpe_round_trip": invariants.fpe_round_trip,
+    "retired_fpe_round_trip": invariants.retired_fpe_round_trip,
     "fpe_ciphertext_integrity": invariants.fpe_ciphertext_integrity,
+    "mac_create_output": invariants.mac_create_output,
     "mac_verification_failure": invariants.mac_verification_failure,
     "mac_verification_success": invariants.mac_verification_success,
     "masking_output": invariants.masking_output,
+    "masking_policy_output": invariants.masking_policy_output,
     "public_keys_output": invariants.public_keys_output,
     "token_round_trip": invariants.token_round_trip,
     "token_once_round_trip": invariants.token_once_round_trip,
+    "token_distinct_output": invariants.token_distinct_output,
+    "token_once_output": invariants.token_once_output,
+    "one_time_token_race": invariants.one_time_token_race,
+    "one_time_token_batch_round_trip": invariants.one_time_token_batch_round_trip,
+    "token_output": invariants.token_output,
     "verification_success": invariants.verification_success,
     "verification_failure": invariants.verification_failure,
 }
@@ -54,9 +64,16 @@ class VectisProject:
         return HttpStep("ready", "GET", "{base_url}/healthz/ready", expectation=ExpectStatus(frozenset({200})))
 
     def redaction_values(self, fixture: object) -> tuple[bytes, ...]:
-        if not isinstance(fixture, VectisFixture) or fixture.api_key is None:
+        if not isinstance(fixture, VectisFixture):
             return ()
-        return (fixture.api_key.encode("utf-8"),)
+        return tuple(key.encode("utf-8") for key in (fixture.api_key, fixture.denied_api_key, fixture.scoped_api_key) if key is not None)
+
+    def primary_api_key(self, fixture: object) -> bytes | None:
+        # The full-privilege key. A finding whose request used the scoped or denied
+        # key is not replayed with this one; it is recorded as unreplayable.
+        if not isinstance(fixture, VectisFixture) or fixture.api_key is None:
+            return None
+        return fixture.api_key.encode("utf-8")
 
     def self_check(self) -> tuple[Finding, ...]:
         return ()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import sys
 
@@ -77,6 +78,14 @@ def _print_summary(summary) -> None:
             f"  responses: 2xx={target.responses_2xx} 4xx={target.responses_4xx} "
             f"5xx={target.responses_5xx} transport_failures={target.transport_failures}"
         )
+        if target.uncovered_classes:
+            print(
+                f"  coverage: incomplete requested_iterations={target.expected_rejections} "
+                f"required_iterations={target.required_iterations} "
+                f"uncovered={','.join(target.uncovered_classes)}"
+            )
+        else:
+            print(f"  coverage: complete required_iterations={target.required_iterations}")
     for artifact in summary.artifacts:
         print(f"finding artifact: {artifact}")
 
@@ -86,7 +95,7 @@ def main(argv: list[str] | None = None) -> None:
     try:
         if args.command == "replay":
             try:
-                requests = load_replay_requests(args.artifact)
+                requests = load_replay_requests(args.artifact, api_key=os.environ.get("NADIR_API_KEY"))
             except ValueError as error:
                 print(str(error), file=sys.stderr)
                 raise SystemExit(EXIT_REPLAY) from error

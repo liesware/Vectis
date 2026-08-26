@@ -220,6 +220,7 @@ values from the environment instead of hardcoding them:
 | `NADIR_BASE_URL` | `{base_url}` | required, loopback only |
 | `NADIR_KID` | `{kid}` | required |
 | `NADIR_API_KEY` | `{api_key}` | redacted from artifacts; used when `auth: true` |
+| `NADIR_SCOPED_API_KEY` | `{scoped_api_key}` | optional valid least-privilege client for scope targets; redacted |
 | `NADIR_DIGEST` | `{digest}` | example of a free-form value |
 | `NADIR_ANYTHING` | `{anything}` | any other `NADIR_*` flows through |
 
@@ -234,10 +235,13 @@ value does not round-trip as UTF-8). Declared secrets are scrubbed everywhere,
 including the mutation record; if redaction ever fails, the artifact is refused.
 
 Replay re-sends the exact recorded replayable request without generating a new
-mutation:
+mutation. A public artifact needs no credentials. For an authenticated artifact,
+Nadir keeps only `requires_api_key: true`; it takes a fresh `NADIR_API_KEY` from
+the environment and injects it as `X-API-Key` at replay time. The original key
+is never persisted.
 
 ```sh
-uv run nadir replay --artifact nadir-results/<finding>.json
+NADIR_API_KEY='...' uv run nadir replay --artifact nadir-results/<finding>.json
 ```
 
 ## Project files
@@ -321,9 +325,9 @@ nadir/
 | File | Purpose |
 |------|---------|
 | `cli.py` | The command-line boundary. Parses `list`/`check`/`run`/`replay`, loads the project module, turns every `NADIR_*` value into a template variable, and maps results to exit codes. Contains no fuzzing logic. |
-| `engine.py` | The heart. Renders request templates once, schedules control plus semantic, structured, raw, and bounded-deserialization-stress cases, executes `request`, `producer→consumer`, and `flow` targets, threads captured values through a flow, and aggregates findings and coverage counters. |
+| `engine.py` | The heart. Renders request templates once, guarantees every semantic and applicable structured/raw/deserialization class before weighted draws, executes `request`, `producer→consumer`, and `flow` targets, threads captures through a flow, and reports classes omitted by a small iteration budget. |
 | `http.py` | The only place that talks HTTP. Sends bounded requests, captures exact bytes, classifies transport failures (dns/tls/refused/reset/timeout/…), and refuses non-loopback hosts by default. |
-| `workflows.py` | The shared vocabulary the engine and projects both speak: target types, `HttpStep`, `Capture`, the composable oracles (`ExpectStatus`, `ExpectNoServerError`, `NoDeclaredSecrets`, `ProjectPredicate`, `AllOf`), `Finding`, and `MutationRecord`. No behavior beyond oracle evaluation. |
+| `workflows.py` | The shared vocabulary the engine and projects both speak: target types, `HttpStep`, `Capture`, the composable oracles (`ExpectStatus`, `ExpectAuthorizationMatrix`, `ExpectNoServerError`, `NoDeclaredSecrets`, `ProjectPredicate`, `AllOf`), `Finding`, and `MutationRecord`. No behavior beyond oracle evaluation. |
 | `mutations.py` | Generic mutators: deterministic ones (template value, JSON field) and generative ones (`StructuredMutation`, `RawBodyMutation`), plus JSON path navigation and the bad-value vocabulary. Knows no domain concepts. |
 | `spec.py` | Translates `targets.yaml` into the dataclasses in `workflows.py`. Resolves generic oracles inline and named invariants against a project-supplied registry. The single YAML↔engine translation layer. |
 | `artifacts.py` | Owns durable evidence: version, redaction (including the mutation record), lossless byte encoding, atomic write, and exact replay. Refuses to publish if a declared secret survives redaction. |

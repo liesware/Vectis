@@ -80,3 +80,19 @@ class SpecTests(unittest.TestCase):
         )
         (target,) = load_targets(document, invariants={})
         self.assertEqual(target.required_variables, frozenset({"base_url", "id"}))
+
+    def test_authorization_matrix_declares_denied_credential_dependency(self):
+        document = """
+targets:
+  - name: demo.auth
+    request: {method: POST, path: /protected, auth: true, body: {value: ok}}
+    mutate:
+      - {variable: api_key, values: [bad], name: authn-invalid}
+      - {variable: api_key, from_variable: denied_api_key, name: authz-denied}
+    expect:
+      control: {status: [200]}
+      mutated: {authorization_matrix: true, json_error: true}
+"""
+        (target,) = load_targets(document, invariants={})
+        self.assertEqual(target.required_variables, frozenset({"base_url", "api_key", "denied_api_key"}))
+        self.assertEqual([mutation.name for mutation in target.mutations], ["authn-invalid-0", "authz-denied"])

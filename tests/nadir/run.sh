@@ -166,12 +166,21 @@ done
 ./vectis health ready --output json >/dev/null
 
 kid="$(./vectis keys create --tag nadir-target --profile hybrid-standard-v1 --output json | json_field kid)"
+retired_kid="$(./vectis keys create --tag nadir-retired-target --profile hybrid-standard-v1 --output json | json_field kid)"
 client_output="$(./vectis apikey create --output json)"
 client_apikey="$(printf '%s\n' "${client_output}" | json_field VECTIS_APIKEY)"
 client_apikey_hash="$(printf '%s\n' "${client_output}" | json_field VECTIS_APIKEY_HASH)"
+scoped_client_output="$(./vectis apikey create --output json)"
+scoped_client_apikey="$(printf '%s\n' "${scoped_client_output}" | json_field VECTIS_APIKEY)"
+scoped_client_apikey_hash="$(printf '%s\n' "${scoped_client_output}" | json_field VECTIS_APIKEY_HASH)"
+denied_client_output="$(./vectis apikey create --output json)"
+denied_client_apikey="$(printf '%s\n' "${denied_client_output}" | json_field VECTIS_APIKEY)"
+denied_client_apikey_hash="$(printf '%s\n' "${denied_client_output}" | json_field VECTIS_APIKEY_HASH)"
 
 ./vectis config init >/dev/null
 ./vectis config permissions add --client nadir-local --apikey-hash "${client_apikey_hash}" --status active >/dev/null
+./vectis config permissions add --client nadir-denied --apikey-hash "${denied_client_apikey_hash}" --status active >/dev/null
+./vectis config permissions add --client nadir-scoped --apikey-hash "${scoped_client_apikey_hash}" --status active >/dev/null
 ./vectis config permissions grant nadir-local --kid "${kid}" --action keys >/dev/null
 ./vectis config permissions grant nadir-local --kid "${kid}" --action sign >/dev/null
 ./vectis config permissions grant nadir-local --kid "${kid}" --action fpe-encrypt >/dev/null
@@ -181,7 +190,11 @@ client_apikey_hash="$(printf '%s\n' "${client_output}" | json_field VECTIS_APIKE
 ./vectis config permissions grant nadir-local --kid "${kid}" --action mask >/dev/null
 ./vectis config permissions grant nadir-local --kid "${kid}" --action token-encode >/dev/null
 ./vectis config permissions grant nadir-local --kid "${kid}" --action token-decode >/dev/null
+./vectis config permissions grant nadir-local --kid "${retired_kid}" --action fpe-encrypt >/dev/null
+./vectis config permissions grant nadir-local --kid "${retired_kid}" --action fpe-decrypt >/dev/null
+./vectis config permissions grant nadir-scoped --kid "${kid}" --action fpe-encrypt >/dev/null
 ./vectis config fpe add --name nadir-fpe-v1 --kid "${kid}" --alphabet 0123456789 --min-len 6 --max-len 32 --tweak-aad 'tenant=nadir;field=account;version=1' >/dev/null
+./vectis config fpe add --name nadir-retired-fpe-v1 --kid "${retired_kid}" --alphabet 0123456789 --min-len 6 --max-len 32 --tweak-aad 'tenant=nadir;field=historical-account;version=1' >/dev/null
 ./vectis config mac add --name nadir-mac-v1 --kid "${kid}" --context 'tenant=nadir;field=pan;purpose=mac;version=1' >/dev/null
 ./vectis config masking add --name nadir-mask-v1 --kid "${kid}" --visible-first 0 --visible-last 4 --mask-char '*' --min-len 12 --max-len 19 >/dev/null
 ./vectis config token add --name nadir-token-v1 --kid "${kid}" --token-prefix nadir_tok --token-len 32 --max-plaintext-len 128 --one-time false >/dev/null
@@ -190,10 +203,19 @@ client_apikey_hash="$(printf '%s\n' "${client_output}" | json_field VECTIS_APIKE
 ./vectis config sign --output json >/dev/null
 ./vectis config reload --output json >/dev/null
 
+# State transition fixture: produce one historical ciphertext while active, then
+# retire the KID. The target suite can now assert both sides of the lifecycle.
+retired_ciphertext="$(./vectis fpe encrypt "${retired_kid}" --json '{"ref":"nadir-retired-fpe-control","profile":"nadir-retired-fpe-v1","plaintext":"1234567890"}' --output json | json_field ciphertext)"
+./vectis lifecycle "${retired_kid}" --status retired --reason 'nadir lifecycle fixture' --output json >/dev/null
+
 echo "Running Nadir against isolated Vectis at ${BASE_URL}"
 NADIR_BASE_URL="${BASE_URL}" \
 NADIR_KID="${kid}" \
 NADIR_API_KEY="${client_apikey}" \
+NADIR_DENIED_API_KEY="${denied_client_apikey}" \
+NADIR_SCOPED_API_KEY="${scoped_client_apikey}" \
+NADIR_RETIRED_KID="${retired_kid}" \
+NADIR_RETIRED_FPE_CIPHERTEXT="${retired_ciphertext}" \
 UV_CACHE_DIR="${ROOT_DIR}/.uv-cache" \
 uv run --project "${NADIR_PROJECT}" nadir run \
   --project "${NADIR_VECTIS_PROJECT}" \

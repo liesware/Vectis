@@ -14,11 +14,11 @@ targets:
   - name: vectis.keys
     request: {method: GET, path: "/keys/properties/{kid}", auth: true}
     mutate:
-      - variable: api_key
-        values: ["", "0000000000000000000000000000000000000000", "not-a-real-key", "wrong-but-plausible"]
+      - {variable: api_key, values: ["", "0000000000000000000000000000000000000000", "not-a-real-key", "wrong-but-plausible"], name: authn-invalid}
+      - {variable: api_key, from_variable: denied_api_key, name: authz-denied, expected_status: 403}
     expect:
       control: {status: [200]}
-      mutated: {status: [401, 403]}
+      mutated: {authorization_matrix: true, json_error: true}
 
   # --- Shallow: path-variable fuzzing, one named shape invariant ---------------
   - name: vectis.public-keys
@@ -52,6 +52,7 @@ targets:
         delimiter: "."
         segments: [0, 1, 2, 3]
         name: compact-segment          # invariant keys on this name
+    producer_expect: {status: [200], invariant: compact_signature_output}
     expect:
       control: {status: [200], invariant: verification_success}
       mutated: {status: [200], invariant: verification_failure}
@@ -75,6 +76,7 @@ targets:
       body: {ref: "{fpe_ref}", kid: "{fpe_kid}", profile: "{fpe_profile}", ciphertext: "{ciphertext}"}
     mutate:
       - {json_field: $.profile, name: fpe-profile}
+    producer_expect: {status: [200], invariant: fpe_encrypt_output}
     expect:
       control: {status: [200], invariant: fpe_round_trip}
       mutated: {status: "4xx", json_error: true}
@@ -102,6 +104,7 @@ targets:
       # alphabet so the decrypt actually runs (a non-digit char would be rejected at
       # input validation, testing parsing instead of ciphertext integrity).
       - {json_field: $.ciphertext, name: fpe-ciphertext, alphabet: "0123456789"}
+    producer_expect: {status: [200], invariant: fpe_encrypt_output}
     expect:
       control: {status: [200], invariant: fpe_round_trip}
       mutated: {no_server_error: true, no_server_crash: true, invariant: fpe_ciphertext_integrity}
@@ -125,6 +128,8 @@ targets:
       # correct verifier still accepts it (false positive). Flip within the hex
       # alphabet so the digest is a genuinely different value.
       - {json_field: $.digest, name: mac-digest, alphabet: "0123456789abcdef"}
+      - {json_field: $.plaintext, name: mac-plaintext}
+    producer_expect: {status: [200], invariant: mac_create_output}
     expect:
       control: {status: [200], invariant: mac_verification_success}
       mutated: {status: [200], invariant: mac_verification_failure}
@@ -142,6 +147,21 @@ targets:
     expect:
       control: {status: [200], invariant: masking_output}
       mutated: {status: "4xx", json_error: true}
+
+  # A second masking target keeps the policy arithmetic out of the fixture: the
+  # target declares its inputs and the invariant derives the expected display.
+  - name: vectis.masking-policy
+    request:
+      method: POST
+      path: "/mask/{kid}"
+      auth: true
+      body: {ref: "{mask_policy_ref}", profile: "{mask_profile}", plaintext: "{mask_policy_plaintext}"}
+    mutate:
+      - {variable: mask_policy_plaintext, values: ["nadir-pan-001112", "nadir-pan-001113"], name: masking-policy-plaintext}
+    requires: [mask_visible_first, mask_visible_last, mask_char]
+    expect:
+      control: {status: [200], invariant: masking_policy_output}
+      mutated: {status: [200], invariant: masking_policy_output}
 
   # --- Deep: random token encode -> decode ------------------------------------
   # Mutating random token bytes preserves its envelope prefix but must never
@@ -161,7 +181,8 @@ targets:
       auth: true
       body: {ref: "{token_ref}", kid: "{token_kid}", profile: "{token_profile}", token: "{token}"}
     mutate:
-      - {json_field: $.token, delimiter: "_", segments: [2], name: token-random-bytes}
+      - {json_field: $.token, delimiter: "_", segments: [-1], name: token-random-bytes}
+    producer_expect: {status: [200], invariant: token_output}
     expect:
       control: {status: [200], invariant: token_round_trip}
       mutated: {status: "4xx", json_error: true}
@@ -182,7 +203,7 @@ targets:
           body:
             {ref: "{token_once_ref}", profile: "{token_once_profile}", plaintext: "{token_once_plaintext}", metadata: {tenant: "{token_once_metadata_tenant}"}}
         capture: {token_once_kid: $.kid, token_once: $.token}
-        expect: {status: [200]}
+        expect: {status: [200], invariant: token_once_output}
       - step: consume
         request:
           method: POST
@@ -198,6 +219,180 @@ targets:
           body: {ref: "{token_once_ref}", kid: "{token_once_kid}", profile: "{token_once_profile}", token: "{token_once}"}
         fuzz: true
         mutate:
-          - {json_field: $.token, delimiter: "_", segments: [2], name: one-time-replay}
+          - {json_field: $.token, delimiter: "_", segments: [-1], name: one-time-replay}
         expect: {status: [404], json_error: true}
         fuzz_expect: {status: [404], json_error: true}
+
+  - name: vectis.one-time-token-race
+    race:
+      producer:
+        method: POST
+        path: "/token/encode/{kid}"
+        auth: true
+        replayable: false
+        body: {ref: "{token_once_ref}", profile: "{token_once_profile}", plaintext: "{token_once_plaintext}", metadata: {tenant: "{token_once_metadata_tenant}"}}
+      producer_expect: {status: [200], invariant: token_once_output}
+      capture: {token_once_kid: $.kid, token_once: $.token}
+      contenders:
+        - step: decode-a
+          request: {method: POST, path: /token/decode, auth: true, body: {ref: "{token_once_ref}", kid: "{token_once_kid}", profile: "{token_once_profile}", token: "{token_once}"}}
+        - step: decode-b
+          request: {method: POST, path: /token/decode, auth: true, body: {ref: "{token_once_ref}", kid: "{token_once_kid}", profile: "{token_once_profile}", token: "{token_once}"}}
+      expect: {race_invariant: one_time_token_race}
+
+  # A failed one-time batch decode must consume neither valid token. The final
+  # valid decode proves rollback and preserves the submitted order.
+  - name: vectis.one-time-token-batch-rollback
+    control: false
+    generative: false
+    flow:
+      - step: encode-batch
+        request:
+          method: POST
+          path: "/token/encode/batch/{kid}"
+          auth: true
+          replayable: false
+          body:
+            {profile: "{token_once_profile}", items: [{ref: "{token_once_batch_ref_zero}", plaintext: "{token_once_plaintext}", metadata: {tenant: "{token_once_metadata_tenant}"}}, {ref: "{token_once_batch_ref_one}", plaintext: "{token_once_plaintext}", metadata: {tenant: "{token_once_metadata_tenant}"}}]}
+        capture: {token_once_batch_kid: $.kid, token_once_batch_zero: $.items.0.token, token_once_batch_one: $.items.1.token}
+        expect: {status: [200]}
+      - step: failed-consume
+        request:
+          method: POST
+          path: /token/decode/batch
+          auth: true
+          body:
+            {profile: "{token_once_profile}", kid: "{token_once_batch_kid}", items: [{ref: "{token_once_batch_ref_zero}", token: "{token_once_batch_zero}"}, {ref: "{token_once_batch_ref_one}", token: "{token_once_batch_one}"}]}
+        fuzz: true
+        mutate:
+          - {json_field: $.items.1.token, name: one-time-batch-token}
+          - {variable: token_once_batch_ref_one, from_variable: token_once_batch_ref_zero, name: one-time-batch-duplicate-ref}
+        expect: {status: [200]}
+        fuzz_expect: {status: "4xx", json_error: true}
+        continue_on_rejection: true
+      - step: rollback-proof
+        request:
+          method: POST
+          path: /token/decode/batch
+          auth: true
+          body:
+            {profile: "{token_once_profile}", kid: "{token_once_batch_kid}", items: [{ref: "{token_once_batch_ref_zero}", token: "{token_once_batch_zero}"}, {ref: "{token_once_batch_ref_one}", token: "{token_once_batch_one}"}]}
+        expect: {status: [200], invariant: one_time_token_batch_round_trip}
+
+  # Randomized tokenization must not expose equality: same plaintext and profile
+  # are encoded twice, then the second token still has to decode correctly.
+  - name: vectis.token-randomness
+    flow:
+      - step: encode-first
+        request:
+          method: POST
+          path: "/token/encode/{kid}"
+          auth: true
+          replayable: false
+          body: {ref: "{token_ref}", profile: "{token_profile}", plaintext: "{token_plaintext}", metadata: {tenant: "{token_metadata_tenant}"}}
+        capture: {first_token: $.token}
+        expect: {status: [200], invariant: token_output}
+      - step: encode-second
+        request:
+          method: POST
+          path: "/token/encode/{kid}"
+          auth: true
+          replayable: false
+          body: {ref: "{token_ref}", profile: "{token_profile}", plaintext: "{token_plaintext}", metadata: {tenant: "{token_metadata_tenant}"}}
+        capture: {token_kid: $.kid, token: $.token}
+        expect: {status: [200], invariant: token_distinct_output}
+      - step: decode
+        request:
+          method: POST
+          path: /token/decode
+          auth: true
+          body: {ref: "{token_ref}", kid: "{token_kid}", profile: "{token_profile}", token: "{token}"}
+        fuzz: true
+        mutate:
+          - {json_field: $.profile, name: token-random-profile}
+        expect: {status: [200], invariant: token_round_trip}
+        fuzz_expect: {status: "4xx", json_error: true}
+
+  # Reusable authorization matrix: malformed/missing credentials must be 401;
+  # a real but ungranted client must be 403. Every protected operation below is
+  # a normal declarative request, not an endpoint-specific engine branch.
+  - name: vectis.sign-authorization
+    request: {method: POST, path: "/sign/{kid}", auth: true, body: {message_hash: {alg: "SHA-256", hex: "{digest}"}}}
+    mutate:
+      - {variable: api_key, values: ["", "not-a-real-key"], name: authn-invalid}
+      - {variable: api_key, from_variable: denied_api_key, name: authz-denied, expected_status: 403}
+    expect:
+      control: {status: [200], invariant: compact_signature_output}
+      mutated: {authorization_matrix: true, json_error: true}
+
+  - name: vectis.fpe-encrypt-authorization
+    request: {method: POST, path: "/fpe/encrypt/{kid}", auth: true, body: {ref: "{fpe_ref}", profile: "{fpe_profile}", plaintext: "{fpe_plaintext}"}}
+    mutate:
+      - {variable: api_key, values: ["", "not-a-real-key"], name: authn-invalid}
+      - {variable: api_key, from_variable: denied_api_key, name: authz-denied, expected_status: 403}
+    expect:
+      control: {status: [200], invariant: fpe_encrypt_output}
+      mutated: {authorization_matrix: true, json_error: true}
+
+  - name: vectis.mac-create-authorization
+    request: {method: POST, path: "/mac/{kid}", auth: true, body: {ref: "{mac_ref}", profile: "{mac_profile}", plaintext: "{mac_plaintext}"}}
+    mutate:
+      - {variable: api_key, values: ["", "not-a-real-key"], name: authn-invalid}
+      - {variable: api_key, from_variable: denied_api_key, name: authz-denied, expected_status: 403}
+    expect:
+      control: {status: [200], invariant: mac_create_output}
+      mutated: {authorization_matrix: true, json_error: true}
+
+  - name: vectis.mask-authorization
+    request: {method: POST, path: "/mask/{kid}", auth: true, body: {ref: "{mask_ref}", profile: "{mask_profile}", plaintext: "{mask_plaintext}"}}
+    mutate:
+      - {variable: api_key, values: ["", "not-a-real-key"], name: authn-invalid}
+      - {variable: api_key, from_variable: denied_api_key, name: authz-denied, expected_status: 403}
+    expect:
+      control: {status: [200], invariant: masking_output}
+      mutated: {authorization_matrix: true, json_error: true}
+
+  - name: vectis.token-encode-authorization
+    request: {method: POST, path: "/token/encode/{kid}", auth: true, body: {ref: "{token_ref}", profile: "{token_profile}", plaintext: "{token_plaintext}", metadata: {tenant: "{token_metadata_tenant}"}}}
+    mutate:
+      - {variable: api_key, values: ["", "not-a-real-key"], name: authn-invalid}
+      - {variable: api_key, from_variable: denied_api_key, name: authz-denied, expected_status: 403}
+    expect:
+      control: {status: [200], invariant: token_output}
+      mutated: {authorization_matrix: true, json_error: true}
+
+  # A valid scoped client has exactly fpe-encrypt for the active KID: its allowed
+  # operation succeeds, while MAC remains denied below.
+  - name: vectis.scoped-fpe-encrypt
+    request: {method: POST, path: "/fpe/encrypt/{kid}", auth: scoped_api_key, body: {ref: "{fpe_ref}", profile: "{fpe_profile}", plaintext: "{fpe_plaintext}"}}
+    mutate:
+      - {json_field: $.profile, name: scoped-fpe-profile}
+    expect:
+      control: {status: [200], invariant: fpe_encrypt_output}
+      mutated: {status: "4xx", json_error: true}
+
+  - name: vectis.scoped-mac-denied
+    request: {method: POST, path: "/mac/{kid}", auth: scoped_api_key, body: {ref: "{mac_ref}", profile: "{mac_profile}", plaintext: "{mac_plaintext}"}}
+    mutate:
+      - {json_field: $.plaintext, name: scoped-mac-plaintext}
+    expect:
+      control: {status: [403], json_error: true}
+      mutated: {status: [403], json_error: true}
+
+  # This KID was transitioned to retired by the fixture after minting ciphertext.
+  # New FPE use is blocked; the matching historical decrypt remains available.
+  - name: vectis.retired-fpe-encrypt-blocked
+    request: {method: POST, path: "/fpe/encrypt/{retired_kid}", auth: true, body: {ref: "{retired_fpe_ref}", profile: "{retired_fpe_profile}", plaintext: "{retired_fpe_plaintext}"}}
+    mutate:
+      - {json_field: $.plaintext, name: retired-fpe-plaintext}
+    expect:
+      control: {status: "4xx", json_error: true}
+      mutated: {status: "4xx", json_error: true}
+
+  - name: vectis.retired-fpe-decrypt
+    request: {method: POST, path: /fpe/decrypt, auth: true, body: {ref: "{retired_fpe_ref}", kid: "{retired_kid}", profile: "{retired_fpe_profile}", ciphertext: "{retired_fpe_ciphertext}"}}
+    mutate:
+      - {json_field: $.profile, name: retired-fpe-profile}
+    expect:
+      control: {status: [200], invariant: retired_fpe_round_trip}
+      mutated: {status: "4xx", json_error: true}

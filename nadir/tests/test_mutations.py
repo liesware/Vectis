@@ -25,6 +25,11 @@ class MutationTests(unittest.TestCase):
         self.assertEqual(body["signature"], "one.two.Ahree.four")
         self.assertEqual(record.location, "$.signature")
 
+    def test_json_negative_segment_mutation_selects_from_the_end(self):
+        mutation = JsonFieldMutation("token", "$.token", delimiter="_", segment_index=-1)
+        _, body, _ = mutation.apply({}, {"token": "nadir_once__160x"}, _rng())
+        self.assertEqual(body["token"], "nadir_once__A60x")
+
     def test_json_selector_must_exist(self):
         with self.assertRaises(ValueError):
             JsonFieldMutation("bad", "$.missing").apply({}, {"signature": "value"}, _rng())

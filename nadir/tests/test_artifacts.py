@@ -36,6 +36,35 @@ class ArtifactTests(unittest.TestCase):
         self.assertNotIn("top-secret-key", text)
         self.assertIn("<redacted>", text)
 
+    def test_authenticated_request_replays_with_environment_key_only(self):
+        request = HttpRequest("POST", "http://127.0.0.1/token/decode", (("X-API-Key", "original-secret"),), b"{}")
+        step = StepExecution("decode", request, HttpResult(request, 403, (), b'{"error":"denied"}', 1))
+        case = WorkflowCase("target", 1, MutationRecord("x", "$.token", "a", "b"), (step,))
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_finding(Path(directory), project="test", run_seed=1, case=case, findings=(Finding("test", "test"),), secrets=(b"original-secret",), primary_api_key=b"original-secret")
+            rendered = path.read_text(encoding="utf-8")
+            self.assertNotIn("original-secret", rendered)
+            with self.assertRaisesRegex(ValueError, "NADIR_API_KEY"):
+                load_replay_requests(path)
+            (replay,) = load_replay_requests(path, api_key="fresh-secret")
+        self.assertEqual(replay.headers, (("X-API-Key", "fresh-secret"),))
+
+    def test_non_primary_principal_step_is_not_replayable(self):
+        # A step that authenticated with the scoped/denied key must not be replayed
+        # with the primary key; it is recorded as unreplayable instead.
+        request = HttpRequest("POST", "http://127.0.0.1/fpe/encrypt", (("X-API-Key", "scoped-secret"),), b"{}")
+        step = StepExecution("encrypt", request, HttpResult(request, 403, (), b'{"error":"denied"}', 1))
+        case = WorkflowCase("target", 1, MutationRecord("x", "api_key", "scoped-secret", "<variable-value>"), (step,))
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_finding(
+                Path(directory), project="test", run_seed=1, case=case,
+                findings=(Finding("test", "test"),), secrets=(b"primary-secret", b"scoped-secret"),
+                primary_api_key=b"primary-secret",
+            )
+            self.assertNotIn("scoped-secret", path.read_text(encoding="utf-8"))
+            with self.assertRaisesRegex(ValueError, "no replayable"):
+                load_replay_requests(path, api_key="fresh-secret")
+
     def test_rejects_v1_artifact(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "old.json"
@@ -43,3 +72,9 @@ class ArtifactTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 load_replay_requests(path)
 
+    def test_rejects_pre_authenticated_replay_format(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "v2.json"
+            path.write_text(json.dumps({"artifact_version": "nadir-finding-v2"}), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                load_replay_requests(path)

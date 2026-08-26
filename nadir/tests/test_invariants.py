@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "projects" / "vecti
 
 from nadir.http import HttpRequest, HttpResult
 from nadir.workflows import EvaluationContext
-from invariants import fpe_round_trip, mac_verification_failure, public_keys_output, token_round_trip, verification_failure
+from invariants import fpe_encrypt_output, fpe_round_trip, mac_create_output, mac_verification_failure, masking_policy_output, public_keys_output, token_round_trip, verification_failure
 
 
 def context(mutation=None, *, target="vectis", variables=None):
@@ -33,12 +33,27 @@ class InvariantTests(unittest.TestCase):
         variables = {"fpe_ref": "fpe-ref", "fpe_plaintext": "expected"}
         self.assertEqual(fpe_round_trip(self._result(body), context(variables=variables))[0].code, "fpe-round-trip-failed")
 
+    def test_detects_invalid_fpe_producer_shape(self):
+        body = {"ref": "fpe-ref", "kid": "a" * 64, "profile": "profile", "ciphertext": "not-digits"}
+        variables = {"fpe_ref": "fpe-ref", "kid": "a" * 64, "fpe_profile": "profile", "fpe_plaintext": "1234"}
+        self.assertEqual(fpe_encrypt_output(self._result(body), context(variables=variables))[0].code, "fpe-producer-invalid")
+
     def test_detects_mac_digest_that_was_accepted(self):
         body = {"ref": "mac-ref", "valid": True}
         self.assertEqual(
             mac_verification_failure(self._result(body), context(variables={"mac_ref": "mac-ref"}))[0].code,
             "mutated-mac-accepted",
         )
+
+    def test_detects_invalid_mac_producer_digest(self):
+        body = {"ref": "mac-ref", "kid": "a" * 64, "profile": "profile", "algorithm": "HMAC", "digest": "xyz"}
+        variables = {"mac_ref": "mac-ref", "kid": "a" * 64, "mac_profile": "profile"}
+        self.assertEqual(mac_create_output(self._result(body), context(variables=variables))[0].code, "mac-producer-invalid")
+
+    def test_detects_masking_policy_mismatch(self):
+        body = {"ref": "mask-ref", "kid": "a" * 64, "profile": "profile", "masked": "wrong"}
+        variables = {"mask_policy_ref": "mask-ref", "kid": "a" * 64, "mask_profile": "profile", "mask_policy_plaintext": "123456", "mask_visible_first": "1", "mask_visible_last": "2", "mask_char": "*"}
+        self.assertEqual(masking_policy_output(self._result(body), context(variables=variables))[0].code, "masking-policy-violated")
 
     def test_detects_wrong_one_time_token_plaintext(self):
         body = {"ref": "once-ref", "plaintext": "wrong", "metadata": {"tenant": "nadir-once"}}

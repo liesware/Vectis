@@ -16,12 +16,13 @@ from typing import Callable, Mapping
 
 import yaml
 
-from .mutations import JsonFieldMutation, TemplateValueMutation
+from .mutations import JsonFieldMutation, TemplateValueMutation, VariableValueMutation
 from .workflows import (
     AllOf,
     Capture,
     DEFAULT_MALFORMED_EXPECTATION,
     ExpectJsonError,
+    ExpectAuthorizationMatrix,
     ExpectNoServerCrash,
     ExpectNoServerError,
     ExpectStatus,
@@ -30,6 +31,8 @@ from .workflows import (
     HttpStep,
     NoDeclaredSecrets,
     ProducerConsumerTarget,
+    ProjectRacePredicate,
+    RaceTarget,
     ProjectPredicate,
     RequestMutation,
     RequestTarget,
@@ -73,7 +76,15 @@ def _step(name: str, block: Mapping[str, object], expectation: ResponseExpectati
     method = block.get("method")
     if not isinstance(path, str) or not path.startswith("/") or not isinstance(method, str):
         raise ValueError(f"step {name} requires a method and an absolute path")
-    headers: tuple[tuple[str, str], ...] = (("X-API-Key", "{api_key}"),) if block.get("auth") else ()
+    auth = block.get("auth")
+    if isinstance(auth, str):
+        if not auth:
+            raise ValueError(f"step {name} auth variable is invalid")
+        headers: tuple[tuple[str, str], ...] = (("X-API-Key", "{" + auth + "}"),)
+    elif auth:
+        headers = (("X-API-Key", "{api_key}"),)
+    else:
+        headers = ()
     return HttpStep(
         name=name,
         method=method.upper(),
@@ -88,7 +99,10 @@ def _step(name: str, block: Mapping[str, object], expectation: ResponseExpectati
 
 def _step_variables(block: Mapping[str, object]) -> set[str]:
     used = _placeholders(block.get("path", "")) | _placeholders(block.get("body"))
-    if block.get("auth"):
+    auth = block.get("auth")
+    if isinstance(auth, str):
+        used.add(auth)
+    elif auth:
         used.add("api_key")
     used.add("base_url")
     return used
@@ -137,6 +151,8 @@ def _oracle(spec: Mapping[str, object] | None, invariants: Invariants) -> Respon
         # Complements no_server_error for a well-formed mutation whose only failure
         # mode of interest is a crash: a server-side connection reset is a finding.
         clauses.append(ExpectNoServerCrash())
+    if spec.get("authorization_matrix"):
+        clauses.append(ExpectAuthorizationMatrix())
     clauses.append(NoDeclaredSecrets())  # secrets are always guarded, never opt-in
     invariant = spec.get("invariant")
     if invariant is not None:
@@ -147,6 +163,16 @@ def _oracle(spec: Mapping[str, object] | None, invariants: Invariants) -> Respon
 
 
 # --- mutators -----------------------------------------------------------------
+
+
+def _mutation_required_variables(items: object) -> set[str]:
+    if not isinstance(items, list):
+        return set()
+    return {
+        item["from_variable"]
+        for item in items
+        if isinstance(item, dict) and isinstance(item.get("from_variable"), str)
+    }
 
 
 def _mutations(items: object, mutators: Mutators) -> tuple[RequestMutation, ...]:
@@ -161,9 +187,21 @@ def _mutations(items: object, mutators: Mutators) -> tuple[RequestMutation, ...]
         elif isinstance(item, dict) and "variable" in item:
             variable = item["variable"]
             values = item.get("values")
-            if not isinstance(variable, str) or not isinstance(values, list) or not values:
-                raise ValueError("a 'variable' mutator needs a name and a non-empty 'values' list")
-            built.extend(TemplateValueMutation(f"{variable}:{index}", variable, str(value)) for index, value in enumerate(values))
+            source_variable = item.get("from_variable")
+            prefix = str(item.get("name", variable))
+            expected_status = item.get("expected_status")
+            if not isinstance(variable, str):
+                raise ValueError("a 'variable' mutator needs a variable name")
+            if expected_status is not None and not isinstance(expected_status, int):
+                raise ValueError("'expected_status' must be an integer")
+            if source_variable is not None:
+                if not isinstance(source_variable, str) or values is not None:
+                    raise ValueError("a 'from_variable' mutator needs one source variable and no values")
+                built.append(VariableValueMutation(prefix, variable, source_variable, expected_status))
+            else:
+                if not isinstance(values, list) or not values:
+                    raise ValueError("a 'variable' mutator needs a name and a non-empty 'values' list")
+                built.extend(TemplateValueMutation(f"{prefix}-{index}", variable, str(value), expected_status=expected_status) for index, value in enumerate(values))
         elif isinstance(item, dict) and "json_field" in item:
             selector = item["json_field"]
             delimiter = item.get("delimiter")
@@ -222,7 +260,8 @@ def _flow_target(entry: Mapping[str, object], invariants: Invariants, mutators: 
             fuzz_seen += 1
             mutations = _mutations(raw.get("mutate"), mutators)
             mutation_expectation = _oracle(raw["fuzz_expect"], invariants) if raw.get("fuzz_expect") else DEFAULT_MALFORMED_EXPECTATION
-        steps.append(FlowStep(control_step, captures, is_fuzz))
+            required.update(_mutation_required_variables(raw.get("mutate")))
+        steps.append(FlowStep(control_step, captures, is_fuzz, bool(raw.get("continue_on_rejection"))))
     if fuzz_seen != 1:
         raise ValueError(f"flow {name} must mark exactly one step with fuzz: true")
     return FlowTarget(
@@ -231,6 +270,46 @@ def _flow_target(entry: Mapping[str, object], invariants: Invariants, mutators: 
         steps=tuple(steps),
         mutations=mutations,
         mutation_expectation=mutation_expectation,
+        run_control=bool(entry.get("control", True)),
+        include_generative=bool(entry.get("generative", True)),
+    )
+
+
+def _race_target(entry: Mapping[str, object], invariants: Invariants) -> RaceTarget:
+    name = entry["name"]
+    block = entry.get("race")
+    if not isinstance(block, dict) or not isinstance(block.get("producer"), dict):
+        raise ValueError(f"race {name} requires a producer")
+    contenders = block.get("contenders")
+    if not isinstance(contenders, list) or len(contenders) < 2:
+        raise ValueError(f"race {name} requires at least two contenders")
+    capture_spec = block.get("capture")
+    if not isinstance(capture_spec, dict) or not capture_spec:
+        raise ValueError(f"race {name} requires captures")
+    producer = block["producer"]
+    producer_expect = _oracle(block.get("producer_expect") or {"status": [200]}, invariants)
+    captured = set(capture_spec)
+    required = _step_variables(producer)
+    built: list[HttpStep] = []
+    for item in contenders:
+        if not isinstance(item, dict) or not isinstance(item.get("request"), dict):
+            raise ValueError(f"race {name} contender requires a request")
+        request = item["request"]
+        built.append(_step(str(item.get("step", "contender")), request, _oracle(item.get("expect") or {"status": [200, 404]}, invariants)))
+        required.update(_step_variables(request))
+    expectation = block.get("expect")
+    if not isinstance(expectation, dict) or not isinstance(expectation.get("race_invariant"), str):
+        raise ValueError(f"race {name} requires a race_invariant")
+    invariant_name = expectation["race_invariant"]
+    if invariant_name not in invariants:
+        raise ValueError(f"unknown invariant {invariant_name!r}")
+    return RaceTarget(
+        name=name,
+        required_variables=frozenset(required - captured) | _extra_required(entry),
+        producer=_step("producer", producer, producer_expect),
+        captures=tuple(Capture(str(key), str(value)) for key, value in capture_spec.items()),
+        contenders=tuple(built),
+        race_expectation=ProjectRacePredicate(invariant_name, invariants[invariant_name]),
     )
 
 
@@ -240,6 +319,8 @@ def _target(entry: Mapping[str, object], invariants: Invariants, mutators: Mutat
     name = entry["name"]
     if "flow" in entry:
         return _flow_target(entry, invariants, mutators)
+    if "race" in entry:
+        return _race_target(entry, invariants)
     expect = entry.get("expect")
     if not isinstance(expect, dict):
         raise ValueError(f"target {name} needs an 'expect' block")
@@ -251,7 +332,7 @@ def _target(entry: Mapping[str, object], invariants: Invariants, mutators: Mutat
         block = entry["request"]
         if not isinstance(block, dict):
             raise ValueError(f"target {name} 'request' must be a mapping")
-        required = frozenset(_step_variables(block)) | _extra_required(entry)
+        required = frozenset(_step_variables(block) | _mutation_required_variables(entry.get("mutate"))) | _extra_required(entry)
         return RequestTarget(
             name=name,
             required_variables=required,
@@ -268,7 +349,10 @@ def _target(entry: Mapping[str, object], invariants: Invariants, mutators: Mutat
         raise ValueError(f"target {name} producer/consumer flow requires a 'capture' block")
     captures = tuple(Capture(str(cap_name), str(selector)) for cap_name, selector in capture_spec.items())
     captured_names = {cap_name for cap_name, _ in capture_spec.items()}
-    required = frozenset((_step_variables(producer_block) | _step_variables(consumer_block)) - captured_names) | _extra_required(entry)
+    required = frozenset(
+        (_step_variables(producer_block) | _step_variables(consumer_block) | _mutation_required_variables(entry.get("mutate")))
+        - captured_names
+    ) | _extra_required(entry)
     producer_oracle = _oracle(entry.get("producer_expect") or {"status": [200]}, invariants)
     return ProducerConsumerTarget(
         name=name,

@@ -4,15 +4,15 @@ Each non-control case is one of four classes: ``control`` (a valid request),
 ``semantic`` (a curated, hand-authored mutation aimed at business logic),
 ``structured`` (generic schema-level corruption), ``raw`` (byte-level
 corruption of the serialised body), or ``deser`` (bounded deserialization
-stress). A target's curated semantic mutations each run once; the remaining
-iterations are filled by weighted random draws over the generative classes
-available to that target. Run summaries report how many cases of each class ran
-and how many reached successful application behaviour.
+stress). A target's curated semantic mutations and each applicable generative
+class run once in deterministic order before any weighted random draws. Run
+summaries make any classes omitted by a too-small iteration budget explicit.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import random
@@ -32,6 +32,7 @@ from .workflows import (
     FlowTarget,
     HttpStep,
     ProducerConsumerTarget,
+    RaceTarget,
     RequestTarget,
     ResponseExpectation,
     StepExecution,
@@ -61,6 +62,8 @@ class TargetSummary:
     responses_4xx: int
     responses_5xx: int
     transport_failures: int
+    required_iterations: int
+    uncovered_classes: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -158,9 +161,12 @@ def _capture(response: HttpResult, captures: tuple[Capture, ...]) -> tuple[tuple
             raise SetupFailure("workflow capture selector is invalid")
         current = value
         for segment in capture.selector[2:].split("."):
-            if not isinstance(current, dict) or segment not in current:
+            if isinstance(current, dict) and segment in current:
+                current = current[segment]
+            elif isinstance(current, list) and segment.isdigit() and int(segment) < len(current):
+                current = current[int(segment)]
+            else:
                 raise SetupFailure(f"workflow capture {capture.name} was not found")
-            current = current[segment]
         collected.append((capture.name, current))
     return tuple(collected)
 
@@ -177,6 +183,10 @@ def _execute_request_target(target: RequestTarget, iteration, plan, variables, s
         return WorkflowCase(target.name, iteration, None, (step,)), findings
     mutator, expectation = plan
     mutated_variables, mutated_body, record = mutator.apply(variables, base, rng)
+    # Variable mutators affect templates as well as headers/URLs. JSON-field
+    # mutators operate on the already-rendered body and retain it verbatim.
+    if not record.location.startswith("$"):
+        mutated_body = _rendered_body(target.control, mutated_variables)
     step, findings = _run_step(
         target.name, target.control, mutated_variables, _serialize(mutated_body), secrets, transport, record, expectation
     )
@@ -202,9 +212,11 @@ def _execute_producer_consumer(target: ProducerConsumerTarget, iteration, plan, 
         )
         return WorkflowCase(target.name, iteration, None, (producer, consumer)), findings
     mutator, expectation = plan
-    _, mutated_body, record = mutator.apply(consumer_variables, base, rng)
+    mutated_variables, mutated_body, record = mutator.apply(consumer_variables, base, rng)
+    if not record.location.startswith("$"):
+        mutated_body = _rendered_body(target.consumer, mutated_variables)
     consumer, findings = _run_step(
-        target.name, target.consumer, consumer_variables, _serialize(mutated_body),
+        target.name, target.consumer, mutated_variables, _serialize(mutated_body),
         secrets, transport, record, expectation,
     )
     return WorkflowCase(target.name, iteration, record, (producer, consumer)), findings
@@ -221,9 +233,11 @@ def _execute_flow(target: FlowTarget, iteration, plan, variables, secrets, trans
         body = _rendered_body(step, flow_variables)
         if index == fuzz_index and plan is not None:
             mutator, expectation = plan
-            _, mutated_body, record = mutator.apply(flow_variables, body, rng)
+            mutated_variables, mutated_body, record = mutator.apply(flow_variables, body, rng)
+            if not record.location.startswith("$"):
+                mutated_body = _rendered_body(step, mutated_variables)
             execution, step_findings = _run_step(
-                target.name, step, flow_variables, _serialize(mutated_body), secrets, transport, record, expectation
+                target.name, step, mutated_variables, _serialize(mutated_body), secrets, transport, record, expectation
             )
         else:
             execution, step_findings = _run_step(
@@ -242,9 +256,38 @@ def _execute_flow(target: FlowTarget, iteration, plan, variables, secrets, trans
         findings.extend(step_findings)
         # a broken step produces no usable output for the next one, so stop there;
         # an accepted mutation flows on so a downstream oracle can catch corruption.
-        if not succeeded and index >= fuzz_index:
+        if not succeeded and index >= fuzz_index and not flow_step.continue_on_rejection:
             break
     return WorkflowCase(target.name, iteration, record, tuple(executions)), tuple(findings)
+
+
+def _execute_race(target: RaceTarget, iteration, variables, secrets, transport):
+    producer, producer_findings = _run_step(
+        target.name, target.producer, variables, _serialize(_rendered_body(target.producer, variables)),
+        secrets, transport, None, target.producer.expectation,
+    )
+    if producer_findings:
+        raise SetupFailure(f"{target.name} producer did not satisfy its control expectation")
+    captures = _capture(producer.result, target.captures)
+    producer = StepExecution(producer.name, producer.request, producer.result, captures, producer.replayable)
+    race_variables = dict(variables)
+    race_variables.update(captures)
+    requests = [
+        _build_request(step, race_variables, _serialize(_rendered_body(step, race_variables))) for step in target.contenders
+    ]
+    # The barrier is deliberately in Nadir rather than the project: contenders
+    # leave together, while each transport call owns its own HTTP client.
+    import threading
+    barrier = threading.Barrier(len(requests))
+    def send(request):
+        barrier.wait()
+        return transport.send(request)
+    with ThreadPoolExecutor(max_workers=len(requests)) as pool:
+        results = tuple(pool.map(send, requests))
+    context = EvaluationContext(target.name, "race", None, secrets, dict(race_variables))
+    findings = target.race_expectation.evaluate(results, context)
+    contenders = tuple(StepExecution(step.name, request, result, (), step.replayable) for step, request, result in zip(target.contenders, requests, results, strict=True))
+    return WorkflowCase(target.name, iteration, None, (producer, *contenders)), findings
 
 
 def _execute_target(target: Target, iteration, plan, variables, secrets, transport, rng):
@@ -252,6 +295,8 @@ def _execute_target(target: Target, iteration, plan, variables, secrets, transpo
         return _execute_request_target(target, iteration, plan, variables, secrets, transport, rng)
     if isinstance(target, FlowTarget):
         return _execute_flow(target, iteration, plan, variables, secrets, transport, rng)
+    if isinstance(target, RaceTarget):
+        return _execute_race(target, iteration, variables, secrets, transport)
     return _execute_producer_consumer(target, iteration, plan, variables, secrets, transport, rng)
 
 
@@ -262,7 +307,11 @@ def _target_has_body(target: Target) -> bool:
     if isinstance(target, RequestTarget):
         step = target.control
     elif isinstance(target, FlowTarget):
+        if not target.include_generative:
+            return False
         step = next(flow_step.request for flow_step in target.steps if flow_step.fuzz)
+    elif isinstance(target, RaceTarget):
+        return False
     else:
         step = target.consumer
     return step.json_body_template is not None
@@ -297,6 +346,28 @@ def _plan_for_class(target: Target, case_class: str, rng: random.Random):
     if case_class == "deser":
         return DeserStressMutation(), target.malformed_expectation
     return rng.choice(list(target.mutations)), target.mutation_expectation
+
+
+def _coverage_plan(target: Target, has_body: bool, declared: list) -> list[tuple[str, object]]:
+    """Return the deterministic minimum coverage plan for one target.
+
+    Named semantic mutations remain individually visible because a target may
+    have several distinct security properties. Generic classes follow them in a
+    stable order; later iterations return to weighted scheduling.
+    """
+
+    plan: list[tuple[str, object]] = [("semantic", (mutation, target.mutation_expectation)) for mutation in declared]
+    if has_body:
+        for case_class in ("structured", "raw", "deser"):
+            plan.append((case_class, _plan_for_class(target, case_class, random.Random(0))))
+    return plan
+
+
+def _uncovered_coverage_labels(target: Target, has_body: bool, declared: list, iterations: int) -> tuple[str, ...]:
+    labels = [f"semantic:{mutation.name}" for mutation in declared]
+    if has_body:
+        labels.extend(("structured", "raw", "deser"))
+    return tuple(labels[iterations:])
 
 
 def _ensure_target_variables(target: Target, variables: Mapping[str, object]) -> None:
@@ -371,6 +442,10 @@ def run_project(
             raise SetupFailure("project invariant self-check failed")
         variables = fixture.variables()
         secrets = project.redaction_values(fixture)
+        # Only the primary key can be safely re-injected on replay; steps that used a
+        # different principal are recorded as unreplayable rather than replayed as it.
+        primary_getter = getattr(project, "primary_api_key", None)
+        primary_api_key = primary_getter(fixture) if callable(primary_getter) else None
         for target in selected:
             _ensure_target_variables(target, variables)
         health = project.healthcheck_step()
@@ -380,25 +455,30 @@ def run_project(
         artifacts: list[Path] = []
         summaries: list[TargetSummary] = []
         for target in selected:
+            is_race = isinstance(target, RaceTarget)
             has_body = _target_has_body(target)
-            options_for_target = _generative_options(target, has_body)
-            declared = list(target.mutations)
+            declared = [] if is_race else list(target.mutations)
             randomizer.shuffle(declared)
+            options_for_target = () if is_race else _generative_options(target, has_body)
+            coverage_plan = [] if is_race else _coverage_plan(target, has_body, declared)
+            uncovered_classes = () if is_race else _uncovered_coverage_labels(target, has_body, declared, iterations)
             counters = {
                 "controls": 0, "expected_rejections": 0, "findings": 0,
                 "semantic": 0, "structured": 0, "raw": 0, "deser": 0,
                 "responses_2xx": 0, "responses_4xx": 0, "responses_5xx": 0, "transport_failures": 0,
             }
-            control_case, control_findings = _execute_target(target, 0, None, variables, secrets, client, randomizer)
-            counters["controls"] += 1
-            _bucket_response(counters, control_case)
-            if control_findings:
-                raise SetupFailure(f"{target.name} control did not satisfy its expectation")
+            if not isinstance(target, FlowTarget) or target.run_control:
+                control_case, control_findings = _execute_target(target, 0, None, variables, secrets, client, randomizer)
+                counters["controls"] += 1
+                _bucket_response(counters, control_case)
+                if control_findings:
+                    raise SetupFailure(f"{target.name} control did not satisfy its expectation")
             for iteration in range(1, iterations + 1):
                 index = iteration - 1
-                if index < len(declared):
-                    case_class = "semantic"
-                    plan = (declared[index], target.mutation_expectation)
+                if is_race:
+                    case_class, plan = "semantic", None
+                elif index < len(coverage_plan):
+                    case_class, plan = coverage_plan[index]
                 else:
                     case_class = _weighted_choice(randomizer, options_for_target)
                     plan = _plan_for_class(target, case_class, randomizer)
@@ -418,6 +498,7 @@ def run_project(
                             case=case,
                             findings=findings,
                             secrets=secrets,
+                            primary_api_key=primary_api_key,
                         )
                     )
             _, health_findings = _run_step(project.name, health, variables, None, secrets, client, None, health.expectation)
@@ -437,6 +518,8 @@ def run_project(
                     counters["responses_4xx"],
                     counters["responses_5xx"],
                     counters["transport_failures"],
+                    max(1, len(coverage_plan)),
+                    uncovered_classes,
                 )
             )
         return RunSummary(tuple(summaries), tuple(artifacts))

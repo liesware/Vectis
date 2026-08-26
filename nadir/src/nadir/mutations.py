@@ -25,7 +25,7 @@ from .workflows import MutationRecord
 Path = tuple[object, ...]
 
 
-def _object_path(value: object, selector: str) -> tuple[dict[str, object], str]:
+def _object_path(value: object, selector: str) -> tuple[object, object]:
     if not selector.startswith("$.") or not selector[2:]:
         raise ValueError("JSON selector must use $.field syntax")
     parts = selector[2:].split(".")
@@ -33,12 +33,16 @@ def _object_path(value: object, selector: str) -> tuple[dict[str, object], str]:
         raise ValueError("JSON selector is invalid")
     current = value
     for part in parts[:-1]:
-        if not isinstance(current, dict) or part not in current:
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        elif isinstance(current, list) and part.isdigit() and int(part) < len(current):
+            current = current[int(part)]
+        else:
             raise ValueError("JSON selector was not found")
-        current = current[part]
-    if not isinstance(current, dict) or parts[-1] not in current:
+    last: object = int(parts[-1]) if isinstance(current, list) and parts[-1].isdigit() else parts[-1]
+    if not isinstance(current, (dict, list)) or (isinstance(current, dict) and last not in current) or (isinstance(current, list) and (not isinstance(last, int) or last >= len(current))):
         raise ValueError("JSON selector was not found")
-    return current, parts[-1]
+    return current, last
 
 
 def _all_paths(node: object, prefix: Path = ()) -> list[Path]:
@@ -135,6 +139,7 @@ class TemplateValueMutation:
     variable: str
     replacement: str
     alternative: str | None = None
+    expected_status: int | None = None
 
     def apply(self, variables: Mapping[str, object], body: object | None, rng: random.Random):
         if self.variable not in variables or not isinstance(variables[self.variable], str):
@@ -143,7 +148,26 @@ class TemplateValueMutation:
         original = variables[self.variable]
         replacement = self.replacement if self.replacement != original else (self.alternative or "_")
         updated[self.variable] = replacement
-        return updated, body, MutationRecord(self.name, self.variable, original, replacement)
+        return updated, body, MutationRecord(self.name, self.variable, original, replacement, self.expected_status)
+
+
+@dataclass(frozen=True)
+class VariableValueMutation:
+    """Replace one variable with another declared, runtime-only value."""
+
+    name: str
+    variable: str
+    source_variable: str
+    expected_status: int | None = None
+
+    def apply(self, variables: Mapping[str, object], body: object | None, rng: random.Random):
+        original = variables.get(self.variable)
+        replacement = variables.get(self.source_variable)
+        if not isinstance(original, str) or not isinstance(replacement, str) or not replacement:
+            raise ValueError("variable reference mutation requires available non-empty string variables")
+        updated = dict(variables)
+        updated[self.variable] = replacement
+        return updated, body, MutationRecord(self.name, self.variable, original, "<variable-value>", self.expected_status)
 
 
 @dataclass(frozen=True)
@@ -159,7 +183,7 @@ class JsonFieldMutation:
             raise ValueError("JSON field mutation requires a JSON body")
         updated_body = copy.deepcopy(body)
         container, key = _object_path(updated_body, self.selector)
-        original = container[key]
+        original = container[key]  # type: ignore[index]
         if not isinstance(original, str) or not original:
             raise ValueError("JSON field mutation requires a non-empty string")
         if self.delimiter is None:
@@ -169,6 +193,8 @@ class JsonFieldMutation:
                 raise ValueError("delimited JSON mutation requires a segment index")
             segments = original.split(self.delimiter)
             index = self.segment_index
+            if index < 0:
+                index += len(segments)
             if 0 <= index < len(segments) and segments[index]:
                 segments[index] = _flip_character(segments[index], self.alphabet)
                 mutated = self.delimiter.join(segments)
@@ -177,7 +203,7 @@ class JsonFieldMutation:
                 # assumed (e.g. a token with fewer segments than expected). Corrupt
                 # the whole field instead of aborting the entire run.
                 mutated = _flip_character(original, self.alphabet)
-        container[key] = mutated
+        container[key] = mutated  # type: ignore[index]
         return dict(variables), updated_body, MutationRecord(self.name, self.selector, original, mutated)
 
 

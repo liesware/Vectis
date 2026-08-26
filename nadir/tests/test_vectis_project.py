@@ -32,6 +32,16 @@ class _VectisHandler(BaseHTTPRequestHandler):
     one_time_tokens: set[str] = set()
     token_counter = 0
     issued_tokens: dict[str, str] = {}
+    one_time_lock = threading.Lock()
+
+    def _auth(self, *, allow_scoped=False):
+        key = self.headers.get("X-API-Key")
+        if key == "test-api-key":
+            return True
+        if allow_scoped and key == "scoped-api-key":
+            return True
+        self._write(403 if key in {"denied-api-key", "scoped-api-key"} else 401, {"error": "denied"})
+        return False
 
     def do_GET(self):
         if self.path == "/healthz/ready":
@@ -40,7 +50,7 @@ class _VectisHandler(BaseHTTPRequestHandler):
             if self.headers.get("X-API-Key") == "test-api-key":
                 self._write(200, {"kid": KID, "properties": {}})
             else:
-                self._write(401, {"error": "denied"})
+                self._write(403 if self.headers.get("X-API-Key") == "denied-api-key" else 401, {"error": "denied"})
         elif self.path == f"/pub/{KID}":
             if self.headers.get("Authorization"):
                 self.public_auth_headers.append(self.headers["Authorization"])
@@ -56,9 +66,7 @@ class _VectisHandler(BaseHTTPRequestHandler):
             self._write(400, {"error": "invalid request"})
             return
         if self.path == f"/sign/{KID}":
-            if self.headers.get("X-API-Key") != "test-api-key":
-                self._write(403, {"error": "denied"})
-            else:
+            if self._auth():
                 self._write(200, {"kid": KID, "signature": "aaaa.bbbb.cccc.dddd"})
             return
         if self.path == "/sign/verification":
@@ -75,14 +83,15 @@ class _VectisHandler(BaseHTTPRequestHandler):
             else:
                 self._write(200, {"valid": "fail", "status": {"eddsa": "not_checked", "ml-dsa": "fail"}})
             return
-        if self.headers.get("X-API-Key") != "test-api-key":
-            self._write(403, {"error": "denied"})
-            return
         if self.path == f"/fpe/encrypt/{KID}":
+            if not self._auth(allow_scoped=True):
+                return
             if body.get("profile") != "nadir-fpe-v1":
                 self._write(400, {"error": "unknown profile"})
             else:
                 self._write(200, {"ref": body.get("ref"), "kid": KID, "profile": body["profile"], "ciphertext": "9876543210"})
+            return
+        if not self._auth():
             return
         if self.path == "/fpe/decrypt":
             if body.get("profile") != "nadir-fpe-v1":
@@ -100,14 +109,19 @@ class _VectisHandler(BaseHTTPRequestHandler):
             digest = body.get("digest")
             # hex comparison is case-insensitive, like a real hex parser: a bare
             # case flip must not read as a different digest.
-            matches = isinstance(digest, str) and digest.lower() == "ab" * 32
+            matches = (
+                isinstance(digest, str)
+                and digest.lower() == "ab" * 32
+                and body.get("plaintext") == "nadir-mac-sample-value"
+            )
             self._write(200, {"ref": body.get("ref"), "valid": matches})
             return
         if self.path == f"/mask/{KID}":
             if body.get("profile") != "nadir-mask-v1":
                 self._write(400, {"error": "unknown profile"})
             else:
-                self._write(200, {"ref": body.get("ref"), "kid": KID, "profile": body["profile"], "masked": "************1111"})
+                plaintext = body.get("plaintext", "")
+                self._write(200, {"ref": body.get("ref"), "kid": KID, "profile": body["profile"], "masked": "*" * max(0, len(plaintext) - 4) + plaintext[-4:]})
             return
         if self.path == f"/token/encode/{KID}":
             profile = body.get("profile")
@@ -130,11 +144,12 @@ class _VectisHandler(BaseHTTPRequestHandler):
             elif not token.startswith(expected_prefix) or type(self).issued_tokens.get(token) != profile:
                 self._write(404, {"error": "token not found"})
             elif profile == "nadir-once-v1":
-                if token not in type(self).one_time_tokens:
-                    self._write(404, {"error": "token not found"})
-                else:
-                    type(self).one_time_tokens.remove(token)
-                    self._write(200, {"ref": body.get("ref"), "plaintext": "nadir-once-plaintext", "metadata": {"tenant": "nadir-once"}})
+                with type(self).one_time_lock:
+                    if token not in type(self).one_time_tokens:
+                        self._write(404, {"error": "token not found"})
+                    else:
+                        type(self).one_time_tokens.remove(token)
+                        self._write(200, {"ref": body.get("ref"), "plaintext": "nadir-once-plaintext", "metadata": {"tenant": "nadir-once"}})
             else:
                 self._write(200, {"ref": body.get("ref"), "plaintext": "nadir-token-plaintext", "metadata": {"tenant": "nadir"}})
             return
@@ -184,17 +199,28 @@ class VectisProjectTests(unittest.TestCase):
             "mask_ref": "nadir-mask-control",
             "mask_plaintext": "nadir-pan-001111",
             "mask_expected": "************1111",
+            "mask_policy_ref": "nadir-mask-policy",
+            "mask_policy_plaintext": "nadir-pan-001111",
+            "mask_visible_first": "0",
+            "mask_visible_last": "4",
+            "mask_char": "*",
             "token_profile": "nadir-token-v1",
+            "token_token_prefix": "nadir_tok",
             "token_ref": "nadir-token-control",
             "token_plaintext": "nadir-token-plaintext",
             "token_metadata_tenant": "nadir",
             "token_once_profile": "nadir-once-v1",
+            "token_once_token_prefix": "nadir_once",
             "token_once_ref": "nadir-once-control",
             "token_once_plaintext": "nadir-once-plaintext",
             "token_once_metadata_tenant": "nadir-once",
         }
         if "NADIR_API_KEY" in os.environ:
             options["api_key"] = os.environ["NADIR_API_KEY"]
+        if "NADIR_DENIED_API_KEY" in os.environ:
+            options["denied_api_key"] = os.environ["NADIR_DENIED_API_KEY"]
+        if "NADIR_SCOPED_API_KEY" in os.environ:
+            options["scoped_api_key"] = os.environ["NADIR_SCOPED_API_KEY"]
         for key in drop:
             options.pop(key, None)
         return run_project(
@@ -214,7 +240,7 @@ class VectisProjectTests(unittest.TestCase):
         self.assertEqual(_VectisHandler.public_auth_headers, [])
 
     def test_key_properties_target_rejects_mutated_api_keys(self):
-        with patch.dict(os.environ, {"NADIR_API_KEY": "test-api-key"}, clear=True):
+        with patch.dict(os.environ, {"NADIR_API_KEY": "test-api-key", "NADIR_DENIED_API_KEY": "denied-api-key"}, clear=True):
             summary = self._run("vectis.keys")
         self.assertEqual(summary.targets[0].findings, 0)
         self.assertGreater(summary.targets[0].expected_rejections, 0)
@@ -243,8 +269,29 @@ class VectisProjectTests(unittest.TestCase):
                 "vectis.fpe-ciphertext",
                 "vectis.mac-verification",
                 "vectis.masking",
+                "vectis.masking-policy",
                 "vectis.token-round-trip",
                 "vectis.one-time-token",
+                "vectis.one-time-token-race",
+                "vectis.token-randomness",
             ):
+                summary = self._run(target)
+                self.assertEqual(summary.targets[0].findings, 0, target)
+
+    def test_authorization_matrix_uses_401_and_403_per_operation(self):
+        with patch.dict(os.environ, {"NADIR_API_KEY": "test-api-key", "NADIR_DENIED_API_KEY": "denied-api-key"}, clear=True):
+            for target in (
+                "vectis.sign-authorization",
+                "vectis.fpe-encrypt-authorization",
+                "vectis.mac-create-authorization",
+                "vectis.mask-authorization",
+                "vectis.token-encode-authorization",
+            ):
+                summary = self._run(target)
+                self.assertEqual(summary.targets[0].findings, 0, target)
+
+    def test_scoped_client_can_only_execute_its_granted_operation(self):
+        with patch.dict(os.environ, {"NADIR_SCOPED_API_KEY": "scoped-api-key"}, clear=True):
+            for target in ("vectis.scoped-fpe-encrypt", "vectis.scoped-mac-denied"):
                 summary = self._run(target)
                 self.assertEqual(summary.targets[0].findings, 0, target)

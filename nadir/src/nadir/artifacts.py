@@ -1,4 +1,4 @@
-"""Versioned redacted workflow evidence and public-step replay."""
+"""Versioned redacted workflow evidence and opt-in authenticated replay."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from .http import HttpRequest, HttpResult
 from .workflows import Finding, StepExecution, WorkflowCase
 
 
-ARTIFACT_VERSION = "nadir-finding-v2"
+ARTIFACT_VERSION = "nadir-finding-v3"
 _SENSITIVE_HEADERS = {"authorization", "x-api-key", "cookie", "set-cookie"}
 
 
@@ -83,25 +83,37 @@ def _redact_bytes(value: bytes | None, secrets: tuple[bytes, ...]) -> tuple[byte
     return redacted, changed
 
 
-def _request_data(request: HttpRequest, secrets: tuple[bytes, ...]) -> tuple[dict[str, object], bool]:
+def _request_data(request: HttpRequest, secrets: tuple[bytes, ...], primary_api_key: bytes | None) -> tuple[dict[str, object], bool, bool]:
     url, url_redacted = _redact_bytes(request.url.encode("utf-8"), secrets)
     body, body_redacted = _redact_bytes(request.body, secrets)
     headers: list[list[str]] = []
-    header_redacted = False
+    requires_api_key = False
+    unreplayable_sensitive_header = False
+    ordinary_header_redacted = False
     for name, value in request.headers:
-        if name.lower() in _SENSITIVE_HEADERS:
+        if name.lower() == "x-api-key":
             headers.append([name, "<redacted>"])
-            header_redacted = True
+            if primary_api_key is not None and value.encode("utf-8") == primary_api_key:
+                requires_api_key = True
+            else:
+                # Authenticated with a non-primary principal (a scoped or denied key)
+                # that we do not record: mark the step unreplayable instead of
+                # re-injecting the primary key and replaying as the wrong client.
+                unreplayable_sensitive_header = True
+        elif name.lower() in _SENSITIVE_HEADERS:
+            headers.append([name, "<redacted>"])
+            unreplayable_sensitive_header = True
         else:
             encoded, changed = _redact_bytes(value.encode("utf-8"), secrets)
             headers.append([name, encoded.decode("utf-8", "replace")])
-            header_redacted = header_redacted or changed
+            ordinary_header_redacted = ordinary_header_redacted or changed
     return {
         "method": request.method,
         "url": url.decode("utf-8", "replace"),
         "headers": headers,
         "body": _encode_bytes(body),
-    }, url_redacted or body_redacted or header_redacted
+        "requires_api_key": requires_api_key,
+    }, url_redacted or body_redacted or ordinary_header_redacted or unreplayable_sensitive_header, requires_api_key
 
 
 def _response_data(result: HttpResult, secrets: tuple[bytes, ...]) -> dict[str, object]:
@@ -123,8 +135,8 @@ def _response_data(result: HttpResult, secrets: tuple[bytes, ...]) -> dict[str, 
     }
 
 
-def _step_data(step: StepExecution, secrets: tuple[bytes, ...]) -> tuple[dict[str, object], bool]:
-    request, request_redacted = _request_data(step.request, secrets)
+def _step_data(step: StepExecution, secrets: tuple[bytes, ...], primary_api_key: bytes | None) -> tuple[dict[str, object], bool]:
+    request, request_redacted, _ = _request_data(step.request, secrets, primary_api_key)
     return {
         "name": step.name,
         "request": request,
@@ -142,11 +154,12 @@ def write_finding(
     case: WorkflowCase,
     findings: tuple[Finding, ...],
     secrets: tuple[bytes, ...],
+    primary_api_key: bytes | None = None,
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     steps: list[dict[str, object]] = []
     for step in case.steps:
-        rendered, _ = _step_data(step, secrets)
+        rendered, _ = _step_data(step, secrets, primary_api_key)
         steps.append(rendered)
     payload = {
         "artifact_version": ARTIFACT_VERSION,
@@ -170,7 +183,7 @@ def write_finding(
     return destination
 
 
-def load_replay_requests(path: Path) -> tuple[HttpRequest, ...]:
+def load_replay_requests(path: Path, *, api_key: str | None = None) -> tuple[HttpRequest, ...]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -185,9 +198,9 @@ def load_replay_requests(path: Path) -> tuple[HttpRequest, ...]:
         if not isinstance(step, dict) or step.get("replayable") is not True:
             continue
         request = step.get("request")
-        if not isinstance(request, dict) or set(request) != {"method", "url", "headers", "body"}:
+        if not isinstance(request, dict) or set(request) != {"method", "url", "headers", "body", "requires_api_key"}:
             raise ValueError("finding artifact request is invalid")
-        method, url, headers = request["method"], request["url"], request["headers"]
+        method, url, headers, requires_api_key = request["method"], request["url"], request["headers"], request["requires_api_key"]
         if not isinstance(method, str) or not re.fullmatch(r"[A-Z]+", method) or not isinstance(url, str):
             raise ValueError("finding artifact request is invalid")
         if not isinstance(headers, list) or not all(
@@ -195,6 +208,18 @@ def load_replay_requests(path: Path) -> tuple[HttpRequest, ...]:
             for item in headers
         ):
             raise ValueError("finding artifact headers are invalid")
+        if not isinstance(requires_api_key, bool):
+            raise ValueError("finding artifact request is invalid")
+        api_key_headers = [item for item in headers if item[0].lower() == "x-api-key"]
+        if requires_api_key:
+            if not isinstance(api_key, str) or not api_key:
+                raise ValueError("authenticated replay requires NADIR_API_KEY")
+            if len(api_key_headers) != 1 or api_key_headers[0][1] != "<redacted>":
+                raise ValueError("finding artifact authenticated replay data is invalid")
+            headers = [item for item in headers if item[0].lower() != "x-api-key"]
+            headers.append(["X-API-Key", api_key])
+        elif api_key_headers:
+            raise ValueError("finding artifact request is invalid")
         if any(value == "<redacted>" for _, value in headers):
             raise ValueError("finding artifact cannot replay redacted request data")
         requests.append(HttpRequest(method, url, tuple((item[0], item[1]) for item in headers), _decode_bytes(request["body"])))

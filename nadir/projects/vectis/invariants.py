@@ -10,6 +10,7 @@ from nadir.workflows import EvaluationContext, Finding
 
 
 _HEX = re.compile(r"[0-9a-fA-F]+\Z")
+_B64URL = re.compile(r"[A-Za-z0-9_-]+\Z")
 _KEY_SHAPE = {
     "eddsa": "public_key_der_hex",
     "xecdh": "public_key_hex",
@@ -118,6 +119,34 @@ def fpe_round_trip(result: HttpResult, context: EvaluationContext) -> tuple[Find
     return ()
 
 
+def retired_fpe_round_trip(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+    body = _json(result)
+    if (
+        not isinstance(body, dict)
+        or body.get("ref") != context.variables.get("retired_fpe_ref")
+        or body.get("plaintext") != context.variables.get("retired_fpe_plaintext")
+    ):
+        return _finding("retired-fpe-decrypt-failed", "a retired KID did not permit its historical FPE decrypt")
+    return ()
+
+
+def fpe_encrypt_output(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+    body = _json(result)
+    plaintext = context.variables.get("fpe_plaintext")
+    if (
+        not isinstance(body, dict)
+        or body.get("ref") != context.variables.get("fpe_ref")
+        or body.get("kid") != context.variables.get("kid")
+        or body.get("profile") != context.variables.get("fpe_profile")
+        or not isinstance(body.get("ciphertext"), str)
+        or not isinstance(plaintext, str)
+        or len(body["ciphertext"]) != len(plaintext)
+        or not body["ciphertext"].isdigit()
+    ):
+        return _finding("fpe-producer-invalid", "FPE encrypt response does not satisfy its control contract")
+    return ()
+
+
 def fpe_ciphertext_integrity(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
     # FF1 does not authenticate ciphertext, so a tampered ciphertext need not
     # error; but it must never decrypt back to the original plaintext, which would
@@ -140,6 +169,23 @@ def _mac_verification(result: HttpResult, context: EvaluationContext, expected: 
 
 def mac_verification_success(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
     return _mac_verification(result, context, True, "mac-verification-control-failed", "control MAC digest did not verify")
+
+
+def mac_create_output(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+    body = _json(result)
+    digest = body.get("digest") if isinstance(body, dict) else None
+    if (
+        not isinstance(body, dict)
+        or body.get("ref") != context.variables.get("mac_ref")
+        or body.get("kid") != context.variables.get("kid")
+        or body.get("profile") != context.variables.get("mac_profile")
+        or not isinstance(body.get("algorithm"), str)
+        or not body["algorithm"]
+        or not _is_hex(digest)
+        or len(digest) not in {64, 96, 128}
+    ):
+        return _finding("mac-producer-invalid", "MAC create response does not satisfy its control contract")
+    return ()
 
 
 def mac_verification_failure(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
@@ -174,6 +220,70 @@ def token_once_round_trip(result: HttpResult, context: EvaluationContext) -> tup
     return _token_round_trip(result, context, "token_once")
 
 
+def one_time_token_race(results: tuple[HttpResult, ...], context: EvaluationContext) -> tuple[Finding, ...]:
+    """Exactly one concurrent decode may reveal a one-time plaintext."""
+    statuses = [result.status for result in results]
+    if any(result.failure is not None for result in results) or sorted(statuses) != [200, 404]:
+        return _finding("one-time-race-invalid-outcome", "concurrent one-time decode did not produce exactly one 200 and one 404")
+    successful = next(result for result in results if result.status == 200)
+    failed = next(result for result in results if result.status == 404)
+    if _token_round_trip(successful, context, "token_once"):
+        return _finding("one-time-race-winner-invalid", "winning one-time decode did not return the expected value")
+    failed_body = _json(failed)
+    plaintext = context.variables.get("token_once_plaintext")
+    leaked = isinstance(plaintext, str) and plaintext.encode("utf-8") in failed.body
+    if not isinstance(failed_body, dict) or not isinstance(failed_body.get("error"), str) or leaked:
+        return _finding("one-time-race-loser-leaked", "losing one-time decode was not a clean not-found response")
+    return ()
+
+
+def one_time_token_batch_round_trip(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+    body = _json(result)
+    if not isinstance(body, dict) or not isinstance(body.get("items"), list) or len(body["items"]) != 2:
+        return _finding("one-time-batch-invalid", "one-time batch decode response has an invalid shape")
+    refs = [item.get("ref") if isinstance(item, dict) else None for item in body["items"]]
+    plaintexts = [item.get("plaintext") if isinstance(item, dict) else None for item in body["items"]]
+    if refs != [context.variables.get("token_once_batch_ref_zero"), context.variables.get("token_once_batch_ref_one")] or plaintexts != [context.variables.get("token_once_plaintext")] * 2:
+        return _finding("one-time-batch-order-or-rollback-failed", "one-time batch did not preserve order or rollback after a failed consume")
+    return ()
+
+
+def _token_output(result: HttpResult, context: EvaluationContext, prefix: str) -> tuple[Finding, ...]:
+    body = _json(result)
+    token = body.get("token") if isinstance(body, dict) else None
+    token_prefix = context.variables.get(f"{prefix}_token_prefix")
+    if (
+        not isinstance(body, dict)
+        or body.get("ref") != context.variables.get(f"{prefix}_ref")
+        or body.get("kid") != context.variables.get("kid")
+        or body.get("profile") != context.variables.get(f"{prefix}_profile")
+        or not isinstance(token, str)
+        or not isinstance(token_prefix, str)
+        or not token.startswith(token_prefix + "_")
+        or _B64URL.fullmatch(token[len(token_prefix) + 1 :]) is None
+    ):
+        return _finding("token-producer-invalid", "token encode response does not satisfy its control contract")
+    return ()
+
+
+def token_output(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+    return _token_output(result, context, "token")
+
+
+def token_once_output(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+    return _token_output(result, context, "token_once")
+
+
+def token_distinct_output(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+    findings = _token_output(result, context, "token")
+    if findings:
+        return findings
+    body = _json(result)
+    if isinstance(body, dict) and body.get("token") == context.variables.get("first_token"):
+        return _finding("token-randomness-failed", "two encodes of the same plaintext returned the same token")
+    return ()
+
+
 def masking_output(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
     body = _json(result)
     if not isinstance(body, dict):
@@ -186,4 +296,28 @@ def masking_output(result: HttpResult, context: EvaluationContext) -> tuple[Find
     }
     if any(body.get(name) != value for name, value in expected.items()):
         return _finding("masking-output-invalid", "mask response did not match the signed display policy")
+    return ()
+
+
+def masking_policy_output(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+    plaintext = context.variables.get("mask_policy_plaintext")
+    first = context.variables.get("mask_visible_first")
+    last = context.variables.get("mask_visible_last")
+    mask_char = context.variables.get("mask_char")
+    if not isinstance(plaintext, str) or not isinstance(first, str) or not isinstance(last, str) or not isinstance(mask_char, str):
+        return _finding("masking-policy-input-invalid", "masking policy variables are unavailable")
+    try:
+        visible_first, visible_last = int(first), int(last)
+    except ValueError:
+        return _finding("masking-policy-input-invalid", "masking visibility values are invalid")
+    expected = plaintext[:visible_first] + mask_char * (len(plaintext) - visible_first - visible_last) + plaintext[len(plaintext) - visible_last :]
+    body = _json(result)
+    if (
+        not isinstance(body, dict)
+        or body.get("ref") != context.variables.get("mask_policy_ref")
+        or body.get("kid") != context.variables.get("kid")
+        or body.get("profile") != context.variables.get("mask_profile")
+        or body.get("masked") != expected
+    ):
+        return _finding("masking-policy-violated", "mask response did not apply the configured visible ranges and mask character")
     return ()

@@ -135,7 +135,8 @@ class _DeserTimeoutTransport:
                 return HttpResult(request, None, (), b"", 2_500, TransportFailure("timeout", "ready probe timed out"))
             return HttpResult(request, 200, (), b"{}", 1)
         self.request_count += 1
-        if self.request_count == 3:
+        # control + semantic + structured + raw run before the guaranteed deser case.
+        if self.request_count == 5:
             return HttpResult(request, None, (), b"", 2_500, TransportFailure("timeout", "request timed out"))
         return HttpResult(request, 200, (), b"{}", 1)
 
@@ -209,7 +210,7 @@ class EngineTests(unittest.TestCase):
                 _DeserProject(),
                 options={},
                 target_name=None,
-                iterations=2,
+                iterations=4,
                 run_seed=7,
                 output_dir=Path(directory),
                 transport=_DeserTimeoutTransport(False),
@@ -223,10 +224,30 @@ class EngineTests(unittest.TestCase):
                 _DeserProject(),
                 options={},
                 target_name=None,
-                iterations=2,
+                iterations=4,
                 run_seed=7,
                 output_dir=Path(directory),
                 transport=_DeserTimeoutTransport(True),
             )
         self.assertEqual(summary.targets[0].deser, 1)
         self.assertEqual(summary.targets[0].findings, 1)
+
+    def test_scheduler_covers_every_case_class_before_weighted_draws(self):
+        with tempfile.TemporaryDirectory() as directory:
+            summary = run_project(
+                _DeserProject(), options={}, target_name=None, iterations=4, run_seed=7,
+                output_dir=Path(directory), transport=_DeserTimeoutTransport(False),
+            ).targets[0]
+        self.assertEqual((summary.semantic, summary.structured, summary.raw, summary.deser), (1, 1, 1, 1))
+        self.assertEqual(summary.required_iterations, 4)
+        self.assertEqual(summary.uncovered_classes, ())
+
+    def test_scheduler_surfaces_classes_omitted_by_small_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            summary = run_project(
+                _DeserProject(), options={}, target_name=None, iterations=2, run_seed=7,
+                output_dir=Path(directory), transport=_DeserTimeoutTransport(False),
+            ).targets[0]
+        self.assertEqual((summary.semantic, summary.structured, summary.raw, summary.deser), (1, 1, 0, 0))
+        self.assertEqual(summary.required_iterations, 4)
+        self.assertEqual(summary.uncovered_classes, ("raw", "deser"))

@@ -21,6 +21,9 @@ class MutationRecord:
     location: str
     original: str
     mutated: str
+    # Status a credential/authorization mutation expects, so oracles read it as
+    # declarative metadata instead of keying on the mutation's name.
+    expected_status: int | None = None
 
 
 @dataclass(frozen=True)
@@ -34,6 +37,10 @@ class EvaluationContext:
 
 class ResponseExpectation(Protocol):
     def evaluate(self, result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]: ...
+
+
+class RaceExpectation(Protocol):
+    def evaluate(self, results: tuple[HttpResult, ...], context: EvaluationContext) -> tuple[Finding, ...]: ...
 
 
 @dataclass(frozen=True)
@@ -151,12 +158,39 @@ class ExpectUnderLatency:
 
 
 @dataclass(frozen=True)
+class ExpectAuthorizationMatrix:
+    """Assert the status each credential mutation declares (401 invalid, 403 denied).
+
+    The expected status is read from the mutation's own ``expected_status`` metadata,
+    not inferred from its name, so the oracle stays decoupled from any project's
+    naming convention. A mutation that declares nothing falls back to 401.
+    """
+
+    def evaluate(self, result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+        if result.failure is not None:
+            return (Finding("transport-failure", result.failure.public_message),)
+        expected = context.mutation.expected_status if context.mutation and context.mutation.expected_status is not None else 401
+        if result.status != expected:
+            return (Finding("authorization-policy-violated", f"{context.step} received HTTP {result.status}; expected {expected}"),)
+        return ()
+
+
+@dataclass(frozen=True)
 class ProjectPredicate:
     name: str
     predicate: Callable[[HttpResult, EvaluationContext], tuple[Finding, ...]]
 
     def evaluate(self, result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
         return self.predicate(result, context)
+
+
+@dataclass(frozen=True)
+class ProjectRacePredicate:
+    name: str
+    predicate: Callable[[tuple[HttpResult, ...], EvaluationContext], tuple[Finding, ...]]
+
+    def evaluate(self, results: tuple[HttpResult, ...], context: EvaluationContext) -> tuple[Finding, ...]:
+        return self.predicate(results, context)
 
 
 @dataclass(frozen=True)
@@ -253,6 +287,7 @@ class FlowStep:
     request: HttpStep
     captures: tuple[Capture, ...] = ()
     fuzz: bool = False
+    continue_on_rejection: bool = False
 
 
 @dataclass(frozen=True)
@@ -271,6 +306,8 @@ class FlowTarget:
     mutation_expectation: ResponseExpectation
     weights: CaseWeights = CaseWeights()
     malformed_expectation: ResponseExpectation = DEFAULT_MALFORMED_EXPECTATION
+    run_control: bool = True
+    include_generative: bool = True
 
     def __post_init__(self) -> None:
         if not self.mutations:
@@ -280,7 +317,19 @@ class FlowTarget:
             raise ValueError(f"flow {self.name} must mark exactly one step with fuzz: true")
 
 
-Target = RequestTarget | ProducerConsumerTarget | FlowTarget
+@dataclass(frozen=True)
+class RaceTarget:
+    """Producer plus contenders released together by the generic engine."""
+
+    name: str
+    required_variables: frozenset[str]
+    producer: HttpStep
+    captures: tuple[Capture, ...]
+    contenders: tuple[HttpStep, ...]
+    race_expectation: RaceExpectation
+
+
+Target = RequestTarget | ProducerConsumerTarget | FlowTarget | RaceTarget
 
 
 @dataclass(frozen=True)
