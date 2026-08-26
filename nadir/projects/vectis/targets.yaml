@@ -1,0 +1,57 @@
+# Nadir fuzz targets for the Vectis project.
+#
+# Request shape and mutations are pure data. Generic outcomes (status class,
+# json_error, no leaked secret) are built in; a deep cryptographic property is
+# named under `invariant:` and resolved to a Python function in project.py.
+project: vectis
+
+targets:
+
+  # --- Shallow: authorization fuzzing, zero Python -----------------------------
+  # Key properties are permission-protected. The thing under test is the API
+  # key: valid credentials receive properties; empty/wrong/malformed keys are
+  # rejected (401/403) and must never leak a declared secret.
+  - name: vectis.keys
+    request: {method: GET, path: "/keys/properties/{kid}", auth: true}
+    mutate:
+      - variable: api_key
+        values: ["", "0000000000000000000000000000000000000000", "not-a-real-key", "wrong-but-plausible"]
+    expect:
+      control: {status: [200]}
+      mutated: {status: [401, 403]}
+
+  # --- Shallow: path-variable fuzzing, one named shape invariant ---------------
+  - name: vectis.public-keys
+    request: {method: GET, path: "/pub/{kid}"}
+    mutate:
+      - variable: kid
+        values: ["not-hex", "abcd", "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "GGGGGGGG", "../keys"]
+    expect:
+      control: {status: [200], invariant: public_keys_output}
+      mutated: {status: "4xx", json_error: true}
+
+  # --- Deep: producer -> consumer, semantic invariant by name ------------------
+  # Sign a control message, capture the compact signature, then verify a version
+  # with one mutated segment. The request and the mutations are pure YAML; the
+  # only Python is `verification_failure`, which asserts the hybrid per-segment
+  # verification status. That irreducible bit is exactly Nadir's value.
+  - name: vectis.sign-verification
+    producer:
+      method: POST
+      path: "/sign/{kid}"
+      auth: true
+      replayable: false
+      body: {message_hash: {alg: "SHA-256", hex: "{digest}"}}
+    capture: {signer_kid: $.kid, signature: $.signature}
+    consumer:
+      method: POST
+      path: /sign/verification
+      body: {kid: "{signer_kid}", signature: "{signature}"}
+    mutate:
+      - json_field: $.signature
+        delimiter: "."
+        segments: [0, 1, 2, 3]
+        name: compact-segment          # invariant keys on this name
+    expect:
+      control: {status: [200], invariant: verification_success}
+      mutated: {status: [200], invariant: verification_failure}
