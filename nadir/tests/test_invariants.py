@@ -8,11 +8,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "projects" / "vecti
 
 from nadir.http import HttpRequest, HttpResult
 from nadir.workflows import EvaluationContext
-from invariants import public_keys_output, verification_failure
+from invariants import fpe_round_trip, mac_verification_failure, public_keys_output, token_round_trip, verification_failure
 
 
-def context(mutation=None):
-    return EvaluationContext("vectis", "test", mutation, ())
+def context(mutation=None, *, target="vectis", variables=None):
+    return EvaluationContext(target, "test", mutation, (), variables or {})
 
 
 class InvariantTests(unittest.TestCase):
@@ -28,3 +28,26 @@ class InvariantTests(unittest.TestCase):
         body = {"valid": "ok", "status": {"eddsa": "ok", "ml-dsa": "ok"}}
         self.assertEqual(verification_failure(self._result(body), context())[0].code, "mutated-signature-accepted")
 
+    def test_detects_fpe_round_trip_with_wrong_plaintext(self):
+        body = {"ref": "fpe-ref", "plaintext": "wrong"}
+        variables = {"fpe_ref": "fpe-ref", "fpe_plaintext": "expected"}
+        self.assertEqual(fpe_round_trip(self._result(body), context(variables=variables))[0].code, "fpe-round-trip-failed")
+
+    def test_detects_mac_digest_that_was_accepted(self):
+        body = {"ref": "mac-ref", "valid": True}
+        self.assertEqual(
+            mac_verification_failure(self._result(body), context(variables={"mac_ref": "mac-ref"}))[0].code,
+            "mutated-mac-accepted",
+        )
+
+    def test_detects_wrong_one_time_token_plaintext(self):
+        body = {"ref": "once-ref", "plaintext": "wrong", "metadata": {"tenant": "nadir-once"}}
+        variables = {
+            "token_once_ref": "once-ref",
+            "token_once_plaintext": "expected",
+            "token_once_metadata_tenant": "nadir-once",
+        }
+        self.assertEqual(
+            token_round_trip(self._result(body), context(target="vectis.one-time-token", variables=variables))[0].code,
+            "token-round-trip-failed",
+        )

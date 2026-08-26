@@ -152,6 +152,7 @@ class JsonFieldMutation:
     selector: str
     delimiter: str | None = None
     segment_index: int | None = None
+    alphabet: str | None = None
 
     def apply(self, variables: Mapping[str, object], body: object | None, rng: random.Random):
         if body is None:
@@ -162,21 +163,39 @@ class JsonFieldMutation:
         if not isinstance(original, str) or not original:
             raise ValueError("JSON field mutation requires a non-empty string")
         if self.delimiter is None:
-            mutated = _flip_character(original)
+            mutated = _flip_character(original, self.alphabet)
         else:
             if self.segment_index is None:
                 raise ValueError("delimited JSON mutation requires a segment index")
             segments = original.split(self.delimiter)
-            if self.segment_index < 0 or self.segment_index >= len(segments) or not segments[self.segment_index]:
-                raise ValueError("JSON mutation segment is unavailable")
-            segments[self.segment_index] = _flip_character(segments[self.segment_index])
-            mutated = self.delimiter.join(segments)
+            index = self.segment_index
+            if 0 <= index < len(segments) and segments[index]:
+                segments[index] = _flip_character(segments[index], self.alphabet)
+                mutated = self.delimiter.join(segments)
+            else:
+                # The value's delimited layout differs from the one this target
+                # assumed (e.g. a token with fewer segments than expected). Corrupt
+                # the whole field instead of aborting the entire run.
+                mutated = _flip_character(original, self.alphabet)
         container[key] = mutated
         return dict(variables), updated_body, MutationRecord(self.name, self.selector, original, mutated)
 
 
-def _flip_character(value: str) -> str:
-    return ("A" if value[0] != "A" else "B") + value[1:]
+def _flip_character(value: str, alphabet: str | None = None) -> str:
+    """Change the first character to a different one.
+
+    With an ``alphabet``, the replacement is drawn from it so the field stays
+    well-formed while its *value* changes: a format-preserving ciphertext keeps
+    its radix, and a case-insensitive hex digest changes to different bytes rather
+    than a mere case flip that a lenient parser would treat as identical.
+    """
+
+    first = value[0]
+    if alphabet:
+        index = alphabet.find(first)
+        replacement = alphabet[(index + 1) % len(alphabet)] if index != -1 else alphabet[0]
+        return replacement + value[1:]
+    return ("A" if first != "A" else "B") + value[1:]
 
 
 # --- generative mutators ------------------------------------------------------

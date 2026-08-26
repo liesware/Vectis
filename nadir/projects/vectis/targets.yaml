@@ -55,3 +55,149 @@ targets:
     expect:
       control: {status: [200], invariant: verification_success}
       mutated: {status: [200], invariant: verification_failure}
+
+  # --- Deep: deterministic FPE encrypt -> decrypt -----------------------------
+  # FF1 does not authenticate ciphertext. The semantic mutation changes the
+  # signed profile selector instead, which must fail rather than silently using
+  # a different domain. The control asserts the original plaintext round-trips.
+  - name: vectis.fpe-round-trip
+    producer:
+      method: POST
+      path: "/fpe/encrypt/{kid}"
+      auth: true
+      replayable: false
+      body: {ref: "{fpe_ref}", profile: "{fpe_profile}", plaintext: "{fpe_plaintext}"}
+    capture: {fpe_kid: $.kid, ciphertext: $.ciphertext}
+    consumer:
+      method: POST
+      path: /fpe/decrypt
+      auth: true
+      body: {ref: "{fpe_ref}", kid: "{fpe_kid}", profile: "{fpe_profile}", ciphertext: "{ciphertext}"}
+    mutate:
+      - {json_field: $.profile, name: fpe-profile}
+    expect:
+      control: {status: [200], invariant: fpe_round_trip}
+      mutated: {status: "4xx", json_error: true}
+
+  # --- Deep: FPE ciphertext tamper (FF1 is unauthenticated) --------------------
+  # The profile target above cannot cover the real FF1 risk: a corrupted
+  # ciphertext is not required to error, so it needs its own oracle. Tamper one
+  # byte of the captured ciphertext; the decrypt must not crash (no_server_error)
+  # and must never round-trip back to the original plaintext.
+  - name: vectis.fpe-ciphertext
+    producer:
+      method: POST
+      path: "/fpe/encrypt/{kid}"
+      auth: true
+      replayable: false
+      body: {ref: "{fpe_ref}", profile: "{fpe_profile}", plaintext: "{fpe_plaintext}"}
+    capture: {fpe_kid: $.kid, ciphertext: $.ciphertext}
+    consumer:
+      method: POST
+      path: /fpe/decrypt
+      auth: true
+      body: {ref: "{fpe_ref}", kid: "{fpe_kid}", profile: "{fpe_profile}", ciphertext: "{ciphertext}"}
+    mutate:
+      # FF1 is format-preserving over the numeric domain: tamper within the digit
+      # alphabet so the decrypt actually runs (a non-digit char would be rejected at
+      # input validation, testing parsing instead of ciphertext integrity).
+      - {json_field: $.ciphertext, name: fpe-ciphertext, alphabet: "0123456789"}
+    expect:
+      control: {status: [200], invariant: fpe_round_trip}
+      mutated: {no_server_error: true, no_server_crash: true, invariant: fpe_ciphertext_integrity}
+
+  # --- Deep: MAC create -> verify ----------------------------------------------
+  - name: vectis.mac-verification
+    producer:
+      method: POST
+      path: "/mac/{kid}"
+      auth: true
+      replayable: false
+      body: {ref: "{mac_ref}", profile: "{mac_profile}", plaintext: "{mac_plaintext}"}
+    capture: {mac_kid: $.kid, digest: $.digest}
+    consumer:
+      method: POST
+      path: /mac/verify
+      auth: true
+      body: {ref: "{mac_ref}", kid: "{mac_kid}", profile: "{mac_profile}", plaintext: "{mac_plaintext}", digest: "{digest}"}
+    mutate:
+      # Hex is case-insensitive, so a bare case flip decodes to the same bytes and a
+      # correct verifier still accepts it (false positive). Flip within the hex
+      # alphabet so the digest is a genuinely different value.
+      - {json_field: $.digest, name: mac-digest, alphabet: "0123456789abcdef"}
+    expect:
+      control: {status: [200], invariant: mac_verification_success}
+      mutated: {status: [200], invariant: mac_verification_failure}
+
+  # --- Shallow: display masking -------------------------------------------------
+  - name: vectis.masking
+    request:
+      method: POST
+      path: "/mask/{kid}"
+      auth: true
+      body: {ref: "{mask_ref}", profile: "{mask_profile}", plaintext: "{mask_plaintext}"}
+    mutate:
+      - {json_field: $.profile, name: masking-profile}
+    requires: [mask_expected]        # the invariant compares against it; not in any template
+    expect:
+      control: {status: [200], invariant: masking_output}
+      mutated: {status: "4xx", json_error: true}
+
+  # --- Deep: random token encode -> decode ------------------------------------
+  # Mutating random token bytes preserves its envelope prefix but must never
+  # recover the stored plaintext. The control also binds metadata round-trip.
+  - name: vectis.token-round-trip
+    producer:
+      method: POST
+      path: "/token/encode/{kid}"
+      auth: true
+      replayable: false
+      body:
+        {ref: "{token_ref}", profile: "{token_profile}", plaintext: "{token_plaintext}", metadata: {tenant: "{token_metadata_tenant}"}}
+    capture: {token_kid: $.kid, token: $.token}
+    consumer:
+      method: POST
+      path: /token/decode
+      auth: true
+      body: {ref: "{token_ref}", kid: "{token_kid}", profile: "{token_profile}", token: "{token}"}
+    mutate:
+      - {json_field: $.token, delimiter: "_", segments: [2], name: token-random-bytes}
+    expect:
+      control: {status: [200], invariant: token_round_trip}
+      mutated: {status: "4xx", json_error: true}
+
+  # --- Flow: a one-time token cannot be decoded twice, even under attack -------
+  # Single use is exercised on every iteration, not only the control run: mint a
+  # token, consume it once in the valid preamble, then the fuzz step re-decodes the
+  # SAME (now consumed) token. Whether that replay is clean or mutated it must be
+  # rejected 404, so both the control and every mutated case assert single-use.
+  - name: vectis.one-time-token
+    flow:
+      - step: encode
+        request:
+          method: POST
+          path: "/token/encode/{kid}"
+          auth: true
+          replayable: false
+          body:
+            {ref: "{token_once_ref}", profile: "{token_once_profile}", plaintext: "{token_once_plaintext}", metadata: {tenant: "{token_once_metadata_tenant}"}}
+        capture: {token_once_kid: $.kid, token_once: $.token}
+        expect: {status: [200]}
+      - step: consume
+        request:
+          method: POST
+          path: /token/decode
+          auth: true
+          body: {ref: "{token_once_ref}", kid: "{token_once_kid}", profile: "{token_once_profile}", token: "{token_once}"}
+        expect: {status: [200], invariant: token_once_round_trip}
+      - step: replay
+        request:
+          method: POST
+          path: /token/decode
+          auth: true
+          body: {ref: "{token_once_ref}", kid: "{token_once_kid}", profile: "{token_once_profile}", token: "{token_once}"}
+        fuzz: true
+        mutate:
+          - {json_field: $.token, delimiter: "_", segments: [2], name: one-time-replay}
+        expect: {status: [404], json_error: true}
+        fuzz_expect: {status: [404], json_error: true}

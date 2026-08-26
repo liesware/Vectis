@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Mapping, Protocol
 
 from .http import HttpRequest, HttpResult, is_client_side_failure
@@ -29,6 +29,7 @@ class EvaluationContext:
     step: str
     mutation: MutationRecord | None
     declared_secrets: tuple[bytes, ...]
+    variables: Mapping[str, object] = field(default_factory=dict)
 
 
 class ResponseExpectation(Protocol):
@@ -106,6 +107,26 @@ class ExpectNoServerError:
             return ()
         if result.status is not None and 500 <= result.status < 600:
             return (Finding("server-error", f"{context.step} returned HTTP {result.status}"),)
+        return ()
+
+
+@dataclass(frozen=True)
+class ExpectNoServerCrash:
+    """A server-side connection drop signals a crash, and is a finding.
+
+    Where ExpectNoServerError only sees a status code, this catches the case where
+    a well-formed but adversarial request makes the service panic and drop the
+    connection (RST) or return a malformed HTTP response. A client-side failure (our
+    own request was un-sendable) and a plain timeout (network noise) are left to
+    other classification so this never fires on those.
+    """
+
+    def evaluate(self, result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+        failure = result.failure
+        if failure is None or is_client_side_failure(failure):
+            return ()
+        if failure.kind in {"reset", "protocol"}:
+            return (Finding("server-crash", f"{context.step} triggered a server-side {failure.kind}"),)
         return ()
 
 
@@ -277,4 +298,3 @@ class WorkflowCase:
     iteration: int
     mutation: MutationRecord | None
     steps: tuple[StepExecution, ...]
-

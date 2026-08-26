@@ -29,6 +29,25 @@ class MutationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             JsonFieldMutation("bad", "$.missing").apply({}, {"signature": "value"}, _rng())
 
+    def test_alphabet_flip_stays_in_domain_and_changes_value(self):
+        # format-preserving numeric ciphertext must remain all digits, and differ
+        mutation = JsonFieldMutation("fpe", "$.ciphertext", alphabet="0123456789")
+        _, body, _ = mutation.apply({}, {"ciphertext": "9876543210"}, _rng())
+        self.assertTrue(body["ciphertext"].isdigit())
+        self.assertNotEqual(body["ciphertext"], "9876543210")
+
+    def test_alphabet_flip_changes_hex_value_not_just_case(self):
+        # a case-insensitive parser must see a different value, not the same bytes
+        mutation = JsonFieldMutation("mac", "$.digest", alphabet="0123456789abcdef")
+        _, body, _ = mutation.apply({}, {"digest": "ab" * 32}, _rng())
+        self.assertNotEqual(body["digest"].lower(), ("ab" * 32).lower())
+
+    def test_delimited_mutation_degrades_when_segment_is_absent(self):
+        # a token with fewer segments than assumed must still mutate, not raise
+        mutation = JsonFieldMutation("token", "$.token", delimiter="_", segment_index=2)
+        _, body, _ = mutation.apply({}, {"token": "nadir_tokABCD"}, _rng())
+        self.assertNotEqual(body["token"], "nadir_tokABCD")
+
     def test_structured_mutation_changes_body_and_is_deterministic(self):
         seed_body = {"alg": "SHA-256", "hex": "abcdef", "nested": {"k": "v"}}
         first = StructuredMutation().apply({}, seed_body, _rng(7))

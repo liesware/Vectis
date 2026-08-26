@@ -96,6 +96,8 @@ client, then exports the `NADIR_*` values for a run:
 ```sh
 bash tests/nadir/run.sh
 bash tests/nadir/run.sh --target vectis.sign-verification --iterations 4
+bash tests/nadir/run.sh --target vectis.fpe-round-trip --iterations 8
+bash tests/nadir/run.sh --target vectis.one-time-token --iterations 8
 ```
 
 It stops Vectis, verifies its audit log, and removes its workspace on exit. Set
@@ -247,6 +249,7 @@ projects/vectis/
 ├── targets.yaml     # the endpoints and flows (config)
 ├── invariants.py    # named semantic oracle functions (Python)
 ├── fixture.py       # how to reach a test instance; env pass-through
+├── env.dist          # declared NADIR_* defaults and control values
 └── project.py       # wiring: fixture + invariants registry + healthcheck + redaction
 ```
 
@@ -318,7 +321,7 @@ nadir/
 | File | Purpose |
 |------|---------|
 | `cli.py` | The command-line boundary. Parses `list`/`check`/`run`/`replay`, loads the project module, turns every `NADIR_*` value into a template variable, and maps results to exit codes. Contains no fuzzing logic. |
-| `engine.py` | The heart. Renders request templates once, schedules the four case classes (control / semantic / structured / raw), executes `request`, `producer→consumer`, and `flow` targets, threads captured values through a flow, and aggregates findings and coverage counters. |
+| `engine.py` | The heart. Renders request templates once, schedules control plus semantic, structured, raw, and bounded-deserialization-stress cases, executes `request`, `producer→consumer`, and `flow` targets, threads captured values through a flow, and aggregates findings and coverage counters. |
 | `http.py` | The only place that talks HTTP. Sends bounded requests, captures exact bytes, classifies transport failures (dns/tls/refused/reset/timeout/…), and refuses non-loopback hosts by default. |
 | `workflows.py` | The shared vocabulary the engine and projects both speak: target types, `HttpStep`, `Capture`, the composable oracles (`ExpectStatus`, `ExpectNoServerError`, `NoDeclaredSecrets`, `ProjectPredicate`, `AllOf`), `Finding`, and `MutationRecord`. No behavior beyond oracle evaluation. |
 | `mutations.py` | Generic mutators: deterministic ones (template value, JSON field) and generative ones (`StructuredMutation`, `RawBodyMutation`), plus JSON path navigation and the bad-value vocabulary. Knows no domain concepts. |
@@ -333,4 +336,5 @@ nadir/
 | `targets.yaml` | The endpoints and flows as data. Adding a target is editing this file. |
 | `invariants.py` | The pure semantic oracles referenced by name from the YAML — the irreducible Python that makes Nadir more than a conformance checker. |
 | `fixture.py` | Resolves and validates the test instance (loopback, KID shape), enforces required credentials, and passes `NADIR_*` values through as template variables. The home of future stateful setup (key creation, profile signing). |
+| `env.dist` | Declares every `NADIR_*` variable consumed by this project, including synthetic control values for profile-driven workflows. |
 | `project.py` | The wiring: exposes the fixture, the invariants registry, the health check, and which variables are secrets to redact. Small by design. |

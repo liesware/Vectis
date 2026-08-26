@@ -13,7 +13,7 @@ from nadir.artifacts import load_replay_requests
 from nadir.engine import run_project
 from nadir.http import HttpRequest, HttpResult, TransportFailure
 from nadir.mutations import JsonFieldMutation
-from nadir.workflows import AllOf, CaseWeights, Capture, EvaluationContext, ExpectStatus, Finding, HttpStep, MutationRecord, ProducerConsumerTarget, ProjectPredicate, RequestTarget
+from nadir.workflows import AllOf, CaseWeights, Capture, EvaluationContext, ExpectNoServerCrash, ExpectStatus, Finding, HttpStep, MutationRecord, ProducerConsumerTarget, ProjectPredicate, RequestTarget
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -165,6 +165,16 @@ class ExpectStatusTransportTests(unittest.TestCase):
         result = self._result(TransportFailure("reset", "connection reset"))
         findings = ExpectStatus(frozenset({401})).evaluate(result, self._context(self._record))
         self.assertEqual([finding.code for finding in findings], ["transport-failure"])
+
+    def test_no_server_crash_flags_reset_but_not_timeout_or_success(self):
+        oracle = ExpectNoServerCrash()
+        context = self._context(self._record)
+        self.assertEqual([f.code for f in oracle.evaluate(self._result(TransportFailure("reset", "x")), context)], ["server-crash"])
+        self.assertEqual([f.code for f in oracle.evaluate(self._result(TransportFailure("protocol", "x")), context)], ["server-crash"])
+        self.assertEqual(oracle.evaluate(self._result(TransportFailure("timeout", "x")), context), ())
+        self.assertEqual(oracle.evaluate(self._result(TransportFailure("local_protocol", "x")), context), ())
+        request = HttpRequest("GET", "http://127.0.0.1/x", (), None)
+        self.assertEqual(oracle.evaluate(HttpResult(request, 200, (), b"{}", 1, None), context), ())
 
 
 class EngineTests(unittest.TestCase):

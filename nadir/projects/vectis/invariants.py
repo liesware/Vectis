@@ -106,3 +106,84 @@ def verification_failure(result: HttpResult, context: EvaluationContext) -> tupl
     if context.mutation is None or status != expected.get(context.mutation.name):
         return _finding("verification-order-invalid", "hybrid verification status does not match the mutated segment")
     return ()
+
+
+def fpe_round_trip(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+    body = _json(result)
+    if not isinstance(body, dict):
+        return _finding("fpe-round-trip-invalid-json", "FPE decrypt response is not valid JSON")
+    expected = context.variables.get("fpe_plaintext")
+    if body.get("ref") != context.variables.get("fpe_ref") or body.get("plaintext") != expected:
+        return _finding("fpe-round-trip-failed", "FPE decrypt response did not restore the control plaintext")
+    return ()
+
+
+def fpe_ciphertext_integrity(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+    # FF1 does not authenticate ciphertext, so a tampered ciphertext need not
+    # error; but it must never decrypt back to the original plaintext, which would
+    # mean the corrupted bytes were ignored. No-5xx and no-leak are enforced by the
+    # generic clauses paired with this one in the mutated oracle.
+    body = _json(result)
+    if isinstance(body, dict) and body.get("plaintext") == context.variables.get("fpe_plaintext"):
+        return _finding("fpe-tamper-round-trips", "a tampered ciphertext decrypted to the original plaintext")
+    return ()
+
+
+def _mac_verification(result: HttpResult, context: EvaluationContext, expected: bool, code: str, message: str) -> tuple[Finding, ...]:
+    # MAC verification is intentionally distinct from hybrid-signature
+    # verification: its public contract uses a JSON boolean.
+    body = _json(result)
+    if not isinstance(body, dict) or body.get("ref") != context.variables.get("mac_ref") or body.get("valid") != expected:
+        return _finding(code, message)
+    return ()
+
+
+def mac_verification_success(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+    return _mac_verification(result, context, True, "mac-verification-control-failed", "control MAC digest did not verify")
+
+
+def mac_verification_failure(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+    return _mac_verification(result, context, False, "mutated-mac-accepted", "mutated MAC digest was not rejected")
+
+
+def _token_round_trip(result: HttpResult, context: EvaluationContext, prefix: str) -> tuple[Finding, ...]:
+    """Ensure a stored token returns only its intended synthetic control value.
+
+    The variable prefix comes from the caller, not from the target name, so the
+    same logic serves both the standard and one-time targets without either one
+    hard-coding the other's identity.
+    """
+
+    body = _json(result)
+    expected_metadata = {"tenant": context.variables.get(f"{prefix}_metadata_tenant")}
+    if (
+        not isinstance(body, dict)
+        or body.get("ref") != context.variables.get(f"{prefix}_ref")
+        or body.get("plaintext") != context.variables.get(f"{prefix}_plaintext")
+        or body.get("metadata") != expected_metadata
+    ):
+        return _finding("token-round-trip-failed", "token decode response did not restore the control value and metadata")
+    return ()
+
+
+def token_round_trip(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+    return _token_round_trip(result, context, "token")
+
+
+def token_once_round_trip(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+    return _token_round_trip(result, context, "token_once")
+
+
+def masking_output(result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+    body = _json(result)
+    if not isinstance(body, dict):
+        return _finding("masking-output-invalid-json", "mask response is not valid JSON")
+    expected = {
+        "ref": context.variables.get("mask_ref"),
+        "kid": context.variables.get("kid"),
+        "profile": context.variables.get("mask_profile"),
+        "masked": context.variables.get("mask_expected"),
+    }
+    if any(body.get(name) != value for name, value in expected.items()):
+        return _finding("masking-output-invalid", "mask response did not match the signed display policy")
+    return ()

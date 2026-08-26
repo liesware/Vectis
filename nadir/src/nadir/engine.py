@@ -142,7 +142,7 @@ def _run_step(
 ) -> tuple[StepExecution, tuple]:
     request = _build_request(step, variables, body)
     result = transport.send(request)
-    context = EvaluationContext(target_name, step.name, mutation, secrets)
+    context = EvaluationContext(target_name, step.name, mutation, secrets, dict(variables))
     findings = expectation.evaluate(result, context)
     return StepExecution(step.name, request, result, (), step.replayable), findings
 

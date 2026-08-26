@@ -174,6 +174,18 @@ client_apikey_hash="$(printf '%s\n' "${client_output}" | json_field VECTIS_APIKE
 ./vectis config permissions add --client nadir-local --apikey-hash "${client_apikey_hash}" --status active >/dev/null
 ./vectis config permissions grant nadir-local --kid "${kid}" --action keys >/dev/null
 ./vectis config permissions grant nadir-local --kid "${kid}" --action sign >/dev/null
+./vectis config permissions grant nadir-local --kid "${kid}" --action fpe-encrypt >/dev/null
+./vectis config permissions grant nadir-local --kid "${kid}" --action fpe-decrypt >/dev/null
+./vectis config permissions grant nadir-local --kid "${kid}" --action mac-create >/dev/null
+./vectis config permissions grant nadir-local --kid "${kid}" --action mac-verify >/dev/null
+./vectis config permissions grant nadir-local --kid "${kid}" --action mask >/dev/null
+./vectis config permissions grant nadir-local --kid "${kid}" --action token-encode >/dev/null
+./vectis config permissions grant nadir-local --kid "${kid}" --action token-decode >/dev/null
+./vectis config fpe add --name nadir-fpe-v1 --kid "${kid}" --alphabet 0123456789 --min-len 6 --max-len 32 --tweak-aad 'tenant=nadir;field=account;version=1' >/dev/null
+./vectis config mac add --name nadir-mac-v1 --kid "${kid}" --context 'tenant=nadir;field=pan;purpose=mac;version=1' >/dev/null
+./vectis config masking add --name nadir-mask-v1 --kid "${kid}" --visible-first 0 --visible-last 4 --mask-char '*' --min-len 12 --max-len 19 >/dev/null
+./vectis config token add --name nadir-token-v1 --kid "${kid}" --token-prefix nadir_tok --token-len 32 --max-plaintext-len 128 --one-time false >/dev/null
+./vectis config token add --name nadir-once-v1 --kid "${kid}" --token-prefix nadir_once --token-len 32 --max-plaintext-len 128 --one-time true >/dev/null
 ./vectis config validate --output json >/dev/null
 ./vectis config sign --output json >/dev/null
 ./vectis config reload --output json >/dev/null

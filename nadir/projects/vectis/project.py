@@ -25,7 +25,14 @@ import invariants
 
 _TARGETS_FILE = _PROJECT_DIRECTORY / "targets.yaml"
 _INVARIANTS = {
+    "fpe_round_trip": invariants.fpe_round_trip,
+    "fpe_ciphertext_integrity": invariants.fpe_ciphertext_integrity,
+    "mac_verification_failure": invariants.mac_verification_failure,
+    "mac_verification_success": invariants.mac_verification_success,
+    "masking_output": invariants.masking_output,
     "public_keys_output": invariants.public_keys_output,
+    "token_round_trip": invariants.token_round_trip,
+    "token_once_round_trip": invariants.token_once_round_trip,
     "verification_success": invariants.verification_success,
     "verification_failure": invariants.verification_failure,
 }

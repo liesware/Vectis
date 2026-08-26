@@ -22,6 +22,8 @@ from .workflows import (
     Capture,
     DEFAULT_MALFORMED_EXPECTATION,
     ExpectJsonError,
+    ExpectNoServerCrash,
+    ExpectNoServerError,
     ExpectStatus,
     FlowStep,
     FlowTarget,
@@ -92,6 +94,20 @@ def _step_variables(block: Mapping[str, object]) -> set[str]:
     return used
 
 
+def _extra_required(entry: Mapping[str, object]) -> frozenset[str]:
+    """Variables a named invariant reads but no request template references.
+
+    Without this, an invariant that compares against an environment value (e.g. a
+    masking oracle reading ``mask_expected``) would not fail setup when that value
+    is missing; it would instead fail the control with a misleading message.
+    """
+
+    extra = entry.get("requires", [])
+    if not isinstance(extra, list) or not all(isinstance(name, str) for name in extra):
+        raise ValueError("'requires' must be a list of variable names")
+    return frozenset(extra)
+
+
 # --- oracles ------------------------------------------------------------------
 
 
@@ -113,6 +129,14 @@ def _oracle(spec: Mapping[str, object] | None, invariants: Invariants) -> Respon
         clauses.append(ExpectStatus(_status_set(spec["status"])))
     if spec.get("json_error"):
         clauses.append(ExpectJsonError())
+    if spec.get("no_server_error"):
+        # For a mutated path that legitimately accepts (2xx) or rejects (4xx) but
+        # must never crash: guards 5xx without pinning an exact status class.
+        clauses.append(ExpectNoServerError())
+    if spec.get("no_server_crash"):
+        # Complements no_server_error for a well-formed mutation whose only failure
+        # mode of interest is a crash: a server-side connection reset is a finding.
+        clauses.append(ExpectNoServerCrash())
     clauses.append(NoDeclaredSecrets())  # secrets are always guarded, never opt-in
     invariant = spec.get("invariant")
     if invariant is not None:
@@ -144,17 +168,25 @@ def _mutations(items: object, mutators: Mutators) -> tuple[RequestMutation, ...]
             selector = item["json_field"]
             delimiter = item.get("delimiter")
             segments = item.get("segments")
+            alphabet = item.get("alphabet")
             # A name-coupled invariant (one that keys on which mutation ran) needs
             # the mutation names to match; `name:` lets the YAML control that prefix.
             prefix = str(item.get("name", "field"))
             if not isinstance(selector, str):
                 raise ValueError("a 'json_field' mutator needs a selector string")
+            # An `alphabet` keeps the flip inside a restricted domain (hex digest,
+            # format-preserving ciphertext) so it changes value, not just shape.
+            if alphabet is not None and (not isinstance(alphabet, str) or len(alphabet) < 2):
+                raise ValueError("'alphabet' must be a string of at least two characters")
             if segments is None:
-                built.append(JsonFieldMutation(prefix, selector))
+                built.append(JsonFieldMutation(prefix, selector, alphabet=alphabet))
             else:
                 if not isinstance(segments, list) or not all(isinstance(index, int) for index in segments):
                     raise ValueError("'segments' must be a list of integers")
-                built.extend(JsonFieldMutation(f"{prefix}-{index}", selector, delimiter=str(delimiter), segment_index=index) for index in segments)
+                built.extend(
+                    JsonFieldMutation(f"{prefix}-{index}", selector, delimiter=str(delimiter), segment_index=index, alphabet=alphabet)
+                    for index in segments
+                )
         else:
             raise ValueError(f"unrecognised mutator entry: {item!r}")
     return tuple(built)
@@ -195,7 +227,7 @@ def _flow_target(entry: Mapping[str, object], invariants: Invariants, mutators: 
         raise ValueError(f"flow {name} must mark exactly one step with fuzz: true")
     return FlowTarget(
         name=name,
-        required_variables=frozenset(required - captured),
+        required_variables=frozenset(required - captured) | _extra_required(entry),
         steps=tuple(steps),
         mutations=mutations,
         mutation_expectation=mutation_expectation,
@@ -219,7 +251,7 @@ def _target(entry: Mapping[str, object], invariants: Invariants, mutators: Mutat
         block = entry["request"]
         if not isinstance(block, dict):
             raise ValueError(f"target {name} 'request' must be a mapping")
-        required = frozenset(_step_variables(block))
+        required = frozenset(_step_variables(block)) | _extra_required(entry)
         return RequestTarget(
             name=name,
             required_variables=required,
@@ -236,7 +268,7 @@ def _target(entry: Mapping[str, object], invariants: Invariants, mutators: Mutat
         raise ValueError(f"target {name} producer/consumer flow requires a 'capture' block")
     captures = tuple(Capture(str(cap_name), str(selector)) for cap_name, selector in capture_spec.items())
     captured_names = {cap_name for cap_name, _ in capture_spec.items()}
-    required = frozenset((_step_variables(producer_block) | _step_variables(consumer_block)) - captured_names)
+    required = frozenset((_step_variables(producer_block) | _step_variables(consumer_block)) - captured_names) | _extra_required(entry)
     producer_oracle = _oracle(entry.get("producer_expect") or {"status": [200]}, invariants)
     return ProducerConsumerTarget(
         name=name,
