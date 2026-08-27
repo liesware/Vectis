@@ -56,6 +56,40 @@ KEY_TARGET_SEED = {
     "ml_kem_variant": "ML-KEM-512",
 }
 
+
+_BATCH_CONTRACTS = {
+    "fpe": (
+        {"tag": "fuzz-fpe-batch-contract", "profile": "hybrid-high-assurance-v1"},
+        configure_fpe_profile,
+        FPE_PROFILE,
+    ),
+    "token": (
+        {"tag": "fuzz-token-batch-contract", "profile": "hybrid-performance-v1"},
+        configure_tokenization_profile,
+        TOKENIZATION_PROFILE,
+    ),
+    "mac": (
+        {"tag": "fuzz-mac-batch-contract", "profile": "hybrid-standard-v1"},
+        configure_mac_profile,
+        MAC_PROFILE,
+    ),
+    "index": (
+        {"tag": "fuzz-index-batch-contract", "profile": "hybrid-standard-v1"},
+        configure_mac_profile,
+        MAC_PROFILE,
+    ),
+    "mask": (
+        {"tag": "fuzz-mask-batch-contract", "profile": "hybrid-standard-v1"},
+        configure_masking_profile,
+        MASKING_PROFILE,
+    ),
+    "commitment": (
+        {"tag": "fuzz-commitment-batch-contract", "profile": "hybrid-standard-v1"},
+        configure_commitment_profile,
+        COMMITMENT_PROFILE,
+    ),
+}
+
 ONE_TIME_TOKEN_PLAINTEXT = "fuzz one-time token plaintext"
 ONE_TIME_BATCH_PLAINTEXTS = ["fuzz one-time batch first", "fuzz one-time batch second"]
 
@@ -65,6 +99,16 @@ def _create_key(client, case):
     if status != 200:
         raise RuntimeError(f"could not create seed key ({case}): HTTP {status}: {body}")
     return json.loads(body)["kid"]
+
+
+def batch_contract_context(client, capability):
+    try:
+        key_case, configure_profile, profile = _BATCH_CONTRACTS[capability]
+    except KeyError as err:
+        raise ValueError(f"unknown batch contract capability: {capability}") from err
+    kid = _create_key(client, key_case)
+    configure_profile(client, kid)
+    return {"kid": kid, "profile": profile}
 
 
 def message_seeds(_client):

@@ -280,6 +280,166 @@ def tokenization_batch_semantic(sent_value, seed, status, body):
     return findings
 
 
+def _response_items(response):
+    """Return the `items` list from an (status, body) response tuple, or []."""
+    parsed = _parse(response[1])
+    items = parsed.get("items") if isinstance(parsed, dict) else None
+    return items if isinstance(items, list) else []
+
+
+def reject_malformed_body_semantic(sent_value, _seed_obj, status, _response):
+    """Floor oracle for body endpoints that carry no richer semantic.
+
+    Every Vectis write endpoint expects a JSON object body. `sent_value` is the
+    body that actually reached the server (the parsed structured mutation, or the
+    raw-mutated bytes parsed back — None when they were not valid JSON). If that
+    body is not a JSON object, the request is malformed and the server must answer
+    4xx; a 200 means it accepted non-JSON, a bare scalar/array, or null — a lenient
+    parser or a body-ignoring handler. This claims only what is always true, so it
+    never fires on a benign mutation that left a still-valid object.
+    """
+    if status == 200 and not isinstance(sent_value, dict):
+        return ["SEMANTIC: endpoint accepted a non-object body with 200"]
+    return []
+
+
+def batch_output_contract(status, body, kid, profile, refs, required_fields):
+    """Validate the shape and input order shared by successful batch responses."""
+    if status != 200:
+        return ["SEMANTIC: batch control did not return 200"]
+    parsed = _parse(body)
+    if not isinstance(parsed, dict):
+        return ["SEMANTIC: batch control response is not a JSON object"]
+
+    findings = []
+    if parsed.get("kid") != kid:
+        findings.append("SEMANTIC: batch control returned an unexpected kid")
+    if parsed.get("profile") != profile:
+        findings.append("SEMANTIC: batch control returned an unexpected profile")
+    items = parsed.get("items")
+    if not isinstance(items, list) or len(items) != len(refs):
+        return [*findings, "SEMANTIC: batch control item count mismatch"]
+    if [item.get("ref") if isinstance(item, dict) else None for item in items] != refs:
+        findings.append("SEMANTIC: batch control did not preserve item order")
+    # Enforce the exact key set, not a subset: an item that echoes an extra field
+    # (e.g. a leaked "plaintext" on an encrypt result) or an unexpected internal
+    # field must be caught, which a "required fields are present" check misses.
+    allowed_keys = {"ref", *required_fields}
+    if any(
+        not isinstance(item, dict) or set(item.keys()) != allowed_keys
+        for item in items
+    ):
+        findings.append("SEMANTIC: batch control item shape mismatch")
+    return findings
+
+
+def batch_duplicate_ref_rejection(status, body):
+    """A duplicate ref must be an indexed 400 without partial batch output."""
+    if status != 400:
+        return ["SEMANTIC: duplicate batch ref was not rejected with 400"]
+    parsed = _parse(body)
+    if not isinstance(parsed, dict):
+        return ["SEMANTIC: duplicate batch ref response is not a JSON object"]
+    findings = []
+    error = parsed.get("error")
+    if not isinstance(error, str) or not error.startswith("batch item 1 failed:"):
+        findings.append("SEMANTIC: duplicate batch ref error is not indexed")
+    if "items" in parsed:
+        findings.append("SEMANTIC: duplicate batch ref returned partial items")
+    return findings
+
+
+def fpe_batch_contract_semantic(case, context):
+    refs = case["refs"]
+    encrypt, decrypt, duplicate_encrypt, duplicate_decrypt = case["responses"]
+    findings = []
+    findings.extend(batch_output_contract(*encrypt, context["kid"], context["profile"], refs, ("ciphertext",)))
+    findings.extend(batch_output_contract(*decrypt, context["kid"], context["profile"], refs, ("plaintext",)))
+    decrypt_items = _response_items(decrypt)
+    if [item.get("plaintext") if isinstance(item, dict) else None for item in decrypt_items] != case["plaintexts"]:
+        findings.append("SEMANTIC: fpe batch decrypt returned unexpected plaintexts")
+    findings.extend(batch_duplicate_ref_rejection(*duplicate_encrypt))
+    findings.extend(batch_duplicate_ref_rejection(*duplicate_decrypt))
+    return findings
+
+
+def token_batch_contract_semantic(case, context):
+    refs = case["refs"]
+    encoded, decoded, duplicate_encode, duplicate_decode = case["responses"]
+    findings = []
+    findings.extend(batch_output_contract(*encoded, context["kid"], context["profile"], refs, ("token",)))
+    findings.extend(batch_output_contract(*decoded, context["kid"], context["profile"], refs, ("plaintext", "metadata")))
+    decoded_items = _response_items(decoded)
+    if [item.get("plaintext") if isinstance(item, dict) else None for item in decoded_items] != case["plaintexts"]:
+        findings.append("SEMANTIC: token batch decode returned unexpected plaintexts")
+    if [item.get("metadata") if isinstance(item, dict) else None for item in decoded_items] != case["metadata"]:
+        findings.append("SEMANTIC: token batch decode returned unexpected metadata")
+    findings.extend(batch_duplicate_ref_rejection(*duplicate_encode))
+    findings.extend(batch_duplicate_ref_rejection(*duplicate_decode))
+    return findings
+
+
+def mac_batch_contract_semantic(case, context):
+    refs = case["refs"]
+    created, verified, duplicate_create, duplicate_verify = case["responses"]
+    findings = []
+    findings.extend(batch_output_contract(*created, context["kid"], context["profile"], refs, ("digest",)))
+    findings.extend(batch_output_contract(*verified, context["kid"], context["profile"], refs, ("valid",)))
+    verified_items = _response_items(verified)
+    if [item.get("valid") if isinstance(item, dict) else None for item in verified_items] != [True, True]:
+        findings.append("SEMANTIC: valid mac batch did not verify every item")
+    findings.extend(batch_duplicate_ref_rejection(*duplicate_create))
+    findings.extend(batch_duplicate_ref_rejection(*duplicate_verify))
+    return findings
+
+
+def index_batch_transaction_semantic(case, context):
+    refs = case["refs"]
+    duplicate_create, missing, created, verified, duplicate_verify = case["responses"]
+    findings = []
+    findings.extend(batch_duplicate_ref_rejection(*duplicate_create))
+    missing_status, missing_body = missing
+    missing_output = _parse(missing_body)
+    if (
+        missing_status != 200
+        or not isinstance(missing_output, dict)
+        or missing_output.get("matched") is not False
+    ):
+        findings.append("SEMANTIC: invalid index batch persisted a partial index")
+    findings.extend(batch_output_contract(*created, context["kid"], context["profile"], refs, ("index",)))
+    findings.extend(batch_output_contract(*verified, context["kid"], context["profile"], refs, ("matched", "index")))
+    verified_items = _response_items(verified)
+    if [item.get("matched") if isinstance(item, dict) else None for item in verified_items] != [True, True]:
+        findings.append("SEMANTIC: valid index batch did not persist every index")
+    findings.extend(batch_duplicate_ref_rejection(*duplicate_verify))
+    return findings
+
+
+def masking_batch_contract_semantic(case, context):
+    refs = case["refs"]
+    masked, duplicate = case["responses"]
+    findings = batch_output_contract(*masked, context["kid"], context["profile"], refs, ("masked",))
+    masked_items = _response_items(masked)
+    if [item.get("masked") if isinstance(item, dict) else None for item in masked_items] != case["masked"]:
+        findings.append("SEMANTIC: masking batch returned unexpected policy output")
+    findings.extend(batch_duplicate_ref_rejection(*duplicate))
+    return findings
+
+
+def commitment_batch_contract_semantic(case, context):
+    refs = case["refs"]
+    created, verified, duplicate_create, duplicate_verify = case["responses"]
+    findings = []
+    findings.extend(batch_output_contract(*created, context["kid"], context["profile"], refs, ("commitment", "opening")))
+    findings.extend(batch_output_contract(*verified, context["kid"], context["profile"], refs, ("valid",)))
+    verified_items = _response_items(verified)
+    if [item.get("valid") if isinstance(item, dict) else None for item in verified_items] != [True, True]:
+        findings.append("SEMANTIC: valid commitment batch did not verify every item")
+    findings.extend(batch_duplicate_ref_rejection(*duplicate_create))
+    findings.extend(batch_duplicate_ref_rejection(*duplicate_verify))
+    return findings
+
+
 def _encoded_token_present(encoded_status, encoded_body):
     """A well-formed encode is HTTP 200 with a non-empty token in the body.
 
@@ -406,388 +566,3 @@ def token_batch_duplicate_policy_semantic(results, plaintext):
     ):
         findings.append("SEMANTIC: reusable duplicate token batch was not accepted")
     return findings
-
-
-# --- reporting ---------------------------------------------------------------
-def self_check():
-    failures = []
-    total = 0
-
-    def expect(condition, label):
-        nonlocal total
-        total += 1
-        if not condition:
-            failures.append(label)
-
-    token = {
-        "kid": "a" * 64,
-        "signature": "header.payload.eddsa.ml-dsa",
-    }
-    token_mut = json.loads(json.dumps(token))
-    token_mut["kid"] = "b" * 64
-    expect(token_semantic(token_mut, token, 200, '{"valid":"ok"}'), "token flags bypass")
-    expect(not token_semantic(token, token, 200, '{"valid":"ok"}'), "token ignores identity")
-    expect(not token_semantic(token_mut, token, 200, '{"valid":"fail"}'), "token ignores valid=fail")
-    expect(not token_semantic(token_mut, token, 400, '{"error":"x"}'), "token ignores 4xx")
-
-    iseed = {
-        "timestamp": "1",
-        "kid": "a" * 64,
-        "message": {"ctx": "aa", "nonce": "bb", "aad": "c", "variant": "ChaCha20Poly1305"},
-    }
-    itamper = json.loads(json.dumps(iseed))
-    itamper["message"]["ctx"] = "ff"
-    ok_body = json.dumps({"plaintext": INTERNAL_SEED_PLAINTEXT})
-    expect(internal_semantic(itamper, iseed, 200, ok_body), "internal flags AEAD bypass")
-    expect(internal_semantic(iseed, iseed, 200, '{"plaintext":"WRONG"}'), "internal flags wrong plaintext")
-    expect(not internal_semantic(iseed, iseed, 200, ok_body), "internal ignores correct decrypt")
-    expect(not internal_semantic(itamper, iseed, 400, '{"error":"x"}'), "internal ignores 4xx")
-
-    encrypt_seed = {"plaintext": INTERNAL_SEED_PLAINTEXT}
-    bad_encrypt_body = json.dumps({"message": {"ctx": INTERNAL_SEED_PLAINTEXT}})
-    good_encrypt_body = json.dumps({"message": {"ctx": "aa", "nonce": "bb", "aad": "c"}})
-    expect(
-        internal_encrypt_semantic(encrypt_seed, encrypt_seed, 200, bad_encrypt_body),
-        "internal encrypt flags plaintext ciphertext",
-    )
-    expect(
-        not internal_encrypt_semantic(encrypt_seed, encrypt_seed, 200, good_encrypt_body),
-        "internal encrypt ignores plausible body",
-    )
-
-    loaded_body = '{"status":"reloaded","routes_loaded":1,"remote_routes_loaded":0,"clients_loaded":0,"fpe_profiles_loaded":0,"tokenization_profiles_loaded":0,"mac_profiles_loaded":0,"masking_profiles_loaded":0,"commitment_profiles_loaded":0,"sharing_profiles_loaded":0}'
-    empty_body = '{"status":"reloaded","routes_loaded":0,"remote_routes_loaded":0,"clients_loaded":0,"fpe_profiles_loaded":0,"tokenization_profiles_loaded":0,"mac_profiles_loaded":0,"masking_profiles_loaded":0,"commitment_profiles_loaded":0,"sharing_profiles_loaded":0}'
-    expect(config_semantic(200, loaded_body), "config flags integrity bypass")
-    expect(not config_semantic(200, empty_body), "config ignores empty reload")
-    expect(not config_semantic(400, '{"error":"x"}'), "config ignores rejected")
-
-    fpe_encrypt_seed = {"ref": "fpe-self", "profile": FPE_PROFILE, "plaintext": FPE_PLAINTEXT}
-    fpe_decrypt_seed = {
-        "ref": "fpe-self",
-        "kid": "a" * 64,
-        "profile": FPE_PROFILE,
-        "ciphertext": "9876543210",
-    }
-    fpe_decrypt_mut = dict(fpe_decrypt_seed, ciphertext="9876543211")
-    fpe_decrypt_ref_mut = dict(fpe_decrypt_seed, ref="0x1F")
-    expect(
-        fpe_semantic(
-            fpe_encrypt_seed, fpe_encrypt_seed, 200, '{"ciphertext":"1234567890"}'
-        ),
-        "fpe encrypt flags plaintext ciphertext",
-    )
-    expect(
-        not fpe_semantic(
-            fpe_encrypt_seed, fpe_encrypt_seed, 200, '{"ciphertext":"9876543210"}'
-        ),
-        "fpe encrypt ignores changed ciphertext",
-    )
-    expect(
-        fpe_semantic(fpe_decrypt_seed, fpe_decrypt_seed, 200, '{"plaintext":"WRONG"}'),
-        "fpe decrypt flags wrong plaintext",
-    )
-    expect(
-        fpe_semantic(fpe_decrypt_mut, fpe_decrypt_seed, 200, '{"plaintext":"1234567890"}'),
-        "fpe decrypt flags mutated original plaintext",
-    )
-    expect(
-        not fpe_semantic(fpe_decrypt_ref_mut, fpe_decrypt_seed, 200, '{"plaintext":"1234567890"}'),
-        "fpe decrypt ignores ref-only mutation",
-    )
-    expect(
-        not fpe_semantic(fpe_decrypt_seed, fpe_decrypt_seed, 200, '{"plaintext":"1234567890"}'),
-        "fpe decrypt ignores correct plaintext",
-    )
-
-    fpe_batch_encrypt_seed = {
-        "profile": FPE_PROFILE,
-        "items": [
-            {"ref": f"fpe-self-{index}", "plaintext": item}
-            for index, item in enumerate(FPE_BATCH_PLAINTEXTS)
-        ],
-    }
-    fpe_batch_decrypt_seed = {
-        "kid": "a" * 64,
-        "profile": FPE_PROFILE,
-        "items": [
-            {"ref": "fpe-self-0", "ciphertext": "9876543210"},
-            {"ref": "fpe-self-1", "ciphertext": "0123456789"},
-        ],
-    }
-    fpe_batch_decrypt_mut = json.loads(json.dumps(fpe_batch_decrypt_seed))
-    fpe_batch_decrypt_mut["items"][0]["ciphertext"] = "9876543211"
-    fpe_batch_decrypt_ref_mut = json.loads(json.dumps(fpe_batch_decrypt_seed))
-    fpe_batch_decrypt_ref_mut["items"][0]["ref"] = "0x1F"
-    correct_batch_plaintext_body = json.dumps(
-        {"items": [{"plaintext": FPE_BATCH_PLAINTEXTS[0]}, {"plaintext": FPE_BATCH_PLAINTEXTS[1]}]}
-    )
-    expect(
-        fpe_batch_semantic(
-            fpe_batch_encrypt_seed, fpe_batch_encrypt_seed, 200,
-            json.dumps({"items": [{"ciphertext": FPE_BATCH_PLAINTEXTS[0]}, {"ciphertext": "aaaa"}]}),
-        ),
-        "fpe batch encrypt flags plaintext ciphertext",
-    )
-    expect(
-        not fpe_batch_semantic(
-            fpe_batch_encrypt_seed, fpe_batch_encrypt_seed, 200,
-            json.dumps({"items": [{"ciphertext": "111"}, {"ciphertext": "222"}]}),
-        ),
-        "fpe batch encrypt ignores changed ciphertext",
-    )
-    expect(
-        fpe_batch_semantic(
-            fpe_batch_decrypt_seed, fpe_batch_decrypt_seed, 200,
-            json.dumps({"items": [{"plaintext": "WRONG"}, {"plaintext": "X"}]}),
-        ),
-        "fpe batch decrypt flags wrong plaintext",
-    )
-    expect(
-        fpe_batch_semantic(
-            fpe_batch_decrypt_mut, fpe_batch_decrypt_seed, 200, correct_batch_plaintext_body
-        ),
-        "fpe batch decrypt flags mutated original plaintext",
-    )
-    expect(
-        not fpe_batch_semantic(
-            fpe_batch_decrypt_ref_mut, fpe_batch_decrypt_seed, 200, correct_batch_plaintext_body
-        ),
-        "fpe batch decrypt ignores ref-only mutation",
-    )
-    expect(
-        not fpe_batch_semantic(
-            fpe_batch_decrypt_seed, fpe_batch_decrypt_seed, 200, correct_batch_plaintext_body
-        ),
-        "fpe batch decrypt ignores correct plaintext",
-    )
-    expect(
-        not fpe_batch_semantic(fpe_batch_decrypt_mut, fpe_batch_decrypt_seed, 400, '{"error":"x"}'),
-        "fpe batch ignores 4xx",
-    )
-
-    token_encode_seed = {
-        "ref": "token-self",
-        "profile": TOKENIZATION_PROFILE,
-        "plaintext": TOKEN_PLAINTEXT,
-        "metadata": {},
-    }
-    token_decode_seed = {
-        "ref": "token-self",
-        "kid": "a" * 64,
-        "profile": TOKENIZATION_PROFILE,
-        "token": "tok_fuzz_deadbeef",
-    }
-    token_decode_mut = dict(token_decode_seed, token="tok_fuzz_ffffffff")
-    token_decode_ref_mut = dict(token_decode_seed, ref="Zoken-fuzz")
-    expect(
-        tokenization_semantic(
-            token_encode_seed, token_encode_seed, 200,
-            json.dumps({"kid": "a" * 64, "profile": TOKENIZATION_PROFILE, "token": "tok_fuzz_" + TOKEN_PLAINTEXT}),
-        ),
-        "token encode flags plaintext leak",
-    )
-    expect(
-        not tokenization_semantic(
-            token_encode_seed, token_encode_seed, 200, json.dumps({"token": "tok_fuzz_abcdef"})
-        ),
-        "token encode ignores clean token",
-    )
-    expect(
-        tokenization_semantic(token_decode_seed, token_decode_seed, 200, '{"plaintext":"WRONG"}'),
-        "token decode flags wrong plaintext",
-    )
-    expect(
-        tokenization_semantic(
-            token_decode_mut, token_decode_seed, 200, json.dumps({"plaintext": TOKEN_PLAINTEXT})
-        ),
-        "token decode flags mutated token as original",
-    )
-    expect(
-        not tokenization_semantic(
-            token_decode_ref_mut, token_decode_seed, 200, json.dumps({"plaintext": TOKEN_PLAINTEXT})
-        ),
-        "token decode ignores ref-only mutation",
-    )
-    expect(
-        not tokenization_semantic(
-            token_decode_seed, token_decode_seed, 200, json.dumps({"plaintext": TOKEN_PLAINTEXT})
-        ),
-        "token decode ignores correct plaintext",
-    )
-    expect(
-        not tokenization_semantic(token_decode_mut, token_decode_seed, 400, '{"error":"x"}'),
-        "token decode ignores 4xx",
-    )
-
-    token_batch_encode_seed = {
-        "profile": TOKENIZATION_PROFILE,
-        "items": [
-            {"ref": "token-self-0", "plaintext": TOKEN_BATCH_PLAINTEXTS[0], "metadata": {}},
-            {"ref": "token-self-1", "plaintext": TOKEN_BATCH_PLAINTEXTS[1], "metadata": {}},
-        ],
-    }
-    token_batch_decode_seed = {
-        "kid": "a" * 64,
-        "profile": TOKENIZATION_PROFILE,
-        "items": [
-            {"ref": "token-self-0", "token": "tok_fuzz_deadbeef"},
-            {"ref": "token-self-1", "token": "tok_fuzz_cafebabe"},
-        ],
-    }
-    token_batch_decode_mut = json.loads(json.dumps(token_batch_decode_seed))
-    token_batch_decode_mut["items"][0]["token"] = "tok_fuzz_ffffffff"
-    token_batch_decode_ref_mut = json.loads(json.dumps(token_batch_decode_seed))
-    token_batch_decode_ref_mut["items"][0]["ref"] = "token-f*zz-0"
-    correct_token_batch_plaintext_body = json.dumps(
-        {"items": [{"plaintext": TOKEN_BATCH_PLAINTEXTS[0]}, {"plaintext": TOKEN_BATCH_PLAINTEXTS[1]}]}
-    )
-    expect(
-        tokenization_batch_semantic(
-            token_batch_encode_seed, token_batch_encode_seed, 200,
-            json.dumps({"items": [{"token": "tok_fuzz_" + TOKEN_BATCH_PLAINTEXTS[0]}, {"token": "tok_fuzz_clean"}]}),
-        ),
-        "token batch encode flags plaintext leak",
-    )
-    expect(
-        not tokenization_batch_semantic(
-            token_batch_encode_seed, token_batch_encode_seed, 200,
-            json.dumps({"items": [{"token": "tok_fuzz_abcdef"}, {"token": "tok_fuzz_123456"}]}),
-        ),
-        "token batch encode ignores clean tokens",
-    )
-    expect(
-        tokenization_batch_semantic(
-            token_batch_decode_seed, token_batch_decode_seed, 200,
-            json.dumps({"items": [{"plaintext": "WRONG"}, {"plaintext": "X"}]}),
-        ),
-        "token batch decode flags wrong plaintext",
-    )
-    expect(
-        tokenization_batch_semantic(
-            token_batch_decode_mut, token_batch_decode_seed, 200, correct_token_batch_plaintext_body
-        ),
-        "token batch decode flags mutated token as original",
-    )
-    expect(
-        not tokenization_batch_semantic(
-            token_batch_decode_ref_mut, token_batch_decode_seed, 200, correct_token_batch_plaintext_body
-        ),
-        "token batch decode ignores ref-only mutation",
-    )
-    expect(
-        not tokenization_batch_semantic(
-            token_batch_decode_seed, token_batch_decode_seed, 200, correct_token_batch_plaintext_body
-        ),
-        "token batch decode ignores correct plaintext",
-    )
-    expect(
-        not tokenization_batch_semantic(
-            token_batch_decode_mut, token_batch_decode_seed, 400, '{"error":"x"}'
-        ),
-        "token batch decode ignores 4xx",
-    )
-
-    one_time_plaintext = "one-time-self-check"
-    one_time_single = [
-        (200, '{"token":"opaque"}'),
-        (200, json.dumps({"plaintext": one_time_plaintext})),
-        (404, '{"error":"token not found"}'),
-    ]
-    expect(
-        not one_time_single_semantic(one_time_single, one_time_plaintext),
-        "one-time single accepts one decode followed by not found",
-    )
-    expect(
-        one_time_single_semantic(
-            [one_time_single[0], one_time_single[1], (200, "{}")], one_time_plaintext
-        ),
-        "one-time single flags successful replay",
-    )
-
-    one_time_batch = [
-        (200, '{"items":[{"token":"opaque-a"},{"token":"opaque-b"}]}'),
-        (200, '{"plaintext":"second"}'),
-        (404, '{"error":"batch item 1 failed: token not found"}'),
-        (200, json.dumps({"plaintext": one_time_plaintext})),
-    ]
-    expect(
-        not one_time_batch_semantic(one_time_batch, one_time_plaintext),
-        "one-time batch preserves the unconsumed item after rollback",
-    )
-    expect(
-        one_time_batch_semantic(
-            [one_time_batch[0], one_time_batch[1], (404, '{"items":[]}'), one_time_batch[3]],
-            one_time_plaintext,
-        ),
-        "one-time batch flags partial output on rejection",
-    )
-    expect(
-        one_time_batch_semantic(
-            [(200, '{"items":[]}'), one_time_batch[1], one_time_batch[2], one_time_batch[3]],
-            one_time_plaintext,
-        ),
-        "one-time batch flags a 200 encode that returned no tokens",
-    )
-    expect(
-        one_time_batch_semantic(
-            [
-                one_time_batch[0],
-                one_time_batch[1],
-                (404, '{"error":"batch item 1 failed: token not found","echo":"second"}'),
-                one_time_batch[3],
-            ],
-            one_time_plaintext,
-            [one_time_plaintext, "second"],
-        ),
-        "one-time batch flags a leak of the already-consumed plaintext",
-    )
-
-    one_time_race = [
-        (200, '{"token":"opaque"}'),
-        (200, json.dumps({"plaintext": one_time_plaintext})),
-        (404, '{"error":"token not found"}'),
-    ]
-    expect(
-        not one_time_race_semantic(one_time_race, one_time_plaintext),
-        "one-time race accepts exactly one winner",
-    )
-    expect(
-        one_time_race_semantic(
-            [one_time_race[0], one_time_race[1], (200, json.dumps({"plaintext": one_time_plaintext}))],
-            one_time_plaintext,
-        ),
-        "one-time race flags two winners",
-    )
-
-    duplicate_policy = [
-        (200, '{"token":"opaque"}'),
-        (400, '{"error":"batch item 1 failed: token batch contains duplicated token"}'),
-        (200, '{"token":"opaque"}'),
-        (
-            200,
-            json.dumps(
-                {
-                    "items": [
-                        {"ref": "reusable-duplicate-0", "plaintext": one_time_plaintext},
-                        {"ref": "reusable-duplicate-1", "plaintext": one_time_plaintext},
-                    ]
-                }
-            ),
-        ),
-    ]
-    expect(
-        not token_batch_duplicate_policy_semantic(duplicate_policy, one_time_plaintext),
-        "duplicate policy distinguishes one-time and reusable profiles",
-    )
-    expect(
-        token_batch_duplicate_policy_semantic(
-            [duplicate_policy[0], duplicate_policy[1], duplicate_policy[2], (400, '{"error":"x"}')],
-            one_time_plaintext,
-        ),
-        "duplicate policy flags reusable rejection",
-    )
-
-    for label in failures:
-        print(f"SELF-CHECK FAIL: {label}")
-    print(f"SUMMARY self-check passed={total - len(failures)} failed={len(failures)}")
-    return 1 if failures else 0

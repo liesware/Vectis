@@ -72,6 +72,18 @@ def print_create_key(rows):
     print()
 
 
+def require_duplicate_batch_ref_rejected(client, path, body, label):
+    status, response = StatusClient(client.base_url, client.apikey).post(path, body, auth=True)
+    require(status == 400, f"{label} duplicate ref must return 400")
+    require(isinstance(response, dict), f"{label} duplicate ref must return JSON object")
+    require(isinstance(response.get("error"), str), f"{label} duplicate ref must return JSON error")
+    require(
+        response["error"].startswith("batch item 1 failed:"),
+        f"{label} duplicate ref error must identify the second item",
+    )
+    require("items" not in response, f"{label} duplicate ref must not return partial items")
+
+
 def print_message(rows):
     print("message:")
     for key_id, timestamp, variant, ctx_len, plaintext in rows:
@@ -796,6 +808,18 @@ def fpe_batch_round_trip(client, key_id):
         [item.get("plaintext") for item in decrypted_items] == plaintexts,
         "fpe batch decrypt plaintext order mismatch",
     )
+    require_duplicate_batch_ref_rejected(
+        client,
+        f"/fpe/encrypt/batch/{key_id}",
+        {"profile": profile, "items": [{"ref": refs[0], "plaintext": plaintexts[0]}, {"ref": refs[0], "plaintext": plaintexts[1]}]},
+        "fpe batch encrypt",
+    )
+    require_duplicate_batch_ref_rejected(
+        client,
+        "/fpe/decrypt/batch",
+        {"kid": key_id, "profile": profile, "items": [{"ref": refs[0], "ciphertext": ciphertexts[0]}, {"ref": refs[0], "ciphertext": ciphertexts[1]}]},
+        "fpe batch decrypt",
+    )
 
     return profile, ciphertexts, plaintexts
 
@@ -920,6 +944,18 @@ def token_batch_round_trip(client, key_id):
     require(
         [item.get("plaintext") for item in duplicate_items] == [plaintexts[0], plaintexts[0]],
         "reusable token duplicate batch plaintext mismatch",
+    )
+    require_duplicate_batch_ref_rejected(
+        client,
+        f"/token/encode/batch/{key_id}",
+        {"profile": profile, "items": [{"ref": refs[0], "plaintext": plaintexts[0], "metadata": metadata[0]}, {"ref": refs[0], "plaintext": plaintexts[1], "metadata": metadata[1]}]},
+        "token batch encode",
+    )
+    require_duplicate_batch_ref_rejected(
+        client,
+        "/token/decode/batch",
+        {"kid": key_id, "profile": profile, "items": [{"ref": refs[0], "token": tokens[0]}, {"ref": refs[0], "token": tokens[1]}]},
+        "token batch decode",
     )
 
     return profile, [token[:16] + "..." for token in tokens], plaintexts
@@ -1143,6 +1179,18 @@ def mac_batch_round_trip(client, key_id):
         [item.get("valid") for item in verify_items] == [True, False],
         "mac batch verify must preserve true/false results",
     )
+    require_duplicate_batch_ref_rejected(
+        client,
+        f"/mac/batch/{key_id}",
+        {"profile": profile, "items": [{"ref": refs[0], "plaintext": plaintexts[0]}, {"ref": refs[0], "plaintext": plaintexts[1]}]},
+        "mac batch create",
+    )
+    require_duplicate_batch_ref_rejected(
+        client,
+        "/mac/verify/batch",
+        {"kid": key_id, "profile": profile, "items": [{"ref": refs[0], "plaintext": plaintexts[0], "digest": digests[0]}, {"ref": refs[0], "plaintext": plaintexts[1], "digest": digests[1]}]},
+        "mac batch verify",
+    )
 
     return profile, algorithm, [digest[:16] + "..." for digest in digests]
 
@@ -1345,6 +1393,18 @@ def commitment_batch_round_trip(client, key_id):
         [item.get("valid") for item in verify_items] == [True, False],
         "commit batch verify must preserve true/false results",
     )
+    require_duplicate_batch_ref_rejected(
+        client,
+        f"/commit/batch/{key_id}",
+        {"profile": profile, "items": [{"ref": refs[0], "plaintext": plaintexts[0]}, {"ref": refs[0], "plaintext": plaintexts[1]}]},
+        "commit batch create",
+    )
+    require_duplicate_batch_ref_rejected(
+        client,
+        "/commit/verify/batch",
+        {"kid": key_id, "profile": profile, "items": [{"ref": refs[0], "plaintext": plaintexts[0], "opening": openings[0], "commitment": commitments[0]}, {"ref": refs[0], "plaintext": plaintexts[1], "opening": openings[1], "commitment": commitments[1]}]},
+        "commit batch verify",
+    )
 
     return profile, algorithm, [commitment[:16] + "..." for commitment in commitments]
 
@@ -1389,6 +1449,12 @@ def mask_batch_round_trip(client, key_id):
     require(
         [item.get("masked") for item in items] == ["************1111", "************4444"],
         "mask batch output mismatch",
+    )
+    require_duplicate_batch_ref_rejected(
+        client,
+        f"/mask/batch/{key_id}",
+        {"profile": profile, "items": [{"ref": refs[0], "plaintext": plaintexts[0]}, {"ref": refs[0], "plaintext": plaintexts[1]}]},
+        "mask batch",
     )
 
     return profile, [item.get("masked") for item in items]
@@ -1435,6 +1501,21 @@ def index_batch_round_trip(client, key_id):
     profile = "pan-blind-index-v1"
     refs = ["index-batch-1", "index-batch-2"]
     plaintexts = ["4111111111111111", "5555555555554444"]
+    require_duplicate_batch_ref_rejected(
+        client,
+        f"/index/batch/{key_id}",
+        {"profile": profile, "items": [{"ref": refs[0], "plaintext": plaintexts[0]}, {"ref": refs[0], "plaintext": plaintexts[1]}]},
+        "index batch create",
+    )
+    missing_after_rejection = client.post(
+        "/index/verify",
+        {"ref": refs[0], "kid": key_id, "profile": profile, "plaintext": plaintexts[0]},
+        auth=True,
+    )
+    require(
+        missing_after_rejection.get("matched") is False,
+        "invalid index batch must not persist its first item",
+    )
     created = client.post(
         f"/index/batch/{key_id}",
         {
@@ -1478,6 +1559,12 @@ def index_batch_round_trip(client, key_id):
         "index batch verify must preserve true/false results",
     )
     require(verify_items[0].get("index") == digests[0], "index batch verify digest mismatch")
+    require_duplicate_batch_ref_rejected(
+        client,
+        "/index/verify/batch",
+        {"kid": key_id, "profile": profile, "items": [{"ref": refs[0], "plaintext": plaintexts[0]}, {"ref": refs[0], "plaintext": plaintexts[1]}]},
+        "index batch verify",
+    )
 
     return profile, [digest[:16] + "..." for digest in digests]
 

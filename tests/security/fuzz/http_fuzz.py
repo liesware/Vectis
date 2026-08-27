@@ -14,7 +14,7 @@ from support.test_config import require_apikey
 from client import FuzzClient
 from config import DEFAULT_BASE_URL, UNSEAL_KEY_FILE
 from reporting import print_target_done, print_target_start
-from semantics import self_check
+from self_check import self_check
 from targets import TARGET_NAMES, TARGETS
 
 
