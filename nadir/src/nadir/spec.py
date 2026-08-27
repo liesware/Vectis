@@ -22,6 +22,7 @@ from .workflows import (
     Capture,
     DEFAULT_MALFORMED_EXPECTATION,
     ExpectJsonError,
+    ExpectNoJsonFields,
     ExpectAuthorizationMatrix,
     ExpectNoServerCrash,
     ExpectNoServerError,
@@ -122,6 +123,19 @@ def _extra_required(entry: Mapping[str, object]) -> frozenset[str]:
     return frozenset(extra)
 
 
+def _artifact_redact_captures(entry: Mapping[str, object], captured: set[object]) -> frozenset[str]:
+    """Capture names that must be redacted only when serializing findings."""
+    names = entry.get("artifact_redact_captures", [])
+    if not isinstance(names, list) or not all(isinstance(name, str) and name for name in names):
+        raise ValueError("'artifact_redact_captures' must be a list of non-empty capture names")
+    if len(names) != len(set(names)):
+        raise ValueError("'artifact_redact_captures' must not contain duplicates")
+    unknown = set(names).difference(captured)
+    if unknown:
+        raise ValueError(f"artifact redaction references unknown captures: {', '.join(sorted(unknown))}")
+    return frozenset(names)
+
+
 # --- oracles ------------------------------------------------------------------
 
 
@@ -143,6 +157,16 @@ def _oracle(spec: Mapping[str, object] | None, invariants: Invariants) -> Respon
         clauses.append(ExpectStatus(_status_set(spec["status"])))
     if spec.get("json_error"):
         clauses.append(ExpectJsonError())
+    forbidden = spec.get("forbidden_json_fields")
+    if forbidden is not None:
+        if (
+            not isinstance(forbidden, list)
+            or not forbidden
+            or not all(isinstance(field, str) and field for field in forbidden)
+            or len(forbidden) != len(set(forbidden))
+        ):
+            raise ValueError("'forbidden_json_fields' must be a non-empty list of unique field names")
+        clauses.append(ExpectNoJsonFields(frozenset(forbidden)))
     if spec.get("no_server_error"):
         # For a mutated path that legitimately accepts (2xx) or rejects (4xx) but
         # must never crash: guards 5xx without pinning an exact status class.
@@ -272,6 +296,7 @@ def _flow_target(entry: Mapping[str, object], invariants: Invariants, mutators: 
         mutation_expectation=mutation_expectation,
         run_control=bool(entry.get("control", True)),
         include_generative=bool(entry.get("generative", True)),
+        artifact_redact_captures=_artifact_redact_captures(entry, captured),
     )
 
 
@@ -310,6 +335,7 @@ def _race_target(entry: Mapping[str, object], invariants: Invariants) -> RaceTar
         captures=tuple(Capture(str(key), str(value)) for key, value in capture_spec.items()),
         contenders=tuple(built),
         race_expectation=ProjectRacePredicate(invariant_name, invariants[invariant_name]),
+        artifact_redact_captures=_artifact_redact_captures(entry, captured),
     )
 
 
@@ -365,4 +391,5 @@ def _target(entry: Mapping[str, object], invariants: Invariants, mutators: Mutat
         control_expectation=control_oracle,
         mutation_expectation=mutated_oracle,
         include_generative=bool(entry.get("generative", True)),
+        artifact_redact_captures=_artifact_redact_captures(entry, captured_names),
     )

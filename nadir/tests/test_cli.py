@@ -1,4 +1,5 @@
 import os
+from io import StringIO
 from pathlib import Path
 import sys
 import tempfile
@@ -8,7 +9,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from nadir.cli import _options, _parser, main
+from nadir.cli import _options, _parser, _print_progress, main
+from nadir.engine import RunSummary, TargetCompleted, TargetSummary
 from nadir.workflows import Finding
 
 
@@ -101,3 +103,65 @@ class CliEnvironmentTests(unittest.TestCase):
         ):
             main(arguments)
         self.assertEqual(stopped.exception.code, 4)
+
+
+class _FlushingStream(StringIO):
+    def __init__(self):
+        super().__init__()
+        self.flushes = 0
+
+    def flush(self):
+        self.flushes += 1
+        super().flush()
+
+
+class CliProgressTests(unittest.TestCase):
+    @staticmethod
+    def _summary() -> RunSummary:
+        return RunSummary(
+            (
+                TargetSummary(
+                    "vectis.target", 1, 1, 2, 0, 1, 0, 0, 0,
+                    2, 0, 0, 0, 0, 1, (),
+                ),
+            ),
+            (),
+        )
+
+    def test_progress_renders_completed_target_summary_to_stdout_and_flushes(self):
+        stream = _FlushingStream()
+        event = TargetCompleted(1, 3, self._summary().targets[0], ())
+        with patch("sys.stdout", stream):
+            _print_progress(event)
+        self.assertIn("[1/3] vectis.target: controls=1 mutated_cases=1", stream.getvalue())
+        self.assertIn("classes: semantic=1 structured=0 raw=0 deser=0", stream.getvalue())
+        self.assertEqual(stream.flushes, 4)
+
+    def test_progress_prints_target_artifacts_immediately(self):
+        artifact = Path("tests/nadir/results/finding.json")
+        stream = _FlushingStream()
+        event = TargetCompleted(2, 3, self._summary().targets[0], (artifact,))
+        with patch("sys.stdout", stream):
+            _print_progress(event)
+        self.assertIn("[2/3] vectis.target", stream.getvalue())
+        self.assertIn("finding artifact: tests/nadir/results/finding.json", stream.getvalue())
+        self.assertEqual(stream.flushes, 5)
+
+    def test_run_registers_live_target_summary_without_duplicate_final_summary(self):
+        stdout = _FlushingStream()
+
+        def fake_run_project(*args, **kwargs):
+            kwargs["progress"](
+                TargetCompleted(1, 1, self._summary().targets[0], ())
+            )
+            return self._summary()
+
+        with (
+            patch("nadir.cli.load_project", return_value=object()),
+            patch("nadir.cli._options", return_value={}),
+            patch("nadir.cli.run_project", side_effect=fake_run_project),
+            patch("sys.stdout", stdout),
+        ):
+            main(["run", "--project", "project.py", "--iterations", "1"])
+        self.assertEqual(stdout.getvalue().count("vectis.target: controls=1 mutated_cases=1"), 1)
+        self.assertIn("[1/1] vectis.target", stdout.getvalue())

@@ -158,11 +158,15 @@ def _response_data(result: HttpResult, secrets: tuple[bytes, ...]) -> dict[str, 
 
 def _step_data(step: StepExecution, secrets: tuple[bytes, ...], primary_api_key: bytes | None) -> tuple[dict[str, object], bool]:
     request, request_redacted, _ = _request_data(step.request, secrets, primary_api_key)
+    captures = [
+        [name, _redact_text(value, secrets) if isinstance(value, str) else value]
+        for name, value in step.captures
+    ]
     return {
         "name": step.name,
         "request": request,
         "response": _response_data(step.result, secrets),
-        "captures": [[name, value] for name, value in step.captures],
+        "captures": captures,
         "replayable": step.replayable and not request_redacted,
     }, request_redacted
 

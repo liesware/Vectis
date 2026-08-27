@@ -11,10 +11,10 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from nadir.artifacts import ReproductionRecipe, load_replay_requests, load_reproduction_recipe
-from nadir.engine import _case_seed, _target_has_body, reproduce_project, run_project
+from nadir.engine import _artifact_capture_secrets, _case_seed, _target_has_body, reproduce_project, run_project
 from nadir.http import HttpRequest, HttpResult, TransportFailure
 from nadir.mutations import JsonFieldMutation
-from nadir.workflows import AllOf, CaseRecipe, CaseWeights, Capture, EvaluationContext, ExpectNoServerCrash, ExpectStatus, Finding, HttpStep, MutationRecord, NoDeclaredSecrets, ProducerConsumerTarget, ProjectPredicate, ProjectRacePredicate, RaceTarget, RequestTarget
+from nadir.workflows import AllOf, CaseRecipe, CaseWeights, Capture, EvaluationContext, ExpectNoServerCrash, ExpectStatus, Finding, FlowStep, FlowTarget, HttpStep, MutationRecord, NoDeclaredSecrets, ProducerConsumerTarget, ProjectPredicate, ProjectRacePredicate, RaceTarget, RequestTarget, StepExecution, WorkflowCase
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -193,6 +193,35 @@ class _MultiFindingProject(_FindingProject):
         return (replace(finding, name="synthetic.extra"), finding)
 
 
+class _NoControlFlowProject(_Project):
+    def target_names(self):
+        return ("synthetic.no-control-flow",)
+
+    def targets(self):
+        return (
+            FlowTarget(
+                "synthetic.no-control-flow",
+                frozenset({"base_url", "api_key"}),
+                (
+                    FlowStep(
+                        HttpStep(
+                            "sign",
+                            "POST",
+                            "{base_url}/sign",
+                            (("X-API-Key", "{api_key}"),),
+                            {"value": "valid"},
+                            expectation=ExpectStatus(frozenset({200})),
+                        ),
+                        fuzz=True,
+                    ),
+                ),
+                (JsonFieldMutation("semantic", "$.value"),),
+                ExpectStatus(frozenset({200})),
+                run_control=False,
+            ),
+        )
+
+
 class _RaceProject:
     name = "synthetic-race"
 
@@ -321,6 +350,61 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(summary.targets[0].findings, 0)
         self.assertEqual(summary.targets[0].mutated_cases, 1)
         self.assertEqual(summary.targets[0].requests, 4)
+
+    def test_progress_emits_one_completed_summary_per_target(self):
+        _Handler.accept_mutation = False
+        events = []
+        run_project(
+            _Project(self.base_url), options={}, target_name=None, iterations=2,
+            run_seed=1, output_dir=Path(tempfile.mkdtemp()), progress=events.append,
+        )
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual((event.completed_targets, event.total_targets), (1, 1))
+        self.assertEqual(event.summary.target, "synthetic.workflow")
+        self.assertEqual((event.summary.controls, event.summary.mutated_cases, event.summary.requests), (1, 2, 6))
+        self.assertEqual(event.artifacts, ())
+
+    def test_progress_counts_completed_targets_globally(self):
+        _Handler.accept_mutation = False
+        events = []
+        run_project(
+            _MultiFindingProject(self.base_url), options={}, target_name=None, iterations=1,
+            run_seed=1, output_dir=Path(tempfile.mkdtemp()), progress=events.append,
+        )
+        self.assertEqual(
+            [(event.completed_targets, event.total_targets, event.summary.target) for event in events],
+            [
+                (1, 2, "synthetic.extra"),
+                (2, 2, "synthetic.finding"),
+            ],
+        )
+
+    def test_progress_summary_preserves_flow_without_control(self):
+        events = []
+        run_project(
+            _NoControlFlowProject(self.base_url), options={}, target_name=None, iterations=1,
+            run_seed=1, output_dir=Path(tempfile.mkdtemp()), progress=events.append,
+        )
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].summary.controls, 0)
+        self.assertEqual(events[0].summary.mutated_cases, 1)
+
+    def test_completed_target_event_contains_persisted_artifact(self):
+        _Handler.accept_mutation = True
+        events = []
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                run_project(
+                    _Project(self.base_url), options={}, target_name=None, iterations=1,
+                    run_seed=1, output_dir=Path(directory), progress=events.append,
+                )
+                finding = events[-1]
+                self.assertEqual(finding.summary.findings, 1)
+                self.assertEqual(len(finding.artifacts), 1)
+                self.assertTrue(finding.artifacts[0].is_file())
+        finally:
+            _Handler.accept_mutation = False
 
     def test_finding_replays_only_consumer_request(self):
         _Handler.accept_mutation = True
@@ -480,6 +564,18 @@ class EngineTests(unittest.TestCase):
         self.assertEqual((summary.semantic, summary.structured, summary.raw, summary.deser), (1, 1, 1, 1))
         self.assertEqual(summary.required_iterations, 4)
         self.assertEqual(summary.uncovered_classes, ())
+
+    def test_artifact_capture_secrets_skips_empty_captures_without_aborting(self):
+        # A redact-declared capture that comes back empty or null (e.g. $.items.0.token
+        # -> null) must not raise: this runs while serializing a finding, so a raise
+        # would abort the run and discard every collected artifact.
+        class _Target:
+            name = "synthetic.capture"
+            artifact_redact_captures = frozenset({"token"})
+
+        step = StepExecution("encode", HttpRequest("POST", "http://nadir.test/x"), HttpResult(HttpRequest("POST", "http://nadir.test/x"), 200, (), b"{}", 1), (("token", None), ("token", ""), ("token", "real-secret")), False)
+        case = WorkflowCase("synthetic.capture", 1, None, (step,), None)
+        self.assertEqual(_artifact_capture_secrets(_Target(), case), (b"real-secret",))
 
     def test_request_target_generative_false_suppresses_body_fuzzing(self):
         def _request_target(include_generative):

@@ -18,7 +18,7 @@ import json
 from pathlib import Path
 import random
 import re
-from typing import Mapping
+from typing import Callable, Mapping
 from urllib.parse import quote
 
 from .artifacts import ReproductionRecipe, write_finding
@@ -73,6 +73,16 @@ class TargetSummary:
 @dataclass(frozen=True)
 class RunSummary:
     targets: tuple[TargetSummary, ...]
+    artifacts: tuple[Path, ...]
+
+
+@dataclass(frozen=True)
+class TargetCompleted:
+    """One target summary ready for immediate presentation."""
+
+    completed_targets: int
+    total_targets: int
+    summary: TargetSummary
     artifacts: tuple[Path, ...]
 
 
@@ -488,6 +498,26 @@ def _prepare_workflow_run(project: Project, fixture, targets, client: HttpTransp
     return variables, secrets, health
 
 
+def _artifact_capture_secrets(target: Target, case: WorkflowCase) -> tuple[bytes, ...]:
+    """Collect target-declared ephemeral captures for artifact-only redaction."""
+    names = getattr(target, "artifact_redact_captures", frozenset())
+    if not names:
+        return ()
+    secrets: list[bytes] = []
+    for step in case.steps:
+        for name, value in step.captures:
+            if name not in names:
+                continue
+            # An empty or non-string capture carries no sensitive material to redact.
+            # Skip it rather than raising: this runs while serializing a finding, so a
+            # raise would abort the whole run and discard every collected summary and
+            # artifact. Whether an empty capture is itself anomalous is the oracle's job.
+            if not isinstance(value, str) or not value:
+                continue
+            secrets.append(value.encode("utf-8"))
+    return tuple(secrets)
+
+
 def reproduce_project(
     project: Project,
     *,
@@ -562,6 +592,7 @@ def run_project(
     run_seed: int,
     output_dir: Path,
     transport: HttpTransport | None = None,
+    progress: Callable[[TargetCompleted], None] | None = None,
 ) -> RunSummary:
     if iterations < 1:
         raise ValueError("iterations must be at least one")
@@ -584,6 +615,7 @@ def run_project(
         artifacts: list[Path] = []
         summaries: list[TargetSummary] = []
         for target in selected:
+            target_artifacts: list[Path] = []
             randomizer = random.Random(_stable_seed("target", run_seed, target.name))
             is_race = isinstance(target, RaceTarget)
             has_body = _target_has_body(target)
@@ -653,22 +685,21 @@ def run_project(
                 _bucket_responses(counters, case)
                 if findings:
                     counters["findings"] += len(findings)
-                    artifacts.append(
-                        write_finding(
-                            output_dir,
-                            project=project.name,
-                            run_seed=run_seed,
-                            case=case,
-                            findings=findings,
-                            secrets=artifact_secrets,
-                            primary_api_key=primary_api_key,
-                        )
+                    artifact = write_finding(
+                        output_dir,
+                        project=project.name,
+                        run_seed=run_seed,
+                        case=case,
+                        findings=findings,
+                        secrets=(*artifact_secrets, *_artifact_capture_secrets(target, case)),
+                        primary_api_key=primary_api_key,
                     )
+                    artifacts.append(artifact)
+                    target_artifacts.append(artifact)
             _, health_findings = _run_step(project.name, health, variables, None, secrets, client, None, health.expectation)
             if health_findings:
                 raise SetupFailure("project liveness check did not satisfy its expectation")
-            summaries.append(
-                TargetSummary(
+            target_summary = TargetSummary(
                     target=target.name,
                     controls=counters["controls"],
                     mutated_cases=counters["mutated_cases"],
@@ -685,6 +716,8 @@ def run_project(
                     transport_failures=counters["transport_failures"],
                     required_iterations=max(1, len(coverage_plan)),
                     uncovered_classes=uncovered_classes,
-                )
             )
+            summaries.append(target_summary)
+            if progress is not None:
+                progress(TargetCompleted(len(summaries), len(selected), target_summary, tuple(target_artifacts)))
         return RunSummary(tuple(summaries), tuple(artifacts))

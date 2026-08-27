@@ -3,10 +3,12 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from nadir.artifacts import load_replay_requests, load_reproduction_recipe, write_finding
+from nadir.engine import _artifact_capture_secrets
 from nadir.http import HttpRequest, HttpResult
 from nadir.workflows import CaseRecipe, Finding, MutationRecord, StepExecution, WorkflowCase
 
@@ -65,6 +67,82 @@ class ArtifactTests(unittest.TestCase):
             )
             rendered = path.read_text(encoding="utf-8")
         self.assertNotIn("secret-value", rendered)
+        self.assertIn("<redacted>", rendered)
+
+    def test_sensitive_capture_is_redacted_and_disables_request_replay(self):
+        opening = "secret-opening"
+        producer_request = HttpRequest("POST", "http://127.0.0.1/commit", (), b"{}")
+        consumer_request = HttpRequest("POST", "http://127.0.0.1/commit/verify", (), b'{"opening":"secret-opening"}')
+        producer = StepExecution(
+            "create",
+            producer_request,
+            HttpResult(producer_request, 200, (), b'{"opening":"secret-opening"}', 1),
+            (("opening", opening),),
+            replayable=False,
+        )
+        consumer = StepExecution("verify", consumer_request, HttpResult(consumer_request, 500, (), b"{}", 1))
+        case = WorkflowCase("target", 1, MutationRecord("opening", "$.opening", opening, "changed"), (producer, consumer), self._recipe)
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_finding(
+                Path(directory),
+                project="test",
+                run_seed=1,
+                case=case,
+                findings=(Finding("test", "test"),),
+                secrets=(opening.encode("utf-8"),),
+            )
+            rendered = path.read_text(encoding="utf-8")
+            self.assertNotIn(opening, rendered)
+            self.assertIn("<redacted>", rendered)
+            with self.assertRaisesRegex(ValueError, "no replayable"):
+                load_replay_requests(path)
+
+    def test_target_declared_capture_is_added_to_artifact_redaction(self):
+        opening = "fresh-opening"
+        request = HttpRequest("POST", "http://127.0.0.1/commit", (), b"{}")
+        case = WorkflowCase(
+            "target",
+            1,
+            MutationRecord("opening", "$.opening", opening, "changed"),
+            (StepExecution("create", request, HttpResult(request, 200, (), b"{}", 1), (("opening", opening),)),),
+            self._recipe,
+        )
+        target = SimpleNamespace(name="target", artifact_redact_captures=frozenset({"opening"}))
+        self.assertEqual(_artifact_capture_secrets(target, case), (opening.encode("utf-8"),))
+
+    def test_all_captured_shares_are_redacted_from_a_finding(self):
+        shares = tuple(f"vectis-sss-v1.synthetic-share-{index}" for index in range(5))
+        request = HttpRequest(
+            "POST",
+            "http://127.0.0.1/shares/combine",
+            (),
+            ("{\"shares\":" + json.dumps(list(shares)) + "}").encode("utf-8"),
+        )
+        step = StepExecution(
+            "split",
+            request,
+            HttpResult(request, 500, (), json.dumps({"shares": list(shares)}).encode("utf-8"), 1),
+            tuple((f"share_{index}", share) for index, share in enumerate(shares)),
+            replayable=False,
+        )
+        case = WorkflowCase("sharing", 1, MutationRecord("share", "$.shares.2", shares[2], "changed"), (step,), self._recipe)
+        target = SimpleNamespace(
+            name="sharing",
+            artifact_redact_captures=frozenset(f"share_{index}" for index in range(5)),
+        )
+        secrets = _artifact_capture_secrets(target, case)
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_finding(
+                Path(directory),
+                project="test",
+                run_seed=1,
+                case=case,
+                findings=(Finding("test", "test"),),
+                secrets=secrets,
+            )
+            rendered = path.read_text(encoding="utf-8")
+        for share in shares:
+            self.assertNotIn(share, rendered)
         self.assertIn("<redacted>", rendered)
 
     def test_authenticated_request_replays_with_environment_key_only(self):

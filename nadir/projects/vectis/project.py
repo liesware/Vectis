@@ -32,26 +32,47 @@ _INVARIANTS = {
     "blind_index_membership": invariants.blind_index_membership,
     "blind_index_nonmembership": invariants.blind_index_nonmembership,
     "blind_index_verify_nonmembership": invariants.blind_index_verify_nonmembership,
+    "commitment_batch_create_output": invariants.commitment_batch_create_output,
+    "commitment_batch_verification_failure": invariants.commitment_batch_verification_failure,
+    "commitment_batch_verification_success": invariants.commitment_batch_verification_success,
+    "commitment_create_output": invariants.commitment_create_output,
+    "commitment_randomness": invariants.commitment_randomness,
+    "commitment_verification_failure": invariants.commitment_verification_failure,
+    "commitment_verification_success": invariants.commitment_verification_success,
     "compact_signature_output": invariants.compact_signature_output,
     "fpe_encrypt_output": invariants.fpe_encrypt_output,
+    "fpe_batch_encrypt_output": invariants.fpe_batch_encrypt_output,
+    "fpe_batch_round_trip": invariants.fpe_batch_round_trip,
+    "fpe_batch_ciphertext_integrity": invariants.fpe_batch_ciphertext_integrity,
     "fpe_round_trip": invariants.fpe_round_trip,
     "retired_fpe_round_trip": invariants.retired_fpe_round_trip,
+    "retired_sharing_round_trip": invariants.retired_sharing_round_trip,
     "fpe_ciphertext_integrity": invariants.fpe_ciphertext_integrity,
     "internal_message_encrypt_output": invariants.internal_message_encrypt_output,
     "internal_message_round_trip": invariants.internal_message_round_trip,
     "internal_message_tamper_rejected": invariants.internal_message_tamper_rejected,
     "mac_create_output": invariants.mac_create_output,
+    "mac_batch_create_output": invariants.mac_batch_create_output,
+    "mac_batch_verification_success": invariants.mac_batch_verification_success,
+    "mac_batch_verification_failure": invariants.mac_batch_verification_failure,
     "mac_verification_failure": invariants.mac_verification_failure,
     "mac_verification_success": invariants.mac_verification_success,
     "masking_output": invariants.masking_output,
+    "masking_batch_output": invariants.masking_batch_output,
     "masking_policy_output": invariants.masking_policy_output,
     "public_keys_output": invariants.public_keys_output,
+    "sharing_randomness": invariants.sharing_randomness,
+    "sharing_round_trip": invariants.sharing_round_trip,
+    "sharing_split_output": invariants.sharing_split_output,
     "token_round_trip": invariants.token_round_trip,
     "token_once_round_trip": invariants.token_once_round_trip,
     "token_distinct_output": invariants.token_distinct_output,
     "token_once_output": invariants.token_once_output,
     "one_time_token_race": invariants.one_time_token_race,
     "one_time_token_batch_round_trip": invariants.one_time_token_batch_round_trip,
+    "one_time_token_batch_race": invariants.one_time_token_batch_race,
+    "token_batch_encode_output": invariants.token_batch_encode_output,
+    "token_batch_round_trip": invariants.token_batch_round_trip,
     "token_output": invariants.token_output,
     "verification_success": invariants.verification_success,
     "verification_failure": invariants.verification_failure,
@@ -86,6 +107,18 @@ class VectisProject:
             "index_batch_plaintext_one",
             "index_atomic_plaintext_zero",
             "index_atomic_plaintext_one",
+            "commit_plaintext",
+            "commit_mutated_plaintext",
+            "commit_batch_plaintext_zero",
+            "commit_batch_plaintext_one",
+            "mac_batch_plaintext_zero",
+            "mac_batch_plaintext_one",
+            "mac_batch_mutated_plaintext",
+            "mask_batch_plaintext_zero",
+            "mask_batch_plaintext_one",
+            "retired_share_zero",
+            "retired_share_one",
+            "retired_share_two",
         ):
             value = extra.get(name)
             if isinstance(value, str) and value:
@@ -96,9 +129,21 @@ class VectisProject:
         values = list(self.redaction_values(fixture))
         if not isinstance(fixture, VectisFixture):
             return tuple(values)
-        plaintext = dict(fixture.extra).get("internal_message_plaintext")
-        if plaintext:
-            values.append(plaintext.encode("utf-8"))
+        extra = dict(fixture.extra)
+        for name in (
+            "internal_message_plaintext",
+            "share_plaintext",
+            "retired_share_plaintext",
+            "fpe_batch_plaintext_zero",
+            "fpe_batch_plaintext_one",
+            "token_plaintext",
+            "token_once_plaintext",
+            "token_batch_plaintext_zero",
+            "token_batch_plaintext_one",
+        ):
+            plaintext = extra.get(name)
+            if isinstance(plaintext, str) and plaintext:
+                values.append(plaintext.encode("utf-8"))
         return tuple(values)
 
     def primary_api_key(self, fixture: object) -> bytes | None:

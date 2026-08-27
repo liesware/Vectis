@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 
 from .artifacts import load_replay_requests, load_reproduction_recipe
-from .engine import SetupFailure, reproduce_project, run_project
+from .engine import SetupFailure, TargetCompleted, TargetSummary, reproduce_project, run_project
 from .http import HttpTransport
 from .project import load_project, load_project_environment
 
@@ -67,32 +67,41 @@ def _options(project_path: Path) -> dict[str, object]:
     return options
 
 
-def _print_summary(summary) -> None:
-    for target in summary.targets:
+def _print_target_summary(target: TargetSummary, *, prefix: str = "") -> None:
+    print(
+        f"{prefix}{target.target}: controls={target.controls} "
+        f"mutated_cases={target.mutated_cases} requests={target.requests} "
+        f"findings={target.findings}",
+        flush=True,
+    )
+    print(
+        f"  classes: semantic={target.semantic} structured={target.structured} "
+        f"raw={target.raw} deser={target.deser}",
+        flush=True,
+    )
+    print(
+        f"  responses: 2xx={target.responses_2xx} 4xx={target.responses_4xx} "
+        f"5xx={target.responses_5xx} other={target.responses_other} "
+        f"transport_failures={target.transport_failures}",
+        flush=True,
+    )
+    if target.uncovered_classes:
         print(
-            f"{target.target}: controls={target.controls} "
-            f"mutated_cases={target.mutated_cases} requests={target.requests} "
-            f"findings={target.findings}"
+            f"  coverage: incomplete requested_iterations={target.mutated_cases} "
+            f"required_iterations={target.required_iterations} "
+            f"uncovered={','.join(target.uncovered_classes)}",
+            flush=True,
         )
-        print(
-            f"  classes: semantic={target.semantic} structured={target.structured} "
-            f"raw={target.raw} deser={target.deser}"
-        )
-        print(
-            f"  responses: 2xx={target.responses_2xx} 4xx={target.responses_4xx} "
-            f"5xx={target.responses_5xx} other={target.responses_other} "
-            f"transport_failures={target.transport_failures}"
-        )
-        if target.uncovered_classes:
-            print(
-                f"  coverage: incomplete requested_iterations={target.mutated_cases} "
-                f"required_iterations={target.required_iterations} "
-                f"uncovered={','.join(target.uncovered_classes)}"
-            )
-        else:
-            print(f"  coverage: complete required_iterations={target.required_iterations}")
-    for artifact in summary.artifacts:
-        print(f"finding artifact: {artifact}")
+    else:
+        print(f"  coverage: complete required_iterations={target.required_iterations}", flush=True)
+
+
+def _print_progress(event: TargetCompleted) -> None:
+    """Print each target's ordinary summary as soon as it completes."""
+
+    _print_target_summary(event.summary, prefix=f"[{event.completed_targets}/{event.total_targets}] ")
+    for artifact in event.artifacts:
+        print(f"finding artifact: {artifact}", flush=True)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -145,8 +154,8 @@ def main(argv: list[str] | None = None) -> None:
             iterations=1 if args.command == "check" else args.iterations,
             run_seed=0 if args.command == "check" else args.seed,
             output_dir=Path("nadir-results") if args.command == "check" else args.output_dir,
+            progress=_print_progress,
         )
-        _print_summary(summary)
         if any(target.findings for target in summary.targets):
             raise SystemExit(EXIT_FINDINGS)
     except (ValueError, argparse.ArgumentError) as error:

@@ -75,6 +75,31 @@ class ExpectJsonError:
 
 
 @dataclass(frozen=True)
+class ExpectNoJsonFields:
+    """Require a JSON object not to contain fields forbidden by the contract.
+
+    Batch endpoints use this with ``items`` on rejection paths: an invalid batch
+    must not look partially successful merely because it includes a result list.
+    """
+
+    forbidden_fields: frozenset[str]
+
+    def evaluate(self, result: HttpResult, context: EvaluationContext) -> tuple[Finding, ...]:
+        import json
+
+        try:
+            body = json.loads(result.body)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return (Finding("invalid-json-forbidden-fields", f"{context.step} response is not valid JSON", "medium"),)
+        if not isinstance(body, dict):
+            return (Finding("invalid-json-forbidden-fields", f"{context.step} response is not a JSON object", "medium"),)
+        present = sorted(self.forbidden_fields.intersection(body))
+        if present:
+            return (Finding("forbidden-json-field", f"{context.step} rejection contains forbidden field {present[0]!r}", "medium"),)
+        return ()
+
+
+@dataclass(frozen=True)
 class ExpectJsonShape:
     required_fields: frozenset[str]
 
@@ -289,6 +314,7 @@ class ProducerConsumerTarget:
     weights: CaseWeights = CaseWeights()
     malformed_expectation: ResponseExpectation = DEFAULT_MALFORMED_EXPECTATION
     include_generative: bool = True
+    artifact_redact_captures: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if not self.mutations:
@@ -324,6 +350,7 @@ class FlowTarget:
     malformed_expectation: ResponseExpectation = DEFAULT_MALFORMED_EXPECTATION
     run_control: bool = True
     include_generative: bool = True
+    artifact_redact_captures: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if not self.mutations:
@@ -344,6 +371,7 @@ class RaceTarget:
     captures: tuple[Capture, ...]
     contenders: tuple[HttpStep, ...]
     race_expectation: RaceExpectation
+    artifact_redact_captures: frozenset[str] = frozenset()
 
 
 Target = RequestTarget | ProducerConsumerTarget | FlowTarget | RaceTarget

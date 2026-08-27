@@ -269,7 +269,7 @@ targets:
         mutate:
           - {variable: index_atomic_ref_one, from_variable: index_atomic_ref_zero, name: blind-index-batch-duplicate-ref}
         expect: {status: [200]}
-        fuzz_expect: {status: "4xx", json_error: true}
+        fuzz_expect: {status: "4xx", json_error: true, forbidden_json_fields: [items]}
         continue_on_rejection: true
       - step: verify-no-partial-write
         request:
@@ -279,6 +279,376 @@ targets:
           body:
             {kid: "{kid}", profile: "{index_profile}", items: [{ref: "{index_atomic_ref_zero}", plaintext: "{index_atomic_plaintext_zero}"}, {ref: "{index_atomic_ref_one}", plaintext: "{index_atomic_plaintext_one}"}]}
         expect: {status: [200], invariant: blind_index_batch_atomicity}
+
+  # --- Cryptographic commitments: stateless, randomized openings -------------
+  - name: vectis.commitment-create
+    request:
+      method: POST
+      path: "/commit/{kid}"
+      auth: true
+      body: {ref: "{commit_ref}", profile: "{commit_profile}", plaintext: "{commit_plaintext}"}
+    mutate:
+      - {json_field: $.plaintext, name: commitment-plaintext}
+    requires: [commit_opening_len]
+    expect:
+      control: {status: [200], invariant: commitment_create_output}
+      mutated: {no_server_error: true}
+
+  # The producer makes a fresh commitment; all consumer mutations remain well
+  # formed, so Vectis must return valid:false instead of merely rejecting shape.
+  - name: vectis.commitment-round-trip
+    generative: false
+    artifact_redact_captures: [commit_opening]
+    producer:
+      method: POST
+      path: "/commit/{kid}"
+      auth: true
+      replayable: false
+      body: {ref: "{commit_ref}", profile: "{commit_profile}", plaintext: "{commit_plaintext}"}
+    capture: {commit_kid: $.kid, commit_value: $.commitment, commit_opening: $.opening}
+    consumer:
+      method: POST
+      path: /commit/verify
+      auth: true
+      body: {ref: "{commit_ref}", kid: "{commit_kid}", profile: "{commit_profile}", plaintext: "{commit_plaintext}", opening: "{commit_opening}", commitment: "{commit_value}"}
+    mutate:
+      - {variable: commit_plaintext, from_variable: commit_mutated_plaintext, name: commitment-plaintext}
+      - {json_field: $.opening, name: commitment-opening, alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"}
+      - {json_field: $.commitment, name: commitment-digest, alphabet: "0123456789abcdef"}
+    requires: [commit_opening_len]
+    producer_expect: {status: [200], invariant: commitment_create_output}
+    expect:
+      control: {status: [200], invariant: commitment_verification_success}
+      mutated: {status: [200], invariant: commitment_verification_failure}
+
+  # Creating the same plaintext twice must produce independent opening and
+  # commitment values. A ref-only mutation keeps that property stable per run.
+  - name: vectis.commitment-randomness
+    generative: false
+    artifact_redact_captures: [first_opening, second_opening]
+    flow:
+      - step: create-first
+        request:
+          method: POST
+          path: "/commit/{kid}"
+          auth: true
+          replayable: false
+          body: {ref: "{commit_ref}", profile: "{commit_profile}", plaintext: "{commit_plaintext}"}
+        capture: {first_commitment: $.commitment, first_opening: $.opening}
+        expect: {status: [200], invariant: commitment_create_output}
+      - step: create-second
+        request:
+          method: POST
+          path: "/commit/{kid}"
+          auth: true
+          replayable: false
+          body: {ref: "{commit_random_ref}", profile: "{commit_profile}", plaintext: "{commit_plaintext}"}
+        capture: {second_opening: $.opening}
+        fuzz: true
+        mutate:
+          - {json_field: $.ref, name: commitment-random-ref}
+        expect: {status: [200], invariant: commitment_randomness}
+        fuzz_expect: {status: [200], invariant: commitment_randomness}
+
+  - name: vectis.commitment-batch-round-trip
+    generative: false
+    artifact_redact_captures: [commit_batch_opening_zero, commit_batch_opening_one]
+    flow:
+      - step: create-batch
+        request:
+          method: POST
+          path: "/commit/batch/{kid}"
+          auth: true
+          replayable: false
+          body:
+            {profile: "{commit_profile}", items: [{ref: "{commit_batch_ref_zero}", plaintext: "{commit_batch_plaintext_zero}"}, {ref: "{commit_batch_ref_one}", plaintext: "{commit_batch_plaintext_one}"}]}
+        capture:
+          commit_batch_kid: $.kid
+          commit_batch_value_zero: $.items.0.commitment
+          commit_batch_opening_zero: $.items.0.opening
+          commit_batch_value_one: $.items.1.commitment
+          commit_batch_opening_one: $.items.1.opening
+        expect: {status: [200], invariant: commitment_batch_create_output}
+      - step: verify-batch
+        request:
+          method: POST
+          path: /commit/verify/batch
+          auth: true
+          body:
+            {kid: "{commit_batch_kid}", profile: "{commit_profile}", items: [{ref: "{commit_batch_ref_zero}", plaintext: "{commit_batch_plaintext_zero}", opening: "{commit_batch_opening_zero}", commitment: "{commit_batch_value_zero}"}, {ref: "{commit_batch_ref_one}", plaintext: "{commit_batch_plaintext_one}", opening: "{commit_batch_opening_one}", commitment: "{commit_batch_value_one}"}]}
+        fuzz: true
+        mutate:
+          - {variable: commit_batch_plaintext_one, from_variable: commit_mutated_plaintext, name: commitment-batch-plaintext}
+        expect: {status: [200], invariant: commitment_batch_verification_success}
+        fuzz_expect: {status: [200], invariant: commitment_batch_verification_failure}
+
+  # Commitments retain no state, so all-or-nothing here means invalid batch
+  # input yields only a rejection, never a partial create response.
+  - name: vectis.commitment-batch-validation
+    generative: false
+    request:
+      method: POST
+      path: "/commit/batch/{kid}"
+      auth: true
+      body:
+        {profile: "{commit_profile}", items: [{ref: "{commit_batch_ref_zero}", plaintext: "{commit_batch_plaintext_zero}"}, {ref: "{commit_batch_ref_one}", plaintext: "{commit_batch_plaintext_one}"}]}
+    mutate:
+      - {variable: commit_batch_ref_one, from_variable: commit_batch_ref_zero, name: commitment-batch-duplicate-ref}
+    requires: [commit_opening_len]
+    expect:
+      control: {status: [200], invariant: commitment_batch_create_output}
+      mutated: {status: "4xx", json_error: true, forbidden_json_fields: [items]}
+
+  - name: vectis.commitment-create-authorization
+    generative: false
+    request:
+      method: POST
+      path: "/commit/{kid}"
+      auth: true
+      body: {ref: "{commit_ref}", profile: "{commit_profile}", plaintext: "{commit_plaintext}"}
+    mutate:
+      - {variable: api_key, values: ["", not-a-real-key], name: authn-invalid}
+      - {variable: api_key, from_variable: denied_api_key, name: authz-denied, expected_status: 403}
+    requires: [commit_opening_len]
+    expect:
+      control: {status: [200], invariant: commitment_create_output}
+      mutated: {authorization_matrix: true, json_error: true}
+
+  - name: vectis.commitment-verify-authorization
+    generative: false
+    artifact_redact_captures: [commit_opening]
+    producer:
+      method: POST
+      path: "/commit/{kid}"
+      auth: true
+      replayable: false
+      body: {ref: "{commit_ref}", profile: "{commit_profile}", plaintext: "{commit_plaintext}"}
+    capture: {commit_kid: $.kid, commit_value: $.commitment, commit_opening: $.opening}
+    consumer:
+      method: POST
+      path: /commit/verify
+      auth: true
+      body: {ref: "{commit_ref}", kid: "{commit_kid}", profile: "{commit_profile}", plaintext: "{commit_plaintext}", opening: "{commit_opening}", commitment: "{commit_value}"}
+    mutate:
+      - {variable: api_key, values: ["", not-a-real-key], name: authn-invalid}
+      - {variable: api_key, from_variable: denied_api_key, name: authz-denied, expected_status: 403}
+    requires: [commit_opening_len]
+    producer_expect: {status: [200], invariant: commitment_create_output}
+    expect:
+      control: {status: [200], invariant: commitment_verification_success}
+      mutated: {authorization_matrix: true, json_error: true}
+
+  # --- Secret sharing: stateless authenticated Shamir envelopes ---------------
+  - name: vectis.share-split
+    request:
+      method: POST
+      path: "/shares/split/{kid}"
+      auth: true
+      body: {profile: "{share_profile}", plaintext: "{share_plaintext}"}
+    mutate:
+      - {json_field: $.plaintext, name: share-plaintext}
+    expect:
+      control: {status: [200], invariant: sharing_split_output}
+      mutated: {no_server_error: true}
+
+  # Combine a nonconsecutive threshold subset. All captures are artifact-only
+  # secrets, so an integrity finding cannot preserve reconstructing material.
+  - name: vectis.share-round-trip
+    generative: false
+    artifact_redact_captures: [share_zero, share_one, share_two, share_three, share_four]
+    producer:
+      method: POST
+      path: "/shares/split/{kid}"
+      auth: true
+      replayable: false
+      body: {profile: "{share_profile}", plaintext: "{share_plaintext}"}
+    capture:
+      share_kid: $.kid
+      share_set_id: $.set_id
+      share_zero: $.shares.0
+      share_one: $.shares.1
+      share_two: $.shares.2
+      share_three: $.shares.3
+      share_four: $.shares.4
+    consumer:
+      method: POST
+      path: /shares/combine
+      auth: true
+      body: {kid: "{share_kid}", profile: "{share_profile}", shares: ["{share_zero}", "{share_two}", "{share_four}"]}
+    mutate:
+      - {json_field: $.shares.2, delimiter: ".", segments: [-1], name: share-envelope}
+      - {variable: share_four, from_variable: share_two, name: share-duplicate-index}
+    producer_expect: {status: [200], invariant: sharing_split_output}
+    expect:
+      control: {status: [200], invariant: sharing_round_trip}
+      mutated: {status: "4xx", json_error: true}
+
+  # The control makes two fresh distributions of the same secret. A profile
+  # mutation then keeps the fuzz path a normal input rejection.
+  - name: vectis.share-randomness
+    generative: false
+    artifact_redact_captures: [first_share_zero, first_share_one, first_share_two, first_share_three, first_share_four, second_share_zero, second_share_one, second_share_two, second_share_three, second_share_four]
+    flow:
+      - step: first-split
+        request:
+          method: POST
+          path: "/shares/split/{kid}"
+          auth: true
+          replayable: false
+          body: {profile: "{share_profile}", plaintext: "{share_plaintext}"}
+        capture:
+          first_set_id: $.set_id
+          first_share_zero: $.shares.0
+          first_share_one: $.shares.1
+          first_share_two: $.shares.2
+          first_share_three: $.shares.3
+          first_share_four: $.shares.4
+        expect: {status: [200], invariant: sharing_split_output}
+      - step: second-split
+        request:
+          method: POST
+          path: "/shares/split/{kid}"
+          auth: true
+          replayable: false
+          body: {profile: "{share_profile}", plaintext: "{share_plaintext}"}
+        capture:
+          second_set_id: $.set_id
+          second_share_zero: $.shares.0
+          second_share_one: $.shares.1
+          second_share_two: $.shares.2
+          second_share_three: $.shares.3
+          second_share_four: $.shares.4
+        fuzz: true
+        mutate:
+          - {json_field: $.profile, name: sharing-profile}
+        expect: {status: [200], invariant: sharing_randomness}
+        fuzz_expect: {status: "4xx", json_error: true}
+
+  # A valid 3-share combine is the control. An altered envelope or repeated
+  # index must never return reconstructed plaintext.
+  - name: vectis.share-combine-integrity
+    generative: false
+    artifact_redact_captures: [share_zero, share_one, share_two]
+    producer:
+      method: POST
+      path: "/shares/split/{kid}"
+      auth: true
+      replayable: false
+      body: {profile: "{share_profile}", plaintext: "{share_plaintext}"}
+    capture:
+      share_kid: $.kid
+      share_set_id: $.set_id
+      share_zero: $.shares.0
+      share_one: $.shares.1
+      share_two: $.shares.2
+    consumer:
+      method: POST
+      path: /shares/combine
+      auth: true
+      body: {kid: "{share_kid}", profile: "{share_profile}", shares: ["{share_zero}", "{share_one}", "{share_two}"]}
+    mutate:
+      - {json_field: $.shares.2, delimiter: ".", segments: [-1], name: share-envelope}
+      - {variable: share_two, from_variable: share_one, name: share-duplicate-index}
+    producer_expect: {status: [200], invariant: sharing_split_output}
+    expect:
+      control: {status: [200], invariant: sharing_round_trip}
+      mutated: {status: "4xx", json_error: true}
+
+  - name: vectis.share-threshold
+    generative: false
+    artifact_redact_captures: [share_zero, share_one]
+    flow:
+      - step: split
+        request:
+          method: POST
+          path: "/shares/split/{kid}"
+          auth: true
+          replayable: false
+          body: {profile: "{share_profile}", plaintext: "{share_plaintext}"}
+        capture: {share_kid: $.kid, share_zero: $.shares.0, share_one: $.shares.1}
+        expect: {status: [200], invariant: sharing_split_output}
+      - step: below-threshold-combine
+        request:
+          method: POST
+          path: /shares/combine
+          auth: true
+          body: {kid: "{share_kid}", profile: "{share_profile}", shares: ["{share_zero}", "{share_one}"]}
+        fuzz: true
+        mutate:
+          - {json_field: $.profile, name: sharing-profile}
+        expect: {status: "4xx", json_error: true}
+        fuzz_expect: {status: "4xx", json_error: true}
+
+  - name: vectis.share-cross-set
+    generative: false
+    artifact_redact_captures: [first_share_zero, first_share_one, first_share_two, second_share_zero]
+    flow:
+      - step: first-split
+        request:
+          method: POST
+          path: "/shares/split/{kid}"
+          auth: true
+          replayable: false
+          body: {profile: "{share_profile}", plaintext: "{share_plaintext}"}
+        capture: {share_kid: $.kid, share_set_id: $.set_id, first_share_zero: $.shares.0, first_share_one: $.shares.1, first_share_two: $.shares.2}
+        expect: {status: [200], invariant: sharing_split_output}
+      - step: second-split
+        request:
+          method: POST
+          path: "/shares/split/{kid}"
+          auth: true
+          replayable: false
+          body: {profile: "{share_profile}", plaintext: "{share_plaintext}"}
+        capture: {second_share_zero: $.shares.0}
+        expect: {status: [200], invariant: sharing_split_output}
+      - step: combine
+        request:
+          method: POST
+          path: /shares/combine
+          auth: true
+          body: {kid: "{share_kid}", profile: "{share_profile}", shares: ["{first_share_zero}", "{first_share_one}", "{first_share_two}"]}
+        fuzz: true
+        mutate:
+          - {variable: first_share_two, from_variable: second_share_zero, name: share-cross-set}
+        expect: {status: [200], invariant: sharing_round_trip}
+        fuzz_expect: {status: "4xx", json_error: true}
+
+  - name: vectis.share-split-authorization
+    generative: false
+    request:
+      method: POST
+      path: "/shares/split/{kid}"
+      auth: true
+      body: {profile: "{share_profile}", plaintext: "{share_plaintext}"}
+    mutate:
+      - {variable: api_key, values: ["", not-a-real-key], name: authn-invalid}
+      - {variable: api_key, from_variable: denied_api_key, name: authz-denied, expected_status: 403}
+    expect:
+      control: {status: [200], invariant: sharing_split_output}
+      mutated: {authorization_matrix: true, json_error: true}
+
+  - name: vectis.share-combine-authorization
+    generative: false
+    artifact_redact_captures: [share_zero, share_one, share_two]
+    producer:
+      method: POST
+      path: "/shares/split/{kid}"
+      auth: true
+      replayable: false
+      body: {profile: "{share_profile}", plaintext: "{share_plaintext}"}
+    capture: {share_kid: $.kid, share_set_id: $.set_id, share_zero: $.shares.0, share_one: $.shares.1, share_two: $.shares.2}
+    consumer:
+      method: POST
+      path: /shares/combine
+      auth: true
+      body: {kid: "{share_kid}", profile: "{share_profile}", shares: ["{share_zero}", "{share_one}", "{share_two}"]}
+    mutate:
+      - {variable: api_key, values: ["", not-a-real-key], name: authn-invalid}
+      - {variable: api_key, from_variable: denied_api_key, name: authz-denied, expected_status: 403}
+    producer_expect: {status: [200], invariant: sharing_split_output}
+    expect:
+      control: {status: [200], invariant: sharing_round_trip}
+      mutated: {authorization_matrix: true, json_error: true}
 
   # --- Shallow: display masking -------------------------------------------------
   - name: vectis.masking
@@ -414,7 +784,7 @@ targets:
           - {json_field: $.items.1.token, name: one-time-batch-token}
           - {variable: token_once_batch_ref_one, from_variable: token_once_batch_ref_zero, name: one-time-batch-duplicate-ref}
         expect: {status: [200]}
-        fuzz_expect: {status: "4xx", json_error: true}
+        fuzz_expect: {status: "4xx", json_error: true, forbidden_json_fields: [items]}
         continue_on_rejection: true
       - step: rollback-proof
         request:
@@ -559,4 +929,224 @@ targets:
       - {json_field: $.profile, name: retired-fpe-profile}
     expect:
       control: {status: [200], invariant: retired_fpe_round_trip}
+      mutated: {status: "4xx", json_error: true}
+
+  # --- Batch: ordered pairs, whole-request rejection, and state semantics ----
+  - name: vectis.fpe-batch-round-trip
+    generative: false
+    flow:
+      - step: encrypt-batch
+        request: {method: POST, path: "/fpe/encrypt/batch/{kid}", auth: true, replayable: false, body: {profile: "{fpe_profile}", items: [{ref: "{fpe_batch_ref_zero}", plaintext: "{fpe_batch_plaintext_zero}"}, {ref: "{fpe_batch_ref_one}", plaintext: "{fpe_batch_plaintext_one}"}]}}
+        capture: {fpe_batch_kid: $.kid, fpe_batch_ciphertext_zero: $.items.0.ciphertext, fpe_batch_ciphertext_one: $.items.1.ciphertext}
+        expect: {status: [200], invariant: fpe_batch_encrypt_output}
+      - step: decrypt-batch
+        request: {method: POST, path: /fpe/decrypt/batch, auth: true, body: {kid: "{fpe_batch_kid}", profile: "{fpe_profile}", items: [{ref: "{fpe_batch_ref_zero}", ciphertext: "{fpe_batch_ciphertext_zero}"}, {ref: "{fpe_batch_ref_one}", ciphertext: "{fpe_batch_ciphertext_one}"}]}}
+        fuzz: true
+        mutate:
+          - {json_field: $.items.1.ciphertext, name: fpe-batch-ciphertext, alphabet: "0123456789"}
+        expect: {status: [200], invariant: fpe_batch_round_trip}
+        fuzz_expect: {no_server_error: true, no_server_crash: true, invariant: fpe_batch_ciphertext_integrity}
+
+  - name: vectis.fpe-batch-validation
+    generative: false
+    request: {method: POST, path: "/fpe/encrypt/batch/{kid}", auth: true, body: {profile: "{fpe_profile}", items: [{ref: "{fpe_batch_ref_zero}", plaintext: "{fpe_batch_plaintext_zero}"}, {ref: "{fpe_batch_ref_one}", plaintext: "{fpe_batch_plaintext_one}"}]}}
+    mutate:
+      - {variable: fpe_batch_ref_one, from_variable: fpe_batch_ref_zero, name: fpe-batch-duplicate-ref}
+    expect:
+      control: {status: [200], invariant: fpe_batch_encrypt_output}
+      mutated: {status: "4xx", json_error: true, forbidden_json_fields: [items]}
+
+  - name: vectis.token-batch-round-trip
+    generative: false
+    artifact_redact_captures: [token_batch_zero, token_batch_one]
+    flow:
+      - step: encode-batch
+        request: {method: POST, path: "/token/encode/batch/{kid}", auth: true, replayable: false, body: {profile: "{token_profile}", items: [{ref: "{token_batch_ref_zero}", plaintext: "{token_batch_plaintext_zero}", metadata: {tenant: "{token_batch_metadata_zero}"}}, {ref: "{token_batch_ref_one}", plaintext: "{token_batch_plaintext_one}", metadata: {tenant: "{token_batch_metadata_one}"}}]}}
+        capture: {token_batch_kid: $.kid, token_batch_zero: $.items.0.token, token_batch_one: $.items.1.token}
+        expect: {status: [200], invariant: token_batch_encode_output}
+      - step: rejected-decode-batch
+        request: {method: POST, path: /token/decode/batch, auth: true, body: {kid: "{token_batch_kid}", profile: "{token_profile}", items: [{ref: "{token_batch_ref_zero}", token: "{token_batch_zero}"}, {ref: "{token_batch_ref_one}", token: "{token_batch_one}"}]}}
+        fuzz: true
+        mutate:
+          - {json_field: $.items.1.token, name: token-batch-tamper}
+        expect: {status: [200], invariant: token_batch_round_trip}
+        fuzz_expect: {status: "4xx", json_error: true, forbidden_json_fields: [items]}
+        continue_on_rejection: true
+      - step: reusable-rollback-proof
+        request: {method: POST, path: /token/decode/batch, auth: true, body: {kid: "{token_batch_kid}", profile: "{token_profile}", items: [{ref: "{token_batch_ref_zero}", token: "{token_batch_zero}"}, {ref: "{token_batch_ref_one}", token: "{token_batch_one}"}]}}
+        expect: {status: [200], invariant: token_batch_round_trip}
+
+  - name: vectis.token-batch-validation
+    generative: false
+    request: {method: POST, path: "/token/encode/batch/{kid}", auth: true, body: {profile: "{token_profile}", items: [{ref: "{token_batch_ref_zero}", plaintext: "{token_batch_plaintext_zero}", metadata: {tenant: "{token_batch_metadata_zero}"}}, {ref: "{token_batch_ref_one}", plaintext: "{token_batch_plaintext_one}", metadata: {tenant: "{token_batch_metadata_one}"}}]}}
+    mutate:
+      - {variable: token_batch_ref_one, from_variable: token_batch_ref_zero, name: token-batch-duplicate-ref}
+    expect:
+      control: {status: [200], invariant: token_batch_encode_output}
+      mutated: {status: "4xx", json_error: true, forbidden_json_fields: [items]}
+
+  - name: vectis.one-time-token-batch-replay
+    generative: false
+    artifact_redact_captures: [token_once_batch_zero, token_once_batch_one]
+    flow:
+      - step: encode-batch
+        request: {method: POST, path: "/token/encode/batch/{kid}", auth: true, replayable: false, body: {profile: "{token_once_profile}", items: [{ref: "{token_once_batch_ref_zero}", plaintext: "{token_once_plaintext}", metadata: {tenant: "{token_once_metadata_tenant}"}}, {ref: "{token_once_batch_ref_one}", plaintext: "{token_once_plaintext}", metadata: {tenant: "{token_once_metadata_tenant}"}}]}}
+        capture: {token_once_batch_kid: $.kid, token_once_batch_zero: $.items.0.token, token_once_batch_one: $.items.1.token}
+        expect: {status: [200]}
+      - step: consume-batch
+        request: {method: POST, path: /token/decode/batch, auth: true, body: {kid: "{token_once_batch_kid}", profile: "{token_once_profile}", items: [{ref: "{token_once_batch_ref_zero}", token: "{token_once_batch_zero}"}, {ref: "{token_once_batch_ref_one}", token: "{token_once_batch_one}"}]}}
+        expect: {status: [200], invariant: one_time_token_batch_round_trip}
+      - step: replay-batch
+        request: {method: POST, path: /token/decode/batch, auth: true, body: {kid: "{token_once_batch_kid}", profile: "{token_once_profile}", items: [{ref: "{token_once_batch_ref_zero}", token: "{token_once_batch_zero}"}, {ref: "{token_once_batch_ref_one}", token: "{token_once_batch_one}"}]}}
+        fuzz: true
+        mutate:
+          - {json_field: $.items.1.token, name: one-time-batch-replay}
+        # Unmutated replay of consumed tokens must be 404 (already consumed). The
+        # fuzz path mutates a token, so the server may instead reject it as malformed
+        # (400, "token prefix does not match"): either is a clean rejection. What must
+        # hold in both is a JSON error with no partial items — never a revived token.
+        expect: {status: [404], json_error: true, forbidden_json_fields: [items]}
+        fuzz_expect: {status: "4xx", json_error: true, forbidden_json_fields: [items]}
+
+  - name: vectis.one-time-token-batch-race
+    artifact_redact_captures: [token_once_batch_zero, token_once_batch_one]
+    race:
+      producer: {method: POST, path: "/token/encode/batch/{kid}", auth: true, replayable: false, body: {profile: "{token_once_profile}", items: [{ref: "{token_once_batch_ref_zero}", plaintext: "{token_once_plaintext}", metadata: {tenant: "{token_once_metadata_tenant}"}}, {ref: "{token_once_batch_ref_one}", plaintext: "{token_once_plaintext}", metadata: {tenant: "{token_once_metadata_tenant}"}}]}}
+      capture: {token_once_batch_kid: $.kid, token_once_batch_zero: $.items.0.token, token_once_batch_one: $.items.1.token}
+      contenders:
+        - step: decode-a
+          request: {method: POST, path: /token/decode/batch, auth: true, body: {kid: "{token_once_batch_kid}", profile: "{token_once_profile}", items: [{ref: "{token_once_batch_ref_zero}", token: "{token_once_batch_zero}"}, {ref: "{token_once_batch_ref_one}", token: "{token_once_batch_one}"}]}}
+        - step: decode-b
+          request: {method: POST, path: /token/decode/batch, auth: true, body: {kid: "{token_once_batch_kid}", profile: "{token_once_profile}", items: [{ref: "{token_once_batch_ref_zero}", token: "{token_once_batch_zero}"}, {ref: "{token_once_batch_ref_one}", token: "{token_once_batch_one}"}]}}
+      expect: {race_invariant: one_time_token_batch_race}
+
+  - name: vectis.mac-batch-round-trip
+    generative: false
+    flow:
+      - step: create-batch
+        request: {method: POST, path: "/mac/batch/{kid}", auth: true, replayable: false, body: {profile: "{mac_profile}", items: [{ref: "{mac_batch_ref_zero}", plaintext: "{mac_batch_plaintext_zero}"}, {ref: "{mac_batch_ref_one}", plaintext: "{mac_batch_plaintext_one}"}]}}
+        capture: {mac_batch_kid: $.kid, mac_batch_digest_zero: $.items.0.digest, mac_batch_digest_one: $.items.1.digest}
+        expect: {status: [200], invariant: mac_batch_create_output}
+      - step: verify-batch
+        request: {method: POST, path: /mac/verify/batch, auth: true, body: {kid: "{mac_batch_kid}", profile: "{mac_profile}", items: [{ref: "{mac_batch_ref_zero}", plaintext: "{mac_batch_plaintext_zero}", digest: "{mac_batch_digest_zero}"}, {ref: "{mac_batch_ref_one}", plaintext: "{mac_batch_plaintext_one}", digest: "{mac_batch_digest_one}"}]}}
+        fuzz: true
+        mutate:
+          - {variable: mac_batch_plaintext_one, from_variable: mac_batch_mutated_plaintext, name: mac-batch-plaintext}
+        expect: {status: [200], invariant: mac_batch_verification_success}
+        fuzz_expect: {status: [200], invariant: mac_batch_verification_failure}
+
+  - name: vectis.mac-batch-validation
+    generative: false
+    request: {method: POST, path: "/mac/batch/{kid}", auth: true, body: {profile: "{mac_profile}", items: [{ref: "{mac_batch_ref_zero}", plaintext: "{mac_batch_plaintext_zero}"}, {ref: "{mac_batch_ref_one}", plaintext: "{mac_batch_plaintext_one}"}]}}
+    mutate:
+      - {variable: mac_batch_ref_one, from_variable: mac_batch_ref_zero, name: mac-batch-duplicate-ref}
+    expect:
+      control: {status: [200], invariant: mac_batch_create_output}
+      mutated: {status: "4xx", json_error: true, forbidden_json_fields: [items]}
+
+  - name: vectis.mask-batch
+    generative: false
+    request: {method: POST, path: "/mask/batch/{kid}", auth: true, body: {profile: "{mask_profile}", items: [{ref: "{mask_batch_ref_zero}", plaintext: "{mask_batch_plaintext_zero}"}, {ref: "{mask_batch_ref_one}", plaintext: "{mask_batch_plaintext_one}"}]}}
+    mutate:
+      - {json_field: $.profile, name: mask-batch-profile}
+    expect:
+      control: {status: [200], invariant: masking_batch_output}
+      mutated: {status: "4xx", json_error: true, forbidden_json_fields: [items]}
+
+  - name: vectis.mask-batch-validation
+    generative: false
+    request: {method: POST, path: "/mask/batch/{kid}", auth: true, body: {profile: "{mask_profile}", items: [{ref: "{mask_batch_ref_zero}", plaintext: "{mask_batch_plaintext_zero}"}, {ref: "{mask_batch_ref_one}", plaintext: "{mask_batch_plaintext_one}"}]}}
+    mutate:
+      - {variable: mask_batch_ref_one, from_variable: mask_batch_ref_zero, name: mask-batch-duplicate-ref}
+    expect:
+      control: {status: [200], invariant: masking_batch_output}
+      mutated: {status: "4xx", json_error: true, forbidden_json_fields: [items]}
+
+  # Authorization is evaluated AFTER structural body validation on these routes, so
+  # an empty body makes a denied credential fail with 400 (missing fields) before the
+  # grant is ever checked, never reaching 403. Each probe therefore sends a
+  # structurally complete batch body with synthetic values: a granted client reaches a
+  # real handler (2xx, or 4xx when the synthetic material does not resolve — never an
+  # auth error), an invalid credential is blocked at 401, and an ungranted one at 403
+  # (authorization_matrix). Semantic material checks (token prefix, ciphertext, opening)
+  # run at execution, after authorization, so synthetic values still reach the grant
+  # check. The dedicated *-batch-validation targets cover all-or-nothing rejection.
+  - name: vectis.fpe-batch-encrypt-authorization
+    generative: false
+    request: {method: POST, path: "/fpe/encrypt/batch/{kid}", auth: true, body: {profile: "{fpe_profile}", items: [{ref: "{fpe_ref}", plaintext: "{fpe_plaintext}"}]}}
+    mutate: [{variable: api_key, values: ["", not-a-real-key], name: authn-invalid}, {variable: api_key, from_variable: denied_api_key, name: authz-denied, expected_status: 403}]
+    expect: {control: {status: [200, 400, 404]}, mutated: {authorization_matrix: true, json_error: true}}
+  - name: vectis.fpe-batch-decrypt-authorization
+    generative: false
+    request: {method: POST, path: /fpe/decrypt/batch, auth: true, body: {kid: "{kid}", profile: "{fpe_profile}", items: [{ref: "{fpe_ref}", ciphertext: "{fpe_plaintext}"}]}}
+    mutate: [{variable: api_key, values: ["", not-a-real-key], name: authn-invalid}, {variable: api_key, from_variable: denied_api_key, name: authz-denied, expected_status: 403}]
+    expect: {control: {status: [200, 400, 404]}, mutated: {authorization_matrix: true, json_error: true}}
+  - name: vectis.token-batch-encode-authorization
+    generative: false
+    request: {method: POST, path: "/token/encode/batch/{kid}", auth: true, body: {profile: "{token_profile}", items: [{ref: "{token_ref}", plaintext: "{token_plaintext}", metadata: {tenant: "{token_metadata_tenant}"}}]}}
+    mutate: [{variable: api_key, values: ["", not-a-real-key], name: authn-invalid}, {variable: api_key, from_variable: denied_api_key, name: authz-denied, expected_status: 403}]
+    expect: {control: {status: [200, 400, 404]}, mutated: {authorization_matrix: true, json_error: true}}
+  - name: vectis.token-batch-decode-authorization
+    generative: false
+    request: {method: POST, path: /token/decode/batch, auth: true, body: {kid: "{kid}", profile: "{token_profile}", items: [{ref: "{token_ref}", token: "{token_plaintext}"}]}}
+    mutate: [{variable: api_key, values: ["", not-a-real-key], name: authn-invalid}, {variable: api_key, from_variable: denied_api_key, name: authz-denied, expected_status: 403}]
+    expect: {control: {status: [200, 400, 404]}, mutated: {authorization_matrix: true, json_error: true}}
+  - name: vectis.mac-batch-create-authorization
+    generative: false
+    request: {method: POST, path: "/mac/batch/{kid}", auth: true, body: {profile: "{mac_profile}", items: [{ref: "{mac_ref}", plaintext: "{mac_plaintext}"}]}}
+    mutate: [{variable: api_key, values: ["", not-a-real-key], name: authn-invalid}, {variable: api_key, from_variable: denied_api_key, name: authz-denied, expected_status: 403}]
+    expect: {control: {status: [200, 400, 404]}, mutated: {authorization_matrix: true, json_error: true}}
+  - name: vectis.mac-batch-verify-authorization
+    generative: false
+    request: {method: POST, path: /mac/verify/batch, auth: true, body: {kid: "{kid}", profile: "{mac_profile}", items: [{ref: "{mac_ref}", plaintext: "{mac_plaintext}", digest: "{digest}"}]}}
+    mutate: [{variable: api_key, values: ["", not-a-real-key], name: authn-invalid}, {variable: api_key, from_variable: denied_api_key, name: authz-denied, expected_status: 403}]
+    expect: {control: {status: [200, 400, 404]}, mutated: {authorization_matrix: true, json_error: true}}
+  - name: vectis.blind-index-batch-create-authorization
+    generative: false
+    request: {method: POST, path: "/index/batch/{kid}", auth: true, body: {profile: "{index_profile}", items: [{ref: "{index_ref}", plaintext: "{index_plaintext}"}]}}
+    mutate: [{variable: api_key, values: ["", not-a-real-key], name: authn-invalid}, {variable: api_key, from_variable: denied_api_key, name: authz-denied, expected_status: 403}]
+    expect: {control: {status: [200, 400, 404]}, mutated: {authorization_matrix: true, json_error: true}}
+  - name: vectis.blind-index-batch-verify-authorization
+    generative: false
+    request: {method: POST, path: /index/verify/batch, auth: true, body: {kid: "{kid}", profile: "{index_profile}", items: [{ref: "{index_ref}", plaintext: "{index_plaintext}"}]}}
+    mutate: [{variable: api_key, values: ["", not-a-real-key], name: authn-invalid}, {variable: api_key, from_variable: denied_api_key, name: authz-denied, expected_status: 403}]
+    expect: {control: {status: [200, 400, 404]}, mutated: {authorization_matrix: true, json_error: true}}
+  - name: vectis.commitment-batch-create-authorization
+    generative: false
+    request: {method: POST, path: "/commit/batch/{kid}", auth: true, body: {profile: "{commit_profile}", items: [{ref: "{commit_ref}", plaintext: "{commit_plaintext}"}]}}
+    mutate: [{variable: api_key, values: ["", not-a-real-key], name: authn-invalid}, {variable: api_key, from_variable: denied_api_key, name: authz-denied, expected_status: 403}]
+    expect: {control: {status: [200, 400, 404]}, mutated: {authorization_matrix: true, json_error: true}}
+  - name: vectis.commitment-batch-verify-authorization
+    generative: false
+    request: {method: POST, path: /commit/verify/batch, auth: true, body: {kid: "{kid}", profile: "{commit_profile}", items: [{ref: "{commit_ref}", plaintext: "{commit_plaintext}", opening: "{digest}", commitment: "{digest}"}]}}
+    mutate: [{variable: api_key, values: ["", not-a-real-key], name: authn-invalid}, {variable: api_key, from_variable: denied_api_key, name: authz-denied, expected_status: 403}]
+    expect: {control: {status: [200, 400, 404]}, mutated: {authorization_matrix: true, json_error: true}}
+  - name: vectis.mask-batch-authorization
+    generative: false
+    request: {method: POST, path: "/mask/batch/{kid}", auth: true, body: {profile: "{mask_profile}", items: [{ref: "{mask_ref}", plaintext: "{mask_plaintext}"}]}}
+    mutate: [{variable: api_key, values: ["", not-a-real-key], name: authn-invalid}, {variable: api_key, from_variable: denied_api_key, name: authz-denied, expected_status: 403}]
+    expect: {control: {status: [200, 400, 404]}, mutated: {authorization_matrix: true, json_error: true}}
+
+  # Shares were split while this KID was active by the local harness. Retirement
+  # blocks new distributions but keeps threshold recovery available.
+  - name: vectis.share-retired-split-blocked
+    generative: false
+    request: {method: POST, path: "/shares/split/{retired_kid}", auth: true, body: {profile: "{retired_share_profile}", plaintext: "{retired_share_plaintext}"}}
+    mutate:
+      - {json_field: $.plaintext, name: retired-share-plaintext}
+    expect:
+      control: {status: "4xx", json_error: true}
+      mutated: {status: "4xx", json_error: true}
+
+  - name: vectis.share-retired-combine
+    generative: false
+    request:
+      method: POST
+      path: /shares/combine
+      auth: true
+      body: {kid: "{retired_kid}", profile: "{retired_share_profile}", shares: ["{retired_share_zero}", "{retired_share_one}", "{retired_share_two}"]}
+    mutate:
+      - {variable: retired_share_two, from_variable: retired_share_one, name: retired-share-duplicate-index}
+    expect:
+      control: {status: [200], invariant: retired_sharing_round_trip}
       mutated: {status: "4xx", json_error: true}

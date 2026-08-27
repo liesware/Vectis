@@ -5,7 +5,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from nadir.spec import load_targets
-from nadir.workflows import ProducerConsumerTarget, RequestTarget
+from nadir.workflows import ExpectNoJsonFields, ProducerConsumerTarget, RequestTarget
 
 
 def _noop(result, context):
@@ -29,6 +29,7 @@ targets:
   - name: demo.sign
     producer: {method: POST, path: "/sign/{kid}", auth: true, replayable: false, body: {m: "x"}}
     capture: {sig: $.signature}
+    artifact_redact_captures: [sig]
     consumer: {method: POST, path: /verify, body: {signature: "{sig}"}}
     mutate:
       - {json_field: $.signature, delimiter: ".", segments: [0, 1], name: seg}
@@ -53,6 +54,12 @@ class SpecTests(unittest.TestCase):
         self.assertEqual(target.required_variables, frozenset({"base_url", "kid", "api_key"}))
         self.assertEqual([mutation.name for mutation in target.mutations], ["seg-0", "seg-1"])
         self.assertFalse(target.producer.replayable)
+        self.assertEqual(target.artifact_redact_captures, frozenset({"sig"}))
+
+    def test_artifact_redaction_rejects_unknown_capture(self):
+        document = DEEP.replace("[sig]", "[missing]")
+        with self.assertRaisesRegex(ValueError, "unknown captures"):
+            load_targets(document, invariants={"verify_ok": _noop, "verify_fail": _noop})
 
     def test_unknown_invariant_is_rejected(self):
         with self.assertRaises(ValueError):
@@ -80,6 +87,25 @@ class SpecTests(unittest.TestCase):
         )
         (target,) = load_targets(document, invariants={})
         self.assertEqual(target.required_variables, frozenset({"base_url", "id"}))
+
+    def test_batch_rejection_can_forbid_partial_result_fields(self):
+        document = """
+targets:
+  - name: demo.batch
+    request: {method: POST, path: /batch, body: {items: []}}
+    mutate:
+      - {json_field: $.items, name: malformed-items}
+    expect:
+      control: {status: [200]}
+      mutated: {status: "4xx", json_error: true, forbidden_json_fields: [items]}
+"""
+        (target,) = load_targets(document, invariants={})
+        self.assertTrue(any(isinstance(item, ExpectNoJsonFields) for item in target.mutation_expectation.expectations))
+
+    def test_empty_batch_forbidden_field_list_is_rejected(self):
+        document = SHALLOW.replace('mutated: {status: [401, 403]}', 'mutated: {status: [401], forbidden_json_fields: []}')
+        with self.assertRaisesRegex(ValueError, "forbidden_json_fields"):
+            load_targets(document, invariants={})
 
     def test_authorization_matrix_declares_denied_credential_dependency(self):
         document = """

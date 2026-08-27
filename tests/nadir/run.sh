@@ -77,6 +77,12 @@ json_field() {
   python3 -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]])' "${field}"
 }
 
+json_array_item() {
+  local field="$1"
+  local index="$2"
+  python3 -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]][int(sys.argv[2])])' "${field}" "${index}"
+}
+
 stop_vectis() {
   if [[ -n "${SERVER_PID}" ]] && kill -0 "${SERVER_PID}" 2>/dev/null; then
     kill -INT "${SERVER_PID}" 2>/dev/null || true
@@ -197,15 +203,24 @@ denied_client_apikey_hash="$(printf '%s\n' "${denied_client_output}" | json_fiel
 ./vectis config permissions grant nadir-local --kid "${kid}" --action mac-verify >/dev/null
 ./vectis config permissions grant nadir-local --kid "${kid}" --action index-create >/dev/null
 ./vectis config permissions grant nadir-local --kid "${kid}" --action index-verify >/dev/null
+./vectis config permissions grant nadir-local --kid "${kid}" --action commit-create >/dev/null
+./vectis config permissions grant nadir-local --kid "${kid}" --action commit-verify >/dev/null
+./vectis config permissions grant nadir-local --kid "${kid}" --action share-split >/dev/null
+./vectis config permissions grant nadir-local --kid "${kid}" --action share-combine >/dev/null
 ./vectis config permissions grant nadir-local --kid "${kid}" --action mask >/dev/null
 ./vectis config permissions grant nadir-local --kid "${kid}" --action token-encode >/dev/null
 ./vectis config permissions grant nadir-local --kid "${kid}" --action token-decode >/dev/null
 ./vectis config permissions grant nadir-local --kid "${retired_kid}" --action fpe-encrypt >/dev/null
 ./vectis config permissions grant nadir-local --kid "${retired_kid}" --action fpe-decrypt >/dev/null
+./vectis config permissions grant nadir-local --kid "${retired_kid}" --action share-split >/dev/null
+./vectis config permissions grant nadir-local --kid "${retired_kid}" --action share-combine >/dev/null
 ./vectis config permissions grant nadir-scoped --kid "${kid}" --action fpe-encrypt >/dev/null
 ./vectis config fpe add --name nadir-fpe-v1 --kid "${kid}" --alphabet 0123456789 --min-len 6 --max-len 32 --tweak-aad 'tenant=nadir;field=account;version=1' >/dev/null
 ./vectis config fpe add --name nadir-retired-fpe-v1 --kid "${retired_kid}" --alphabet 0123456789 --min-len 6 --max-len 32 --tweak-aad 'tenant=nadir;field=historical-account;version=1' >/dev/null
 ./vectis config mac add --name nadir-mac-v1 --kid "${kid}" --context 'tenant=nadir;field=pan;purpose=mac;version=1' >/dev/null
+./vectis config commitment add --name nadir-commitment-v1 --kid "${kid}" --context 'tenant=nadir;field=commitment;purpose=commitment;version=1' --max-plaintext-len 128 --opening-len 32 >/dev/null
+./vectis config sharing add --name nadir-sharing-3of5-v1 --kid "${kid}" --threshold 3 --shares 5 --max-secret-len 128 --context 'tenant=nadir;purpose=sharing;version=1' >/dev/null
+./vectis config sharing add --name nadir-retired-sharing-3of5-v1 --kid "${retired_kid}" --threshold 3 --shares 5 --max-secret-len 128 --context 'tenant=nadir;purpose=sharing;version=1' >/dev/null
 ./vectis config masking add --name nadir-mask-v1 --kid "${kid}" --visible-first 0 --visible-last 4 --mask-char '*' --min-len 12 --max-len 19 >/dev/null
 ./vectis config token add --name nadir-token-v1 --kid "${kid}" --token-prefix nadir_tok --token-len 32 --max-plaintext-len 128 --one-time false >/dev/null
 ./vectis config token add --name nadir-once-v1 --kid "${kid}" --token-prefix nadir_once --token-len 32 --max-plaintext-len 128 --one-time true >/dev/null
@@ -216,6 +231,11 @@ denied_client_apikey_hash="$(printf '%s\n' "${denied_client_output}" | json_fiel
 # State transition fixture: produce one historical ciphertext while active, then
 # retire the KID. The target suite can now assert both sides of the lifecycle.
 retired_ciphertext="$(./vectis fpe encrypt "${retired_kid}" --json '{"ref":"nadir-retired-fpe-control","profile":"nadir-retired-fpe-v1","plaintext":"1234567890"}' --output json | json_field ciphertext)"
+retired_shares_output="$(./vectis shares split "${retired_kid}" --json '{"profile":"nadir-retired-sharing-3of5-v1","plaintext":"nadir-sharing-retired-secret"}' --output json)"
+retired_share_set_id="$(printf '%s\n' "${retired_shares_output}" | json_field set_id)"
+retired_share_zero="$(printf '%s\n' "${retired_shares_output}" | json_array_item shares 0)"
+retired_share_one="$(printf '%s\n' "${retired_shares_output}" | json_array_item shares 1)"
+retired_share_two="$(printf '%s\n' "${retired_shares_output}" | json_array_item shares 2)"
 ./vectis lifecycle "${retired_kid}" --status retired --reason 'nadir lifecycle fixture' --output json >/dev/null
 
 echo "Running Nadir ${NADIR_COMMAND} against isolated Vectis at ${BASE_URL}"
@@ -227,6 +247,10 @@ common_environment=(
   "NADIR_SCOPED_API_KEY=${scoped_client_apikey}"
   "NADIR_RETIRED_KID=${retired_kid}"
   "NADIR_RETIRED_FPE_CIPHERTEXT=${retired_ciphertext}"
+  "NADIR_RETIRED_SHARE_SET_ID=${retired_share_set_id}"
+  "NADIR_RETIRED_SHARE_ZERO=${retired_share_zero}"
+  "NADIR_RETIRED_SHARE_ONE=${retired_share_one}"
+  "NADIR_RETIRED_SHARE_TWO=${retired_share_two}"
   "UV_CACHE_DIR=${ROOT_DIR}/.uv-cache"
 )
 
