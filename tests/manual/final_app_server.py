@@ -5,7 +5,11 @@ import json
 import sys
 import urllib.error
 import urllib.request
-from test_config import require_apikey
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "integration"))
+
+from support.test_config import require_apikey
 
 
 class FinalAppHandler(http.server.BaseHTTPRequestHandler):

@@ -60,21 +60,21 @@ curl --fail --silent --show-error "$VECTIS_API_URL/healthz/ready" >/dev/null
 uv sync --locked
 
 env -u VECTIS_UNSEAL_KEY -u VECTIS_APIKEY -u VECTIS_APIKEY_HASH \
-    uv run tests/cli_all.py \
+    uv run tests/integration/cli/cli_all.py \
     --base-url "$VECTIS_API_URL" \
     --apikey "$VECTIS_APIKEY"
 
-uv run tests/http_all.py \
+uv run tests/integration/http/http_all.py \
     --base-url "$VECTIS_API_URL" \
     --apikey "$VECTIS_APIKEY"
 
-uv run tests/http_fuzz.py \
+uv run tests/security/fuzz/http_fuzz.py \
     --base-url "$VECTIS_API_URL" \
     --apikey "$VECTIS_APIKEY"
 
 uv sync --locked --group fuzz
 
-uv run tests/http_schemathesis.py \
+uv run tests/security/openapi/http_schemathesis.py \
     --profile prepared \
     --base-url "$VECTIS_API_URL" \
     --apikey "$VECTIS_APIKEY"

@@ -42,18 +42,18 @@ echo
 
 echo "\n### CLI Positive/Negative"
 uv sync
-uv run tests/cli_all.py
+uv run tests/integration/cli/cli_all.py
 
 echo "\n### HTTP Positive/Negative"
 uv sync
-uv run tests/http_all.py
+uv run tests/integration/http/http_all.py
 
 echo "\n### Manual HTTP Fuzzing"
-uv run tests/http_fuzz.py 
+uv run tests/security/fuzz/http_fuzz.py
 
 echo "\n### HTTP Schemathesis"
 uv sync --group fuzz
-uv run tests/http_schemathesis.py --profile prepared 
+uv run tests/security/openapi/http_schemathesis.py --profile prepared
 
 echo "\n### TLS happy path"
-bash tests/tls.sh
+bash tests/integration/tls/tls.sh

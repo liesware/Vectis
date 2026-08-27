@@ -2,15 +2,15 @@
 
 # Provision an isolated local Vectis instance, then run Nadir against it.
 # Pass ordinary Nadir run options after this script, for example:
-#   bash tests/nadir/run.sh --target vectis.sign-verification --iterations 4
+#   bash tests/security/nadir/run.sh --target vectis.sign-verification --iterations 4
 
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 NADIR_PROJECT="${ROOT_DIR}/nadir"
 NADIR_VECTIS_PROJECT="${NADIR_PROJECT}/projects/vectis/project.py"
 WORKSPACE="$(mktemp -d "${TMPDIR:-/tmp}/vectis-nadir.XXXXXX")"
-RESULTS_ROOT="${NADIR_RESULTS_DIR:-${ROOT_DIR}/tests/nadir/results}"
+RESULTS_ROOT="${NADIR_RESULTS_DIR:-${ROOT_DIR}/tests/security/nadir/results}"
 mkdir -p "${RESULTS_ROOT}"
 RESULTS_DIR="$(mktemp -d "${RESULTS_ROOT}/vectis.XXXXXX")"
 SERVER_PID=""
@@ -23,7 +23,7 @@ fi
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
-    echo "tests/nadir/run.sh requires $1" >&2
+    echo "tests/security/nadir/run.sh requires $1" >&2
     exit 2
   fi
 }

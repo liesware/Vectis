@@ -10,8 +10,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from test_config import require_apikey
-from http_support import StatusClient as Client, parse_json, require_request_id
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from support.test_config import require_apikey
+from support.http_support import StatusClient as Client, parse_json, require_request_id
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:3000"

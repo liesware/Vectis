@@ -5,8 +5,12 @@ import base64
 import hashlib
 import json
 import sys
-from test_config import require_apikey
-from http_support import (
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from support.test_config import require_apikey
+from support.http_support import (
     DEFAULT_BASE_URL,
     DEFAULT_FINAL_APP_ADDR,
     KEY_CASES,

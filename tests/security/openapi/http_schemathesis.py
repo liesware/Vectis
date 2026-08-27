@@ -7,8 +7,11 @@ import sys
 import tempfile
 from pathlib import Path
 
-from test_config import require_apikey
-from http_support import (
+INTEGRATION_ROOT = Path(__file__).resolve().parents[2] / "integration"
+sys.path.insert(0, str(INTEGRATION_ROOT))
+
+from support.test_config import require_apikey
+from support.http_support import (
     DEFAULT_BASE_URL,
     DEFAULT_FINAL_APP_ADDR,
     KEY_CASES,
@@ -28,7 +31,7 @@ from http_support import (
 
 
 DEFAULT_MAX_EXAMPLES = 25
-DEFAULT_SCHEMA = Path(__file__).resolve().parents[1] / "doc" / "openapi.yaml"
+DEFAULT_SCHEMA = Path(__file__).resolve().parents[3] / "doc" / "openapi.yaml"
 
 SAFE_PATHS = [
     "/healthz/startup",

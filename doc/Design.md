@@ -929,8 +929,8 @@ part of designing the rule.
 
 **In Vectis**: `#[cfg(test)]` modules across `core`/`ops` cover validation,
 AAD canonicalization, lifecycle, storage, FPE, tokenization, messages, and
-signing; `tests/http_positive.py` and `tests/http_negative.py` assert runtime
-contracts; `http_fuzz.py`, cargo-fuzz targets, and Schemathesis cover mutation
+signing; `tests/integration/http/http_positive.py` and `tests/integration/http/http_negative.py` assert runtime
+contracts; `tests/security/fuzz/http_fuzz.py`, cargo-fuzz targets, and Schemathesis cover mutation
 and OpenAPI contract behavior.
 
 ### Rule 39 — Zero warnings, always

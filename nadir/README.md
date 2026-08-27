@@ -95,16 +95,16 @@ SQLite-backed Vectis instance, creates the required key and least-privilege
 client, then exports the `NADIR_*` values for a run:
 
 ```sh
-bash tests/nadir/run.sh
-bash tests/nadir/run.sh --target vectis.sign-verification --iterations 4
-bash tests/nadir/run.sh --target vectis.fpe-round-trip --iterations 8
-bash tests/nadir/run.sh --target vectis.one-time-token --iterations 8
+bash tests/security/nadir/run.sh
+bash tests/security/nadir/run.sh --target vectis.sign-verification --iterations 4
+bash tests/security/nadir/run.sh --target vectis.fpe-round-trip --iterations 8
+bash tests/security/nadir/run.sh --target vectis.one-time-token --iterations 8
 ```
 
 It stops Vectis, verifies its audit log, and removes its workspace on exit. Set
 `NADIR_KEEP_WORKSPACE=true` only when retaining the isolated workspace is useful
 for debugging a failure. Finding artifacts are retained under
-`tests/nadir/results/` in the repository (or `NADIR_RESULTS_DIR` when set); an
+`tests/security/nadir/results/` in the repository (or `NADIR_RESULTS_DIR` when set); an
 all-clear run leaves no empty result directory behind.
 
 A run prints a per-target summary:
@@ -263,7 +263,7 @@ uv run nadir reproduce \
   --artifact nadir-results/<finding>.json
 
 # Vectis: provision a new isolated node before reproducing the workflow
-bash tests/nadir/reproduce.sh tests/nadir/results/<finding>.json
+bash tests/security/nadir/reproduce.sh tests/security/nadir/results/<finding>.json
 ```
 
 For `reproduce`, exit `0` means the original finding codes reappeared, exit `1`

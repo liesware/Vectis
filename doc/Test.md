@@ -70,7 +70,7 @@ by the normal suite because it requires external network access:
 cargo test cloudflare_nts_smoke_test -- --ignored
 ```
 
-`tests/tls.sh` is the canonical local TLS happy-path test; Rust CI runs it
+`tests/integration/tls/tls.sh` is the canonical local TLS happy-path test; Rust CI runs it
 through `tests/ci/test-tls.sh` using the built artifact. It starts Vectis in
 production HTTPS mode with a temporary self-signed certificate, drives the CLI
 through health checks, creates signed config and profiles, exercises local
@@ -126,16 +126,16 @@ uv sync
 Run the local CLI suite with:
 
 ```sh
-uv run tests/cli_all.py
+uv run tests/integration/cli/cli_all.py
 ```
 
-`tests/cli_all.py` runs:
+`tests/integration/cli/cli_all.py` runs:
 
-- `tests/cli_init.py`: init overwrite protection and custom init file handling.
-- `tests/cli_positive.py`: local `vectis config init`, section list/edit
+- `tests/integration/cli/cli_init.py`: init overwrite protection and custom init file handling.
+- `tests/integration/cli/cli_positive.py`: local `vectis config init`, section list/edit
   commands for `routes`, `remote-routes`, `permissions`, `fpe`, `token`, and full
   `config list` happy paths.
-- `tests/cli_negative.py`: duplicate names, invalid fields, missing records, and
+- `tests/integration/cli/cli_negative.py`: duplicate names, invalid fields, missing records, and
   mutation safety, including missing config files and overwrite refusal.
 
 The CLI tests isolate runtime files with temporary paths:
@@ -154,29 +154,29 @@ Most CLI tests are local and do not need Vectis to be running. An optional
 remote-route public-key import case can run when a server is available:
 
 ```sh
-uv run tests/cli_all.py --base-url http://127.0.0.1:3000 --apikey <VECTIS_APIKEY>
+uv run tests/integration/cli/cli_all.py --base-url http://127.0.0.1:3000 --apikey <VECTIS_APIKEY>
 ```
 
 Run the positive and negative HTTP suite against a running Vectis instance:
 
 ```sh
-uv run tests/http_all.py --base-url http://127.0.0.1:3000 --apikey <VECTIS_APIKEY>
+uv run tests/integration/http/http_all.py --base-url http://127.0.0.1:3000 --apikey <VECTIS_APIKEY>
 ```
 
-`tests/http_all.py` runs:
+`tests/integration/http/http_all.py` runs:
 
-- `tests/http_positive.py`: valid end-to-end workflows, including FPE and
+- `tests/integration/http/http_positive.py`: valid end-to-end workflows, including FPE and
   reversible tokenization.
-- `tests/http_negative.py`: invalid input, denied permission, lifecycle, and
+- `tests/integration/http/http_negative.py`: invalid input, denied permission, lifecycle, and
   error-path checks, including FPE/tokenization validation failures.
 
 Run targeted manual HTTP fuzzing with:
 
 ```sh
-uv run tests/http_fuzz.py --base-url http://127.0.0.1:3000 --apikey <VECTIS_APIKEY>
+uv run tests/security/fuzz/http_fuzz.py --base-url http://127.0.0.1:3000 --apikey <VECTIS_APIKEY>
 ```
 
-`tests/http_fuzz.py` is a targeted mutation helper. It is separate from
+`tests/security/fuzz/http_fuzz.py` is a targeted mutation helper. It is separate from
 Schemathesis and is useful for project-specific negative cases. It mutates
 seeds across crypto profiles (ChaCha20 and AES-GCM variants) with domain-aware
 mutations, and drives a table of targets (`--target`): `token`, `message`,
@@ -197,7 +197,7 @@ those oracles offline.
 ### Nadir Stateful HTTP Fuzzing
 
 Nadir is the developing replacement for the stateful and semantic parts of
-`tests/http_fuzz.py`. It models request, producer/consumer, multi-step flow,
+`tests/security/fuzz/http_fuzz.py`. It models request, producer/consumer, multi-step flow,
 and race targets, then evaluates project-specific invariants across fresh
 workflow state. It remains in parallel with `http_fuzz.py` until the existing
 semantic coverage has been migrated and compared over repeated runs.
@@ -205,7 +205,7 @@ semantic coverage has been migrated and compared over repeated runs.
 Run it against a disposable, automatically provisioned Vectis node:
 
 ```sh
-bash tests/nadir/run.sh --iterations 100 --seed 0
+bash tests/security/nadir/run.sh --iterations 100 --seed 0
 ```
 
 New finding artifacts use `nadir-finding-v4` and contain a redacted per-case
@@ -214,7 +214,7 @@ Use the Vectis wrapper to rebuild state and verify that the original finding
 codes still appear:
 
 ```sh
-bash tests/nadir/reproduce.sh tests/nadir/results/<finding.json>
+bash tests/security/nadir/reproduce.sh tests/security/nadir/results/<finding.json>
 ```
 
 The wrapper provisions a fresh local node, runs `nadir reproduce`, verifies the
@@ -231,19 +231,19 @@ uv sync --group fuzz
 Run the default safe profile:
 
 ```sh
-uv run tests/http_schemathesis.py --profile safe --base-url http://127.0.0.1:3000 --apikey <VECTIS_APIKEY>
+uv run tests/security/openapi/http_schemathesis.py --profile safe --base-url http://127.0.0.1:3000 --apikey <VECTIS_APIKEY>
 ```
 
 Run the prepared profile:
 
 ```sh
-uv run tests/http_schemathesis.py --profile prepared --base-url http://127.0.0.1:3000 --apikey <VECTIS_APIKEY>
+uv run tests/security/openapi/http_schemathesis.py --profile prepared --base-url http://127.0.0.1:3000 --apikey <VECTIS_APIKEY>
 ```
 
 Run the full contract only in disposable environments:
 
 ```sh
-uv run tests/http_schemathesis.py --profile all --base-url http://127.0.0.1:3000 --apikey <VECTIS_APIKEY>
+uv run tests/security/openapi/http_schemathesis.py --profile all --base-url http://127.0.0.1:3000 --apikey <VECTIS_APIKEY>
 ```
 
 Schemathesis uses `doc/openapi.yaml` by default.
@@ -255,7 +255,7 @@ Schemathesis uses `doc/openapi.yaml` by default.
   runtime state.
 
 Schemathesis helps confirm that the OpenAPI schema and backend validation stay
-in sync. It does not replace `tests/http_positive.py`, which remains the source
+in sync. It does not replace `tests/integration/http/http_positive.py`, which remains the source
 of cryptographically valid happy paths.
 
 ## Dynamic API Scanning With OWASP ZAP
@@ -266,20 +266,20 @@ imports the OpenAPI contract and sends attack payloads to the described API.
 Run it only against systems that you own and are explicitly authorized to test.
 
 The workflow never targets a deployed Vectis instance. Its dedicated
-`tests/ci/zap_scan.sh` runner creates a disposable HTTPS node with temporary
+`tests/security/zap/zap_scan.sh` runner creates a disposable HTTPS node with temporary
 SQLite storage, init material, signed profiles, an operational KID, and a
 synthetic application API key. That identity has only data-protection and
 signing permissions; administrative, lifecycle, messaging, routing, and time
 attestation operations remain denied. The complete laboratory is removed after
 the scan.
 
-ZAP, Schemathesis, and `tests/http_fuzz.py` answer different questions:
+ZAP, Schemathesis, and `tests/security/fuzz/http_fuzz.py` answer different questions:
 
 - ZAP looks for common API and web security vulnerabilities through active and
   passive scanner rules.
 - Schemathesis checks whether generated requests and observed responses conform
   to `doc/openapi.yaml`.
-- `tests/http_fuzz.py` applies Vectis-specific mutations and semantic oracles.
+- `tests/security/fuzz/http_fuzz.py` applies Vectis-specific mutations and semantic oracles.
 
 The initial ZAP policy is report-only. Scanner exit codes that indicate alerts
 do not fail the workflow, but Docker failures, scanner errors, and timeouts do.
@@ -293,7 +293,7 @@ On Linux with Docker available, run the same isolated scan locally with:
 cargo build --locked --all-features
 VECTIS_BIN="$PWD/target/debug/vectis" \
 ZAP_RESULTS_DIR="$PWD/zap-results" \
-bash tests/ci/zap_scan.sh
+bash tests/security/zap/zap_scan.sh
 ```
 
 Review real results before adding rule suppressions. Do not point this runner at
@@ -302,7 +302,7 @@ production, shared test environments, remote peers, or final applications.
 ## Performance Testing With k6
 
 `tests/performance/k6.js` is a manual local performance suite. It is not part
-of `tests.sh`, and it does not replace `tests/http_positive.py`, Schemathesis,
+of `tests.sh`, and it does not replace `tests/integration/http/http_positive.py`, Schemathesis,
 or fuzzing.
 
 Prerequisites:
@@ -451,7 +451,7 @@ boundary; compact signatures, audit checkpoints, init artifacts, SLH-DSA files,
 and share envelopes stop before cryptographic authentication. They do not load
 keys or profiles, execute cryptographic operations, or exercise HTTP. Hash
 output validation and cryptographic verification remain covered by Rust unit
-tests, `tests/crypto_integration.rs`, and `tests/http_fuzz.py`.
+tests, `tests/crypto_integration.rs`, and `tests/security/fuzz/http_fuzz.py`.
 
 ### Error message hygiene
 
@@ -501,42 +501,42 @@ cargo check
 cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 uv sync
-uv run tests/cli_all.py
-uv run tests/http_all.py
-uv run tests/http_fuzz.py
+uv run tests/integration/cli/cli_all.py
+uv run tests/integration/http/http_all.py
+uv run tests/security/fuzz/http_fuzz.py
 uv sync --group fuzz
-uv run tests/http_schemathesis.py --profile prepared
+uv run tests/security/openapi/http_schemathesis.py --profile prepared
 ```
 
 `tests.sh` runs Rust checks and local CLI tests first. It then asks the operator
 to start Vectis before the HTTP, manual fuzz, and Schemathesis layers. The HTTP
 tests need an API key available through the environment or `.env` flow used by
-`tests/test_config.py`.
+`tests/integration/support/test_config.py`.
 
 `tests_cargo-fuzz.sh` is intentionally separate because it requires nightly,
 uses sanitizer builds, and is heavier than the normal HTTP test suite.
 
 ## Test File Reference
 
-- `tests/cli_all.py`: streaming CLI summary runner.
-- `tests/cli_init.py`: CLI init behavior.
-- `tests/cli_negative.py`: invalid local CLI config-editing workflows.
-- `tests/cli_positive.py`: valid local CLI config-editing workflows.
-- `tests/cli_support.py`: shared Python helpers for CLI workflows.
+- `tests/integration/cli/cli_all.py`: streaming CLI summary runner.
+- `tests/integration/cli/cli_init.py`: CLI init behavior.
+- `tests/integration/cli/cli_negative.py`: invalid local CLI config-editing workflows.
+- `tests/integration/cli/cli_positive.py`: valid local CLI config-editing workflows.
+- `tests/integration/support/cli_support.py`: shared Python helpers for CLI workflows.
 - `tests/crypto_integration.rs`: focused Vectis/Botan crypto integration smoke
   tests.
-- `tests/final_app_server.py`: mock final app receiver and decrypt helper.
-- `tests/http_all.py`: positive + negative summary runner.
-- `tests/http_fuzz.py`: targeted manual HTTP mutation tests retained during the
+- `tests/manual/final_app_server.py`: manual mock final-app receiver and decrypt helper; it is not part of CI or `tests.sh`.
+- `tests/integration/http/http_all.py`: positive + negative summary runner.
+- `tests/security/fuzz/http_fuzz.py`: targeted manual HTTP mutation tests retained during the
   Nadir migration.
-- `tests/nadir/run.sh`: isolated Vectis harness for Nadir discovery runs.
-- `tests/nadir/reproduce.sh`: isolated Vectis harness for v4 finding reproduction.
-- `tests/http_negative.py`: invalid, denied, and error-path workflows.
-- `tests/http_positive.py`: valid end-to-end runtime workflows.
-- `tests/http_schemathesis.py`: OpenAPI contract fuzzing via Schemathesis.
-- `tests/http_support.py`: shared Python helpers for HTTP workflows.
+- `tests/security/nadir/run.sh`: isolated Vectis harness for Nadir discovery runs.
+- `tests/security/nadir/reproduce.sh`: isolated Vectis harness for v4 finding reproduction.
+- `tests/integration/http/http_negative.py`: invalid, denied, and error-path workflows.
+- `tests/integration/http/http_positive.py`: valid end-to-end runtime workflows.
+- `tests/security/openapi/http_schemathesis.py`: OpenAPI contract fuzzing via Schemathesis.
+- `tests/integration/support/http_support.py`: shared Python helpers for HTTP workflows.
 - `tests/performance/run.sh`: single entry point for the isolated local k6
   harness.
 - `tests/performance/k6.js`: local mixed-workload k6 scenario.
-- `tests/test_config.py`: test configuration and API key loading helpers.
+- `tests/integration/support/test_config.py`: test configuration and API key loading helpers.
 - `tests_cargo-fuzz.sh`: native fuzz runner for all cargo-fuzz targets.

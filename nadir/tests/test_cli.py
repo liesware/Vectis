@@ -138,13 +138,13 @@ class CliProgressTests(unittest.TestCase):
         self.assertEqual(stream.flushes, 4)
 
     def test_progress_prints_target_artifacts_immediately(self):
-        artifact = Path("tests/nadir/results/finding.json")
+        artifact = Path("tests/security/nadir/results/finding.json")
         stream = _FlushingStream()
         event = TargetCompleted(2, 3, self._summary().targets[0], (artifact,))
         with patch("sys.stdout", stream):
             _print_progress(event)
         self.assertIn("[2/3] vectis.target", stream.getvalue())
-        self.assertIn("finding artifact: tests/nadir/results/finding.json", stream.getvalue())
+        self.assertIn("finding artifact: tests/security/nadir/results/finding.json", stream.getvalue())
         self.assertEqual(stream.flushes, 5)
 
     def test_run_registers_live_target_summary_without_duplicate_final_summary(self):

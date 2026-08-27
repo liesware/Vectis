@@ -11,7 +11,10 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from test_config import require_apikey
+INTEGRATION_ROOT = Path(__file__).resolve().parents[2] / "integration"
+sys.path.insert(0, str(INTEGRATION_ROOT))
+
+from support.test_config import require_apikey
 
 DEFAULT_BASE_URL = "http://127.0.0.1:3000"
 CONFIG_PATH = Path("config.json")

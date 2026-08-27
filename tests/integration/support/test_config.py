@@ -7,7 +7,7 @@ def config_value(name):
     if value:
         return value.strip()
 
-    paths = [Path.cwd() / ".env", Path(__file__).resolve().parents[1] / ".env"]
+    paths = [Path.cwd() / ".env", Path(__file__).resolve().parents[3] / ".env"]
     for path in paths:
         if not path.is_file():
             continue

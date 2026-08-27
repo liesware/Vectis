@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 BINARY="${VECTIS_BIN:-$ROOT/target/debug/vectis}"
 if [[ "$BINARY" != /* ]]; then
   BINARY="$ROOT/$BINARY"

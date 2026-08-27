@@ -2,8 +2,12 @@
 import argparse
 import tempfile
 import urllib.parse
+from pathlib import Path
+import sys
 
-from cli_support import (
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from support.cli_support import (
     APIKEY_HASH_A,
     APIKEY_HASH_B,
     KID_A,
@@ -546,7 +550,7 @@ def remote_route_dynamic_import(env, base_url, apikey):
         print("Remote route dynamic import: SKIPPED (requires http --base-url)", flush=True)
         return False
 
-    from http_support import Client, KEY_CASES, create_key
+    from support.http_support import Client, KEY_CASES, create_key
 
     client = Client(base_url, apikey)
     kid = create_key(client, KEY_CASES[0])

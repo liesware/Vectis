@@ -51,7 +51,7 @@ jobs:
           ZAP_RESULTS_DIR: ${{ github.workspace }}/zap-results
         run: |
           mkdir -p "$ZAP_RESULTS_DIR"
-          bash tests/ci/zap_scan.sh
+          bash tests/security/zap/zap_scan.sh
 
       - name: Publish ZAP summary
         if: always()
