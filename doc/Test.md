@@ -194,7 +194,7 @@ semantic oracles that flag verification, AEAD, FPE, tokenization, and
 config-integrity bypasses; `--self-check` tests
 those oracles offline.
 
-### Nadir Stateful HTTP Fuzzing
+### Nadir Stateful HTTP Fuzzing - Experiment
 
 Nadir is the developing replacement for the stateful and semantic parts of
 `tests/http_fuzz.py`. It models request, producer/consumer, multi-step flow,
