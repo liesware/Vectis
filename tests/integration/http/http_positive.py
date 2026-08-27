@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from support.test_config import require_apikey
+from support.concurrency import run_simultaneously
 from support.http_support import (
     DEFAULT_BASE_URL,
     DEFAULT_FINAL_APP_ADDR,
@@ -1002,6 +1003,46 @@ def one_time_token_cases(client, key_id):
     require(
         decoded_a.get("plaintext") == "111111111",
         "failed one-time batch must not consume other tokens",
+    )
+
+    race_plaintext = "333333333"
+    race_encoded = client.post(
+        f"/token/encode/{key_id}",
+        {"ref": "one-time-race-source", "profile": profile, "plaintext": race_plaintext},
+        auth=True,
+    )
+    race_token = race_encoded["token"]
+
+    def decode_race_token(ref):
+        worker = StatusClient(client.base_url, client.apikey)
+        return worker.post(
+            "/token/decode",
+            {"ref": ref, "kid": key_id, "profile": profile, "token": race_token},
+            auth=True,
+        )
+
+    outcomes = run_simultaneously(
+        [lambda: decode_race_token("one-time-race-a"), lambda: decode_race_token("one-time-race-b")]
+    )
+
+    winners = [
+        body
+        for status, body in outcomes
+        if status == 200 and body.get("plaintext") == race_plaintext
+    ]
+    losers = [
+        body
+        for status, body in outcomes
+        if status == 404 and body.get("error") == "token not found"
+    ]
+    require(len(winners) == 1 and len(losers) == 1, "one-time token race must have one winner")
+    # Scan the whole serialized loser body, not just its top-level keys: the
+    # plaintext could leak inside an error message, a nested field, or a non-JSON
+    # body that parse_json wrapped as {"raw": ...}. Matches the fuzz oracle
+    # (one_time_race_semantic), which scans the raw response string.
+    require(
+        all(race_plaintext not in json.dumps(body) for status, body in outcomes if status != 200),
+        "one-time token race loser must not receive plaintext",
     )
 
     return profile

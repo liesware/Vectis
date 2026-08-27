@@ -10,6 +10,7 @@ FPE_PROFILE = "fuzz-patient-id-decimal-v1"
 FPE_PLAINTEXT = "1234567890"
 FPE_BATCH_PLAINTEXTS = [FPE_PLAINTEXT, "9876543210"]
 TOKENIZATION_PROFILE = "fuzz-patient-id-token-v1"
+ONE_TIME_TOKENIZATION_PROFILE = "fuzz-one-time-token-v1"
 TOKEN_PLAINTEXT = "fuzz token plaintext"
 TOKEN_BATCH_PLAINTEXTS = [TOKEN_PLAINTEXT, "second fuzz token plaintext"]
 MAC_PROFILE = "fuzz-pan-blind-index-v1"
@@ -276,6 +277,134 @@ def tokenization_batch_semantic(sent_value, seed, status, body):
             findings.append(
                 "SEMANTIC: token batch decode accepted mutated token as original plaintext"
             )
+    return findings
+
+
+def _encoded_token_present(encoded_status, encoded_body):
+    """A well-formed encode is HTTP 200 with a non-empty token in the body.
+
+    A malformed 200 (parse failure, or a body missing the token) is itself an
+    anomaly: the encode step succeeded on the wire but produced nothing usable.
+    Flagging it here keeps the real defect at the encode step instead of letting
+    it surface later as a misleading "did not decode exactly once".
+    """
+    if encoded_status != 200:
+        return False
+    encoded = _parse(encoded_body)
+    return isinstance(encoded, dict) and isinstance(encoded.get("token"), str) and bool(encoded["token"])
+
+
+def _encoded_tokens_present(encoded_status, encoded_body, count):
+    """A well-formed batch encode is HTTP 200 with `count` non-empty tokens."""
+    if encoded_status != 200:
+        return False
+    encoded = _parse(encoded_body)
+    if not isinstance(encoded, dict):
+        return False
+    items = encoded.get("items")
+    if not isinstance(items, list) or len(items) != count:
+        return False
+    return all(isinstance(item, dict) and isinstance(item.get("token"), str) and item["token"] for item in items)
+
+
+def one_time_single_semantic(results, plaintext):
+    encoded_status, encoded_body = results[0]
+    decoded_status, decoded_body = results[1]
+    replay_status, replay_body = results[2]
+    decoded = _parse(decoded_body)
+    replay = _parse(replay_body)
+    findings = []
+    if not _encoded_token_present(encoded_status, encoded_body):
+        findings.append("SEMANTIC: one-time token encode returned no usable token")
+    if (
+        encoded_status != 200
+        or decoded_status != 200
+        or not isinstance(decoded, dict)
+        or decoded.get("plaintext") != plaintext
+    ):
+        findings.append("SEMANTIC: one-time token did not decode exactly once")
+    if replay_status != 404 or not isinstance(replay, dict) or replay.get("error") != "token not found":
+        findings.append("SEMANTIC: consumed one-time token replay was not rejected")
+    if plaintext in replay_body:
+        findings.append("SEMANTIC: one-time token replay leaked plaintext")
+    return findings
+
+
+def one_time_batch_semantic(results, plaintext, leaked_plaintexts=None):
+    """`plaintext` is the survivor's expected value; `leaked_plaintexts`
+    enumerates every plaintext that could leak in the failure body (both the
+    survivor's and the already-consumed item's). Defaults to `[plaintext]`."""
+    leaked_plaintexts = leaked_plaintexts if leaked_plaintexts is not None else [plaintext]
+    encoded_status, encoded_body = results[0]
+    consumed_status, _consumed_body = results[1]
+    batch_status, batch_body = results[2]
+    survivor_status, survivor_body = results[3]
+    batch = _parse(batch_body)
+    survivor = _parse(survivor_body)
+    findings = []
+    if not _encoded_tokens_present(encoded_status, encoded_body, 2):
+        findings.append("SEMANTIC: one-time batch encode returned no usable tokens")
+    # Atomicity: the batch must fail as a whole (404, token-not-found, no partial
+    # output). Match the failure reason by substring rather than the exact string
+    # so a wording or item-index change (0- vs 1-based) does not fake a finding.
+    if (
+        encoded_status != 200
+        or consumed_status != 200
+        or batch_status != 404
+        or not isinstance(batch, dict)
+        or "token not found" not in str(batch.get("error", ""))
+        or "items" in batch
+    ):
+        findings.append("SEMANTIC: failed one-time batch was not atomic")
+    if (
+        survivor_status != 200
+        or not isinstance(survivor, dict)
+        or survivor.get("plaintext") != plaintext
+    ):
+        findings.append("SEMANTIC: failed one-time batch consumed an available token")
+    if any(leaked in batch_body for leaked in leaked_plaintexts):
+        findings.append("SEMANTIC: failed one-time batch leaked plaintext")
+    return findings
+
+
+def one_time_race_semantic(results, plaintext):
+    encoded_status, _encoded_body = results[0]
+    decoded = [(status, _parse(body), body) for status, body in results[1:]]
+    winners = [body for status, body, _raw in decoded if status == 200 and isinstance(body, dict) and body.get("plaintext") == plaintext]
+    losers = [body for status, body, _raw in decoded if status == 404 and isinstance(body, dict) and body.get("error") == "token not found"]
+    findings = []
+    if encoded_status != 200 or len(winners) != 1 or len(losers) != 1:
+        findings.append("SEMANTIC: one-time token race did not produce exactly one winner")
+    if any(plaintext in raw for status, _body, raw in decoded if status != 200):
+        findings.append("SEMANTIC: one-time token race loser leaked plaintext")
+    return findings
+
+
+def token_batch_duplicate_policy_semantic(results, plaintext):
+    one_time_encode_status, _one_time_encode_body = results[0]
+    one_time_status, one_time_body = results[1]
+    reusable_encode_status, _reusable_encode_body = results[2]
+    reusable_status, reusable_body = results[3]
+    one_time = _parse(one_time_body)
+    reusable = _parse(reusable_body)
+    findings = []
+    if (
+        one_time_encode_status != 200
+        or one_time_status != 400
+        or not isinstance(one_time, dict)
+        or one_time.get("error") != "batch item 1 failed: token batch contains duplicated token"
+        or "items" in one_time
+    ):
+        findings.append("SEMANTIC: one-time duplicate token batch was not rejected")
+    reusable_items = reusable.get("items") if isinstance(reusable, dict) else None
+    if (
+        reusable_encode_status != 200
+        or reusable_status != 200
+        or not isinstance(reusable_items, list)
+        or [item.get("ref") for item in reusable_items if isinstance(item, dict)] != ["reusable-duplicate-0", "reusable-duplicate-1"]
+        or [item.get("plaintext") for item in reusable_items if isinstance(item, dict)] != [plaintext, plaintext]
+    ):
+        findings.append("SEMANTIC: reusable duplicate token batch was not accepted")
     return findings
 
 
@@ -556,6 +685,106 @@ def self_check():
             token_batch_decode_mut, token_batch_decode_seed, 400, '{"error":"x"}'
         ),
         "token batch decode ignores 4xx",
+    )
+
+    one_time_plaintext = "one-time-self-check"
+    one_time_single = [
+        (200, '{"token":"opaque"}'),
+        (200, json.dumps({"plaintext": one_time_plaintext})),
+        (404, '{"error":"token not found"}'),
+    ]
+    expect(
+        not one_time_single_semantic(one_time_single, one_time_plaintext),
+        "one-time single accepts one decode followed by not found",
+    )
+    expect(
+        one_time_single_semantic(
+            [one_time_single[0], one_time_single[1], (200, "{}")], one_time_plaintext
+        ),
+        "one-time single flags successful replay",
+    )
+
+    one_time_batch = [
+        (200, '{"items":[{"token":"opaque-a"},{"token":"opaque-b"}]}'),
+        (200, '{"plaintext":"second"}'),
+        (404, '{"error":"batch item 1 failed: token not found"}'),
+        (200, json.dumps({"plaintext": one_time_plaintext})),
+    ]
+    expect(
+        not one_time_batch_semantic(one_time_batch, one_time_plaintext),
+        "one-time batch preserves the unconsumed item after rollback",
+    )
+    expect(
+        one_time_batch_semantic(
+            [one_time_batch[0], one_time_batch[1], (404, '{"items":[]}'), one_time_batch[3]],
+            one_time_plaintext,
+        ),
+        "one-time batch flags partial output on rejection",
+    )
+    expect(
+        one_time_batch_semantic(
+            [(200, '{"items":[]}'), one_time_batch[1], one_time_batch[2], one_time_batch[3]],
+            one_time_plaintext,
+        ),
+        "one-time batch flags a 200 encode that returned no tokens",
+    )
+    expect(
+        one_time_batch_semantic(
+            [
+                one_time_batch[0],
+                one_time_batch[1],
+                (404, '{"error":"batch item 1 failed: token not found","echo":"second"}'),
+                one_time_batch[3],
+            ],
+            one_time_plaintext,
+            [one_time_plaintext, "second"],
+        ),
+        "one-time batch flags a leak of the already-consumed plaintext",
+    )
+
+    one_time_race = [
+        (200, '{"token":"opaque"}'),
+        (200, json.dumps({"plaintext": one_time_plaintext})),
+        (404, '{"error":"token not found"}'),
+    ]
+    expect(
+        not one_time_race_semantic(one_time_race, one_time_plaintext),
+        "one-time race accepts exactly one winner",
+    )
+    expect(
+        one_time_race_semantic(
+            [one_time_race[0], one_time_race[1], (200, json.dumps({"plaintext": one_time_plaintext}))],
+            one_time_plaintext,
+        ),
+        "one-time race flags two winners",
+    )
+
+    duplicate_policy = [
+        (200, '{"token":"opaque"}'),
+        (400, '{"error":"batch item 1 failed: token batch contains duplicated token"}'),
+        (200, '{"token":"opaque"}'),
+        (
+            200,
+            json.dumps(
+                {
+                    "items": [
+                        {"ref": "reusable-duplicate-0", "plaintext": one_time_plaintext},
+                        {"ref": "reusable-duplicate-1", "plaintext": one_time_plaintext},
+                    ]
+                }
+            ),
+        ),
+    ]
+    expect(
+        not token_batch_duplicate_policy_semantic(duplicate_policy, one_time_plaintext),
+        "duplicate policy distinguishes one-time and reusable profiles",
+    )
+    expect(
+        token_batch_duplicate_policy_semantic(
+            [duplicate_policy[0], duplicate_policy[1], duplicate_policy[2], (400, '{"error":"x"}')],
+            one_time_plaintext,
+        ),
+        "duplicate policy flags reusable rejection",
     )
 
     for label in failures:

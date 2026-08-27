@@ -1,6 +1,10 @@
 import json
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 
+from support.concurrency import run_simultaneously
+
+from client import FuzzClient
 from config import CONFIG_PATH, CONFIG_SIGN_PATH, build_config_baseline
 from mutations import BAD_APIKEYS, NASTY_KIDS, WRONG_METHODS, corrupt_string, mutate_raw, mutate_structured
 from oracle import ALLOWED_STATUS, FRAMEWORK_STATUS, _parse, oracle
@@ -22,6 +26,11 @@ from seeds import (
     masking_batch_seeds,
     masking_seeds,
     message_seeds,
+    ONE_TIME_BATCH_PLAINTEXTS,
+    ONE_TIME_TOKEN_PLAINTEXT,
+    issue_token,
+    issue_token_batch,
+    one_time_token_context,
     send_message_seeds,
     sharing_seeds,
     sign_body_seeds,
@@ -31,12 +40,18 @@ from seeds import (
 )
 from semantics import (
     KID_HEX,
+    ONE_TIME_TOKENIZATION_PROFILE,
+    TOKENIZATION_PROFILE,
     config_semantic,
     fpe_batch_semantic,
     fpe_semantic,
     internal_encrypt_semantic,
     internal_semantic,
+    one_time_batch_semantic,
+    one_time_race_semantic,
+    one_time_single_semantic,
     token_semantic,
+    token_batch_duplicate_policy_semantic,
     tokenization_batch_semantic,
     tokenization_semantic,
 )
@@ -180,7 +195,174 @@ def run_config(target, client, rng, args, secrets):
     return counters
 
 
-# --- seed factories ----------------------------------------------------------
+def _decode_token(client, kid, profile, ref, token):
+    return client.post_json(
+        "/token/decode",
+        {"ref": ref, "kid": kid, "profile": profile, "token": token},
+        auth=True,
+    )
+
+
+def _one_time_single_case(client, context, index):
+    encoded_status, encoded_body, token = issue_token(
+        client,
+        context,
+        ONE_TIME_TOKENIZATION_PROFILE,
+        f"one-time-single-{index}",
+        ONE_TIME_TOKEN_PLAINTEXT,
+    )
+    decoded_status, decoded_body = _decode_token(
+        client,
+        context["kid"],
+        ONE_TIME_TOKENIZATION_PROFILE,
+        f"one-time-decode-{index}",
+        token,
+    )
+    replay_status, replay_body = _decode_token(
+        client,
+        context["kid"],
+        ONE_TIME_TOKENIZATION_PROFILE,
+        f"one-time-replay-{index}",
+        token,
+    )
+    return [(encoded_status, encoded_body), (decoded_status, decoded_body), (replay_status, replay_body)]
+
+
+def _one_time_batch_case(client, context, index):
+    refs = [f"one-time-batch-{index}-0", f"one-time-batch-{index}-1"]
+    encoded_status, encoded_body, tokens = issue_token_batch(
+        client,
+        context,
+        ONE_TIME_TOKENIZATION_PROFILE,
+        [
+            {"ref": refs[0], "plaintext": ONE_TIME_BATCH_PLAINTEXTS[0], "metadata": {}},
+            {"ref": refs[1], "plaintext": ONE_TIME_BATCH_PLAINTEXTS[1], "metadata": {}},
+        ],
+    )
+    token_a = tokens[0] if len(tokens) > 0 else None
+    token_b = tokens[1] if len(tokens) > 1 else None
+    consumed_status, consumed_body = _decode_token(
+        client, context["kid"], ONE_TIME_TOKENIZATION_PROFILE, f"one-time-consume-{index}", token_b
+    )
+    batch_status, batch_body = client.post_json(
+        "/token/decode/batch",
+        {
+            "kid": context["kid"],
+            "profile": ONE_TIME_TOKENIZATION_PROFILE,
+            "items": [{"ref": refs[0], "token": token_a}, {"ref": refs[1], "token": token_b}],
+        },
+        auth=True,
+    )
+    survivor_status, survivor_body = _decode_token(
+        client, context["kid"], ONE_TIME_TOKENIZATION_PROFILE, f"one-time-survivor-{index}", token_a
+    )
+    return [
+        (encoded_status, encoded_body),
+        (consumed_status, consumed_body),
+        (batch_status, batch_body),
+        (survivor_status, survivor_body),
+    ]
+
+
+def _one_time_race_case(client, context, index):
+    encoded_status, encoded_body, token = issue_token(
+        client,
+        context,
+        ONE_TIME_TOKENIZATION_PROFILE,
+        f"one-time-race-source-{index}",
+        ONE_TIME_TOKEN_PLAINTEXT,
+    )
+    def decode(ref):
+        worker_client = FuzzClient(client.base_url, client.apikey)
+        return _decode_token(worker_client, context["kid"], ONE_TIME_TOKENIZATION_PROFILE, ref, token)
+
+    # Reuse the scenario's pool across every iteration (see run_one_time_scenario);
+    # the barrier still releases both decodes at the same instant so they race.
+    first_result, second_result = run_simultaneously(
+        [lambda: decode(f"one-time-race-{index}-0"), lambda: decode(f"one-time-race-{index}-1")],
+        executor=context["executor"],
+    )
+    return [(encoded_status, encoded_body), first_result, second_result]
+
+
+def _token_batch_duplicate_policy_case(client, context, index):
+    one_time_status, one_time_body, one_time_token = issue_token(
+        client,
+        context,
+        ONE_TIME_TOKENIZATION_PROFILE,
+        f"one-time-duplicate-source-{index}",
+        ONE_TIME_TOKEN_PLAINTEXT,
+    )
+    rejected_status, rejected_body = client.post_json(
+        "/token/decode/batch",
+        {
+            "kid": context["kid"],
+            "profile": ONE_TIME_TOKENIZATION_PROFILE,
+            "items": [
+                {"ref": "one-time-duplicate-0", "token": one_time_token},
+                {"ref": "one-time-duplicate-1", "token": one_time_token},
+            ],
+        },
+        auth=True,
+    )
+    reusable_status, reusable_body, reusable_token = issue_token(
+        client,
+        context,
+        TOKENIZATION_PROFILE,
+        f"reusable-duplicate-source-{index}",
+        ONE_TIME_TOKEN_PLAINTEXT,
+    )
+    accepted_status, accepted_body = client.post_json(
+        "/token/decode/batch",
+        {
+            "kid": context["kid"],
+            "profile": TOKENIZATION_PROFILE,
+            "items": [
+                {"ref": "reusable-duplicate-0", "token": reusable_token},
+                {"ref": "reusable-duplicate-1", "token": reusable_token},
+            ],
+        },
+        auth=True,
+    )
+    return [
+        (one_time_status, one_time_body),
+        (rejected_status, rejected_body),
+        (reusable_status, reusable_body),
+        (accepted_status, accepted_body),
+    ]
+
+
+def run_one_time_scenario(target, client, _rng, args, secrets):
+    apikey, unseal = secrets
+    context = one_time_token_context(client)
+    counters = {"passed": 0, "failed": 0}
+    # Concurrent scenarios share one pool for the whole run instead of spinning up
+    # and tearing down a ThreadPoolExecutor on every iteration.
+    executor = ThreadPoolExecutor(max_workers=2) if target.get("concurrent") else None
+    if executor is not None:
+        context["executor"] = executor
+    try:
+        for index in range(args.iterations):
+            responses = target["scenario"](client, context, index)
+            findings = []
+            for status, body in responses:
+                findings.extend(oracle(status, body, apikey, unseal, ALLOWED_STATUS, False))
+            findings.extend(target["semantic"](responses))
+            status = 0 if any(response_status == 0 for response_status, _body in responses) else 200
+            description = {
+                "scenario": target["name"],
+                "kid": context["kid"],
+                "statuses": [response_status for response_status, _body in responses],
+            }
+            if check_and_record(target["name"], client, args, index, status, findings, description, counters):
+                break
+            print_progress(target["name"], index, args, counters)
+    finally:
+        if executor is not None:
+            executor.shutdown(wait=True)
+    return counters
+
+
 TARGETS = [
     {"name": "token", "runner": run_body, "seed_factory": token_seeds,
      "path": "/sign/verification", "auth": False, "semantic": token_semantic},
@@ -205,6 +387,19 @@ TARGETS = [
      "auth": True, "semantic": tokenization_semantic},
     {"name": "tokenization_batch", "runner": run_body, "seed_factory": tokenization_batch_seeds,
      "auth": True, "semantic": tokenization_batch_semantic},
+    {"name": "one_time_token", "runner": run_one_time_scenario,
+     "scenario": _one_time_single_case,
+     "semantic": lambda results: one_time_single_semantic(results, ONE_TIME_TOKEN_PLAINTEXT)},
+    {"name": "one_time_token_batch", "runner": run_one_time_scenario,
+     "scenario": _one_time_batch_case,
+     "semantic": lambda results: one_time_batch_semantic(
+         results, ONE_TIME_BATCH_PLAINTEXTS[0], ONE_TIME_BATCH_PLAINTEXTS)},
+    {"name": "one_time_token_race", "runner": run_one_time_scenario,
+     "scenario": _one_time_race_case, "concurrent": True,
+     "semantic": lambda results: one_time_race_semantic(results, ONE_TIME_TOKEN_PLAINTEXT)},
+    {"name": "token_batch_duplicate_policy", "runner": run_one_time_scenario,
+     "scenario": _token_batch_duplicate_policy_case,
+     "semantic": lambda results: token_batch_duplicate_policy_semantic(results, ONE_TIME_TOKEN_PLAINTEXT)},
     {"name": "mac", "runner": run_body, "seed_factory": mac_seeds, "auth": True},
     {"name": "mac_batch", "runner": run_body, "seed_factory": mac_batch_seeds, "auth": True},
     {"name": "index", "runner": run_body, "seed_factory": index_seeds, "auth": True},

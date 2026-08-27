@@ -6,6 +6,7 @@ from config import (
     configure_fpe_profile,
     configure_mac_profile,
     configure_masking_profile,
+    configure_one_time_tokenization_profiles,
     configure_sharing_profile,
     configure_tokenization_profile,
 )
@@ -21,6 +22,7 @@ from semantics import (
     MAC_PROFILE,
     MASKING_PLAINTEXTS,
     MASKING_PROFILE,
+    ONE_TIME_TOKENIZATION_PROFILE,
     RECIPIENT_HEX,
     SHARING_PLAINTEXT,
     SHARING_PROFILE,
@@ -53,6 +55,9 @@ KEY_TARGET_SEED = {
     "ml_dsa_variant": "ML-DSA-44",
     "ml_kem_variant": "ML-KEM-512",
 }
+
+ONE_TIME_TOKEN_PLAINTEXT = "fuzz one-time token plaintext"
+ONE_TIME_BATCH_PLAINTEXTS = ["fuzz one-time batch first", "fuzz one-time batch second"]
 
 
 def _create_key(client, case):
@@ -275,6 +280,47 @@ def tokenization_batch_seeds(client):
         (f"/token/encode/batch/{kid}", encode_seed),
         ("/token/decode/batch", decode_seed),
     ]
+
+
+def one_time_token_context(client):
+    kid = _create_key(
+        client,
+        {"tag": "fuzz-one-time-token", "profile": "hybrid-performance-v1"},
+    )
+    configure_one_time_tokenization_profiles(client, kid)
+    return {"kid": kid}
+
+
+def issue_token(client, context, profile, ref, plaintext):
+    status, body = client.post_json(
+        f"/token/encode/{context['kid']}",
+        {"ref": ref, "profile": profile, "plaintext": plaintext, "metadata": {}},
+        auth=True,
+    )
+    try:
+        parsed = json.loads(body) if status == 200 else None
+    except json.JSONDecodeError:
+        parsed = None
+    token = parsed.get("token") if isinstance(parsed, dict) else None
+    return status, body, token
+
+
+def issue_token_batch(client, context, profile, items):
+    status, body = client.post_json(
+        f"/token/encode/batch/{context['kid']}",
+        {"profile": profile, "items": items},
+        auth=True,
+    )
+    try:
+        parsed = json.loads(body) if status == 200 else None
+    except json.JSONDecodeError:
+        parsed = None
+    tokens = (
+        [item.get("token") for item in parsed.get("items", []) if isinstance(item, dict)]
+        if isinstance(parsed, dict)
+        else []
+    )
+    return status, body, tokens
 
 
 def mac_seeds(client):

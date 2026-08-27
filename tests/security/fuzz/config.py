@@ -9,6 +9,7 @@ from semantics import (
     FPE_PROFILE,
     MAC_PROFILE,
     MASKING_PROFILE,
+    ONE_TIME_TOKENIZATION_PROFILE,
     SHARING_PROFILE,
     TOKENIZATION_PROFILE,
 )
@@ -129,25 +130,16 @@ def configure_fpe_profile(client, kid):
     atexit.register(restore)
 
 
-def configure_tokenization_profile(client, kid):
+def _configure_tokenization_profiles(client, profiles, context):
     original_cfg = CONFIG_PATH.read_bytes() if CONFIG_PATH.exists() else None
     original_sig = CONFIG_SIGN_PATH.read_bytes() if CONFIG_SIGN_PATH.exists() else None
     config = read_config_or_empty()
-    config["tokenization_profiles"] = [
-        {
-            "name": TOKENIZATION_PROFILE,
-            "kid": kid,
-            "token_prefix": "tok_fuzz",
-            "token_len": 32,
-            "max_plaintext_len": 1024,
-            "one_time": False,
-        }
-    ]
+    config["tokenization_profiles"] = profiles
     CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
     sign_config_file()
     status, body = client.post_json("/config/reload", {}, auth=True)
     if status != 200:
-        raise RuntimeError(f"could not load tokenization seed config: HTTP {status}: {body}")
+        raise RuntimeError(f"could not load {context} config: HTTP {status}: {body}")
 
     def restore():
         if original_cfg is None:
@@ -160,6 +152,48 @@ def configure_tokenization_profile(client, kid):
             CONFIG_SIGN_PATH.write_bytes(original_sig)
 
     atexit.register(restore)
+
+
+def configure_tokenization_profile(client, kid):
+    _configure_tokenization_profiles(
+        client,
+        [
+            {
+                "name": TOKENIZATION_PROFILE,
+                "kid": kid,
+                "token_prefix": "tok_fuzz",
+                "token_len": 32,
+                "max_plaintext_len": 1024,
+                "one_time": False,
+            }
+        ],
+        "tokenization seed",
+    )
+
+
+def configure_one_time_tokenization_profiles(client, kid):
+    _configure_tokenization_profiles(
+        client,
+        [
+            {
+                "name": TOKENIZATION_PROFILE,
+                "kid": kid,
+                "token_prefix": "tok_fuzz",
+                "token_len": 32,
+                "max_plaintext_len": 1024,
+                "one_time": False,
+            },
+            {
+                "name": ONE_TIME_TOKENIZATION_PROFILE,
+                "kid": kid,
+                "token_prefix": "tok_fuzz_once",
+                "token_len": 32,
+                "max_plaintext_len": 1024,
+                "one_time": True,
+            },
+        ],
+        "one-time tokenization seed",
+    )
 
 
 def configure_mac_profile(client, kid):
@@ -289,4 +323,3 @@ def configure_sharing_profile(client, kid):
             CONFIG_SIGN_PATH.write_bytes(original_sig)
 
     atexit.register(restore)
-
