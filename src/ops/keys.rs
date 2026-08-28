@@ -632,6 +632,13 @@ pub fn parse_create_keys_input(request: Value) -> Result<CreateKeysInput, DynErr
     crate::ops::json::parse_json_request(request, "keys request")
 }
 
+pub fn validate_create_keys_input(
+    config: &config::AppConfig,
+    input: CreateKeysInput,
+) -> Result<(), DynError> {
+    resolve_keys_input(input, config).map(drop)
+}
+
 pub fn parse_update_lifecycle_input(request: Value) -> Result<UpdateLifecycleInput, DynError> {
     let Some(object) = request.as_object() else {
         return Err(crate::error::invalid_input(
@@ -1603,6 +1610,51 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn validate_create_keys_input_accepts_profile_only_request() {
+        let config = config::test_app_config();
+        let input = parse_create_keys_input(json!({
+            "tag": "fuzz-seed",
+            "profile": "hybrid-standard-v1",
+        }))
+        .expect("keys input must parse");
+
+        validate_create_keys_input(&config, input).expect("profile request must validate");
+    }
+
+    #[test]
+    fn validate_create_keys_input_enforces_override_policy() {
+        let request = json!({
+            "tag": "custom-seed",
+            "profile": "hybrid-standard-v1",
+            "eddsa_algorithm": "Ed448",
+        });
+        let profile_only = config::test_app_config();
+        let input = parse_create_keys_input(request.clone()).expect("keys input must parse");
+        assert!(validate_create_keys_input(&profile_only, input).is_err());
+
+        let mut allow_overrides = config::test_app_config();
+        allow_overrides.crypto_policy = String::from("allow-overrides");
+        let input = parse_create_keys_input(request).expect("keys input must parse");
+        validate_create_keys_input(&allow_overrides, input)
+            .expect("valid override must be accepted by policy");
+    }
+
+    #[test]
+    fn validate_create_keys_input_rejects_invalid_profile_tag_and_algorithm() {
+        let mut config = config::test_app_config();
+        config.crypto_policy = String::from("allow-overrides");
+
+        for request in [
+            json!({"profile": "unknown-profile"}),
+            json!({"tag": "bad;tag"}),
+            json!({"eddsa_algorithm": "Ed999"}),
+        ] {
+            let input = parse_create_keys_input(request).expect("keys input must parse");
+            assert!(validate_create_keys_input(&config, input).is_err());
+        }
     }
 
     #[test]

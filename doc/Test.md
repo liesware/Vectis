@@ -433,16 +433,21 @@ and key-file wrappers. Its Botan round-trip test still confirms the compiled
 variant and randomized signing mode. Audit JSONL and init artifacts likewise
 have structural fuzz coverage without loading private material.
 
-These targets intentionally avoid invoking Botan, SQLite, networking, and
-server startup inside the fuzz loop. They focus on parser safety, validation
-boundaries, canonical JSON determinism, config parsing robustness, compact
-signature encoding, audit JSONL shape, key-file wrappers, and share-envelope
-encoding. The data-protection input targets stop at the `ops` parse/validate
-boundary; compact signatures, audit checkpoints, init artifacts, SLH-DSA files,
-and share envelopes stop before cryptographic authentication. They do not load
-keys or profiles, execute cryptographic operations, or exercise HTTP. Hash
-output validation and cryptographic verification remain covered by Rust unit
-tests, `tests/crypto_integration.rs`, and `tests/security/fuzz/http_fuzz.py`.
+These targets intentionally avoid invoking Botan, SQLite, PostgreSQL,
+networking, and server startup inside the fuzz loop. They focus on parser
+safety, complete semantic validation at the `ops` contract boundary, canonical
+JSON determinism, config parsing robustness, compact signature encoding, audit
+JSONL shape, key-file wrappers, and share-envelope encoding. Message inputs are
+checked for KID, host, timestamp, algorithm, nonce, hex, AAD, and envelope
+consistency. Key creation inputs are resolved under both `profile-only` and
+`allow-overrides` policy.
+
+The targets do not resolve loaded-key state, enforce runtime lifecycle, load
+profiles from signed config, execute cryptographic operations, access storage,
+or exercise HTTP. Compact signatures, audit checkpoints, init artifacts,
+SLH-DSA files, and share envelopes stop before cryptographic authentication.
+Hash algorithm output sizes are validated without invoking Botan in the fuzz
+loop and separately checked against Botan by Rust unit and integration tests.
 
 ### Error message hygiene
 

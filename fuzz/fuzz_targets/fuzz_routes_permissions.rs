@@ -6,6 +6,9 @@ use serde_json::{Value, json};
 #[path = "common.rs"]
 mod common;
 use common::validate_fuzz_config_content;
+#[path = "input_common.rs"]
+mod input_common;
+use input_common::assert_public_error_is_clean;
 
 fn strip_public_keys(value: &mut Value) {
     match value {
@@ -28,7 +31,7 @@ fn validate_config_value(value: Value) {
     let Ok(content) = serde_json::to_string(&value) else {
         return;
     };
-    let _ = validate_fuzz_config_content(&content);
+    assert_public_error_is_clean(validate_fuzz_config_content(&content));
 }
 
 fuzz_target!(|data: &[u8]| {

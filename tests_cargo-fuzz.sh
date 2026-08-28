@@ -3,12 +3,16 @@ set -uo pipefail
 
 RUNS="${RUNS:-20000}"
 MAX_TOTAL_TIME="${MAX_TOTAL_TIME:-}"
+PER_INPUT_TIMEOUT="${PER_INPUT_TIMEOUT:-5}"
 TOOLCHAIN="${TOOLCHAIN-nightly}"
 KEEP_GOING="${KEEP_GOING:-0}"
 MINIMIZE="${MINIMIZE:-0}"
-EXPECTED_TARGETS="${EXPECTED_TARGETS:-19}"
+SEEDS_ONLY="${SEEDS_ONLY:-0}"
+INCLUDE_SLOW="${INCLUDE_SLOW:-1}"
+EXPECTED_TARGETS="${EXPECTED_TARGETS:-25}"
 
-TARGETS=(
+# Structural targets: fast, parse/validate/canonicalize without panics.
+FAST_TARGETS=(
   fuzz_canonical_json
   fuzz_sign_input
   fuzz_compact_signature
@@ -28,7 +32,24 @@ TARGETS=(
   fuzz_slh_dsa_signature
   fuzz_slh_dsa_key_files
   fuzz_init_artifacts
+  fuzz_protected_message_artifact
+  fuzz_time_attestation_evaluate
 )
+
+# Bounded crypto property targets: real round-trip / verify properties over live
+# primitives. Lower throughput (crypto backend), so they run as a separate group
+# that a fast weekly pass can skip with INCLUDE_SLOW=0.
+SLOW_TARGETS=(
+  fuzz_fpe_roundtrip
+  fuzz_tokenization_roundtrip
+  fuzz_commitment_verify
+  fuzz_internal_encryption_roundtrip
+)
+
+TARGETS=("${FAST_TARGETS[@]}")
+if [[ "$INCLUDE_SLOW" == "1" ]]; then
+  TARGETS+=("${SLOW_TARGETS[@]}")
+fi
 
 fail() {
   echo "ERROR: $*" >&2
@@ -48,6 +69,7 @@ require_positive_integer "RUNS" "$RUNS"
 if [[ -n "$MAX_TOTAL_TIME" ]]; then
   require_positive_integer "MAX_TOTAL_TIME" "$MAX_TOTAL_TIME"
 fi
+require_positive_integer "PER_INPUT_TIMEOUT" "$PER_INPUT_TIMEOUT"
 
 case "$KEEP_GOING" in
   0 | 1) ;;
@@ -59,9 +81,24 @@ case "$MINIMIZE" in
   *) fail "MINIMIZE must be 0 or 1, got '$MINIMIZE'" ;;
 esac
 
+case "$SEEDS_ONLY" in
+  0 | 1) ;;
+  *) fail "SEEDS_ONLY must be 0 or 1, got '$SEEDS_ONLY'" ;;
+esac
+
+if [[ "$MINIMIZE" == "1" && "$SEEDS_ONLY" == "1" ]]; then
+  fail "MINIMIZE and SEEDS_ONLY are mutually exclusive"
+fi
+
+case "$INCLUDE_SLOW" in
+  0 | 1) ;;
+  *) fail "INCLUDE_SLOW must be 0 or 1, got '$INCLUDE_SLOW'" ;;
+esac
+
 require_positive_integer "EXPECTED_TARGETS" "$EXPECTED_TARGETS"
-if (( ${#TARGETS[@]} != EXPECTED_TARGETS )); then
-  fail "expected $EXPECTED_TARGETS fuzz targets but found ${#TARGETS[@]}; update EXPECTED_TARGETS if this change is intentional"
+known_targets=$((${#FAST_TARGETS[@]} + ${#SLOW_TARGETS[@]}))
+if (( known_targets != EXPECTED_TARGETS )); then
+  fail "expected $EXPECTED_TARGETS fuzz targets but found $known_targets; update EXPECTED_TARGETS if this change is intentional"
 fi
 
 [[ -n "$TOOLCHAIN" ]] || fail "TOOLCHAIN must not be empty"
@@ -97,8 +134,11 @@ echo "Configuration:"
 echo "  TOOLCHAIN=$TOOLCHAIN"
 echo "  Target: $FUZZ_TRIPLE"
 echo "  KEEP_GOING=$KEEP_GOING"
+echo "  INCLUDE_SLOW=$INCLUDE_SLOW"
 if [[ "$MINIMIZE" == "1" ]]; then
   echo "  Mode: minimize (cargo fuzz cmin)"
+elif [[ "$SEEDS_ONLY" == "1" ]]; then
+  echo "  Mode: seeds replay (regression gate; -runs=0 over committed seeds)"
 else
   echo "  Mode: fuzz"
   if [[ -n "$MAX_TOTAL_TIME" ]]; then
@@ -117,6 +157,19 @@ if [[ -n "$MAX_TOTAL_TIME" ]]; then
   libfuzzer_args=(-max_total_time="$MAX_TOTAL_TIME")
 else
   libfuzzer_args=(-runs="$RUNS")
+fi
+
+# Flag any single input that takes longer than PER_INPUT_TIMEOUT seconds, so an
+# algorithmic-complexity DoS (a crafted input that makes a parser/validator hang)
+# surfaces as a finding instead of silently eating the time budget.
+libfuzzer_args+=(-timeout="$PER_INPUT_TIMEOUT")
+
+# Seed the mutator with the domain's field names, enum values, and algorithm
+# identifiers so it synthesizes structurally valid JSON far more often than from
+# random bytes, reaching past the initial parse into the real logic.
+DICT_FILE="$REPO_DIR/fuzz/vectis.dict"
+if [[ -f "$DICT_FILE" ]]; then
+  libfuzzer_args+=(-dict="$DICT_FILE")
 fi
 
 passed=0
@@ -144,6 +197,15 @@ for target in "${TARGETS[@]}"; do
 
   if [[ "$MINIMIZE" == "1" ]]; then
     action=(cargo fuzz cmin --target "$FUZZ_TRIPLE" "$target")
+  elif [[ "$SEEDS_ONLY" == "1" ]]; then
+    # Regression gate: execute every committed seed exactly once (-runs=0) and
+    # exit. Fast enough for a per-PR check; any seed that now crashes is a
+    # reintroduced bug. Targets without seeds have nothing to replay.
+    if [[ ! -d "$seed_dir" ]]; then
+      echo "[$target] no committed seeds; skipping replay"
+      continue
+    fi
+    action=(cargo fuzz run --target "$FUZZ_TRIPLE" "$target" "$seed_dir" -- -runs=0 -timeout="$PER_INPUT_TIMEOUT")
   else
     action=(cargo fuzz run --target "$FUZZ_TRIPLE" "$target" -- "${libfuzzer_args[@]}")
   fi

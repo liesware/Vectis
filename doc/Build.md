@@ -12,7 +12,7 @@ GitHub provenance attached to an official release.
 
 ## Rust Toolchain
 
-Vectis pins Rust `1.97.0` in `rust-toolchain.toml`. A rustup-managed `cargo`
+Vectis pins Rust `1.98.0` in `rust-toolchain.toml`. A rustup-managed `cargo`
 automatically selects that toolchain while inside the repository.
 
 Install rustup from its official distribution channel, then confirm the active

@@ -493,7 +493,9 @@ pub fn validate_hash_hex_field(
     validate_allowed_value("hash_algorithm", hash_algorithm, crypto::HASH_ALGORITHMS)?;
     validate_hex_field(field, value)?;
 
-    let expected_hex_len = crypto::hash_bytes(hash_algorithm, &[])?.len() * 2;
+    let expected_hex_len = crypto::hash_output_size_bytes(hash_algorithm)
+        .ok_or_else(|| crate::error::invalid_input("hash_algorithm is not supported"))?
+        * 2;
     if value.len() != expected_hex_len {
         return Err(crate::error::invalid_input(format!(
             "{field} must be {expected_hex_len} hex characters for {hash_algorithm}, got {}",

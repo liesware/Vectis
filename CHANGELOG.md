@@ -7,6 +7,11 @@ manually for releases; the Git history remains the detailed engineering record.
 
 Changes staged for v0.9.0, the first official release.
 
+## Main
+- Update from 1.97.1 to 1.98
+- fuzz testing improvements
+- cargo fuzz improvements
+
 ## v0.8.5 - 2026-08-21
 
 Pre-release of Vectis. This tag exists to exercise the release pipeline end

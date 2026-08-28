@@ -21,14 +21,14 @@ env:
   CARGO_TERM_COLOR: always
   TOOLCHAIN: nightly-2026-08-01
   FUZZ_TRIPLE: x86_64-unknown-linux-gnu
-  MAX_TOTAL_TIME: 60
+  MAX_TOTAL_TIME: 300
   KEEP_GOING: 1
 
 jobs:
   fuzz:
     name: Native fuzz targets
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 240
 
     steps:
       - name: Checkout

@@ -1,0 +1,127 @@
+# libFuzzer dictionary for the Vectis fuzz targets.
+#
+# Most targets decode `serde_json::from_slice::<Value>(data)` and bail on invalid
+# JSON, so the fuzzer wastes iterations before reaching real logic. These tokens
+# are the field names, enum values, and algorithm identifiers the Vectis JSON
+# contracts actually use, so libFuzzer synthesizes structurally plausible input
+# far more often and penetrates deeper per iteration.
+#
+# Passed to every target via `-dict=fuzz/vectis.dict` in tests_cargo-fuzz.sh.
+
+# --- JSON structural punctuation ---
+"{"
+"}"
+"["
+"]"
+":"
+","
+"\"\""
+
+# --- protocol / versions / types ---
+"version"
+"v1"
+"type"
+"protected-message"
+"created_at"
+"status"
+"active"
+"retired"
+"disabled"
+"compromised"
+"destroyed"
+
+# --- envelope / message fields ---
+"payload"
+"sender"
+"recipient"
+"host"
+"kid"
+"kem"
+"cipher"
+"alg"
+"nonce"
+"aad"
+"ct"
+"message"
+"recipient_kid"
+"sender_kid"
+"sender_host"
+"xecdh_ephemeral_public"
+"ml_kem_ciphertext"
+"ml_kem_salt"
+"hkdf_salt"
+
+# --- signatures ---
+"signatures"
+"eddsa"
+"ml-dsa"
+"sig"
+"signature"
+"timestamp"
+"serial"
+
+# --- op payload fields ---
+"ref"
+"profile"
+"profile_name"
+"plaintext"
+"ciphertext"
+"digest"
+"token"
+"metadata"
+"items"
+"shares"
+"opening"
+"commitment"
+"threshold"
+"index"
+"hex"
+"value"
+"context"
+"tag"
+"valid"
+
+# --- profile config fields ---
+"name"
+"fpe_version"
+"alphabet"
+"min_len"
+"max_len"
+"tweak_aad"
+"token_prefix"
+"token_len"
+"max_plaintext_len"
+"one_time"
+"opening_len"
+"routes"
+"permissions"
+"fpe_profiles"
+"tokenization_profiles"
+"mac_profiles"
+"masking_profiles"
+"commitment_profiles"
+"sharing_profiles"
+
+# --- algorithm identifiers (valid) ---
+"Ed25519"
+"Ed448"
+"ML-DSA-44"
+"ML-DSA-65"
+"ML-DSA-87"
+"ML-KEM-512"
+"ML-KEM-768"
+"ML-KEM-1024"
+"X25519"
+"X448"
+"X25519+ML-KEM-512"
+"AES-256/GCM"
+"ChaCha20Poly1305"
+"BLAKE2b(256)"
+"HMAC(BLAKE2b(256))"
+
+# --- near-miss algorithm identifiers (boundary cases) ---
+"Ed25518"
+"ML-DSA-45"
+"ML-KEM-513"
+"ChaCha20Poly1306"
+"AES-257/GCM"

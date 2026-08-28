@@ -79,14 +79,14 @@ mod tests {
     use axum::http::header::CONTENT_TYPE;
     use serde_json::json;
 
-    async fn extract_json_body(body: Vec<u8>) -> Result<JsonBody, Response> {
+    async fn extract_json_body(body: Vec<u8>) -> Result<JsonBody, Box<Response>> {
         extract_json_body_with_content_type(body, Some("application/json")).await
     }
 
     async fn extract_json_body_with_content_type(
         body: Vec<u8>,
         content_type: Option<&str>,
-    ) -> Result<JsonBody, Response> {
+    ) -> Result<JsonBody, Box<Response>> {
         let mut builder = Request::builder();
         if let Some(content_type) = content_type {
             builder = builder.header(CONTENT_TYPE, content_type);
@@ -94,7 +94,7 @@ mod tests {
         let mut request = builder.body(Body::from(body)).expect("request must build");
         DefaultBodyLimit::max(config::INTERNAL_HTTP_MAX_SIZE).apply(&mut request);
 
-        JsonBody::from_request(request, &()).await
+        JsonBody::from_request(request, &()).await.map_err(Box::new)
     }
 
     fn valid_json_with_size(size: usize) -> Vec<u8> {
@@ -148,7 +148,7 @@ mod tests {
 
             assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
             assert_eq!(
-                response_json(response).await,
+                response_json(*response).await,
                 json!({"error": REQUEST_CONTENT_TYPE_ERROR})
             );
         }
@@ -182,7 +182,7 @@ mod tests {
             Some("application/json")
         );
         assert_eq!(
-            response_json(response).await,
+            response_json(*response).await,
             json!({"error": REQUEST_BODY_TOO_LARGE_ERROR})
         );
     }
@@ -194,7 +194,7 @@ mod tests {
             .expect_err("malformed JSON must be rejected");
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let body = response_json(response).await;
+        let body = response_json(*response).await;
         assert!(
             body["error"]
                 .as_str()

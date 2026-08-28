@@ -15,6 +15,15 @@ zeroize = "1.9.0"
 [dependencies.vectis]
 path = ".."
 
+# Fuzz targets build in the release profile. Force integer-overflow checks and
+# debug assertions on so that silent wrapping arithmetic anywhere under fuzz —
+# not just where the code happens to use saturating_* — is caught as a panic and
+# reported as a finding. For a cryptographic library, silent overflow is a
+# corruption class, so it must never pass unnoticed.
+[profile.release]
+overflow-checks = true
+debug-assertions = true
+
 [[bin]]
 name = "fuzz_canonical_json"
 path = "fuzz_targets/fuzz_canonical_json.rs"
@@ -144,6 +153,51 @@ bench = false
 [[bin]]
 name = "fuzz_init_artifacts"
 path = "fuzz_targets/fuzz_init_artifacts.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_protected_message_artifact"
+path = "fuzz_targets/fuzz_protected_message_artifact.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_time_attestation_evaluate"
+path = "fuzz_targets/fuzz_time_attestation_evaluate.rs"
+test = false
+doc = false
+bench = false
+
+# Bounded crypto property targets (slow group): real round-trip / verify
+# properties over live primitives, not just parse-without-panic. Grouped
+# separately in tests_cargo-fuzz.sh because the crypto backend lowers throughput.
+[[bin]]
+name = "fuzz_fpe_roundtrip"
+path = "fuzz_targets/fuzz_fpe_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_tokenization_roundtrip"
+path = "fuzz_targets/fuzz_tokenization_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_commitment_verify"
+path = "fuzz_targets/fuzz_commitment_verify.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_internal_encryption_roundtrip"
+path = "fuzz_targets/fuzz_internal_encryption_roundtrip.rs"
 test = false
 doc = false
 bench = false

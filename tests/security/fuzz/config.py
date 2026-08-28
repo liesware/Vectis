@@ -1,4 +1,5 @@
 import atexit
+import functools
 import json
 import subprocess
 from pathlib import Path
@@ -19,11 +20,33 @@ DEFAULT_BASE_URL = "http://127.0.0.1:3000"
 CONFIG_PATH = Path("config.json")
 CONFIG_SIGN_PATH = Path("config_sign.json")
 UNSEAL_KEY_FILE = Path(".unseal_key")
+VECTIS_BIN = Path(__file__).resolve().parents[3] / "target" / "debug" / "vectis"
+
+
+@functools.lru_cache(maxsize=1)
+def _vectis_binary():
+    """Build the debug binary once per process and return its path.
+
+    `sign_config_file` is invoked once per provisioning target (every batch and
+    crypto-semantics target signs its profile), and `cargo run` pays Cargo's
+    freshness check (~1.8s) on every call even when nothing recompiles. Building
+    once here and then exec'ing the binary directly drops each subsequent sign
+    from ~1.8s to ~10ms while still rebuilding when `src/` changed.
+    """
+    result = subprocess.run(
+        ["cargo", "build", "--quiet"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"cargo build failed: {result.stderr or result.stdout}")
+    return str(VECTIS_BIN)
 
 
 def sign_config_file():
     result = subprocess.run(
-        ["cargo", "run", "--quiet", "--", "config", "sign", "--output", "json"],
+        [_vectis_binary(), "config", "sign", "--output", "json"],
         check=False,
         capture_output=True,
         text=True,

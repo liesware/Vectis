@@ -42,6 +42,17 @@ pub const HASH_ALGORITHMS: &[&str] = &[
     "Whirlpool",
 ];
 
+pub fn hash_output_size_bytes(algorithm: &str) -> Option<usize> {
+    match algorithm {
+        "BLAKE2b(160)" => Some(20),
+        "BLAKE2b(224)" | "SHA-224" | "SHA-3(224)" => Some(28),
+        "BLAKE2b(256)" | "SHA-256" | "SHA-512-256" | "SHA-3(256)" => Some(32),
+        "BLAKE2b(384)" | "SHA-384" | "SHA-3(384)" => Some(48),
+        "BLAKE2b(512)" | "SHA-512" | "SHA-3(512)" | "Whirlpool" => Some(64),
+        _ => None,
+    }
+}
+
 pub fn hash_text(algorithm: &str, message: &str) -> Result<Vec<u8>, botan::Error> {
     hash_bytes(algorithm, message.as_bytes())
 }
@@ -550,6 +561,19 @@ pub fn decapsulate_ml_kem_shared_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configured_hash_output_sizes_match_botan() {
+        for algorithm in HASH_ALGORITHMS {
+            let expected = hash_output_size_bytes(algorithm)
+                .expect("configured hash algorithm must have a declared output size");
+            let actual = hash_bytes(algorithm, &[])
+                .expect("configured hash algorithm must be supported by Botan")
+                .len();
+
+            assert_eq!(actual, expected, "unexpected output size for {algorithm}");
+        }
+    }
 
     #[test]
     fn create_hkdf_uses_internal_hkdf_constant() {

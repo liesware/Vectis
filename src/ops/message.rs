@@ -246,6 +246,32 @@ pub fn parse_internal_decrypt_message_input(
     crate::ops::json::parse_json_request(request, "internal message decrypt request")
 }
 
+pub fn validate_send_message_input_encoding(input: SendMessageInput) -> Result<(), DynError> {
+    validate_send_message_input(input).map(drop)
+}
+
+pub fn validate_message_envelope_encoding(
+    envelope: &ProtectedMessageToken,
+) -> Result<(), DynError> {
+    validate_message_envelope(envelope)
+}
+
+pub fn validate_decrypt_message_input_encoding(input: DecryptMessageInput) -> Result<(), DynError> {
+    validate_decrypt_message_input(input).map(drop)
+}
+
+pub fn validate_internal_encrypt_message_input_encoding(
+    input: InternalEncryptMessageInput,
+) -> Result<(), DynError> {
+    validate_internal_encrypt_message_input(input).map(drop)
+}
+
+pub fn validate_internal_decrypt_message_input_encoding(
+    input: InternalMessageOutput,
+) -> Result<(), DynError> {
+    validate_internal_decrypt_message_input(input).map(drop)
+}
+
 pub fn decrypt_message_recipient_kid(input: &DecryptMessageInput) -> Result<String, DynError> {
     let aad = parse_aad_fields(&input.message.aad)?;
     let recipient_kid = aad_field(&aad, "recipient_kid")?;
@@ -1623,6 +1649,118 @@ mod tests {
         ] {
             assert!(parse_aad_fields(aad).is_err());
         }
+    }
+
+    #[test]
+    fn message_encoding_validators_accept_current_contracts() {
+        let sender_kid = "a".repeat(64);
+        let recipient_kid = "b".repeat(64);
+        let cipher_alg = "AES-256/GCM";
+
+        let send = parse_send_message_input(json!({
+            "recipient_kid": recipient_kid,
+            "message": "hello",
+        }))
+        .expect("send input must parse");
+        validate_send_message_input_encoding(send).expect("send input must validate");
+
+        let envelope = parse_message_envelope(protected_message_json(&sender_kid, &recipient_kid))
+            .expect("protected message must parse");
+        validate_message_envelope_encoding(&envelope).expect("protected message must validate");
+
+        let decrypt = parse_decrypt_message_input(json!({
+            "sender_host": "localhost:3000",
+            "sender_kid": sender_kid,
+            "timestamp": "123456",
+            "message": {
+                "ctx": "aa",
+                "nonce": nonce_hex_for(cipher_alg),
+                "aad": build_stored_protected_message_aad(
+                    protocol::PROTOCOL_VERSION_V1,
+                    &sender_kid,
+                    &recipient_kid,
+                    "123456",
+                    cipher_alg,
+                ).expect("stored message AAD must build"),
+                "variant": cipher_alg,
+            }
+        }))
+        .expect("decrypt input must parse");
+        validate_decrypt_message_input_encoding(decrypt).expect("decrypt input must validate");
+
+        let internal_encrypt = parse_internal_encrypt_message_input(json!({
+            "plaintext": "secret",
+        }))
+        .expect("internal encrypt input must parse");
+        validate_internal_encrypt_message_input_encoding(internal_encrypt)
+            .expect("internal encrypt input must validate");
+
+        let internal_decrypt = parse_internal_decrypt_message_input(json!({
+            "timestamp": "123456",
+            "kid": recipient_kid,
+            "message": {
+                "ctx": "aa",
+                "nonce": nonce_hex_for(cipher_alg),
+                "aad": build_internal_message_aad(&recipient_kid, "123456", cipher_alg)
+                    .expect("internal message AAD must build"),
+                "variant": cipher_alg,
+            }
+        }))
+        .expect("internal decrypt input must parse");
+        validate_internal_decrypt_message_input_encoding(internal_decrypt)
+            .expect("internal decrypt input must validate");
+    }
+
+    #[test]
+    fn message_encoding_validators_reject_semantic_errors() {
+        let sender_kid = "a".repeat(64);
+        let recipient_kid = "b".repeat(64);
+
+        let send = parse_send_message_input(json!({
+            "recipient_kid": "not-a-kid",
+            "message": "hello",
+        }))
+        .expect("invalid KID remains structurally valid");
+        assert!(validate_send_message_input_encoding(send).is_err());
+
+        let mut envelope_json = protected_message_json(&sender_kid, &recipient_kid);
+        envelope_json["payload"]["cipher"]["aad"] = Value::String(String::from("type=wrong"));
+        let envelope =
+            parse_message_envelope(envelope_json).expect("invalid AAD remains structurally valid");
+        assert!(validate_message_envelope_encoding(&envelope).is_err());
+
+        let decrypt = parse_decrypt_message_input(json!({
+            "sender_host": "localhost:3000",
+            "sender_kid": sender_kid,
+            "timestamp": "123456",
+            "message": {
+                "ctx": "aa",
+                "nonce": "aa",
+                "aad": stored_message_aad(&sender_kid, &recipient_kid, "AES-256/GCM"),
+                "variant": "AES-256/GCM",
+            }
+        }))
+        .expect("short nonce remains structurally valid");
+        assert!(validate_decrypt_message_input_encoding(decrypt).is_err());
+
+        let internal_encrypt = parse_internal_encrypt_message_input(json!({
+            "plaintext": "",
+        }))
+        .expect("empty plaintext remains structurally valid");
+        assert!(validate_internal_encrypt_message_input_encoding(internal_encrypt).is_err());
+
+        let internal_decrypt = parse_internal_decrypt_message_input(json!({
+            "timestamp": "123456",
+            "kid": recipient_kid,
+            "message": {
+                "ctx": "not-hex",
+                "nonce": nonce_hex_for("AES-256/GCM"),
+                "aad": internal_message_aad(&recipient_kid, "AES-256/GCM"),
+                "variant": "AES-256/GCM",
+            }
+        }))
+        .expect("invalid ctx remains structurally valid");
+        assert!(validate_internal_decrypt_message_input_encoding(internal_decrypt).is_err());
     }
 
     proptest! {

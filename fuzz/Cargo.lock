@@ -2991,6 +2991,7 @@ dependencies = [
  "rkik-nts",
  "roughtime",
  "rpassword",
+ "rustls",
  "serde",
  "serde_json",
  "sqlx",
