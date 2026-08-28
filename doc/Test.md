@@ -186,6 +186,10 @@ reusable and one-time token behavior, batch ordering and atomicity
 (`*_batch_contract` and `index_batch_transaction`), and the single-item
 cryptographic capabilities. `compact_signature_integrity` creates fresh tokens
 and verifies the ML-DSA-before-EdDSA failure order for every compact segment.
+`time_attest_offline` temporarily configures loopback-only unavailable sources
+and verifies the fail-closed `502` contract without using the Internet or
+affecting readiness. `http_protocol` checks the 2 MiB request boundary,
+content type, empty-body, method, and per-response latency contracts.
 `lifecycle_contract` verifies that
 new use requires an active KID, retired keys retain only historical
 decrypt/verify capability, and disabled, compromised, and destroyed keys are
@@ -194,6 +198,18 @@ target checks endpoints called without a body where that shape is useful.
 Beyond crash/status hygiene it runs semantic oracles that flag verification,
 AEAD, FPE, tokenization, batch-atomicity, lifecycle, and config-integrity
 bypasses; `--self-check` tests those oracles offline.
+
+Cloudflare validation is deliberately manual and opt-in:
+
+```sh
+VECTIS_TIME_ATTESTATION_LIVE=1 \
+uv run tests/manual/time_attestation_cloudflare.py \
+  --base-url http://127.0.0.1:3000 --apikey <VECTIS_APIKEY>
+```
+
+It validates a complete authenticated NTS and verified Roughtime response, but
+does not require `server_clock.acceptable: true`. It is not part of `tests.sh`,
+CI, release workflows, or normal HTTP fuzzing.
 
 ### Nadir Stateful HTTP Fuzzing
 

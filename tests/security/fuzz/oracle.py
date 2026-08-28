@@ -4,6 +4,7 @@ import json
 ALLOWED_STATUS = {200, 400, 401, 403, 404, 413}
 FRAMEWORK_STATUS = ALLOWED_STATUS | {405, 415}
 REMOTE_UNREACHABLE_MARKER = "final app can't be reached"
+MAX_RESPONSE_DURATION_MS = 2_000
 
 
 def _parse(body):
@@ -37,4 +38,14 @@ def oracle(status, body, apikey, unseal, allowed_status, allow_ru, require_json_
     for name, secret in (("apikey", apikey), ("unseal-key", unseal)):
         if secret and secret in body:
             findings.append(f"possible {name} leak in response body")
+    return findings
+
+
+def slow_response_findings(responses):
+    findings = []
+    for response in responses:
+        if response.status != 0 and response.duration_ms > MAX_RESPONSE_DURATION_MS:
+            findings.append(
+                f"slow response: HTTP {response.status} took {response.duration_ms:.0f}ms"
+            )
     return findings

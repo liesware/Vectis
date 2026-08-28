@@ -1,13 +1,14 @@
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{FromRequest, Request};
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header::CONTENT_TYPE};
 use axum::response::{IntoResponse, Response};
 use serde_json::Value;
 
 use super::error::{ErrorResponse, error_response};
 
 const REQUEST_BODY_TOO_LARGE_ERROR: &str = "request body exceeds maximum allowed size";
+const REQUEST_CONTENT_TYPE_ERROR: &str = "request content type must be application/json";
 
 #[derive(Debug)]
 pub struct JsonBody(pub Value);
@@ -19,6 +20,9 @@ where
     type Rejection = Response;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        if !has_json_content_type(&req) {
+            return Err(content_type_error_response());
+        }
         let bytes = Bytes::from_request(req, state)
             .await
             .map_err(|rejection| body_read_error_response(rejection.into_response().status()))?;
@@ -32,6 +36,23 @@ where
 
         Ok(JsonBody(value))
     }
+}
+
+fn has_json_content_type(request: &Request) -> bool {
+    request
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|media_type| media_type.trim().eq_ignore_ascii_case("application/json"))
+}
+
+fn content_type_error_response() -> Response {
+    (
+        StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        Json(ErrorResponse::new(String::from(REQUEST_CONTENT_TYPE_ERROR))),
+    )
+        .into_response()
 }
 
 fn body_read_error_response(status: StatusCode) -> Response {
@@ -59,9 +80,18 @@ mod tests {
     use serde_json::json;
 
     async fn extract_json_body(body: Vec<u8>) -> Result<JsonBody, Response> {
-        let mut request = Request::builder()
-            .body(Body::from(body))
-            .expect("request must build");
+        extract_json_body_with_content_type(body, Some("application/json")).await
+    }
+
+    async fn extract_json_body_with_content_type(
+        body: Vec<u8>,
+        content_type: Option<&str>,
+    ) -> Result<JsonBody, Response> {
+        let mut builder = Request::builder();
+        if let Some(content_type) = content_type {
+            builder = builder.header(CONTENT_TYPE, content_type);
+        }
+        let mut request = builder.body(Body::from(body)).expect("request must build");
         DefaultBodyLimit::max(config::INTERNAL_HTTP_MAX_SIZE).apply(&mut request);
 
         JsonBody::from_request(request, &()).await
@@ -94,6 +124,34 @@ mod tests {
             .expect("valid body must be accepted");
 
         assert_eq!(value, json!({"ok": true}));
+    }
+
+    #[tokio::test]
+    async fn json_body_accepts_json_content_type_with_charset() {
+        let JsonBody(value) = extract_json_body_with_content_type(
+            br#"{"ok":true}"#.to_vec(),
+            Some("application/json; charset=utf-8"),
+        )
+        .await
+        .expect("JSON content type with charset must be accepted");
+
+        assert_eq!(value, json!({"ok": true}));
+    }
+
+    #[tokio::test]
+    async fn json_body_rejects_missing_or_non_json_content_type() {
+        for content_type in [None, Some("text/plain"), Some("application/octet-stream")] {
+            let response =
+                extract_json_body_with_content_type(br#"{"ok":true}"#.to_vec(), content_type)
+                    .await
+                    .expect_err("non-JSON content type must be rejected");
+
+            assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+            assert_eq!(
+                response_json(response).await,
+                json!({"error": REQUEST_CONTENT_TYPE_ERROR})
+            );
+        }
     }
 
     #[tokio::test]

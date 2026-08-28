@@ -671,7 +671,8 @@ def index_determinism_semantic(case, context):
 
 
 def masking_policy_semantic(case, context):
-    status, body, headers = case["response"]
+    response = case["response"]
+    status, body, headers = response.status, response.body, response.headers or {}
     parsed = _parse(body)
     plaintext = case["plaintext"]
     expected = case["expected"]
@@ -757,4 +758,19 @@ def compact_signature_integrity_semantic(case, _context):
         signature_leaked = isinstance(signature, str) and bool(signature) and signature in verify_body
         if signature_leaked or case["message_hash_hex"] in verify_body:
             findings.append(f"SEMANTIC: compact signature failure reflected sensitive input for {label}")
+    return findings
+
+
+def time_attest_source_unavailable_semantic(case):
+    status, body = case["response"]
+    parsed = _parse(body)
+    findings = []
+    if (
+        status != 502
+        or not isinstance(parsed, dict)
+        or parsed != {"error": "time attestation source unavailable"}
+    ):
+        findings.append("SEMANTIC: unavailable time source did not return the fail-closed 502 contract")
+    if case["ready_before"] != 200 or case["ready_after"] != 200:
+        findings.append("SEMANTIC: time attestation source failure changed readiness")
     return findings

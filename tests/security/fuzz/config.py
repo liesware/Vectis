@@ -96,6 +96,51 @@ def build_config_baseline():
     return baseline_cfg, baseline_sig
 
 
+def configure_time_attestation_offline(client):
+    """Install local-unavailable sources and return the exact restore snapshot."""
+    original_cfg = CONFIG_PATH.read_bytes() if CONFIG_PATH.exists() else None
+    original_sig = CONFIG_SIGN_PATH.read_bytes() if CONFIG_SIGN_PATH.exists() else None
+    snapshot = (original_cfg, original_sig)
+    try:
+        config = read_config_or_empty()
+        config["time_attestation"] = {
+            "nts_server": "localhost",
+            "roughtime_server": "127.0.0.1:9",
+        }
+        CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        sign_config_file()
+        status, body = client.post_json("/config/reload", {}, auth=True)
+        if status != 200:
+            raise RuntimeError(f"could not load offline time-attestation config: HTTP {status}: {body}")
+        return snapshot
+    except Exception:
+        _restore_time_attestation_files(snapshot)
+        try:
+            client.post_json("/config/reload", {}, auth=True)
+        except Exception:
+            pass
+        raise
+
+
+def restore_time_attestation_config(client, snapshot):
+    _restore_time_attestation_files(snapshot)
+    status, body = client.post_json("/config/reload", {}, auth=True)
+    if status != 200:
+        raise RuntimeError(f"could not restore time-attestation config: HTTP {status}: {body}")
+
+
+def _restore_time_attestation_files(snapshot):
+    original_cfg, original_sig = snapshot
+    if original_cfg is None:
+        CONFIG_PATH.unlink(missing_ok=True)
+    else:
+        CONFIG_PATH.write_bytes(original_cfg)
+    if original_sig is None:
+        CONFIG_SIGN_PATH.unlink(missing_ok=True)
+    else:
+        CONFIG_SIGN_PATH.write_bytes(original_sig)
+
+
 def configure_fpe_profile(client, kid):
     original_cfg = CONFIG_PATH.read_bytes() if CONFIG_PATH.exists() else None
     original_sig = CONFIG_SIGN_PATH.read_bytes() if CONFIG_SIGN_PATH.exists() else None

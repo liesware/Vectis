@@ -8,6 +8,8 @@ The `vectis` CLI is an HTTP client for the runtime API, except for `vectis init`
 
 - Default base URL: `http://127.0.0.1:3000`
 - Requests with a body use `Content-Type: application/json`.
+- Body endpoints reject a missing or non-JSON `Content-Type` with `415 Unsupported
+  Media Type`. Parameters such as `application/json; charset=utf-8` are accepted.
 - Request bodies are limited to 2 MiB (`2,097,152` bytes) by the internal
   `INTERNAL_HTTP_MAX_SIZE` policy. Larger bodies are rejected before
   authentication, authorization, storage, or cryptographic processing.
@@ -35,6 +37,28 @@ An oversized request body returns `413 Payload Too Large`:
   "error": "request body exceeds maximum allowed size"
 }
 ```
+
+A body endpoint with a missing or non-JSON content type returns `415 Unsupported
+Media Type`:
+
+```json
+{
+  "error": "request content type must be application/json"
+}
+```
+
+Any endpoint with a body requires `Content-Type: application/json` (parameters
+such as `application/json; charset=utf-8` are accepted). A missing header or a
+non-JSON content type returns `415 Unsupported Media Type`:
+
+```json
+{
+  "error": "request content type must be application/json"
+}
+```
+
+A correct content type with an empty or invalid JSON body returns `400 Bad
+Request`.
 
 ## Protocol Versioning
 

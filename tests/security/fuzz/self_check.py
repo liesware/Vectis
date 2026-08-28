@@ -8,6 +8,8 @@ semantics.py stays a library of oracles rather than a library-plus-test-suite.
 
 import json
 
+from client import FuzzResponse
+from oracle import MAX_RESPONSE_DURATION_MS, slow_response_findings
 from semantics import (
     FPE_BATCH_PLAINTEXTS,
     FPE_PLAINTEXT,
@@ -44,6 +46,7 @@ from semantics import (
     tokenization_batch_semantic,
     tokenization_semantic,
     sharing_integrity_semantic,
+    time_attest_source_unavailable_semantic,
 )
 
 
@@ -109,6 +112,26 @@ def self_check():
     expect(
         not reject_malformed_body_semantic(None, {"a": 1}, 400, ""),
         "malformed floor ignores a rejected non-object body",
+    )
+
+    # Slow-response oracle: a completed HTTP response over the duration limit is a
+    # finding; a fast one is not, and a transport failure (status 0) is left to the
+    # connection-failure classification regardless of how long it took.
+    over = MAX_RESPONSE_DURATION_MS + 1
+    fast = FuzzResponse(200, "{}", MAX_RESPONSE_DURATION_MS - 1)
+    at_limit = FuzzResponse(200, "{}", MAX_RESPONSE_DURATION_MS)
+    slow = FuzzResponse(200, "{}", over)
+    transport_failure = FuzzResponse(0, "", over)
+    expect(not slow_response_findings([fast]), "slow oracle ignores a fast response")
+    expect(not slow_response_findings([at_limit]), "slow oracle ignores a response exactly at the limit")
+    expect(slow_response_findings([slow]), "slow oracle flags a response over the limit")
+    expect(
+        not slow_response_findings([transport_failure]),
+        "slow oracle ignores a transport failure regardless of elapsed time",
+    )
+    expect(
+        len(slow_response_findings([fast, slow, at_limit, slow])) == 2,
+        "slow oracle flags each slow response in a batch",
     )
 
     loaded_body = '{"status":"reloaded","routes_loaded":1,"remote_routes_loaded":0,"clients_loaded":0,"fpe_profiles_loaded":0,"tokenization_profiles_loaded":0,"mac_profiles_loaded":0,"masking_profiles_loaded":0,"commitment_profiles_loaded":0,"sharing_profiles_loaded":0}'
@@ -697,9 +720,9 @@ def self_check():
     index_case["responses"][3] = (200, '{"matched":true}')
     expect(index_determinism_semantic(index_case, crypto_context), "index determinism flags changed plaintext match")
 
-    masking_case = {"plaintext": "4111111111111111", "expected": "************1111", "response": (200, '{"masked":"************1111"}', {})}
+    masking_case = {"plaintext": "4111111111111111", "expected": "************1111", "response": FuzzResponse(200, '{"masked":"************1111"}', 0.0, {})}
     expect(not masking_policy_semantic(masking_case, crypto_context), "mask policy accepts exact redacted output")
-    masking_case["response"] = (200, '{"masked":"4111111111111111"}', {})
+    masking_case["response"] = FuzzResponse(200, '{"masked":"4111111111111111"}', 0.0, {})
     expect(masking_policy_semantic(masking_case, crypto_context), "mask policy flags plaintext leak")
 
     commitment_case = {"responses": [
@@ -731,6 +754,15 @@ def self_check():
     expect(not compact_signature_integrity_semantic(compact_case, crypto_context), "compact signature accepts expected hybrid states")
     compact_case["checks"][4] = ("ml_dsa", 200, '{"signature":"redacted"}', 200, '{"valid":"fail","status":{"ml-dsa":"fail","eddsa":"fail"}}', "signature-ml-dsa")
     expect(compact_signature_integrity_semantic(compact_case, crypto_context), "compact signature flags ML-DSA order violation")
+
+    time_case = {
+        "response": (502, '{"error":"time attestation source unavailable"}'),
+        "ready_before": 200,
+        "ready_after": 200,
+    }
+    expect(not time_attest_source_unavailable_semantic(time_case), "time attest accepts fail-closed source error")
+    time_case["response"] = (502, '{"error":"time attestation source unavailable","sources":{}}')
+    expect(time_attest_source_unavailable_semantic(time_case), "time attest flags partial source output")
 
     for label in failures:
         print(f"SELF-CHECK FAIL: {label}")

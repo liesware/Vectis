@@ -3,6 +3,7 @@ import argparse
 import atexit
 import copy
 import hashlib
+import http.client
 import json
 import subprocess
 import sys
@@ -32,6 +33,8 @@ VALID_MESSAGE = b"Vectis negative workflow test"
 CONFIG_PATH = Path("config.json")
 CONFIG_SIGN_PATH = Path("config_sign.json")
 HTTP_MAX_SIZE = 2 * 1024 * 1024
+OVERSIZE_ERROR = {"error": "request body exceeds maximum allowed size"}
+CONTENT_TYPE_ERROR = {"error": "request content type must be application/json"}
 
 _CONFIG = {
     "version": "v1",
@@ -61,6 +64,44 @@ def require_status(name, actual, expected):
         actual == expected,
         f"{name} expected HTTP {expected}, got HTTP {actual}",
     )
+
+
+def json_body_with_size(size):
+    prefix = b'{"padding":"'
+    suffix = b'"}'
+    require(size >= len(prefix) + len(suffix), "requested JSON body size is too small")
+    return prefix + (b"a" * (size - len(prefix) - len(suffix))) + suffix
+
+
+def raw_http_request(base_url, method, path, body=b"", headers=None):
+    parsed = urllib.parse.urlsplit(base_url)
+    connection_class = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+    connection = connection_class(parsed.hostname, parsed.port, timeout=60)
+    request_headers = dict(headers or {})
+    if body:
+        request_headers["Content-Length"] = str(len(body))
+    try:
+        connection.request(method, path, body=body or None, headers=request_headers)
+        response = connection.getresponse()
+        payload = response.read().decode("utf-8", errors="replace")
+        return response.status, parse_json(payload)
+    finally:
+        connection.close()
+
+
+def _raw_request(base_url, method, path, data=None, content_type=None):
+    """Send a fully controlled request (arbitrary method, raw body bytes, and an
+    optional Content-Type) so the protocol contract can be probed without the
+    JSON-serializing convenience of the client. Returns (status, parsed_body)."""
+    headers = {}
+    if content_type is not None:
+        headers["Content-Type"] = content_type
+    request = urllib.request.Request(f"{base_url}{path}", data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return response.status, parse_json(response.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as err:
+        return err.code, parse_json(err.read().decode("utf-8", "replace"))
 
 
 def require_hex(value, field):
@@ -496,6 +537,44 @@ def main():
 
     run_case(rows, "POST oversized request body", oversized_request_body)
 
+    def http_protocol_contract():
+        base = args.base_url
+        verify = "/sign/verification"
+        # A body of exactly the limit reaches the parser (a normal semantic
+        # rejection), never 413; one byte over is the fixed 413.
+        prefix, suffix = b'{"padding":"', b'"}'
+        exact = prefix + b"a" * (HTTP_MAX_SIZE - len(prefix) - len(suffix)) + suffix
+        require(len(exact) == HTTP_MAX_SIZE, "exact-limit body construction is wrong")
+        status, _ = _raw_request(base, "POST", verify, exact, "application/json")
+        require(
+            status != 413 and 400 <= status < 500,
+            f"exact {HTTP_MAX_SIZE}-byte body must be a non-413 client error, got {status}",
+        )
+        over = prefix + b"a" * (HTTP_MAX_SIZE + 1 - len(prefix) - len(suffix)) + suffix
+        status, body = _raw_request(base, "POST", verify, over, "application/json")
+        require_status("POST /sign/verification body over the limit", status, 413)
+        require(body == OVERSIZE_ERROR, f"over-limit body must return the fixed 413 error, got {body!r}")
+
+        # Content-Type contract: non-JSON and a missing header are 415.
+        for label, content_type in (("text/plain", "text/plain"), ("missing header", None)):
+            status, body = _raw_request(base, "POST", verify, b'{"kid":"0"}', content_type)
+            require_status(f"POST /sign/verification with {label}", status, 415)
+            require(body == CONTENT_TYPE_ERROR, f"{label} must return the fixed 415 error, got {body!r}")
+
+        # Correct content type with an empty body is an ordinary 400.
+        status, _ = _raw_request(base, "POST", verify, b"", "application/json")
+        require_status("POST /sign/verification with an empty body", status, 400)
+
+        # A wrong method on a POST-only route is 405, never a body-dependent code.
+        for method in ("GET", "PUT", "DELETE", "PATCH", "HEAD"):
+            status, _ = _raw_request(base, method, verify, None, None)
+            require_status(f"{method} /sign/verification", status, 405)
+
+        live_status, _ = client.get("/healthz/live")
+        require_status("GET /healthz/live after protocol matrix", live_status, 200)
+
+    run_case(rows, "HTTP protocol contract", http_protocol_contract)
+
     def keys_without_auth():
         status, _, headers = client.post_with_headers("/keys", VALID_KEY_REQUEST)
         require_status("POST /keys without auth", status, 401)
@@ -714,6 +793,7 @@ def main():
     limited_api_key, limited_api_key_hash = create_api_key_pair()
     metrics_api_key, metrics_api_key_hash = create_api_key_pair()
     admin_api_key, admin_api_key_hash = create_api_key_pair()
+    time_api_key, time_api_key_hash = create_api_key_pair()
     write_permissions(
         [
             {
@@ -749,6 +829,17 @@ def main():
                     }
                 ],
             },
+            {
+                "client": "negative-time-attest",
+                "apikey_hash": time_api_key_hash,
+                "status": "active",
+                "permissions": [
+                    {
+                        "kid": "*",
+                        "actions": ["time-attest"],
+                    }
+                ],
+            },
         ]
     )
     _CONFIG["fpe_profiles"] = [valid_fpe_profile(key_id)]
@@ -757,11 +848,16 @@ def main():
     _CONFIG["masking_profiles"] = [valid_masking_profile(key_id)]
     _CONFIG["commitment_profiles"] = [valid_commitment_profile(key_id)]
     _CONFIG["sharing_profiles"] = [valid_sharing_profile(key_id)]
+    _CONFIG["time_attestation"] = {
+        "nts_server": "localhost",
+        "roughtime_server": "127.0.0.1:9",
+    }
     write_config()
     reload_config(client)
     limited_client = Client(args.base_url, limited_api_key)
     metrics_client = Client(args.base_url, metrics_api_key)
     admin_client = Client(args.base_url, admin_api_key)
+    time_client = Client(args.base_url, time_api_key)
 
     def limited_can_message():
         status, _ = limited_client.post(
@@ -1086,6 +1182,94 @@ def main():
         status, _ = limited_client.get("/permissions", auth=True)
         require_status("limited client blocks permissions list", status, 403)
 
+    def time_attest_invalid_auth():
+        status, _ = client.post(
+            "/time/attest",
+            None,
+            headers={"X-API-Key": "00" * 32},
+        )
+        require_status("time attest invalid API key", status, 401)
+
+    def limited_blocks_time_attest():
+        status, _ = limited_client.post("/time/attest", None, auth=True)
+        require_status("limited client blocks time attest", status, 403)
+
+    def time_attest_offline_source_failure():
+        for path in ("/healthz/startup", "/healthz/live", "/healthz/ready"):
+            status, _ = client.get(path)
+            require_status(f"GET {path} before time attest", status, 200)
+        status, response = time_client.post("/time/attest", None, auth=True)
+        require_status("time attest offline source failure", status, 502)
+        require(
+            response == {"error": "time attestation source unavailable"},
+            "time attest source failure must not return partial observations",
+        )
+        for path in ("/healthz/startup", "/healthz/live", "/healthz/ready"):
+            status, _ = client.get(path)
+            require_status(f"GET {path} after time attest", status, 200)
+
+    def http_protocol_contract():
+        exact_body = json_body_with_size(HTTP_MAX_SIZE)
+        status, response = raw_http_request(
+            args.base_url,
+            "POST",
+            "/sign/verification",
+            exact_body,
+            {"Content-Type": "application/json"},
+        )
+        require_status("body at exact HTTP limit", status, 400)
+        require(isinstance(response.get("error"), str), "exact-limit response must be JSON error")
+
+        oversized_body = json_body_with_size(HTTP_MAX_SIZE + 1)
+        status, response = raw_http_request(
+            args.base_url,
+            "POST",
+            "/sign/verification",
+            oversized_body,
+            {"Content-Type": "application/json"},
+        )
+        require_status("body over HTTP limit", status, 413)
+        require(
+            response == {"error": "request body exceeds maximum allowed size"},
+            "oversized body must use the exact 413 error contract",
+        )
+
+        for label, headers in (
+            ("text content type", {"Content-Type": "text/plain"}),
+            ("missing content type", {}),
+        ):
+            status, response = raw_http_request(
+                args.base_url, "POST", "/sign/verification", b"{}", headers
+            )
+            require_status(f"{label} rejection", status, 415)
+            require(
+                response == {"error": "request content type must be application/json"},
+                f"{label} must use the exact 415 error contract",
+            )
+
+        status, response = raw_http_request(
+            args.base_url,
+            "POST",
+            "/sign/verification",
+            b"",
+            {"Content-Type": "application/json"},
+        )
+        require_status("empty JSON body", status, 400)
+        require(isinstance(response.get("error"), str), "empty body response must be JSON error")
+
+        for method in ("GET", "PUT", "DELETE", "PATCH", "HEAD"):
+            status, _ = raw_http_request(
+                args.base_url,
+                method,
+                "/sign/verification",
+                b"{}",
+                {"Content-Type": "application/json"},
+            )
+            require_status(f"{method} /sign/verification", status, 405)
+
+        status, _ = client.get("/healthz/live")
+        require_status("live after HTTP protocol contract", status, 200)
+
     def metrics_client_blocks_permissions_list():
         status, _ = metrics_client.get("/permissions", auth=True)
         require_status("metrics client blocks permissions list", status, 403)
@@ -1157,6 +1341,10 @@ def main():
         ("metrics client allows metrics", metrics_client_allows_metrics),
         ("metrics client blocks admin", metrics_client_blocks_admin),
         ("limited client blocks permissions list", limited_blocks_permissions_list),
+        ("time attest invalid API key", time_attest_invalid_auth),
+        ("limited client blocks time attest", limited_blocks_time_attest),
+        ("time attest offline source failure", time_attest_offline_source_failure),
+        ("HTTP body and protocol contract", http_protocol_contract),
         ("metrics client blocks permissions list", metrics_client_blocks_permissions_list),
         ("admin client allows config reload", admin_allows_config_reload),
         ("admin client allows permissions list", admin_allows_permissions_list),
@@ -3596,6 +3784,7 @@ def main():
     _CONFIG["masking_profiles"] = []
     _CONFIG["commitment_profiles"] = []
     _CONFIG["sharing_profiles"] = []
+    _CONFIG.pop("time_attestation", None)
     write_config()
     status, _ = client.post("/config/reload", {}, auth=True)
     require_status("restore config reload", status, 200)

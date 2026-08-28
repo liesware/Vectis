@@ -1,11 +1,18 @@
 import json
+import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 
 from support.concurrency import run_simultaneously
 
 from client import FuzzClient
-from config import CONFIG_PATH, CONFIG_SIGN_PATH, build_config_baseline
+from config import (
+    CONFIG_PATH,
+    CONFIG_SIGN_PATH,
+    build_config_baseline,
+    configure_time_attestation_offline,
+    restore_time_attestation_config,
+)
 from mutations import BAD_APIKEYS, NASTY_KIDS, WRONG_METHODS, corrupt_string, mutate_raw, mutate_structured
 from oracle import ALLOWED_STATUS, FRAMEWORK_STATUS, _parse, oracle
 from reporting import check_and_record, describe, print_progress
@@ -87,7 +94,10 @@ from semantics import (
     tokenization_batch_semantic,
     tokenization_semantic,
     sharing_integrity_semantic,
+    time_attest_source_unavailable_semantic,
 )
+
+HTTP_MAX_SIZE = 2 * 1024 * 1024
 
 
 def run_body(target, client, rng, args, secrets):
@@ -100,6 +110,7 @@ def run_body(target, client, rng, args, secrets):
     semantic = target.get("semantic", reject_malformed_body_semantic)
     allowed = target.get("allowed_status", ALLOWED_STATUS)
     counters = {"passed": 0, "failed": 0}
+    client.clear_timings()  # drop setup-phase timings so they don't attach to case 0
     for index in range(args.iterations):
         path, seed_obj = rng.choice(seeds)
         if rng.random() < 0.3:
@@ -127,6 +138,7 @@ def run_path_param(target, client, rng, args, secrets):
     allowed = target.get("allowed_status", ALLOWED_STATUS)
     require_json = target.get("require_json_error", True)
     counters = {"passed": 0, "failed": 0}
+    client.clear_timings()  # drop setup-phase timings so they don't attach to case 0
     for index in range(args.iterations):
         template, auth = rng.choice(endpoints)
         raw_kid = rng.choice(NASTY_KIDS) if rng.random() < 0.5 else corrupt_string(KID_HEX, rng)
@@ -144,6 +156,7 @@ def run_headers(target, client, rng, args, secrets):
     apikey, unseal = secrets
     allowed = target.get("allowed_status", FRAMEWORK_STATUS)
     counters = {"passed": 0, "failed": 0}
+    client.clear_timings()  # drop setup-phase timings so they don't attach to case 0
     for index in range(args.iterations):
         if rng.random() < 0.5:
             bad_key = rng.choice(BAD_APIKEYS)
@@ -165,10 +178,94 @@ def run_headers(target, client, rng, args, secrets):
     return counters
 
 
+def _json_body_with_size(size):
+    prefix = b'{"padding":"'
+    suffix = b'"}'
+    if size < len(prefix) + len(suffix):
+        raise ValueError("requested JSON body size is too small")
+    return prefix + (b"a" * (size - len(prefix) - len(suffix))) + suffix
+
+
+def _protocol_findings(status, body, expected, apikey, unseal):
+    findings = oracle(
+        status,
+        body,
+        apikey,
+        unseal,
+        {expected},
+        False,
+        require_json_error=expected != 405,
+    )
+    if status != expected:
+        findings.append(f"protocol contract expected HTTP {expected}, got {status}")
+    if expected == 413 and _parse(body) != {"error": "request body exceeds maximum allowed size"}:
+        findings.append("protocol limit response did not use the exact 413 error contract")
+    return findings
+
+
+def run_http_protocol(target, client, _rng, args, secrets):
+    apikey, unseal = secrets
+    counters = {"passed": 0, "failed": 0}
+    client.clear_timings()
+
+    for index, (label, size, expected) in enumerate(
+        (
+            ("body-at-limit", HTTP_MAX_SIZE, 400),
+            ("body-over-limit", HTTP_MAX_SIZE + 1, 413),
+        )
+    ):
+        status, body = client.request(
+            "POST",
+            "/sign/verification",
+            data=_json_body_with_size(size),
+            headers={"Content-Type": "application/json"},
+        )
+        findings = _protocol_findings(status, body, expected, apikey, unseal)
+        description = {"case": label, "path": "/sign/verification", "body_bytes": size, "status": status}
+        if check_and_record(target["name"], client, args, index, status, findings, description, counters):
+            return counters
+
+    endpoints = (
+        ("/keys", True),
+        ("/sign/verification", False),
+        (f"/fpe/encrypt/{KID_HEX}", True),
+        ("/token/decode", True),
+        ("/shares/combine", True),
+    )
+    variants = (
+        ("content-type-text", "POST", b"{}", {"Content-Type": "text/plain"}, 415),
+        ("content-type-missing", "POST", b"{}", {}, 415),
+        ("empty-json-body", "POST", b"", {"Content-Type": "application/json"}, 400),
+        ("wrong-method", None, None, None, 405),
+    )
+    for index in range(args.iterations):
+        path, auth = endpoints[index % len(endpoints)]
+        label, method, data, headers, expected = variants[(index // len(endpoints)) % len(variants)]
+        if method is None:
+            methods = [candidate for candidate in WRONG_METHODS if not (path == "/keys" and candidate == "GET")]
+            method = methods[(index // (len(endpoints) * len(variants))) % len(methods)]
+            data = b"{}"
+            headers = {"Content-Type": "application/json"}
+        status, body = client.request(method, path, data=data, headers=headers, auth=auth)
+        findings = _protocol_findings(status, body, expected, apikey, unseal)
+        description = {
+            "case": label,
+            "method": method,
+            "path": path,
+            "body_bytes": len(data or b""),
+            "status": status,
+        }
+        if check_and_record(target["name"], client, args, index + 2, status, findings, description, counters):
+            break
+        print_progress(target["name"], index, args, counters)
+    return counters
+
+
 def run_no_body(target, client, rng, args, secrets):
     apikey, unseal = secrets
     endpoints = target["endpoints"]
     counters = {"passed": 0, "failed": 0}
+    client.clear_timings()  # drop setup-phase timings so they don't attach to case 0
     for index in range(args.iterations):
         method, path, auth, require_json_error = rng.choice(endpoints)
         status, response = client.request(method, path, auth=auth)
@@ -192,6 +289,7 @@ def run_config(target, client, rng, args, secrets):
     apikey, unseal = secrets
     counters = {"passed": 0, "failed": 0}
     baseline_cfg, baseline_sig = build_config_baseline()
+    client.clear_timings()  # drop setup-phase timings so they don't attach to case 0
     for index in range(args.iterations):
         if rng.random() < 0.7:
             seed = json.loads(baseline_cfg)
@@ -227,6 +325,40 @@ def run_config(target, client, rng, args, secrets):
         if aborted:
             break
         print_progress("config", index, args, counters)
+    return counters
+
+
+def run_time_attest_offline(target, client, _rng, args, secrets):
+    apikey, unseal = secrets
+    counters = {"passed": 0, "failed": 0}
+    snapshot = configure_time_attestation_offline(client)
+    try:
+        client.clear_timings()  # drop setup-phase timings so they don't attach to case 0
+        for index in range(args.iterations):
+            # `/time/attest` admits one authorized request per second. This target
+            # tests source failure, not rate limiting, so keep each attempt eligible.
+            time.sleep(1.05)
+            ready_before = client.get_status("/healthz/ready")
+            status, body = client.request("POST", "/time/attest", auth=True)
+            ready_after = client.get_status("/healthz/ready")
+            case = {
+                "response": (status, body),
+                "ready_before": ready_before,
+                "ready_after": ready_after,
+            }
+            findings = oracle(status, body, apikey, unseal, {502}, False)
+            findings.extend(time_attest_source_unavailable_semantic(case))
+            description = {
+                "scenario": target["name"],
+                "status": status,
+                "ready_before": ready_before,
+                "ready_after": ready_after,
+            }
+            if check_and_record(target["name"], client, args, index, status, findings, description, counters):
+                break
+            print_progress(target["name"], index, args, counters)
+    finally:
+        restore_time_attestation_config(client, snapshot)
     return counters
 
 
@@ -308,7 +440,7 @@ def _one_time_race_case(client, context, index):
         ONE_TIME_TOKEN_PLAINTEXT,
     )
     def decode(ref):
-        worker_client = FuzzClient(client.base_url, client.apikey)
+        worker_client = FuzzClient(client.base_url, client.apikey, timing=client.timing)
         return _decode_token(worker_client, context["kid"], ONE_TIME_TOKENIZATION_PROFILE, ref, token)
 
     # Reuse the scenario's pool across every iteration (see run_one_time_scenario);
@@ -377,6 +509,7 @@ def run_one_time_scenario(target, client, _rng, args, secrets):
     if executor is not None:
         context["executor"] = executor
     try:
+        client.clear_timings()  # drop setup-phase timings so they don't attach to case 0
         for index in range(args.iterations):
             responses = target["scenario"](client, context, index)
             findings = []
@@ -610,6 +743,7 @@ def run_batch_contract(target, client, _rng, args, secrets):
     apikey, unseal = secrets
     context = batch_contract_context(client, target["capability"])
     counters = {"passed": 0, "failed": 0}
+    client.clear_timings()  # drop setup-phase timings so they don't attach to case 0
     for index in range(args.iterations):
         case = target["scenario"](client, context, index)
         responses = case["responses"]
@@ -741,6 +875,7 @@ def run_crypto_semantics(target, client, _rng, args, secrets):
     apikey, unseal = secrets
     context = crypto_semantics_context(client, target["capability"])
     counters = {"passed": 0, "failed": 0}
+    client.clear_timings()  # drop setup-phase timings so they don't attach to case 0
     for index in range(args.iterations):
         case = target["scenario"](client, context, index)
         responses = case["responses"]
@@ -788,6 +923,7 @@ def run_compact_signature_integrity(target, client, _rng, args, secrets):
     apikey, unseal = secrets
     context = compact_signature_context(client)
     counters = {"passed": 0, "failed": 0}
+    client.clear_timings()  # drop setup-phase timings so they don't attach to case 0
     for index in range(args.iterations):
         case = _compact_signature_integrity_case(client, context, index)
         findings = []
@@ -903,6 +1039,7 @@ def run_lifecycle_contract(target, client, _rng, args, secrets):
     # Provision every iteration's keys and profiles once (one cargo-signed config
     # reload for the whole run) instead of rebuilding the context per iteration.
     contexts = lifecycle_contract_setup(client, args.iterations)
+    client.clear_timings()  # drop setup-phase timings so they don't attach to case 0
     for index, context in enumerate(contexts):
         records = _lifecycle_contract_case(client, context, index)
         findings = []
@@ -942,6 +1079,8 @@ TARGETS = [
     {"name": "lifecycle_contract", "runner": run_lifecycle_contract},
     {"name": "decrypt", "runner": run_body, "seed_factory": decrypt_seeds, "auth": True},
     {"name": "config", "runner": run_config},
+    {"name": "time_attest_offline", "runner": run_time_attest_offline},
+    {"name": "http_protocol", "runner": run_http_protocol},
     {"name": "fpe", "runner": run_body, "seed_factory": fpe_seeds,
      "auth": True, "semantic": fpe_semantic},
     {"name": "fpe_batch", "runner": run_body, "seed_factory": fpe_batch_seeds,
