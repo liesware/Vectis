@@ -336,8 +336,7 @@ Three things about this schema are the whole design in miniature:
 
 ## The Three Layers And The Dependency Graph
 
-Vectis materializes the layers as **directories** (unlike Nadir, which keeps them
-by module role). The dependency points inward:
+Vectis materializes the layers as **directories**. The dependency points inward:
 
 ```
         io/                 ops/               core/

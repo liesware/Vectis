@@ -211,32 +211,6 @@ It validates a complete authenticated NTS and verified Roughtime response, but
 does not require `server_clock.acceptable: true`. It is not part of `tests.sh`,
 CI, release workflows, or normal HTTP fuzzing.
 
-### Nadir Stateful HTTP Fuzzing
-
-Nadir is the developing replacement for the stateful and semantic parts of
-`tests/security/fuzz/http_fuzz.py`. It models request, producer/consumer, multi-step flow,
-and race targets, then evaluates project-specific invariants across fresh
-workflow state. It remains in parallel with `http_fuzz.py` until the existing
-semantic coverage has been migrated and compared over repeated runs.
-
-Run it against a disposable, automatically provisioned Vectis node:
-
-```sh
-bash tests/security/nadir/run.sh --iterations 100 --seed 0
-```
-
-New finding artifacts use `nadir-finding-v4` and contain a redacted per-case
-recipe. `replay` only resends stored requests and does not evaluate oracles.
-Use the Vectis wrapper to rebuild state and verify that the original finding
-codes still appear:
-
-```sh
-bash tests/security/nadir/reproduce.sh tests/security/nadir/results/<finding.json>
-```
-
-The wrapper provisions a fresh local node, runs `nadir reproduce`, verifies the
-node's audit log, and removes the laboratory. Nadir is not yet part of CI.
-
 ## Schemathesis OpenAPI Tests
 
 Install/sync the fuzz dependency group:
@@ -544,10 +518,7 @@ uses sanitizer builds, and is heavier than the normal HTTP test suite.
   tests.
 - `tests/manual/final_app_server.py`: manual mock final-app receiver and decrypt helper; it is not part of CI or `tests.sh`.
 - `tests/integration/http/http_all.py`: positive + negative summary runner.
-- `tests/security/fuzz/http_fuzz.py`: targeted manual HTTP mutation tests retained during the
-  Nadir migration.
-- `tests/security/nadir/run.sh`: isolated Vectis harness for Nadir discovery runs.
-- `tests/security/nadir/reproduce.sh`: isolated Vectis harness for v4 finding reproduction.
+- `tests/security/fuzz/http_fuzz.py`: targeted manual HTTP mutation and semantic contract tests.
 - `tests/integration/http/http_negative.py`: invalid, denied, and error-path workflows.
 - `tests/integration/http/http_positive.py`: valid end-to-end runtime workflows.
 - `tests/security/openapi/http_schemathesis.py`: OpenAPI contract fuzzing via Schemathesis.

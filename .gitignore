@@ -29,9 +29,6 @@ fuzz/target/
 proptest-regressions/
 tests/performance/local/site/
 /zap-results/
-nadir-results/
-tests/security/nadir/site/
-tests/security/nadir/results/
 
 # exception
 !fuzz/seeds/fuzz_routes_permissions/routes.json

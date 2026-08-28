@@ -55,7 +55,6 @@ jobs:
           bash -n demo/local/*.sh
           bash -n tests/ci/*.sh
           bash -n tests/integration/tls/*.sh
-          bash -n tests/security/nadir/*.sh
           bash -n tests/security/zap/*.sh
           bash -n tests/performance/*.sh
           bash -n tests/performance/local/*.sh
