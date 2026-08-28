@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from support.test_config import require_apikey
+from support.compact_signature import mutate_compact_signature_segment
 from support.concurrency import run_simultaneously
 from support.http_support import (
     DEFAULT_BASE_URL,
@@ -675,6 +676,26 @@ def verify_signature(client, token):
     require(status.get("ml-dsa") == "ok", "verification.status.ml-dsa must be ok")
 
 
+def compact_signature_integrity_round_trip(client, key_id):
+    expected = {
+        "header": (0, "fail", "not_checked"),
+        "payload": (1, "fail", "not_checked"),
+        "eddsa": (2, "ok", "fail"),
+        "ml-dsa": (3, "fail", "not_checked"),
+    }
+    status_client = StatusClient(client.base_url, client.apikey)
+    for label, (segment, expected_ml_dsa, expected_eddsa) in expected.items():
+        token = sign_key(client, key_id, "BLAKE2b(256)", "cd" * 32)
+        mutated = dict(token, signature=mutate_compact_signature_segment(token["signature"], segment))
+        status, response = status_client.post("/sign/verification", mutated)
+        require(status == 200, f"tampered compact {label} must return 200")
+        require(response.get("valid") == "fail", f"tampered compact {label} must fail")
+        verification = response.get("status")
+        require(isinstance(verification, dict), f"tampered compact {label} status must be object")
+        require(verification.get("ml-dsa") == expected_ml_dsa, f"tampered compact {label} ML-DSA state mismatch")
+        require(verification.get("eddsa") == expected_eddsa, f"tampered compact {label} EdDSA state mismatch")
+
+
 def validate_final_app_delivery(delivery, sender_key_id, case):
     require(isinstance(delivery, dict), "final app delivery must be an object")
     require(delivery.get("sender_host"), "final app sender_host must be present")
@@ -1258,6 +1279,119 @@ def sharing_round_trip(client, key_id):
     )
 
     return profile, set_id, len(shares)
+
+
+def retired_lifecycle_historical_operations(client):
+    """A retired key may recover or verify existing material, never create it."""
+    key_id = create_key(
+        client,
+        {"tag": "lifecycle-retired", "profile": "hybrid-standard-v1"},
+    )
+    fpe_profile = "lifecycle-retired-fpe-v1"
+    token_profile = "lifecycle-retired-token-v1"
+    sharing_profile = "lifecycle-retired-sharing-3of5-v1"
+    _CONFIG["fpe_profiles"].append(
+        {
+            "name": fpe_profile,
+            "fpe_version": "fpe-ff1-2025",
+            "alphabet": "0123456789",
+            "min_len": 6,
+            "max_len": 32,
+            "tweak_aad": "tenant=positive;purpose=lifecycle;version=1",
+            "kid": key_id,
+        }
+    )
+    _CONFIG["tokenization_profiles"].append(
+        {
+            "name": token_profile,
+            "kid": key_id,
+            "token_prefix": "tok_lifecycle_retired",
+            "token_len": 32,
+            "max_plaintext_len": 128,
+            "one_time": False,
+        }
+    )
+    _CONFIG["sharing_profiles"].append(
+        {
+            "name": sharing_profile,
+            "kid": key_id,
+            "threshold": 3,
+            "shares": 5,
+            "max_secret_len": 128,
+            "context": "tenant=positive;purpose=lifecycle;version=1",
+        }
+    )
+    write_config()
+    reload_config(client)
+
+    fpe_plaintext = "123456789"
+    fpe = client.post(
+        f"/fpe/encrypt/{key_id}",
+        {"ref": "lifecycle-fpe", "profile": fpe_profile, "plaintext": fpe_plaintext},
+        auth=True,
+    )
+    token_plaintext = "lifecycle-token"
+    token = client.post(
+        f"/token/encode/{key_id}",
+        {"ref": "lifecycle-token", "profile": token_profile, "plaintext": token_plaintext, "metadata": {}},
+        auth=True,
+    )
+    secret = "lifecycle-sharing-secret"
+    split = client.post(
+        f"/shares/split/{key_id}",
+        {"profile": sharing_profile, "plaintext": secret},
+        auth=True,
+    )
+    shares = split.get("shares")
+    require(isinstance(shares, list) and len(shares) == 5, "lifecycle split must return shares")
+
+    validate_lifecycle_response(
+        client.post(
+            f"/lifecycle/{key_id}",
+            {"status": "retired", "reason": "positive historical recovery test"},
+            auth=True,
+        ),
+        key_id,
+        "retired",
+    )
+    require(
+        client.post(
+            "/fpe/decrypt",
+            {"ref": "lifecycle-fpe", "kid": key_id, "profile": fpe_profile, "ciphertext": fpe["ciphertext"]},
+            auth=True,
+        ).get("plaintext") == fpe_plaintext,
+        "retired key must decrypt FPE ciphertext",
+    )
+    require(
+        client.post(
+            "/token/decode",
+            {"ref": "lifecycle-token", "kid": key_id, "profile": token_profile, "token": token["token"]},
+            auth=True,
+        ).get("plaintext") == token_plaintext,
+        "retired key must decode token",
+    )
+    require(
+        client.post(
+            "/shares/combine",
+            {"kid": key_id, "profile": sharing_profile, "shares": shares[:3]},
+            auth=True,
+        ).get("plaintext") == secret,
+        "retired key must combine shares",
+    )
+
+    status_client = StatusClient(client.base_url, client.apikey)
+    blocked = [
+        (f"/fpe/encrypt/{key_id}", {"ref": "lifecycle-fpe-new", "profile": fpe_profile, "plaintext": fpe_plaintext}),
+        (f"/token/encode/{key_id}", {"ref": "lifecycle-token-new", "profile": token_profile, "plaintext": token_plaintext, "metadata": {}}),
+        (f"/shares/split/{key_id}", {"profile": sharing_profile, "plaintext": secret}),
+    ]
+    for path, body in blocked:
+        status, response = status_client.post(path, body, auth=True)
+        require(status == 403, f"retired key must reject {path}")
+        require(
+            response.get("error") == "key is retired and can only be used for decrypt or verification",
+            f"retired key error mismatch for {path}",
+        )
 
 
 def commitment_round_trip(client, key_id):
@@ -2008,6 +2142,9 @@ def main():
     mask_batch_profile, mask_batch_values = mask_batch_round_trip(client, created[0][0])
     index_profile, index_digest = index_round_trip(client, created[0][0])
     index_batch_profile, index_batch_digests = index_batch_round_trip(client, created[0][0])
+    retired_lifecycle_historical_operations(client)
+    print("Retired lifecycle historical operations: OK\n")
+    passed_count += 1
     mac_rows = [
         (f"{mac_profile} {mac_algorithm} {mac_digest}", "OK"),
         (
@@ -2101,6 +2238,9 @@ def main():
 
             verify_signature(client, token)
             verify_rows.append((f"{key_id} {hash_alg}", "OK"))
+
+    compact_signature_integrity_round_trip(client, created[0][0])
+    verify_rows.append((f"{created[0][0]} compact segment integrity", "OK"))
 
     write_test_remote_routes(client, [key_id for key_id, _ in created], recipient_host, wildcard=True)
     reload_config(client)

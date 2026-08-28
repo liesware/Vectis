@@ -1,9 +1,13 @@
+import base64
 import copy
 import json
+
+from support.compact_signature import mutate_compact_signature_segment
 
 from config import (
     configure_commitment_profile,
     configure_fpe_profile,
+    configure_lifecycle_profiles,
     configure_mac_profile,
     configure_masking_profile,
     configure_one_time_tokenization_profiles,
@@ -92,6 +96,7 @@ _BATCH_CONTRACTS = {
 
 ONE_TIME_TOKEN_PLAINTEXT = "fuzz one-time token plaintext"
 ONE_TIME_BATCH_PLAINTEXTS = ["fuzz one-time batch first", "fuzz one-time batch second"]
+COMPACT_SIGNATURE_MESSAGE_HASH = {"alg": "BLAKE2b(256)", "hex": "cd" * 32}
 
 
 def _create_key(client, case):
@@ -109,6 +114,55 @@ def batch_contract_context(client, capability):
     kid = _create_key(client, key_case)
     configure_profile(client, kid)
     return {"kid": kid, "profile": profile}
+
+
+def crypto_semantics_context(client, capability):
+    """Create one fresh active KID/profile pair for a deterministic scenario."""
+    if capability in _BATCH_CONTRACTS:
+        return batch_contract_context(client, capability)
+    if capability != "sharing":
+        raise ValueError(f"unknown crypto semantics capability: {capability}")
+    kid = _create_key(client, {"tag": "fuzz-sharing-integrity", "profile": "hybrid-standard-v1"})
+    configure_sharing_profile(client, kid)
+    return {"kid": kid, "profile": SHARING_PROFILE}
+
+
+def mutate_hex(value):
+    if not isinstance(value, str) or not value:
+        return value
+    replacement = "1" if value[0] == "0" else "0"
+    return replacement + value[1:]
+
+
+def mutate_base64url(value):
+    if not isinstance(value, str) or not value:
+        return value
+    replacement = "B" if value[0] == "A" else "A"
+    return replacement + value[1:]
+
+
+def compact_signature_context(client):
+    return {
+        "kid": _create_key(
+            client, {"tag": "fuzz-compact-signature", "profile": "hybrid-standard-v1"}
+        )
+    }
+
+
+def mutate_share_tag(encoded):
+    """Change only the authenticated tag while preserving a canonical envelope."""
+    prefix = "vectis-sss-v1."
+    if not isinstance(encoded, str) or not encoded.startswith(prefix):
+        return encoded
+    payload = encoded[len(prefix):]
+    try:
+        padding = "=" * (-len(payload) % 4)
+        envelope = json.loads(base64.urlsafe_b64decode(payload + padding))
+        envelope["tag"] = mutate_hex(envelope.get("tag"))
+        canonical = json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return encoded
+    return prefix + base64.urlsafe_b64encode(canonical).decode("ascii").rstrip("=")
 
 
 def message_seeds(_client):
@@ -207,6 +261,29 @@ def lifecycle_seeds(client):
         client, {"tag": "fuzz-lifecycle", "profile": "hybrid-performance-v1"}
     )
     return [(f"/lifecycle/{kid}", {"status": "disabled", "reason": "fuzz"})]
+
+
+def lifecycle_contract_setup(client, iterations):
+    """Provision every lifecycle iteration up front: one fresh 5-KID batch per
+    iteration (keys are permanently transitioned, so each iteration needs its
+    own), all bound in a single signed config reload. Returns one context per
+    iteration, each {"kids": {state: kid}, "profiles": {state: {role: name}}}.
+    """
+    states = ("active", "retired", "disabled", "compromised", "destroyed")
+    batches = [
+        {
+            state: _create_key(
+                client,
+                {"tag": f"fuzz-lifecycle-{index}-{state}", "profile": "hybrid-standard-v1"},
+            )
+            for state in states
+        }
+        for index in range(iterations)
+    ]
+    if not batches:
+        return []
+    profiles = configure_lifecycle_profiles(client, batches)
+    return [{"kids": batch, "profiles": profiles[index]} for index, batch in enumerate(batches)]
 
 
 def decrypt_seeds(_client):

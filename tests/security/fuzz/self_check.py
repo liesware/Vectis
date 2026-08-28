@@ -19,15 +19,21 @@ from semantics import (
     batch_duplicate_ref_rejection,
     batch_output_contract,
     commitment_batch_contract_semantic,
+    commitment_randomness_semantic,
+    compact_signature_integrity_semantic,
     config_semantic,
     fpe_batch_contract_semantic,
     fpe_batch_semantic,
     fpe_semantic,
     index_batch_transaction_semantic,
+    index_determinism_semantic,
     internal_encrypt_semantic,
     internal_semantic,
+    lifecycle_contract_semantic,
     mac_batch_contract_semantic,
+    mac_determinism_semantic,
     masking_batch_contract_semantic,
+    masking_policy_semantic,
     one_time_batch_semantic,
     one_time_race_semantic,
     one_time_single_semantic,
@@ -37,6 +43,7 @@ from semantics import (
     token_semantic,
     tokenization_batch_semantic,
     tokenization_semantic,
+    sharing_integrity_semantic,
 )
 
 
@@ -617,6 +624,113 @@ def self_check():
     expect(not commitment_batch_contract_semantic(commitment_case, contract_context), "commitment batch contract accepts valid flow")
     commitment_case["responses"][1] = contract_response([{"ref": batch_refs[0], "valid": True}, {"ref": batch_refs[1], "valid": False}])
     expect(commitment_batch_contract_semantic(commitment_case, contract_context), "commitment batch contract flags failed valid item")
+
+    lifecycle_records = [
+        {
+            "state": "retired",
+            "phase": "historical",
+            "operation": "fpe_decrypt",
+            "expected": "allowed",
+            "status": 200,
+            "body": json.dumps({"plaintext": FPE_PLAINTEXT}),
+        },
+        {
+            "state": "retired",
+            "phase": "production",
+            "operation": "fpe_encrypt",
+            "expected": "rejected",
+            "status": 403,
+            "body": json.dumps({"error": "key is retired and can only be used for decrypt or verification"}),
+        },
+        {
+            "state": "disabled",
+            "phase": "historical",
+            "operation": "token_decode",
+            "expected": "rejected",
+            "status": 403,
+            "body": json.dumps({"error": "key is currently disabled"}),
+        },
+        {
+            "state": "compromised",
+            "phase": "production",
+            "operation": "share_split",
+            "expected": "rejected",
+            "status": 403,
+            "body": json.dumps({"error": "key is compromised and cannot be used for security reasons"}),
+        },
+        {
+            "state": "destroyed",
+            "phase": "public",
+            "operation": "public_key",
+            "expected": "rejected",
+            "status": 403,
+            "body": json.dumps({"error": "key is logically destroyed and cannot be used"}),
+        },
+    ]
+    expect(not lifecycle_contract_semantic(lifecycle_records), "lifecycle contract accepts the policy matrix")
+    lifecycle_records[2] = dict(lifecycle_records[2], status=200, body=json.dumps({"plaintext": TOKEN_PLAINTEXT}))
+    expect(lifecycle_contract_semantic(lifecycle_records), "lifecycle contract flags blocked historical use")
+    lifecycle_records[2] = {
+        "state": "disabled",
+        "phase": "historical",
+        "operation": "token_decode",
+        "expected": "rejected",
+        "status": 403,
+        "body": json.dumps({"error": "key is currently disabled", "plaintext": TOKEN_PLAINTEXT}),
+    }
+    expect(lifecycle_contract_semantic(lifecycle_records), "lifecycle contract flags output in rejection")
+
+    crypto_context = {"kid": "a" * 64, "profile": "crypto-self"}
+    mac_case = {"responses": [
+        (200, '{"digest":"aa"}'), (200, '{"digest":"aa"}'),
+        (200, '{"valid":true}'), (200, '{"valid":false}'), (200, '{"valid":false}'),
+    ]}
+    expect(not mac_determinism_semantic(mac_case, crypto_context), "MAC determinism accepts valid flow")
+    mac_case["responses"][1] = (200, '{"digest":"bb"}')
+    expect(mac_determinism_semantic(mac_case, crypto_context), "MAC determinism flags changed digest")
+
+    index_case = {"responses": [
+        (200, '{"index":"aa"}'), (200, '{"index":"aa"}'),
+        (200, '{"matched":true}'), (200, '{"matched":false}'),
+    ]}
+    expect(not index_determinism_semantic(index_case, crypto_context), "index determinism accepts valid flow")
+    index_case["responses"][3] = (200, '{"matched":true}')
+    expect(index_determinism_semantic(index_case, crypto_context), "index determinism flags changed plaintext match")
+
+    masking_case = {"plaintext": "4111111111111111", "expected": "************1111", "response": (200, '{"masked":"************1111"}', {})}
+    expect(not masking_policy_semantic(masking_case, crypto_context), "mask policy accepts exact redacted output")
+    masking_case["response"] = (200, '{"masked":"4111111111111111"}', {})
+    expect(masking_policy_semantic(masking_case, crypto_context), "mask policy flags plaintext leak")
+
+    commitment_case = {"responses": [
+        (200, '{"opening":"AA","commitment":"aa"}'), (200, '{"opening":"BB","commitment":"bb"}'),
+        (200, '{"valid":true}'), (200, '{"valid":false}'), (200, '{"valid":false}'),
+    ]}
+    expect(not commitment_randomness_semantic(commitment_case, crypto_context), "commitment randomness accepts valid flow")
+    commitment_case["responses"][1] = (200, '{"opening":"AA","commitment":"aa"}')
+    expect(commitment_randomness_semantic(commitment_case, crypto_context), "commitment randomness flags reused opening")
+
+    sharing_case = {"plaintext": "share-self", "checks": [
+        (200, '{"plaintext":"share-self"}'), (400, '{"error":"x"}'),
+        (400, '{"error":"x"}'), (400, '{"error":"x"}'), (400, '{"error":"x"}'),
+    ]}
+    expect(not sharing_integrity_semantic(sharing_case, crypto_context), "sharing integrity accepts valid flow")
+    sharing_case["checks"][3] = (200, '{"plaintext":"share-self"}')
+    expect(sharing_integrity_semantic(sharing_case, crypto_context), "sharing integrity flags tag bypass")
+
+    compact_case = {
+        "message_hash_hex": "cd" * 32,
+        "checks": [
+            ("control", 200, '{"signature":"redacted"}', 200, '{"valid":"ok","status":{"ml-dsa":"ok","eddsa":"ok"}}', "signature-control"),
+            ("header", 200, '{"signature":"redacted"}', 200, '{"valid":"fail","status":{"ml-dsa":"fail","eddsa":"not_checked"}}', "signature-header"),
+            ("payload", 200, '{"signature":"redacted"}', 200, '{"valid":"fail","status":{"ml-dsa":"fail","eddsa":"not_checked"}}', "signature-payload"),
+            ("eddsa", 200, '{"signature":"redacted"}', 200, '{"valid":"fail","status":{"ml-dsa":"ok","eddsa":"fail"}}', "signature-eddsa"),
+            ("ml_dsa", 200, '{"signature":"redacted"}', 200, '{"valid":"fail","status":{"ml-dsa":"fail","eddsa":"not_checked"}}', "signature-ml-dsa"),
+        ],
+    }
+    expect(not compact_signature_integrity_semantic(compact_case, crypto_context), "compact signature accepts expected hybrid states")
+    compact_case["checks"][4] = ("ml_dsa", 200, '{"signature":"redacted"}', 200, '{"valid":"fail","status":{"ml-dsa":"fail","eddsa":"fail"}}', "signature-ml-dsa")
+    expect(compact_signature_integrity_semantic(compact_case, crypto_context), "compact signature flags ML-DSA order violation")
 
     for label in failures:
         print(f"SELF-CHECK FAIL: {label}")

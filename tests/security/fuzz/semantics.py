@@ -22,6 +22,13 @@ COMMITMENT_PLAINTEXTS = ["4111111111111111", "5555555555554444"]
 SHARING_PROFILE = "fuzz-customer-secret-3of5-v1"
 SHARING_PLAINTEXT = "fuzz secret sharing plaintext"
 
+LIFECYCLE_ERRORS = {
+    "retired": "key is retired and can only be used for decrypt or verification",
+    "disabled": "key is currently disabled",
+    "compromised": "key is compromised and cannot be used for security reasons",
+    "destroyed": "key is logically destroyed and cannot be used",
+}
+
 
 def token_semantic(sent_value, seed, status, body):
     if sent_value is None or sent_value == seed:
@@ -565,4 +572,189 @@ def token_batch_duplicate_policy_semantic(results, plaintext):
         or [item.get("plaintext") for item in reusable_items if isinstance(item, dict)] != [plaintext, plaintext]
     ):
         findings.append("SEMANTIC: reusable duplicate token batch was not accepted")
+    return findings
+
+
+def lifecycle_contract_semantic(records):
+    """Validate the lifecycle matrix without retaining sensitive request data."""
+    findings = []
+    sensitive_fields = {"plaintext", "token", "ciphertext", "digest", "opening", "shares", "signature"}
+    for record in records:
+        status = record["status"]
+        body = record["body"]
+        operation = record["operation"]
+        state = record["state"]
+        expected = record["expected"]
+        parsed = _parse(body)
+        if expected == "rejected":
+            if status != 403:
+                findings.append(
+                    f"SEMANTIC: {state} allowed lifecycle-blocked {operation}"
+                )
+                continue
+            if not isinstance(parsed, dict) or parsed.get("error") != LIFECYCLE_ERRORS[state]:
+                findings.append(
+                    f"SEMANTIC: {state} returned an unexpected lifecycle rejection for {operation}"
+                )
+            elif sensitive_fields.intersection(parsed):
+                findings.append(
+                    f"SEMANTIC: {state} lifecycle rejection exposed operation output for {operation}"
+                )
+            continue
+
+        if status != 200 or not isinstance(parsed, dict):
+            findings.append(f"SEMANTIC: {state} did not allow {operation}")
+            continue
+        if operation == "fpe_decrypt" and parsed.get("plaintext") != FPE_PLAINTEXT:
+            findings.append("SEMANTIC: retired fpe decrypt returned unexpected plaintext")
+        elif operation == "token_decode" and parsed.get("plaintext") != TOKEN_PLAINTEXT:
+            findings.append("SEMANTIC: retired token decode returned unexpected plaintext")
+        elif operation in {"mac_verify", "commitment_verify"} and parsed.get("valid") is not True:
+            findings.append(f"SEMANTIC: retired {operation} did not verify")
+        elif operation == "index_verify" and parsed.get("matched") is not True:
+            findings.append("SEMANTIC: retired index verify did not match")
+        elif operation == "share_combine" and parsed.get("plaintext") != SHARING_PLAINTEXT:
+            findings.append("SEMANTIC: retired share combine returned unexpected plaintext")
+        elif operation == "sign_verify" and parsed.get("valid") != "ok":
+            findings.append("SEMANTIC: retired sign verification did not succeed")
+        elif operation == "internal_decrypt" and parsed.get("plaintext") != INTERNAL_SEED_PLAINTEXT:
+            findings.append("SEMANTIC: retired internal decrypt returned unexpected plaintext")
+        elif operation == "mask" and not isinstance(parsed.get("masked"), str):
+            findings.append("SEMANTIC: retired masking did not return masked output")
+    return findings
+
+
+def _valid_false(status, body):
+    parsed = _parse(body)
+    return status == 200 and isinstance(parsed, dict) and parsed.get("valid") is False
+
+
+def mac_determinism_semantic(case, context):
+    first, second, verified, changed_plaintext, changed_digest = case["responses"]
+    first_value, second_value = _parse(first[1]), _parse(second[1])
+    findings = []
+    if (
+        first[0] != 200 or second[0] != 200
+        or not isinstance(first_value, dict) or not isinstance(second_value, dict)
+        or not isinstance(first_value.get("digest"), str) or not first_value["digest"]
+        or first_value.get("digest") != second_value.get("digest")
+    ):
+        findings.append("SEMANTIC: MAC is not deterministic for identical plaintext")
+    if not _valid_false(*changed_plaintext):
+        findings.append("SEMANTIC: MAC verify accepted changed plaintext")
+    if not _valid_false(*changed_digest):
+        findings.append("SEMANTIC: MAC verify accepted changed digest")
+    if not (verified[0] == 200 and isinstance(_parse(verified[1]), dict) and _parse(verified[1]).get("valid") is True):
+        findings.append("SEMANTIC: MAC verify rejected matching digest")
+    return findings
+
+
+def index_determinism_semantic(case, context):
+    first, second, matched, changed = case["responses"]
+    first_value, second_value = _parse(first[1]), _parse(second[1])
+    findings = []
+    if (
+        first[0] != 200 or second[0] != 200
+        or not isinstance(first_value, dict) or not isinstance(second_value, dict)
+        or not isinstance(first_value.get("index"), str) or not first_value["index"]
+        or first_value.get("index") != second_value.get("index")
+    ):
+        findings.append("SEMANTIC: blind index is not deterministic for identical plaintext")
+    for status, body, expected, label in (
+        (*matched, True, "matching plaintext"),
+        (*changed, False, "changed plaintext"),
+    ):
+        parsed = _parse(body)
+        if status != 200 or not isinstance(parsed, dict) or parsed.get("matched") is not expected:
+            findings.append(f"SEMANTIC: blind index verify returned wrong result for {label}")
+    return findings
+
+
+def masking_policy_semantic(case, context):
+    status, body, headers = case["response"]
+    parsed = _parse(body)
+    plaintext = case["plaintext"]
+    expected = case["expected"]
+    findings = []
+    if status != 200 or not isinstance(parsed, dict) or parsed.get("masked") != expected:
+        findings.append("SEMANTIC: masking output does not match the signed policy")
+    if plaintext in body or any(plaintext in str(value) for value in headers.values()):
+        findings.append("SEMANTIC: masking response leaked plaintext")
+    return findings
+
+
+def commitment_randomness_semantic(case, context):
+    first, second, verified, changed_opening, changed_commitment = case["responses"]
+    first_value, second_value = _parse(first[1]), _parse(second[1])
+    findings = []
+    if (
+        first[0] != 200 or second[0] != 200
+        or not isinstance(first_value, dict) or not isinstance(second_value, dict)
+        or not isinstance(first_value.get("opening"), str) or not first_value["opening"]
+        or not isinstance(first_value.get("commitment"), str) or not first_value["commitment"]
+        or first_value.get("opening") == second_value.get("opening")
+        or first_value.get("commitment") == second_value.get("commitment")
+    ):
+        findings.append("SEMANTIC: commitment creation did not use a fresh opening")
+    if not (verified[0] == 200 and isinstance(_parse(verified[1]), dict) and _parse(verified[1]).get("valid") is True):
+        findings.append("SEMANTIC: commitment verify rejected matching material")
+    if not _valid_false(*changed_opening):
+        findings.append("SEMANTIC: commitment verify accepted changed opening")
+    if not _valid_false(*changed_commitment):
+        findings.append("SEMANTIC: commitment verify accepted changed commitment")
+    return findings
+
+
+def sharing_integrity_semantic(case, context):
+    control, threshold, duplicate, tampered, mixed = case["checks"]
+    plaintext = case["plaintext"]
+    findings = []
+    control_value = _parse(control[1])
+    if control[0] != 200 or not isinstance(control_value, dict) or control_value.get("plaintext") != plaintext:
+        findings.append("SEMANTIC: threshold shares did not reconstruct the original secret")
+    for label, (status, body) in (
+        ("below threshold", threshold),
+        ("duplicate share index", duplicate),
+        ("tampered share tag", tampered),
+        ("mixed share sets", mixed),
+    ):
+        parsed = _parse(body)
+        if status != 400 or not isinstance(parsed, dict) or not isinstance(parsed.get("error"), str):
+            findings.append(f"SEMANTIC: sharing {label} was not rejected")
+        if plaintext in body:
+            findings.append(f"SEMANTIC: sharing {label} leaked plaintext")
+    return findings
+
+
+def compact_signature_integrity_semantic(case, _context):
+    """Validate hybrid verification order without retaining signature material."""
+    expected = {
+        "control": ("ok", "ok", "ok"),
+        "header": ("fail", "not_checked", "fail"),
+        "payload": ("fail", "not_checked", "fail"),
+        "eddsa": ("ok", "fail", "fail"),
+        "ml_dsa": ("fail", "not_checked", "fail"),
+    }
+    findings = []
+    for label, signed_status, signed_body, verify_status, verify_body, signature in case["checks"]:
+        parsed = _parse(verify_body)
+        ml_dsa, eddsa, valid = expected[label]
+        if signed_status != 200:
+            findings.append(f"SEMANTIC: compact signature producer failed for {label}")
+            continue
+        status = parsed.get("status") if isinstance(parsed, dict) else None
+        if (
+            verify_status != 200
+            or not isinstance(status, dict)
+            or parsed.get("valid") != valid
+            or status.get("ml-dsa") != ml_dsa
+            or status.get("eddsa") != eddsa
+        ):
+            findings.append(f"SEMANTIC: compact signature verification state mismatch for {label}")
+        # `signature` is None when the producer returned no signature or the
+        # mutation could not be built; only scan for it when it is a real string
+        # (`None in verify_body` would raise and abort the whole target).
+        signature_leaked = isinstance(signature, str) and bool(signature) and signature in verify_body
+        if signature_leaked or case["message_hash_hex"] in verify_body:
+            findings.append(f"SEMANTIC: compact signature failure reflected sensitive input for {label}")
     return findings

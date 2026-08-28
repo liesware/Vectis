@@ -13,6 +13,9 @@ from seeds import (
     batch_contract_context,
     commitment_batch_seeds,
     commitment_seeds,
+    COMPACT_SIGNATURE_MESSAGE_HASH,
+    compact_signature_context,
+    crypto_semantics_context,
     decrypt_seeds,
     fpe_batch_seeds,
     fpe_seeds,
@@ -21,11 +24,16 @@ from seeds import (
     internal_encrypt_seeds,
     internal_seeds,
     keys_seeds,
+    lifecycle_contract_setup,
     lifecycle_seeds,
     mac_batch_seeds,
     mac_seeds,
     masking_batch_seeds,
     masking_seeds,
+    mutate_base64url,
+    mutate_compact_signature_segment,
+    mutate_hex,
+    mutate_share_tag,
     message_seeds,
     ONE_TIME_BATCH_PLAINTEXTS,
     ONE_TIME_TOKEN_PLAINTEXT,
@@ -43,13 +51,19 @@ from semantics import (
     COMMITMENT_PLAINTEXTS,
     KID_HEX,
     FPE_BATCH_PLAINTEXTS,
+    FPE_PLAINTEXT,
+    INTERNAL_SEED_PLAINTEXT,
     MAC_PLAINTEXTS,
     MASKING_PLAINTEXTS,
     ONE_TIME_TOKENIZATION_PROFILE,
+    SHARING_PLAINTEXT,
     TOKENIZATION_PROFILE,
     TOKEN_BATCH_PLAINTEXTS,
+    TOKEN_PLAINTEXT,
     _response_items,
     commitment_batch_contract_semantic,
+    commitment_randomness_semantic,
+    compact_signature_integrity_semantic,
     config_semantic,
     fpe_batch_semantic,
     fpe_batch_contract_semantic,
@@ -57,8 +71,12 @@ from semantics import (
     internal_encrypt_semantic,
     internal_semantic,
     index_batch_transaction_semantic,
+    index_determinism_semantic,
+    lifecycle_contract_semantic,
     mac_batch_contract_semantic,
+    mac_determinism_semantic,
     masking_batch_contract_semantic,
+    masking_policy_semantic,
     one_time_batch_semantic,
     one_time_race_semantic,
     one_time_single_semantic,
@@ -68,6 +86,7 @@ from semantics import (
     token_batch_contract_semantic,
     tokenization_batch_semantic,
     tokenization_semantic,
+    sharing_integrity_semantic,
 )
 
 
@@ -611,6 +630,300 @@ def run_batch_contract(target, client, _rng, args, secrets):
     return counters
 
 
+def _mac_determinism_case(client, context, index):
+    plaintext = MAC_PLAINTEXTS[0]
+    first = client.post_json(
+        f"/mac/{context['kid']}",
+        {"ref": f"mac-determinism-{index}-0", "profile": context["profile"], "plaintext": plaintext},
+        auth=True,
+    )
+    second = client.post_json(
+        f"/mac/{context['kid']}",
+        {"ref": f"mac-determinism-{index}-1", "profile": context["profile"], "plaintext": plaintext},
+        auth=True,
+    )
+    digest = (_parse(first[1]) or {}).get("digest")
+    verified = client.post_json(
+        "/mac/verify",
+        {"ref": f"mac-determinism-verify-{index}", "kid": context["kid"], "profile": context["profile"], "plaintext": plaintext, "digest": digest},
+        auth=True,
+    )
+    changed_plaintext = client.post_json(
+        "/mac/verify",
+        {"ref": f"mac-determinism-plaintext-{index}", "kid": context["kid"], "profile": context["profile"], "plaintext": "5111111111111111", "digest": digest},
+        auth=True,
+    )
+    changed_digest = client.post_json(
+        "/mac/verify",
+        {"ref": f"mac-determinism-digest-{index}", "kid": context["kid"], "profile": context["profile"], "plaintext": plaintext, "digest": mutate_hex(digest)},
+        auth=True,
+    )
+    return {"refs": [f"mac-determinism-{index}-0", f"mac-determinism-{index}-1"], "responses": [first, second, verified, changed_plaintext, changed_digest]}
+
+
+def _index_determinism_case(client, context, index):
+    plaintext = f"{MAC_PLAINTEXTS[0]}-{index}"
+    first = client.post_json(
+        f"/index/{context['kid']}",
+        {"ref": f"index-determinism-{index}-0", "profile": context["profile"], "plaintext": plaintext},
+        auth=True,
+    )
+    second = client.post_json(
+        f"/index/{context['kid']}",
+        {"ref": f"index-determinism-{index}-1", "profile": context["profile"], "plaintext": plaintext},
+        auth=True,
+    )
+    matched = client.post_json(
+        "/index/verify",
+        {"ref": f"index-determinism-match-{index}", "kid": context["kid"], "profile": context["profile"], "plaintext": plaintext},
+        auth=True,
+    )
+    changed = client.post_json(
+        "/index/verify",
+        {"ref": f"index-determinism-changed-{index}", "kid": context["kid"], "profile": context["profile"], "plaintext": f"{plaintext}x"},
+        auth=True,
+    )
+    return {"refs": [f"index-determinism-{index}-0", f"index-determinism-{index}-1"], "responses": [first, second, matched, changed]}
+
+
+def _masking_policy_case(client, context, index):
+    plaintext = MASKING_PLAINTEXTS[index % len(MASKING_PLAINTEXTS)]
+    response = client.post_json_with_headers(
+        f"/mask/{context['kid']}",
+        {"ref": f"mask-policy-{index}", "profile": context["profile"], "plaintext": plaintext},
+        auth=True,
+    )
+    return {"refs": [f"mask-policy-{index}"], "plaintext": plaintext, "expected": "*" * (len(plaintext) - 4) + plaintext[-4:], "response": response, "responses": [response[:2]]}
+
+
+def _commitment_randomness_case(client, context, index):
+    plaintext = COMMITMENT_PLAINTEXTS[0]
+    first = client.post_json(
+        f"/commit/{context['kid']}",
+        {"ref": f"commitment-randomness-{index}-0", "profile": context["profile"], "plaintext": plaintext},
+        auth=True,
+    )
+    second = client.post_json(
+        f"/commit/{context['kid']}",
+        {"ref": f"commitment-randomness-{index}-1", "profile": context["profile"], "plaintext": plaintext},
+        auth=True,
+    )
+    material = _parse(first[1]) or {}
+    base = {"kid": context["kid"], "profile": context["profile"], "plaintext": plaintext, "opening": material.get("opening"), "commitment": material.get("commitment")}
+    verified = client.post_json("/commit/verify", {"ref": f"commitment-randomness-verify-{index}", **base}, auth=True)
+    changed_opening = client.post_json("/commit/verify", {"ref": f"commitment-randomness-opening-{index}", **base, "opening": mutate_base64url(material.get("opening"))}, auth=True)
+    changed_commitment = client.post_json("/commit/verify", {"ref": f"commitment-randomness-commitment-{index}", **base, "commitment": mutate_hex(material.get("commitment"))}, auth=True)
+    return {"refs": [f"commitment-randomness-{index}-0", f"commitment-randomness-{index}-1"], "responses": [first, second, verified, changed_opening, changed_commitment]}
+
+
+def _sharing_integrity_case(client, context, index):
+    split_input = {"profile": context["profile"], "plaintext": SHARING_PLAINTEXT}
+    first = client.post_json(f"/shares/split/{context['kid']}", split_input, auth=True)
+    second = client.post_json(f"/shares/split/{context['kid']}", split_input, auth=True)
+    first_shares = (_parse(first[1]) or {}).get("shares", [])
+    second_shares = (_parse(second[1]) or {}).get("shares", [])
+    def combine(label, shares):
+        return client.post_json("/shares/combine", {"kid": context["kid"], "profile": context["profile"], "shares": shares}, auth=True)
+    control = combine("control", first_shares[:3])
+    threshold = combine("threshold", first_shares[:2])
+    duplicate = combine("duplicate", [first_shares[0], first_shares[0], first_shares[1]] if len(first_shares) >= 2 else first_shares)
+    tampered = combine("tampered", [mutate_share_tag(first_shares[0]), *first_shares[1:3]] if len(first_shares) >= 3 else first_shares)
+    mixed = combine("mixed", [*first_shares[:2], second_shares[2]] if len(first_shares) >= 2 and len(second_shares) >= 3 else first_shares)
+    return {
+        "refs": [f"sharing-integrity-{index}"],
+        "plaintext": SHARING_PLAINTEXT,
+        "responses": [first, second, control, threshold, duplicate, tampered, mixed],
+        "checks": [control, threshold, duplicate, tampered, mixed],
+    }
+
+
+def run_crypto_semantics(target, client, _rng, args, secrets):
+    apikey, unseal = secrets
+    context = crypto_semantics_context(client, target["capability"])
+    counters = {"passed": 0, "failed": 0}
+    for index in range(args.iterations):
+        case = target["scenario"](client, context, index)
+        responses = case["responses"]
+        findings = []
+        for status, body in responses:
+            findings.extend(oracle(status, body, apikey, unseal, ALLOWED_STATUS, False))
+        findings.extend(target["semantic"](case, context))
+        status = 0 if any(response_status == 0 for response_status, _body in responses) else 200
+        description = {"scenario": target["name"], "kid": context["kid"], "refs": case["refs"], "statuses": [response_status for response_status, _body in responses]}
+        if check_and_record(target["name"], client, args, index, status, findings, description, counters):
+            break
+        print_progress(target["name"], index, args, counters)
+    return counters
+
+
+def _compact_signature_integrity_case(client, context, index):
+    checks = []
+    for label, segment_index in (("control", None), ("header", 0), ("payload", 1), ("eddsa", 2), ("ml_dsa", 3)):
+        signed_status, signed_body = client.post_json(
+            f"/sign/{context['kid']}",
+            {"message_hash": COMPACT_SIGNATURE_MESSAGE_HASH},
+            auth=True,
+        )
+        signed = _parse(signed_body)
+        signature = signed.get("signature") if isinstance(signed, dict) else None
+        if segment_index is not None:
+            try:
+                signature = mutate_compact_signature_segment(signature, segment_index)
+            except ValueError:
+                signature = None
+        verify_status, verify_body = client.post_json(
+            "/sign/verification",
+            {"kid": context["kid"], "signature": signature},
+        )
+        checks.append((label, signed_status, signed_body, verify_status, verify_body, signature))
+    return {
+        "refs": [f"compact-signature-{index}"],
+        "checks": checks,
+        "message_hash_hex": COMPACT_SIGNATURE_MESSAGE_HASH["hex"],
+        "responses": [response for _label, signed_status, signed_body, verify_status, verify_body, _signature in checks for response in ((signed_status, signed_body), (verify_status, verify_body))],
+    }
+
+
+def run_compact_signature_integrity(target, client, _rng, args, secrets):
+    apikey, unseal = secrets
+    context = compact_signature_context(client)
+    counters = {"passed": 0, "failed": 0}
+    for index in range(args.iterations):
+        case = _compact_signature_integrity_case(client, context, index)
+        findings = []
+        for status, body in case["responses"]:
+            findings.extend(oracle(status, body, apikey, unseal, ALLOWED_STATUS, False))
+        findings.extend(compact_signature_integrity_semantic(case, context))
+        status = 0 if any(response_status == 0 for response_status, _body in case["responses"]) else 200
+        description = {
+            "scenario": target["name"],
+            "kid": context["kid"],
+            "statuses": [response_status for response_status, _body in case["responses"]],
+        }
+        if check_and_record(target["name"], client, args, index, status, findings, description, counters):
+            break
+        print_progress(target["name"], index, args, counters)
+    return counters
+
+
+def _lifecycle_new_requests(context, state, index):
+    kid = context["kids"][state]
+    profiles = context["profiles"][state]
+    suffix = f"lifecycle-{state}-{index}"
+    return {
+        "fpe_encrypt": (f"/fpe/encrypt/{kid}", {"ref": f"{suffix}-fpe", "profile": profiles["fpe"], "plaintext": FPE_PLAINTEXT}, True),
+        "token_encode": (f"/token/encode/{kid}", {"ref": f"{suffix}-token", "profile": profiles["token"], "plaintext": TOKEN_PLAINTEXT, "metadata": {}}, True),
+        "mac_create": (f"/mac/{kid}", {"ref": f"{suffix}-mac", "profile": profiles["mac"], "plaintext": MAC_PLAINTEXTS[0]}, True),
+        "index_create": (f"/index/{kid}", {"ref": f"{suffix}-index", "profile": profiles["mac"], "plaintext": MAC_PLAINTEXTS[0]}, True),
+        "commitment_create": (f"/commit/{kid}", {"ref": f"{suffix}-commitment", "profile": profiles["commitment"], "plaintext": COMMITMENT_PLAINTEXTS[0]}, True),
+        "share_split": (f"/shares/split/{kid}", {"profile": profiles["sharing"], "plaintext": SHARING_PLAINTEXT}, True),
+        "sign": (f"/sign/{kid}", {"message_hash": {"alg": "BLAKE2b(256)", "hex": "cd" * 32}}, True),
+        "internal_encrypt": (f"/message/internal/encrypt/{kid}", {"plaintext": INTERNAL_SEED_PLAINTEXT}, True),
+    }
+
+
+def _post_lifecycle_request(client, path, body, auth):
+    return client.post_json(path, body, auth=auth)
+
+
+def _prepare_lifecycle_material(client, context, state, index):
+    requests = _lifecycle_new_requests(context, state, index)
+    records = []
+    outputs = {}
+    for operation, (path, body, auth) in requests.items():
+        status, response = _post_lifecycle_request(client, path, body, auth)
+        records.append({"state": "active", "phase": "prepare", "operation": operation, "expected": "allowed", "status": status, "body": response})
+        outputs[operation] = _parse(response) if status == 200 else None
+    return records, outputs
+
+
+def _lifecycle_historical_requests(context, state, index, outputs):
+    kid = context["kids"][state]
+    profiles = context["profiles"][state]
+    suffix = f"lifecycle-{state}-{index}"
+    fpe = outputs.get("fpe_encrypt") or {}
+    token = outputs.get("token_encode") or {}
+    mac = outputs.get("mac_create") or {}
+    commitment = outputs.get("commitment_create") or {}
+    split = outputs.get("share_split") or {}
+    signature = outputs.get("sign") or {}
+    internal = outputs.get("internal_encrypt") or {}
+    return {
+        "fpe_decrypt": ("/fpe/decrypt", {"ref": f"{suffix}-fpe-decrypt", "kid": kid, "profile": profiles["fpe"], "ciphertext": fpe.get("ciphertext")}, True),
+        "token_decode": ("/token/decode", {"ref": f"{suffix}-token-decode", "kid": kid, "profile": profiles["token"], "token": token.get("token")}, True),
+        "mac_verify": ("/mac/verify", {"ref": f"{suffix}-mac-verify", "kid": kid, "profile": profiles["mac"], "plaintext": MAC_PLAINTEXTS[0], "digest": mac.get("digest")}, True),
+        "index_verify": ("/index/verify", {"ref": f"{suffix}-index-verify", "kid": kid, "profile": profiles["mac"], "plaintext": MAC_PLAINTEXTS[0]}, True),
+        "commitment_verify": ("/commit/verify", {"ref": f"{suffix}-commitment-verify", "kid": kid, "profile": profiles["commitment"], "plaintext": COMMITMENT_PLAINTEXTS[0], "opening": commitment.get("opening"), "commitment": commitment.get("commitment")}, True),
+        "share_combine": ("/shares/combine", {"kid": kid, "profile": profiles["sharing"], "shares": split.get("shares", [])[:3]}, True),
+        "sign_verify": ("/sign/verification", signature, False),
+        "internal_decrypt": ("/message/internal/decrypt", internal, True),
+        "mask": (f"/mask/{kid}", {"ref": f"{suffix}-mask", "profile": profiles["mask"], "plaintext": MASKING_PLAINTEXTS[0]}, True),
+    }
+
+
+def _run_lifecycle_requests(client, state, phase, requests, expected):
+    records = []
+    for operation, (path, body, auth) in requests.items():
+        status, response = _post_lifecycle_request(client, path, body, auth)
+        records.append({"state": state, "phase": phase, "operation": operation, "expected": expected, "status": status, "body": response})
+    return records
+
+
+def _transition_lifecycle(client, kid, state):
+    return client.post_json(
+        f"/lifecycle/{kid}",
+        {"status": state, "reason": f"fuzz lifecycle {state}"},
+        auth=True,
+    )
+
+
+def _lifecycle_contract_case(client, context, index):
+    records = []
+    material = {}
+    for state in context["kids"]:
+        prepared, material[state] = _prepare_lifecycle_material(client, context, state, index)
+        records.extend(prepared)
+
+    for state in ("retired", "disabled", "compromised", "destroyed"):
+        kid = context["kids"][state]
+        status, body = _transition_lifecycle(client, kid, state)
+        records.append({"state": state, "phase": "transition", "operation": "lifecycle_transition", "expected": "allowed", "status": status, "body": body})
+        historical = _lifecycle_historical_requests(context, state, index, material[state])
+        production = _lifecycle_new_requests(context, state, index)
+        records.extend(_run_lifecycle_requests(client, state, "historical", historical, "allowed" if state == "retired" else "rejected"))
+        records.extend(_run_lifecycle_requests(client, state, "production", production, "rejected"))
+        pub_status, pub_body = client.request("GET", f"/pub/{kid}")
+        records.append({"state": state, "phase": "public", "operation": "public_key", "expected": "rejected", "status": pub_status, "body": pub_body})
+    return records
+
+
+def run_lifecycle_contract(target, client, _rng, args, secrets):
+    apikey, unseal = secrets
+    counters = {"passed": 0, "failed": 0}
+    # Provision every iteration's keys and profiles once (one cargo-signed config
+    # reload for the whole run) instead of rebuilding the context per iteration.
+    contexts = lifecycle_contract_setup(client, args.iterations)
+    for index, context in enumerate(contexts):
+        records = _lifecycle_contract_case(client, context, index)
+        findings = []
+        for record in records:
+            findings.extend(oracle(record["status"], record["body"], apikey, unseal, ALLOWED_STATUS, False))
+        findings.extend(lifecycle_contract_semantic(records))
+        status = 0 if any(record["status"] == 0 for record in records) else 200
+        description = {
+            "scenario": target["name"],
+            "kids": context["kids"],
+            "results": [
+                {key: record[key] for key in ("state", "phase", "operation", "status")}
+                for record in records
+            ],
+        }
+        if check_and_record(target["name"], client, args, index, status, findings, description, counters):
+            break
+        print_progress(target["name"], index, args, counters)
+    return counters
+
+
 TARGETS = [
     {"name": "token", "runner": run_body, "seed_factory": token_seeds,
      "path": "/sign/verification", "auth": False, "semantic": token_semantic},
@@ -624,7 +937,9 @@ TARGETS = [
      "auth": True, "semantic": internal_encrypt_semantic},
     {"name": "keys", "runner": run_body, "seed_factory": keys_seeds, "auth": True},
     {"name": "sign_body", "runner": run_body, "seed_factory": sign_body_seeds, "auth": True},
+    {"name": "compact_signature_integrity", "runner": run_compact_signature_integrity},
     {"name": "lifecycle", "runner": run_body, "seed_factory": lifecycle_seeds, "auth": True},
+    {"name": "lifecycle_contract", "runner": run_lifecycle_contract},
     {"name": "decrypt", "runner": run_body, "seed_factory": decrypt_seeds, "auth": True},
     {"name": "config", "runner": run_config},
     {"name": "fpe", "runner": run_body, "seed_factory": fpe_seeds,
@@ -656,19 +971,29 @@ TARGETS = [
     {"name": "mac_batch", "runner": run_body, "seed_factory": mac_batch_seeds, "auth": True},
     {"name": "mac_batch_contract", "runner": run_batch_contract, "capability": "mac",
      "scenario": _mac_batch_contract_case, "semantic": mac_batch_contract_semantic},
+    {"name": "mac_determinism", "runner": run_crypto_semantics, "capability": "mac",
+     "scenario": _mac_determinism_case, "semantic": mac_determinism_semantic},
     {"name": "index", "runner": run_body, "seed_factory": index_seeds, "auth": True},
     {"name": "index_batch", "runner": run_body, "seed_factory": index_batch_seeds, "auth": True},
     {"name": "index_batch_transaction", "runner": run_batch_contract, "capability": "index",
      "scenario": _index_batch_transaction_case, "semantic": index_batch_transaction_semantic},
+    {"name": "index_determinism", "runner": run_crypto_semantics, "capability": "index",
+     "scenario": _index_determinism_case, "semantic": index_determinism_semantic},
     {"name": "masking", "runner": run_body, "seed_factory": masking_seeds, "auth": True},
     {"name": "masking_batch", "runner": run_body, "seed_factory": masking_batch_seeds, "auth": True},
     {"name": "masking_batch_contract", "runner": run_batch_contract, "capability": "mask",
      "scenario": _masking_batch_contract_case, "semantic": masking_batch_contract_semantic},
+    {"name": "masking_policy", "runner": run_crypto_semantics, "capability": "mask",
+     "scenario": _masking_policy_case, "semantic": masking_policy_semantic},
     {"name": "commitment", "runner": run_body, "seed_factory": commitment_seeds, "auth": True},
     {"name": "commitment_batch", "runner": run_body, "seed_factory": commitment_batch_seeds, "auth": True},
     {"name": "commitment_batch_contract", "runner": run_batch_contract, "capability": "commitment",
      "scenario": _commitment_batch_contract_case, "semantic": commitment_batch_contract_semantic},
+    {"name": "commitment_randomness", "runner": run_crypto_semantics, "capability": "commitment",
+     "scenario": _commitment_randomness_case, "semantic": commitment_randomness_semantic},
     {"name": "sharing", "runner": run_body, "seed_factory": sharing_seeds, "auth": True},
+    {"name": "sharing_integrity", "runner": run_crypto_semantics, "capability": "sharing",
+     "scenario": _sharing_integrity_case, "semantic": sharing_integrity_semantic},
     {"name": "pubkid", "runner": run_path_param, "require_json_error": False, "endpoints": [
         ("/pub/{}", False),
         ("/keys/properties/{}", True),

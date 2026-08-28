@@ -179,20 +179,21 @@ uv run tests/security/fuzz/http_fuzz.py --base-url http://127.0.0.1:3000 --apike
 `tests/security/fuzz/http_fuzz.py` is a targeted mutation helper. It is separate from
 Schemathesis and is useful for project-specific negative cases. It mutates
 seeds across crypto profiles (ChaCha20 and AES-GCM variants) with domain-aware
-mutations, and drives a table of targets (`--target`): `token`, `message`,
-`message_send`, `internal`, `internal_encrypt`, `keys`, `sign_body`,
-`lifecycle`, `decrypt`, `config`, `fpe`, `fpe_batch`, `tokenization`,
-`tokenization_batch`, `mac`, `mac_batch`, `commitment`, `commitment_batch`, `index`, `index_batch`, `pubkid` (fuzzes the `{kid}` path
-segment), `masking`, `masking_batch`, `sharing`, `no_body`, and `headers`
-(fuzzes `X-API-Key` and the HTTP method). The `fpe`, `tokenization`, `mac`,
-`commitment`, `index`, `masking`, and `sharing` targets cover the single-item
-endpoints, while `fpe_batch`, `tokenization_batch`, `mac_batch`,
-`commitment_batch`, `index_batch`, and `masking_batch` cover the all-or-nothing
-batch endpoints. Secret sharing has no batch endpoint. The `no_body` target checks endpoints called
-without a body where that shape is useful. Beyond crash/status hygiene it runs
-semantic oracles that flag verification, AEAD, FPE, tokenization, and
-config-integrity bypasses; `--self-check` tests
-those oracles offline.
+mutations, and drives a table of targets (`--target`). Alongside the generic
+surface targets, it includes deterministic contracts for compact hybrid
+signatures (`compact_signature_integrity`), lifecycle (`lifecycle_contract`),
+reusable and one-time token behavior, batch ordering and atomicity
+(`*_batch_contract` and `index_batch_transaction`), and the single-item
+cryptographic capabilities. `compact_signature_integrity` creates fresh tokens
+and verifies the ML-DSA-before-EdDSA failure order for every compact segment.
+`lifecycle_contract` verifies that
+new use requires an active KID, retired keys retain only historical
+decrypt/verify capability, and disabled, compromised, and destroyed keys are
+blocked consistently. Secret sharing has no batch endpoint. The `no_body`
+target checks endpoints called without a body where that shape is useful.
+Beyond crash/status hygiene it runs semantic oracles that flag verification,
+AEAD, FPE, tokenization, batch-atomicity, lifecycle, and config-integrity
+bypasses; `--self-check` tests those oracles offline.
 
 ### Nadir Stateful HTTP Fuzzing
 
