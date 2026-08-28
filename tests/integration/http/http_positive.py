@@ -1305,7 +1305,7 @@ def retired_lifecycle_historical_operations(client):
         {
             "name": token_profile,
             "kid": key_id,
-            "token_prefix": "tok_lifecycle_retired",
+            "token_prefix": "tok_life_ret",
             "token_len": 32,
             "max_plaintext_len": 128,
             "one_time": False,

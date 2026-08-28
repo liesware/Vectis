@@ -114,3 +114,12 @@ jobs:
         env:
           VECTIS_BIN: ${{ github.workspace }}/vectis
         run: bash tests/ci/test-tls.sh
+
+      - name: Upload HTTP fuzz findings
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: http-fuzz-findings-${{ github.run_id }}
+          path: tests/security/fuzz/fuzz-corpus/
+          if-no-files-found: ignore
+          retention-days: 30
