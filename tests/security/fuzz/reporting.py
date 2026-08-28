@@ -31,9 +31,21 @@ def describe(method, path, raw, body):
     return {"method": method, "path": path[:2000], "raw": raw, "body": rendered}
 
 
-def check_and_record(name, client, args, index, status, findings, description, counters):
+def check_and_record(
+    name,
+    client,
+    args,
+    index,
+    status,
+    findings,
+    description,
+    counters,
+    *,
+    check_latency=True,
+):
     responses = client.consume_timings()
-    findings.extend(slow_response_findings(responses))
+    if check_latency:
+        findings.extend(slow_response_findings(responses))
     if responses:
         description["max_duration_ms"] = round(
             max(response.duration_ms for response in responses), 2

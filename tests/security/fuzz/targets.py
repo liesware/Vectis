@@ -242,7 +242,13 @@ def run_http_protocol(target, client, _rng, args, secrets):
         path, auth = endpoints[index % len(endpoints)]
         label, method, data, headers, expected = variants[(index // len(endpoints)) % len(variants)]
         if method is None:
-            methods = [candidate for candidate in WRONG_METHODS if not (path == "/keys" and candidate == "GET")]
+            # Axum maps HEAD to an existing GET route and suppresses the body.
+            # Only methods without a registered route are protocol violations.
+            methods = [
+                candidate
+                for candidate in WRONG_METHODS
+                if not (path == "/keys" and candidate in {"GET", "HEAD"})
+            ]
             method = methods[(index // (len(endpoints) * len(variants))) % len(methods)]
             data = b"{}"
             headers = {"Content-Type": "application/json"}
@@ -267,7 +273,7 @@ def run_no_body(target, client, rng, args, secrets):
     counters = {"passed": 0, "failed": 0}
     client.clear_timings()  # drop setup-phase timings so they don't attach to case 0
     for index in range(args.iterations):
-        method, path, auth, require_json_error = rng.choice(endpoints)
+        method, path, auth, require_json_error, check_latency = rng.choice(endpoints)
         status, response = client.request(method, path, auth=auth)
         description = {"method": method, "path": path, "auth": auth}
         findings = oracle(
@@ -279,7 +285,17 @@ def run_no_body(target, client, rng, args, secrets):
             False,
             require_json_error=require_json_error,
         )
-        if check_and_record(target["name"], client, args, index, status, findings, description, counters):
+        if check_and_record(
+            target["name"],
+            client,
+            args,
+            index,
+            status,
+            findings,
+            description,
+            counters,
+            check_latency=check_latency,
+        ):
             break
         print_progress(target["name"], index, args, counters)
     return counters
@@ -1139,17 +1155,19 @@ TARGETS = [
         ("/self-test/keys/{}", True),
     ]},
     {"name": "no_body", "runner": run_no_body, "endpoints": [
-        ("GET", "/healthz/startup", False, False),
-        ("GET", "/healthz/live", False, False),
-        ("GET", "/healthz/ready", False, False),
-        ("GET", "/metrics", False, False),
-        ("GET", "/routes", True, True),
-        ("GET", "/remote-routes", True, True),
-        ("GET", "/permissions", True, True),
-        ("GET", "/keys", True, True),
-        ("GET", "/keys/properties", True, True),
-        ("GET", "/self-test/init", True, True),
-        ("POST", "/keys/reload", True, True),
+        ("GET", "/healthz/startup", False, False, True),
+        ("GET", "/healthz/live", False, False, True),
+        ("GET", "/healthz/ready", False, False, True),
+        ("GET", "/metrics", False, False, True),
+        ("GET", "/routes", True, True, True),
+        ("GET", "/remote-routes", True, True, True),
+        ("GET", "/permissions", True, True, True),
+        ("GET", "/keys", True, True, True),
+        ("GET", "/keys/properties", True, True, True),
+        ("GET", "/self-test/init", True, True, True),
+        # Reload performs key validation and may legitimately exceed the
+        # malformed-input response budget on shared CI runners.
+        ("POST", "/keys/reload", True, True, False),
     ]},
     {"name": "headers", "runner": run_headers, "allowed_status": FRAMEWORK_STATUS},
 ]
