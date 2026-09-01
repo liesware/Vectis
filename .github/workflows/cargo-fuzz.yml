@@ -44,12 +44,12 @@ jobs:
           echo "$(dirname "$toolchain_cargo")" >> "$GITHUB_PATH"
 
       - name: Install cargo-fuzz
-        uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2
+        uses: taiki-e/install-action@742a3317eac7bd62f91cd888b4eead5e784ba833 # v2
         with:
           tool: cargo-fuzz@0.13.2
 
       - name: Cache Rust build outputs
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           shared-key: cargo-fuzz-${{ env.TOOLCHAIN }}
           workspaces: |
@@ -59,7 +59,7 @@ jobs:
       - name: Restore accumulated fuzz corpus
         id: corpus-restore
         continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: fuzz/corpus
           key: cargo-fuzz-corpus-${{ runner.os }}-${{ github.run_id }}
@@ -86,7 +86,7 @@ jobs:
       - name: Save accumulated fuzz corpus
         if: always()
         continue-on-error: true
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: fuzz/corpus
           key: cargo-fuzz-corpus-${{ runner.os }}-${{ github.run_id }}

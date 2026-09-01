@@ -46,7 +46,7 @@ jobs:
 
       - name: Restore cached Semgrep ruleset
         id: ruleset-cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/semgrep-ruleset
           key: semgrep-ruleset-${{ github.run_id }}
@@ -88,7 +88,7 @@ jobs:
 
       - name: Save Semgrep ruleset to cache
         if: always() && steps.ruleset.outputs.source == 'fresh'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/semgrep-ruleset
           key: semgrep-ruleset-${{ github.run_id }}
@@ -123,7 +123,7 @@ jobs:
         # Fork PRs get a read-only GITHUB_TOKEN, so code-scanning upload would 403.
         # Skip it there; the scan still runs and the SARIF is kept as an artifact.
         if: always() && hashFiles('semgrep.sarif') != '' && github.event.pull_request.head.repo.fork != true
-        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
         with:
           sarif_file: semgrep.sarif
           category: semgrep-ce
