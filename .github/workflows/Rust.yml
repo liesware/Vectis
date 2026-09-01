@@ -28,7 +28,7 @@ jobs:
           persist-credentials: false
 
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           shared-key: vectis-ci
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -60,7 +60,7 @@ jobs:
           bash -n tests/performance/local/*.sh
 
       - name: Install cargo-audit
-        uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2
+        uses: taiki-e/install-action@742a3317eac7bd62f91cd888b4eead5e784ba833 # v2
         with:
           tool: cargo-audit
 
@@ -96,7 +96,7 @@ jobs:
         run: chmod +x vectis
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: true
           # .python-version pins 3.14, which the runner does not preinstall, so
