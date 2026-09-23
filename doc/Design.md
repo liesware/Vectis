@@ -19,7 +19,8 @@ the safe choice the default. The rules earn their place by having prevented
 or caught a real failure, not by citation.
 
 Each rule carries an **Applies** tag so you can select the subset that fits your
-project. Read every rule tagged `always`; add `networked services` rules when you
+project. Rule 0 comes first and is never filtered out. Read every rule tagged
+`always`; add `networked services` rules when you
 expose an API or load operational config, and `systems handling secrets or
 cryptography` rules when you hold key material, credentials, or sign/encrypt
 data. A few rules are conditional even within their tag — those carry a
@@ -41,6 +42,7 @@ Rule format:
 
 | # | Rule | Applies |
 | --- | --- | --- |
+| **0** | **Treat everything from outside the program as hostile** | **always** |
 | 1 | Declare what the system is — and is not | always |
 | 2 | Structure the code in three layers with one-way dependencies | always |
 | 3 | Isolate and discipline shared mutable state | always |
@@ -85,6 +87,49 @@ Rule format:
 | 42 | Separate operational logs, audit logs, and metrics | networked services |
 | 43 | Fixed documentation set, swept on every behavior change | always |
 | 44 | Code explains itself; documents state the contracts and system design | always |
+
+## 0. The First Rule
+
+Every other rule in this document is easier to follow than this one, and most
+of them exist because of it.
+
+### Rule 0 — Treat everything from outside the program as hostile
+
+**Applies**: always.
+
+**Why**: a program does not choose its inputs. Requests, command-line
+arguments, files, configuration, environment variables, peers, the database,
+and the output of other tools can all be wrong by accident or wrong on purpose —
+and from inside the program the two look the same. Every injection, overflow,
+parser crash, and confused-deputy bug starts with a value that was trusted
+because of where it came from, not because of what it was shown to be.
+
+**How**:
+
+- assume every outside value is untrusted, radioactive, and possibly
+  malicious until it is parsed into a known, bounded shape (Rules 9-18);
+- name the trust boundaries — every point where outside data enters — and
+  parse there, once; past a boundary, nothing untrusted travels further;
+- origin is not proof: a value is not safe because it came from your own
+  database, your own configuration file, an authenticated client, or a peer
+  you know (Rules 14, 31);
+- bound it before you touch it, reject rather than coerce, and fail closed;
+- never reflect it back unexamined — outside data that reaches an error
+  message, a log line, or a shell command is still outside data (Rule 22);
+- fuzz every parser that sits on a boundary (Rule 38).
+
+This is the inbound half of a single discipline. Rule 33 is the outbound half:
+**secrets must never leak out; untrusted input must never get in unchecked.**
+
+**In Vectis**: raw `*Input` types exist only at the boundary and convert once
+into validated domain types; stored rows are re-validated on every read before
+decryption (Rule 14); peer public keys come only from the signed
+`remote_routes`, with no trust-on-first-use path; protected messages are
+verified before they are decrypted (Rule 30); operator files and request bodies
+are size-bounded before they are read (Rule 18); error details that echo caller
+values pass through `sanitize_untrusted_error_detail`; and every boundary
+parser — config files, messages, keys, signatures, envelopes, audit lines — has
+its own `cargo-fuzz` target.
 
 ## 1. Scope and Architecture
 
@@ -379,7 +424,7 @@ records that were already valid.
 legacy `build_aad` output for valid fields, while adding delimiter and
 over-limit rejection tests for invalid fields.
 
-### Rule 14 — Treat persisted data as untrusted input *(refines Rule 10)*
+### Rule 14 — Treat persisted data as untrusted input *(refines Rules 0 and 10)*
 
 **Applies**: always.
 
@@ -1050,7 +1095,8 @@ reserved for non-obvious protocol behavior); HTTP contracts live in
 
 ## How to Apply This to a New Project
 
-First, **filter by the Applies tags**: take every `always` rule, add
+Rule 0 is not a step: it applies from the first line of code and shapes every
+step below. Then **filter by the Applies tags**: take every `always` rule, add
 `networked services` rules if you expose an API or load operational config, and
 add `systems handling secrets or cryptography` rules if you hold key material or
 sign/encrypt data. Then follow the bootstrap order — each step makes the next
