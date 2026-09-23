@@ -7,11 +7,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "integration"))
-
-from support.test_config import require_apikey
+from credentials import require_apikey
 
 
 def require(condition, message):

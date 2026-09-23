@@ -3,7 +3,7 @@ import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 
-from support.concurrency import run_simultaneously
+from concurrency import run_simultaneously
 
 from client import FuzzClient
 from config import (

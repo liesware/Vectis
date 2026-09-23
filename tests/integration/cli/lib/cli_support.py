@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[4]
 NEXT_REMINDER = "run `vectis config sign`, then `vectis config reload`"
 KID_A = "a" * 64
 KID_B = "b" * 64

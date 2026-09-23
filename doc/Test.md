@@ -507,7 +507,7 @@ uv run tests/security/openapi/http_schemathesis.py --profile prepared
 `tests.sh` runs Rust checks and local CLI tests first. It then asks the operator
 to start Vectis before the HTTP, manual fuzz, and Schemathesis layers. The HTTP
 tests need an API key available through the environment or `.env` flow used by
-`tests/integration/support/test_config.py`.
+its own local credential helper.
 
 `tests_cargo-fuzz.sh` is intentionally separate because it requires nightly,
 uses sanitizer builds, and is heavier than the normal HTTP test suite.
@@ -518,7 +518,7 @@ uses sanitizer builds, and is heavier than the normal HTTP test suite.
 - `tests/integration/cli/cli_init.py`: CLI init behavior.
 - `tests/integration/cli/cli_negative.py`: invalid local CLI config-editing workflows.
 - `tests/integration/cli/cli_positive.py`: valid local CLI config-editing workflows.
-- `tests/integration/support/cli_support.py`: shared Python helpers for CLI workflows.
+- `tests/integration/cli/lib/`: private Python helpers for CLI workflows.
 - `tests/crypto_integration.rs`: focused Vectis/Botan crypto integration smoke
   tests.
 - `tests/manual/final_app_server.py`: manual mock final-app receiver and decrypt helper; it is not part of CI or `tests.sh`.
@@ -527,9 +527,9 @@ uses sanitizer builds, and is heavier than the normal HTTP test suite.
 - `tests/integration/http/http_negative.py`: invalid, denied, and error-path workflows.
 - `tests/integration/http/http_positive.py`: valid end-to-end runtime workflows.
 - `tests/security/openapi/http_schemathesis.py`: OpenAPI contract fuzzing via Schemathesis.
-- `tests/integration/support/http_support.py`: shared Python helpers for HTTP workflows.
+- `tests/integration/http/lib/`: private client, fixtures, configuration and assertion helpers for HTTP cases.
 - `tests/performance/run.sh`: single entry point for the isolated local k6
   harness.
 - `tests/performance/k6.js`: local mixed-workload k6 scenario.
-- `tests/integration/support/test_config.py`: test configuration and API key loading helpers.
+- Each HTTP, fuzzing, OpenAPI and manual suite owns its API-key loading helper.
 - `tests_cargo-fuzz.sh`: native fuzz runner for all cargo-fuzz targets.

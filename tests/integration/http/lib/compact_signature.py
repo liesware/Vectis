@@ -1,10 +1,4 @@
-"""Shared compact-signature tamper helper.
-
-Both the integration suite and the security-fuzz suite corrupt a compact
-signature the same way: flip one Base64URL character in one of the four segments
-without weakening the overall shape. Keeping the definition here means the two
-suites cannot drift on what a "tampered" compact signature is.
-"""
+"""Compact-signature tamper helper private to HTTP integration tests."""
 
 import base64
 

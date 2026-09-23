@@ -5,7 +5,7 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root_dir"
 
-ci_dir="$root_dir/.ci"
+ci_dir="${VECTIS_CI_DIR:-$root_dir/.ci}"
 mkdir -p "$ci_dir"
 
 export VECTIS_SQLITE_PATH="$ci_dir/vectis-integration.db"

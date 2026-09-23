@@ -4,12 +4,11 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
-from pathlib import Path
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from support.cli_support import (
+from lib.cli_support import (
     APIKEY_HASH_A,
     KID_A,
     KID_B,

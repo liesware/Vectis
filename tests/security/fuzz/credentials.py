@@ -1,3 +1,5 @@
+"""Credential lookup private to the HTTP fuzz suite."""
+
 import os
 from pathlib import Path
 
@@ -15,10 +17,9 @@ def config_value(name):
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
-            key, value = line.split("=", 1)
+            key, candidate = line.split("=", 1)
             if key.strip() == name:
-                return value.strip().strip('"').strip("'")
-
+                return candidate.strip().strip('"').strip("'")
     return None
 
 
@@ -26,5 +27,4 @@ def require_apikey(cli_value=None):
     value = cli_value or config_value("VECTIS_APIKEY")
     if not value:
         raise RuntimeError("VECTIS_APIKEY must be provided with --apikey, environment, or .env")
-
     return value

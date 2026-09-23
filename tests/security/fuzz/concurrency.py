@@ -1,11 +1,4 @@
-"""Shared concurrency scaffold for race tests.
-
-Both the integration suite (StatusClient) and the security-fuzz suite
-(FuzzClient) drive the same one-time-token race: release N decode jobs at the
-same instant so they genuinely contend, then collect their results in order.
-Keeping the barrier/executor mechanics here means a fix to the timing or
-contention logic lands once instead of drifting between two copies.
-"""
+"""Concurrency scaffold private to the HTTP fuzz suite."""
 
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier

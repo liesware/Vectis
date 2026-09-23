@@ -4,15 +4,9 @@
 import argparse
 import random
 import sys
-from pathlib import Path
-
-INTEGRATION_ROOT = Path(__file__).resolve().parents[2] / "integration"
-sys.path.insert(0, str(INTEGRATION_ROOT))
-
-from support.test_config import require_apikey
-
 from client import FuzzClient
 from config import DEFAULT_BASE_URL, UNSEAL_KEY_FILE
+from credentials import require_apikey
 from reporting import print_target_done, print_target_start
 from self_check import self_check
 from targets import TARGET_NAMES, TARGETS

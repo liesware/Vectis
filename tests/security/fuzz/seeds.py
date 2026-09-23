@@ -2,7 +2,7 @@ import base64
 import copy
 import json
 
-from support.compact_signature import mutate_compact_signature_segment
+from compact_signature import mutate_compact_signature_segment
 
 from config import (
     configure_commitment_profile,

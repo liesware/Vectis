@@ -7,11 +7,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-INTEGRATION_ROOT = Path(__file__).resolve().parents[2] / "integration"
-sys.path.insert(0, str(INTEGRATION_ROOT))
-
-from support.test_config import require_apikey
-from support.http_support import (
+from credentials import require_apikey
+from prepared_support import (
     DEFAULT_BASE_URL,
     DEFAULT_FINAL_APP_ADDR,
     KEY_CASES,

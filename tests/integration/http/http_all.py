@@ -5,12 +5,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+HTTP_ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(HTTP_ROOT))
 
-from support.test_config import require_apikey
+from lib.credentials import require_apikey
 
 
-DEFAULT_BASE_URL = "http://127.0.0.1:3000"
+from lib.positive_support import DEFAULT_BASE_URL
 SUMMARY_RE = re.compile(r"^SUMMARY (?P<name>\w+) passed=(?P<passed>\d+) failed=(?P<failed>\d+)$")
 
 
