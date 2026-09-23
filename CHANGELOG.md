@@ -7,6 +7,10 @@ manually for releases; the Git history remains the detailed engineering record.
 
 Changes staged for v0.9.0, the first official release.
 
+### Security
+
+- Updated rustls to 0.23.45 to address RUSTSEC-2026-0285.
+
 ## Main
 - Update from 1.97.1 to 1.98
 - fuzz testing improvements
