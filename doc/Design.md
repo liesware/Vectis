@@ -38,6 +38,50 @@ Rule format:
 - **Rust note** — tooling/crates used in this repository.
 - **In Vectis** — where to see it working (or the honestly declared gap).
 
+## Ethos
+
+The rules below will be refined, added, and retired. This part should not.
+
+**Quality over time.** Fast and wrong is not fast; it is late, with interest.
+When time is short, **cut scope, never quality.** Quality here means correct,
+understandable, secure, tested, and documented — all five, not the ones that
+fit the deadline.
+
+**When time is short, cut the story, not the path.** A smaller story that goes
+through every step — contract, validation, tests, docs — beats a larger one
+that skipped some.
+
+**Security is 90% quality and 10% adversary.** Most vulnerabilities are
+defects: a missing bound, an unchecked input, an error that says too much,
+state nobody owns. The discipline in these rules is the 90%. The last 10% is
+the attacker's creativity — chains of harmless bugs, side channels, classes
+nobody has named yet — and no process reaches it. Only attacking your own
+system does, the way a Pwn2Own contestant would.
+
+> *The 10% feeds the 90%: every adversarial finding becomes a class removed
+> (Rule 35), a test, or a bound, so the next attacker has to be more creative
+> than the last.*
+
+The split is a heuristic, not a measurement. What it says is that the 10% needs
+its own time on the calendar; it is never what is left over.
+
+And what everything else stands on:
+
+- complexity belongs to the problem, not the product;
+- a system grows by deepening its responsibility, not by widening it;
+- everything from outside is hostile, and secrets never leak out;
+- the safe choice is the default;
+- documentation comes before or with the code, never after;
+- a rule earns its place by preventing a real failure, not by being cited;
+- a good intention is not a guarantee; enforcement is;
+- responsibility cannot be delegated to a tool;
+- say what the system is not, and what has not been proven.
+
+**Build to be inherited.** Software that is shared can be read, audited, and
+improved by people you will never meet. Unclear docs are bugs; a well-reported
+break is a contribution. Privacy and knowledge are things we build, not merely
+things we request.
+
 ## Index
 
 | # | Rule | Applies |
@@ -1144,5 +1188,7 @@ one cheaper:
 Distilled from the Vectis codebase as of 2026-07-24 and maintained against the
 project's current design and operational scope. Last revised 2026-08-21:
 added the OpenBSD security philosophy as a source and Rules 34, 35, and 40
-(safe defaults, class-level fixes, release re-reading). Update when a rule is
+(safe defaults, class-level fixes, release re-reading). Revised 2026-09-23:
+added Rule 0 (everything from outside is hostile) and the Ethos section
+(quality over time, security as 90% quality and 10% adversary). Update when a rule is
 learned, invalidated, or superseded by a better one.
