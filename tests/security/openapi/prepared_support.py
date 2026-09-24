@@ -16,6 +16,18 @@ DEFAULT_BASE_URL = "http://127.0.0.1:3000"
 DEFAULT_FINAL_APP_ADDR = "localhost:3999"
 CONFIG_PATH = Path("config.json")
 CONFIG_SIGN_PATH = Path("config_sign.json")
+DEFAULT_CONFIG = {
+    "version": "v1",
+    "routes": [],
+    "remote_routes": [],
+    "permissions": [],
+    "fpe_profiles": [],
+    "tokenization_profiles": [],
+    "mac_profiles": [],
+    "masking_profiles": [],
+    "commitment_profiles": [],
+    "sharing_profiles": [],
+}
 
 KEY_CASES = (
     {
@@ -106,6 +118,11 @@ def restore_config_sign_file(content):
 
 
 def _load_config():
+    if not CONFIG_PATH.exists():
+        # The preceding HTTP suite restores an absent pre-test config by
+        # deleting it. Prepared Schemathesis must still be able to provision
+        # its isolated routes from the same minimal state as a fresh node.
+        return json.loads(json.dumps(DEFAULT_CONFIG))
     try:
         return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as err:
