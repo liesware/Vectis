@@ -476,6 +476,8 @@ native `cargo-fuzz` targets.
   beginning with PostgreSQL storage.
 - [doc/Build.md](doc/Build.md): source build requirements and commands.
 - [doc/API.md](doc/API.md): HTTP API and CLI mapping.
+- [doc/Limits.md](doc/Limits.md): consolidated input, profile, runtime, storage,
+  and encoding limits.
 - [doc/UseCases.md](doc/UseCases.md): real-world use cases per feature.
 - [doc/CLI.md](doc/CLI.md): CLI behavior, commands, output, and environment.
 - [doc/ENV.md](doc/ENV.md): environment variables and expected values.

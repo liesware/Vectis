@@ -2,6 +2,9 @@
 
 Vectis protects data throughout its lifecycle. The HTTP API exposes operations to create key material, validate keys, publish public keys, sign message hashes, exchange protected messages between Vectis instances, and encrypt/decrypt internal messages.
 
+For a consolidated inventory of request, field, batch, profile, storage, and
+runtime bounds, see [Limits](Limits.md).
+
 The `vectis` CLI is an HTTP client for the runtime API, except for `vectis init`, `vectis serve`, `vectis apikey create`, `vectis config sign`, and `vectis config list`, which are local commands.
 
 ## Conventions
