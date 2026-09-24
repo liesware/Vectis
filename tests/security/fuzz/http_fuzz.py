@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI entry point for the Vectis HTTP fuzz suite."""
+"""CLI entry point for the Vectis HTTP fuzz suite. See doc/Test.md."""
 
 import argparse
 import random
@@ -14,12 +14,39 @@ from targets import TARGET_NAMES, TARGETS
 
 def main():
     parser = argparse.ArgumentParser(description="Fuzz the Vectis HTTP surface.")
-    parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
-    parser.add_argument("--apikey")
-    parser.add_argument("--seed", type=int, default=1337)
-    parser.add_argument("--iterations", type=int, default=300)
-    parser.add_argument("--target", choices=["all", *TARGET_NAMES], default="all")
-    parser.add_argument("--liveness-every", type=int, default=1)
+    parser.add_argument(
+        "--base-url",
+        default=DEFAULT_BASE_URL,
+        help="base URL of the running Vectis instance",
+    )
+    parser.add_argument(
+        "--apikey",
+        help="API key; falls back to the environment or .env credential helper",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=1337,
+        help="RNG seed; runs are deterministic so a finding reproduces (default 1337)",
+    )
+    parser.add_argument(
+        "--iterations",
+        type=int,
+        default=300,
+        help="mutation cases run per target (default 300)",
+    )
+    parser.add_argument(
+        "--target",
+        choices=["all", *TARGET_NAMES],
+        default="all",
+        help="run a single target by name, or 'all' (default)",
+    )
+    parser.add_argument(
+        "--liveness-every",
+        type=int,
+        default=1,
+        help="probe /healthz/live every N cases to catch a crash mid-run (default 1)",
+    )
     parser.add_argument(
         "--progress-every",
         type=int,

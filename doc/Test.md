@@ -121,6 +121,77 @@ Install/sync the base Python environment:
 uv sync
 ```
 
+The HTTP suite is structured so that adding a case is adding one function:
+
+- `tests/integration/http/cases/` holds the endpoint contracts, one module per
+  capability (`positive_*.py` / `negative_*.py`). A case is a function decorated
+  with `@cases("capability.contract")`, and each module exposes the resulting
+  `CASES` tuple. `cases/registry.py` is the only place that composes the ordered
+  execution across modules.
+- `tests/integration/http/lib/` is private to this suite: transport clients,
+  assertions, the `HttpTestContext` (`ctx`), configuration transactions,
+  fixtures, and the case runner. No shared cross-suite helper package exists;
+  each suite owns its helpers and must not import another suite's private `lib/`.
+- A case receives `ctx`: `ctx.http` for status-preserving requests, `ctx.client`
+  for successful authenticated ones, `ctx.expect`/`ctx.require` for assertions,
+  `ctx.set_*`/`ctx.write_config()` for signed-config changes (both config files
+  are restored and reloaded during cleanup), and `ctx.fixtures` for ordered
+  shared state produced by earlier cases.
+- Counting: a negative case counts its `weight` (default 1); a positive case
+  returns `CaseResult(passed=N)`. `http_positive.py` runs the positive suite
+  with `require_result=True`, so a positive case that forgets its `CaseResult`
+  fails loudly instead of silently undercounting the total.
+- `tests/integration/http/lib/test_lib.py` holds structural guards, run with the
+  standard-library runner (no server needed):
+
+  ```sh
+  PYTHONPATH=tests/integration:tests/integration/http \
+    python3 -m unittest discover -s tests/integration/http/lib -p 'test_*.py'
+  ```
+
+  They keep the split from regressing: every declared `CASES` module must be
+  composed by the registry and use the `@cases`/`ctx` model, and no shared
+  `support/` package may reappear.
+
+### Adding an HTTP case
+
+1. Put the endpoint-specific contract in the appropriate `cases/positive_*.py`
+   or `cases/negative_*.py` module. Split a capability into its own module when
+   it would make the existing one hard to scan.
+2. Add a function decorated with the module's `@cases(...)` decorator. Adding a
+   case is adding one function — no manual tuple entry and no registry edit for
+   the case itself:
+
+   ```python
+   from lib.casekit import CaseSet
+
+   cases = CaseSet()  # once, near the top
+
+   @cases("tokenization.decode-rejects-unknown-profile")
+   def _(ctx):
+       status, _ = ctx.http.post("/token/decode", {"profile": "nope", ...})
+       ctx.expect(status, 400)
+
+   CASES = cases.tuple()  # once, at the bottom
+   ```
+
+   Only a *new module* needs an explicit entry in `cases/registry.py`; the
+   `lib/test_lib.py` guards fail if you declare a `CASES` module the registry
+   never composes.
+3. The case receives `HttpTestContext` as `ctx`. Use `ctx.http` for
+   status-preserving requests (keeps 4xx/5xx), `ctx.client` for successful
+   authenticated requests, `ctx.expect`/`ctx.require` for assertions, and
+   `ctx.fixtures` for ordered, suite-local shared data (positive cases currently
+   also use the `ctx.artifacts` dict for the same purpose).
+4. Change signed configuration through `ctx.set_*`, `ctx.write_config()`, or
+   `ctx.write_unsigned_config()`. The context transaction restores both config
+   files and reloads the restored runtime state during cleanup.
+5. Counting: a negative case counts its `weight` (default 1); a positive case
+   returns `CaseResult(passed=N)` with the number of sub-checks it makes. Use
+   `@cases(..., weight=0)` for a setup/bootstrap case that counts nothing.
+6. Keep endpoint-specific assertions next to the case. Move an abstraction into
+   `lib/` only when more than one HTTP capability needs it.
+
 ## Python CLI Tests
 
 Run the local CLI suite with:
@@ -197,7 +268,38 @@ blocked consistently. Secret sharing has no batch endpoint. The `no_body`
 target checks endpoints called without a body where that shape is useful.
 Beyond crash/status hygiene it runs semantic oracles that flag verification,
 AEAD, FPE, tokenization, batch-atomicity, lifecycle, and config-integrity
-bypasses; `--self-check` tests those oracles offline.
+bypasses, plus a secret-leak oracle that fails any response containing the API
+key or the on-disk unseal key; the entry point reads `.unseal_key` only to feed
+that oracle, never to unseal. `--self-check` tests those oracles offline. Runs
+are deterministic for a given `--seed`, so a finding reproduces exactly, and
+output ends with `SUMMARY fuzz passed=<N> failed=<M>` (non-zero exit if any case
+failed or the server is unhealthy afterward). Run it only against a disposable
+instance you own.
+
+`http_fuzz.py` is only the entry point; the substance lives in sibling modules:
+`targets.py` (the `TARGETS` table, one dict per target, and the runners),
+`seeds.py` / `mutations.py` (domain-aware seed corpora and mutators),
+`oracle.py` / `semantics.py` (the leak oracle and per-capability semantic
+oracles), and `self_check.py` (offline self-tests of those oracles). Each of
+`client.py`, `config.py`, `reporting.py` and `credentials.py` is private to this
+suite.
+
+To add a target:
+
+1. Add a seed factory (and any mutator) in `seeds.py` / `mutations.py`.
+2. Append one dict to the `TARGETS` list in `targets.py`:
+
+   ```python
+   {"name": "my_capability", "runner": run_body, "seed_factory": my_seeds,
+    "auth": True, "semantic": my_semantic_oracle},
+   ```
+
+   `run_body` covers most body endpoints; use a dedicated runner (e.g.
+   `run_http_protocol`, `run_batch_contract`) for richer contracts. `--target`
+   picks the new name up automatically because `TARGET_NAMES` is derived from
+   `TARGETS`.
+3. If the target asserts a semantic contract, add its oracle in `semantics.py`
+   and cover it in `self_check.py` so `--self-check` protects it offline.
 
 Cloudflare validation is deliberately manual and opt-in:
 
@@ -527,7 +629,10 @@ uses sanitizer builds, and is heavier than the normal HTTP test suite.
 - `tests/integration/http/http_negative.py`: invalid, denied, and error-path workflows.
 - `tests/integration/http/http_positive.py`: valid end-to-end runtime workflows.
 - `tests/security/openapi/http_schemathesis.py`: OpenAPI contract fuzzing via Schemathesis.
+- `tests/integration/http/cases/`: HTTP endpoint contracts as `@cases` functions
+  (one module per capability) plus `registry.py`, which composes their order.
 - `tests/integration/http/lib/`: private client, fixtures, configuration and assertion helpers for HTTP cases.
+- `tests/integration/http/lib/test_lib.py`: harness unit tests and structural guards that keep the case split from regressing.
 - `tests/performance/run.sh`: single entry point for the isolated local k6
   harness.
 - `tests/performance/k6.js`: local mixed-workload k6 scenario.
