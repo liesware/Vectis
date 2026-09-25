@@ -10,14 +10,14 @@ pub async fn list_endpoint(
     State(state): State<HttpState>,
     headers: HeaderMap,
 ) -> Result<Json<ListRemoteRoutesOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    state.require_permission(&client, None, "admin").await?;
+    let request = state.authorize_request(&headers).await?;
+    request.require_permission(None, "admin")?;
 
     info!(
         endpoint = "GET /remote-routes",
         "remote routes list request accepted"
     );
-    let response = state.remote_routes_output().await;
+    let response = request.config().remote_routes.list();
     info!(
         endpoint = "GET /remote-routes",
         routes_count = response.routes_len(),

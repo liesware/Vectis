@@ -10,8 +10,8 @@ pub async fn metrics_endpoint(
     State(state): State<HttpState>,
     headers: HeaderMap,
 ) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    state.require_permission(&client, None, "metrics").await?;
+    let request = state.authorize_request(&headers).await?;
+    request.require_permission(None, "metrics")?;
 
     match state.metrics_handle() {
         Some(handle) => Ok((

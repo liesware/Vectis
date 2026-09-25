@@ -3,6 +3,7 @@ use crate::error::DynError;
 use crate::ops::keys::{self, KeysDbState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 use zeroize::Zeroizing;
 
 #[derive(Deserialize)]
@@ -149,25 +150,25 @@ pub struct ValidatedCommitVerifyBatchInput {
 
 pub struct PreparedCommitCreate {
     kid: String,
-    profile: commitments::CommitmentProfile,
+    profile: Arc<commitments::CommitmentProfile>,
     input: ValidatedCommitCreateInput,
 }
 
 pub struct PreparedCommitVerify {
     kid: String,
-    profile: commitments::CommitmentProfile,
+    profile: Arc<commitments::CommitmentProfile>,
     input: ValidatedCommitVerifyInput,
 }
 
 pub struct PreparedCommitCreateBatch {
     kid: String,
-    profile: commitments::CommitmentProfile,
+    profile: Arc<commitments::CommitmentProfile>,
     input: ValidatedCommitCreateBatchInput,
 }
 
 pub struct PreparedCommitVerifyBatch {
     kid: String,
-    profile: commitments::CommitmentProfile,
+    profile: Arc<commitments::CommitmentProfile>,
     input: ValidatedCommitVerifyBatchInput,
 }
 
@@ -350,7 +351,7 @@ pub fn validate_verify_batch_input(
 pub fn prepare_create(
     keys_db_state: &KeysDbState,
     kid: &str,
-    profile: commitments::CommitmentProfile,
+    profile: Arc<commitments::CommitmentProfile>,
     input: ValidatedCommitCreateInput,
 ) -> Result<PreparedCommitCreate, DynError> {
     keys::prepare_profile_use(
@@ -371,7 +372,7 @@ pub fn prepare_create(
 
 pub fn prepare_verify(
     keys_db_state: &KeysDbState,
-    profile: commitments::CommitmentProfile,
+    profile: Arc<commitments::CommitmentProfile>,
     input: ValidatedCommitVerifyInput,
 ) -> Result<PreparedCommitVerify, DynError> {
     keys::prepare_profile_use(
@@ -394,7 +395,7 @@ pub fn prepare_verify(
 pub fn prepare_create_batch(
     keys_db_state: &KeysDbState,
     kid: &str,
-    profile: commitments::CommitmentProfile,
+    profile: Arc<commitments::CommitmentProfile>,
     input: ValidatedCommitCreateBatchInput,
 ) -> Result<PreparedCommitCreateBatch, DynError> {
     keys::prepare_profile_use(
@@ -418,7 +419,7 @@ pub fn prepare_create_batch(
 
 pub fn prepare_verify_batch(
     keys_db_state: &KeysDbState,
-    profile: commitments::CommitmentProfile,
+    profile: Arc<commitments::CommitmentProfile>,
     input: ValidatedCommitVerifyBatchInput,
 ) -> Result<PreparedCommitVerifyBatch, DynError> {
     keys::prepare_profile_use(
@@ -548,7 +549,7 @@ mod tests {
     const KID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const OTHER_KID: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-    fn commitment_profile(kid: &str) -> commitments::CommitmentProfile {
+    fn commitment_profile(kid: &str) -> Arc<commitments::CommitmentProfile> {
         let input = serde_json::from_value(json!({
             "name": "pan-commitment-v1",
             "kid": kid,
@@ -566,7 +567,6 @@ mod tests {
         .expect("commitment profile must validate")
         .get("pan-commitment-v1")
         .expect("profile must exist")
-        .clone()
     }
 
     fn keys_state(status: &str) -> KeysDbState {
@@ -598,7 +598,7 @@ mod tests {
         .expect("commit verify input must parse")
     }
 
-    fn created_commitment(profile: commitments::CommitmentProfile) -> CommitCreateOutput {
+    fn created_commitment(profile: Arc<commitments::CommitmentProfile>) -> CommitCreateOutput {
         let input = validate_create_input(create_input()).unwrap();
         let prepared = prepare_create(&keys_state("active"), KID, profile, input)
             .expect("commit create must prepare");

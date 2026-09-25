@@ -6,7 +6,7 @@ pub type DynError = Box<dyn Error + Send + Sync>;
 pub const UNTRUSTED_ERROR_DETAIL_MAX_CHARS: usize = 256;
 const SANITIZED_SERDE_FALLBACK: &str = "invalid JSON";
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum VectisError {
     #[error("{0}")]
     InvalidInput(String),

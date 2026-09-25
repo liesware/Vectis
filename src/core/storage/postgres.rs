@@ -120,21 +120,31 @@ impl PostgresStorage {
     }
 
     pub async fn save_tokens_batch(&self, records: &[TokenRow]) -> Result<(), DynError> {
-        let mut tx = self.pool.begin().await?;
-        for record in records {
-            sqlx::query(
-                "
-                INSERT INTO tokens (kid, hashid, data)
-                VALUES ($1, $2, $3)
-                ",
-            )
-            .bind(&record.kid)
-            .bind(&record.hashid)
-            .bind(&record.data)
-            .execute(&mut *tx)
-            .await?;
+        if records.is_empty() {
+            return Ok(());
         }
-        tx.commit().await?;
+        let kids: Vec<&str> = records.iter().map(|record| record.kid.as_str()).collect();
+        let hashids: Vec<&str> = records
+            .iter()
+            .map(|record| record.hashid.as_str())
+            .collect();
+        let data: Vec<&str> = records.iter().map(|record| record.data.as_str()).collect();
+        sqlx::query(
+            "
+            INSERT INTO tokens (kid, hashid, data)
+            SELECT kid, hashid, data
+            FROM UNNEST(
+                $1::text[],
+                $2::text[],
+                $3::text[]
+            ) AS batch(kid, hashid, data)
+            ",
+        )
+        .bind(&kids)
+        .bind(&hashids)
+        .bind(&data)
+        .execute(&self.pool)
+        .await?;
         info!(items_count = records.len(), "inserted token batch");
 
         Ok(())

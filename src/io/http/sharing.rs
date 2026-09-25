@@ -14,16 +14,13 @@ pub async fn split_endpoint(
     headers: HeaderMap,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::sharing::ShareSplitOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    state
-        .require_permission_for(
-            &client,
-            Some(&kid),
-            "share-split",
-            Some("shares.split.denied"),
-        )
-        .await?;
-    let actor = audit::actor_from_client(&client);
+    let request_context = state.authorize_request(&headers).await?;
+    request_context.require_permission_for(
+        Some(&kid),
+        "share-split",
+        Some("shares.split.denied"),
+    )?;
+    let actor = audit::actor_from_client(request_context.client());
 
     if let Err(err) = ops::keys::validate_key_id(&kid) {
         return Err(failed(
@@ -60,7 +57,11 @@ pub async fn split_endpoint(
             ));
         }
     };
-    let Some(profile) = state.sharing_profile(input.profile()).await else {
+    let Some(profile) = request_context
+        .config()
+        .sharing_profiles
+        .get(input.profile())
+    else {
         let err = crate::error::invalid_input("sharing profile not found");
         return Err(failed(
             "shares.split.failed",
@@ -120,8 +121,8 @@ pub async fn combine_endpoint(
     headers: HeaderMap,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::sharing::ShareCombineOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    let actor = audit::actor_from_client(&client);
+    let request_context = state.authorize_request(&headers).await?;
+    let actor = audit::actor_from_client(request_context.client());
     let input = match ops::sharing::parse_combine_input(request)
         .and_then(ops::sharing::validate_combine_input)
     {
@@ -138,14 +139,11 @@ pub async fn combine_endpoint(
         }
     };
     let kid = input.kid().to_string();
-    state
-        .require_permission_for(
-            &client,
-            Some(&kid),
-            "share-combine",
-            Some("shares.combine.denied"),
-        )
-        .await?;
+    request_context.require_permission_for(
+        Some(&kid),
+        "share-combine",
+        Some("shares.combine.denied"),
+    )?;
     if let Err(err) = state.ensure_keys_db_entry(&kid).await {
         return Err(failed(
             "shares.combine.failed",
@@ -156,7 +154,11 @@ pub async fn combine_endpoint(
             err.as_ref(),
         ));
     }
-    let Some(profile) = state.sharing_profile(input.profile()).await else {
+    let Some(profile) = request_context
+        .config()
+        .sharing_profiles
+        .get(input.profile())
+    else {
         let err = crate::error::invalid_input("sharing profile not found");
         return Err(failed(
             "shares.combine.failed",

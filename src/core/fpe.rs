@@ -29,7 +29,6 @@ pub(crate) struct FpeProfileInput {
     kid: String,
 }
 
-#[derive(Clone)]
 pub struct FpeProfile {
     name: String,
     fpe_version: String,
@@ -45,7 +44,7 @@ pub struct FpeProfile {
 
 #[derive(Clone, Default)]
 pub struct FpeProfilesState {
-    profiles: Vec<FpeProfile>,
+    profiles: Vec<Arc<FpeProfile>>,
     by_name: HashMap<String, usize>,
 }
 
@@ -116,6 +115,7 @@ impl FpeProfile {
 
 impl FpeProfilesState {
     fn from_profiles(profiles: Vec<FpeProfile>) -> Self {
+        let profiles = profiles.into_iter().map(Arc::new).collect::<Vec<_>>();
         let by_name = profiles
             .iter()
             .enumerate()
@@ -133,16 +133,19 @@ impl FpeProfilesState {
         self.profiles.is_empty()
     }
 
-    pub fn get(&self, name: &str) -> Option<&FpeProfile> {
+    pub fn get(&self, name: &str) -> Option<Arc<FpeProfile>> {
         self.by_name
             .get(name)
             .and_then(|index| self.profiles.get(*index))
+            .map(Arc::clone)
     }
 }
 
 impl Zeroize for FpeProfilesState {
     fn zeroize(&mut self) {
-        self.profiles.zeroize();
+        while let Some(profile) = self.profiles.pop() {
+            drop(profile);
+        }
         self.by_name.clear();
     }
 }
@@ -156,6 +159,12 @@ impl Zeroize for FpeProfile {
         self.max_len = 0;
         self.tweak_aad.zeroize();
         self.kid.zeroize();
+    }
+}
+
+impl Drop for FpeProfile {
+    fn drop(&mut self) {
+        self.zeroize();
     }
 }
 
@@ -527,6 +536,52 @@ mod tests {
     }
 
     #[test]
+    fn profile_lookups_share_ownership_across_state_zeroize() {
+        let mut state = validate_fpe_profiles(
+            vec![input("patient-id", kid())],
+            |item| item == kid(),
+            |_| Ok(fpe_key()),
+        )
+        .expect("profile must validate");
+        let first = state.get("patient-id").expect("profile must exist");
+        let second = state.get("patient-id").expect("profile must exist");
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(Arc::strong_count(&first), 3);
+        state.zeroize();
+        assert!(state.is_empty());
+        assert_eq!(first.name(), "patient-id");
+        assert_eq!(Arc::strong_count(&first), 2);
+        drop(second);
+        assert_eq!(Arc::strong_count(&first), 1);
+    }
+
+    #[test]
+    fn in_flight_profile_keeps_old_snapshot_after_state_replacement() {
+        let mut old_input = input("patient-id", kid());
+        old_input.tweak_aad = "tenant=old;field=patient_id;version=1".to_string();
+        let mut old_state =
+            validate_fpe_profiles(vec![old_input], |item| item == kid(), |_| Ok(fpe_key()))
+                .expect("old profile must validate");
+        let in_flight = old_state.get("patient-id").expect("profile must exist");
+
+        old_state.zeroize();
+        let mut new_input = input("patient-id", kid());
+        new_input.tweak_aad = "tenant=new;field=patient_id;version=1".to_string();
+        let new_state =
+            validate_fpe_profiles(vec![new_input], |item| item == kid(), |_| Ok(fpe_key()))
+                .expect("new profile must validate");
+        let current = new_state.get("patient-id").expect("profile must exist");
+
+        assert_eq!(
+            in_flight.tweak_aad(),
+            "tenant=old;field=patient_id;version=1"
+        );
+        assert_eq!(current.tweak_aad(), "tenant=new;field=patient_id;version=1");
+        assert!(!Arc::ptr_eq(&in_flight, &current));
+    }
+
+    #[test]
     fn rejects_duplicate_name() {
         let err = validate_fpe_profiles(
             vec![input("patient-id", kid()), input("patient-id", kid())],
@@ -777,8 +832,8 @@ mod tests {
         )
         .expect("profile must validate");
         let profile = state.get("patient-id").expect("profile must exist");
-        let ciphertext = fpe_encrypt(profile, "123456").expect("encrypt must work");
-        let plaintext = fpe_decrypt(profile, &ciphertext).expect("decrypt must work");
+        let ciphertext = fpe_encrypt(&profile, "123456").expect("encrypt must work");
+        let plaintext = fpe_decrypt(&profile, &ciphertext).expect("decrypt must work");
 
         assert_ne!(ciphertext, "123456");
         assert_eq!(plaintext, "123456");
@@ -795,8 +850,8 @@ mod tests {
         let profile = state.get("patient-id").expect("profile must exist");
 
         assert_eq!(
-            fpe_encrypt(profile, "123456").unwrap(),
-            fpe_encrypt(profile, "123456").unwrap()
+            fpe_encrypt(&profile, "123456").unwrap(),
+            fpe_encrypt(&profile, "123456").unwrap()
         );
     }
 
@@ -809,7 +864,7 @@ mod tests {
         )
         .expect("profile must validate");
         let profile = state.get("patient-id").expect("profile must exist");
-        let baseline = fpe_encrypt(profile, "123456").unwrap();
+        let baseline = fpe_encrypt(&profile, "123456").unwrap();
 
         let mut other_tweak = input("patient-id", kid());
         other_tweak.tweak_aad = "tenant=acme;field=other;version=1".to_string();
@@ -835,9 +890,9 @@ mod tests {
 
         assert_ne!(
             baseline,
-            fpe_encrypt(other_tweak_profile, "123456").unwrap()
+            fpe_encrypt(&other_tweak_profile, "123456").unwrap()
         );
-        assert_ne!(baseline, fpe_encrypt(other_profile, "123456").unwrap());
+        assert_ne!(baseline, fpe_encrypt(&other_profile, "123456").unwrap());
         assert_ne!(
             real_fpe_key(kid(), "patient-id", FPE_VERSION_FF1_2025).as_slice(),
             real_fpe_key(kid(), "patient-id", "future-version").as_slice()
@@ -854,28 +909,30 @@ mod tests {
         .expect("profile must validate");
         let profile = state.get("patient-id").expect("profile must exist");
 
-        let err = fpe_encrypt(profile, "abc123").expect_err("invalid plaintext must fail");
+        let err = fpe_encrypt(&profile, "abc123").expect_err("invalid plaintext must fail");
         assert_eq!(
             err.to_string(),
             "plaintext contains character outside fpe profile alphabet"
         );
-        let err = fpe_decrypt(profile, "abc123").expect_err("invalid ciphertext must fail");
+        let err = fpe_decrypt(&profile, "abc123").expect_err("invalid ciphertext must fail");
         assert_eq!(
             err.to_string(),
             "ciphertext contains character outside fpe profile alphabet"
         );
-        assert!(fpe_encrypt(profile, "123").is_err());
+        assert!(fpe_encrypt(&profile, "123").is_err());
     }
 
     #[test]
     fn fpe_profile_zeroize_clears_metadata() {
-        let state = validate_fpe_profiles(
+        let mut state = validate_fpe_profiles(
             vec![input("patient-id", kid())],
             |item| item == kid(),
             |_| Ok(fpe_key()),
         )
         .expect("profile must validate");
-        let mut profile = state.get("patient-id").expect("profile must exist").clone();
+        let profile = state.get("patient-id").expect("profile must exist");
+        state.zeroize();
+        let mut profile = Arc::try_unwrap(profile).expect("profile must have one owner");
 
         profile.zeroize();
 

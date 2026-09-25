@@ -3,7 +3,7 @@ use crate::error::DynError;
 use crate::ops::keys;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::fmt;
+use std::{fmt, sync::Arc};
 use zeroize::{Zeroize, Zeroizing};
 
 pub const MAC_KEY_SALT: &[u8] = b"vectis/mac/v1";
@@ -23,7 +23,6 @@ pub(crate) struct MacProfileInput {
     context: String,
 }
 
-#[derive(Clone)]
 pub struct MacProfile {
     name: String,
     kid: String,
@@ -36,7 +35,7 @@ pub struct MacProfile {
 
 #[derive(Clone, Default)]
 pub struct MacProfilesState {
-    profiles: Vec<MacProfile>,
+    profiles: Vec<Arc<MacProfile>>,
     by_name: HashMap<String, usize>,
 }
 
@@ -116,6 +115,7 @@ impl MacProfile {
 
 impl MacProfilesState {
     fn from_profiles(profiles: Vec<MacProfile>) -> Self {
+        let profiles = profiles.into_iter().map(Arc::new).collect::<Vec<_>>();
         let by_name = profiles
             .iter()
             .enumerate()
@@ -133,16 +133,19 @@ impl MacProfilesState {
         self.profiles.is_empty()
     }
 
-    pub fn get(&self, name: &str) -> Option<&MacProfile> {
+    pub fn get(&self, name: &str) -> Option<Arc<MacProfile>> {
         self.by_name
             .get(name)
             .and_then(|index| self.profiles.get(*index))
+            .map(Arc::clone)
     }
 }
 
 impl Zeroize for MacProfilesState {
     fn zeroize(&mut self) {
-        self.profiles.zeroize();
+        while let Some(profile) = self.profiles.pop() {
+            drop(profile);
+        }
         self.by_name.clear();
     }
 }
@@ -156,6 +159,12 @@ impl Zeroize for MacProfile {
         self.botan_algorithm.zeroize();
         self.customization.zeroize();
         self.mac_key.zeroize();
+    }
+}
+
+impl Drop for MacProfile {
+    fn drop(&mut self) {
+        self.zeroize();
     }
 }
 
@@ -377,6 +386,42 @@ mod tests {
             context,
             hash_algorithm,
         }
+    }
+
+    fn profiles_state() -> MacProfilesState {
+        validate_mac_profiles(
+            vec![MacProfileInput {
+                name: "pan-blind-index-v1".to_string(),
+                kid: KID.to_string(),
+                context: "tenant=mx;field=pan;purpose=blind-index;version=1".to_string(),
+            }],
+            |_| true,
+            |_| Ok("BLAKE2b(256)".to_string()),
+            |_| {
+                Ok(DerivedMacKey {
+                    public_algorithm: "HMAC(BLAKE2b(256))".to_string(),
+                    botan_algorithm: "HMAC(BLAKE2b(256))".to_string(),
+                    mac_key: Zeroizing::new(vec![7; MAC_KEY_SIZE_BYTES]),
+                })
+            },
+        )
+        .expect("profile must validate")
+    }
+
+    #[test]
+    fn profile_lookups_share_ownership_across_state_zeroize() {
+        let mut state = profiles_state();
+        let first = state.get("pan-blind-index-v1").expect("profile must exist");
+        let second = state.get("pan-blind-index-v1").expect("profile must exist");
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(Arc::strong_count(&first), 3);
+        state.zeroize();
+        assert!(state.is_empty());
+        assert_eq!(first.name(), "pan-blind-index-v1");
+        assert_eq!(Arc::strong_count(&first), 2);
+        drop(second);
+        assert_eq!(Arc::strong_count(&first), 1);
     }
 
     #[test]

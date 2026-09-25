@@ -5,7 +5,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::fmt;
+use std::{fmt, sync::Arc};
 use zeroize::{Zeroize, Zeroizing};
 
 pub const COMMITMENT_KEY_SALT: &[u8] = b"vectis/commitment/v1";
@@ -26,7 +26,6 @@ pub(crate) struct CommitmentProfileInput {
     opening_len: usize,
 }
 
-#[derive(Clone)]
 pub struct CommitmentProfile {
     name: String,
     kid: String,
@@ -41,7 +40,7 @@ pub struct CommitmentProfile {
 
 #[derive(Clone, Default)]
 pub struct CommitmentProfilesState {
-    profiles: Vec<CommitmentProfile>,
+    profiles: Vec<Arc<CommitmentProfile>>,
     by_name: HashMap<String, usize>,
 }
 
@@ -121,6 +120,7 @@ impl CommitmentProfile {
 
 impl CommitmentProfilesState {
     fn from_profiles(profiles: Vec<CommitmentProfile>) -> Self {
+        let profiles = profiles.into_iter().map(Arc::new).collect::<Vec<_>>();
         let by_name = profiles
             .iter()
             .enumerate()
@@ -138,16 +138,19 @@ impl CommitmentProfilesState {
         self.profiles.is_empty()
     }
 
-    pub fn get(&self, name: &str) -> Option<&CommitmentProfile> {
+    pub fn get(&self, name: &str) -> Option<Arc<CommitmentProfile>> {
         self.by_name
             .get(name)
             .and_then(|index| self.profiles.get(*index))
+            .map(Arc::clone)
     }
 }
 
 impl Zeroize for CommitmentProfilesState {
     fn zeroize(&mut self) {
-        self.profiles.zeroize();
+        while let Some(profile) = self.profiles.pop() {
+            drop(profile);
+        }
         self.by_name.clear();
     }
 }
@@ -163,6 +166,12 @@ impl Zeroize for CommitmentProfile {
         self.commit_key.zeroize();
         self.max_plaintext_len = 0;
         self.opening_len = 0;
+    }
+}
+
+impl Drop for CommitmentProfile {
+    fn drop(&mut self) {
+        self.zeroize();
     }
 }
 
@@ -380,6 +389,44 @@ mod tests {
             context,
             hash_algorithm,
         }
+    }
+
+    fn profiles_state() -> CommitmentProfilesState {
+        validate_commitment_profiles(
+            vec![CommitmentProfileInput {
+                name: "pan-commitment-v1".to_string(),
+                kid: KID.to_string(),
+                context: "tenant=mx;field=pan;purpose=commitment;version=1".to_string(),
+                max_plaintext_len: 128,
+                opening_len: 32,
+            }],
+            |_| true,
+            |_| Ok("BLAKE2b(256)".to_string()),
+            |_| {
+                Ok(DerivedCommitmentKey {
+                    public_algorithm: "HMAC(BLAKE2b(256))".to_string(),
+                    botan_algorithm: "HMAC(BLAKE2b(256))".to_string(),
+                    commit_key: Zeroizing::new(vec![7; COMMITMENT_KEY_SIZE_BYTES]),
+                })
+            },
+        )
+        .expect("profile must validate")
+    }
+
+    #[test]
+    fn profile_lookups_share_ownership_across_state_zeroize() {
+        let mut state = profiles_state();
+        let first = state.get("pan-commitment-v1").expect("profile must exist");
+        let second = state.get("pan-commitment-v1").expect("profile must exist");
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(Arc::strong_count(&first), 3);
+        state.zeroize();
+        assert!(state.is_empty());
+        assert_eq!(first.name(), "pan-commitment-v1");
+        assert_eq!(Arc::strong_count(&first), 2);
+        drop(second);
+        assert_eq!(Arc::strong_count(&first), 1);
     }
 
     #[test]

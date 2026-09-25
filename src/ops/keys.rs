@@ -88,6 +88,15 @@ impl KeysDbState {
         self.keys_db.push(loaded_key);
         self.by_id.insert(id, index);
     }
+
+    pub(crate) fn insert_if_absent(&mut self, loaded_key: LoadedOpsKey) -> bool {
+        if self.contains_id(loaded_key.id()) {
+            return false;
+        }
+
+        self.upsert(loaded_key);
+        true
+    }
 }
 
 #[cfg(test)]
@@ -1573,6 +1582,33 @@ mod tests {
                 .expect("replaced key must exist")
                 .lifecycle_status(),
             "compromised"
+        );
+    }
+
+    #[test]
+    fn insert_if_absent_adds_new_key_without_replacing_existing_state() {
+        let existing_id = "a".repeat(64);
+        let new_id = "b".repeat(64);
+        let mut state = empty_keys_state();
+        state.upsert(loaded_key_with_id_and_lifecycle(&existing_id, "active"));
+
+        assert!(!state.insert_if_absent(loaded_key_with_id_and_lifecycle(&existing_id, "retired")));
+        assert!(state.insert_if_absent(loaded_key_with_id_and_lifecycle(&new_id, "retired")));
+
+        assert_eq!(state.len(), 2);
+        assert_eq!(
+            state
+                .get(&existing_id)
+                .expect("existing key must remain loaded")
+                .lifecycle_status(),
+            "active"
+        );
+        assert_eq!(
+            state
+                .get(&new_id)
+                .expect("new key must be loaded")
+                .lifecycle_status(),
+            "retired"
         );
     }
 

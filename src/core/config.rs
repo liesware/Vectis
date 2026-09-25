@@ -31,6 +31,7 @@ pub const INTERNAL_COMMIT_BATCH: usize = 128;
 pub const INTERNAL_SHARE_MAX: usize = 32;
 pub const INTERNAL_REF_MAX_CHARS: usize = 128;
 pub const INTERNAL_HTTP_MAX_SIZE: usize = 2 * 1024 * 1024;
+pub const INTERNAL_MESSAGE_PLAINTEXT_MAX_SIZE: usize = (1024 * 1024) - 1024;
 pub const INTERNAL_HTTP_GRACE_SEC: u64 = 30;
 pub const INTERNAL_HTTP_TIMEOUT_SEC: u64 = 30;
 pub const INTERNAL_TIME_ATTEST_TIMEOUT_SEC: u64 = 5;

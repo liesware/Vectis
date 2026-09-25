@@ -19,11 +19,9 @@ pub async fn create_endpoint(
     headers: HeaderMap,
     JsonBody(request): JsonBody,
 ) -> Result<Json<CreateKeysResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    state
-        .require_permission_for(&client, None, "admin", Some("key.create.denied"))
-        .await?;
-    let actor = audit::actor_from_client(&client);
+    let request_context = state.authorize_request(&headers).await?;
+    request_context.require_permission_for(None, "admin", Some("key.create.denied"))?;
+    let actor = audit::actor_from_client(request_context.client());
 
     let request = match ops::keys::parse_create_keys_input(request) {
         Ok(request) => request,
@@ -133,11 +131,13 @@ pub async fn create_endpoint(
 
 pub async fn list_endpoint(State(state): State<HttpState>) -> Json<ops::keys::ListKeysOutput> {
     info!(endpoint = "GET /keys", "keys list request accepted");
-    let response = state
-        .with_keys_db_state(ops::keys::list_keys_from_state)
-        .await;
-    let keys_count = state
-        .with_keys_db_state(|keys_db_state| keys_db_state.len())
+    let (response, keys_count) = state
+        .with_keys_db_state(|keys_db_state| {
+            (
+                ops::keys::list_keys_from_state(keys_db_state),
+                keys_db_state.len(),
+            )
+        })
         .await;
     info!(
         endpoint = "GET /keys",
@@ -151,18 +151,20 @@ pub async fn list_properties_endpoint(
     State(state): State<HttpState>,
     headers: HeaderMap,
 ) -> Result<Json<ops::keys::ListKeysPropertiesOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    state.require_permission(&client, None, "admin").await?;
+    let request = state.authorize_request(&headers).await?;
+    request.require_permission(None, "admin")?;
 
     info!(
         endpoint = "GET /keys/properties",
         "keys properties list request accepted"
     );
-    let response = state
-        .with_keys_db_state(ops::keys::list_keys_properties_from_state)
-        .await;
-    let keys_count = state
-        .with_keys_db_state(|keys_db_state| keys_db_state.len())
+    let (response, keys_count) = state
+        .with_keys_db_state(|keys_db_state| {
+            (
+                ops::keys::list_keys_properties_from_state(keys_db_state),
+                keys_db_state.len(),
+            )
+        })
         .await;
     info!(
         endpoint = "GET /keys/properties",
@@ -177,8 +179,8 @@ pub async fn get_properties_endpoint(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<ops::keys::KeyPropertiesOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    state.require_permission(&client, Some(&id), "keys").await?;
+    let request = state.authorize_request(&headers).await?;
+    request.require_permission(Some(&id), "keys")?;
     info!(
         endpoint = "GET /keys/properties/{kid}",
         kid = %id,
@@ -211,16 +213,9 @@ pub async fn update_lifecycle_endpoint(
     Path(id): Path<String>,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::keys::UpdateLifecycleOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    state
-        .require_permission_for(
-            &client,
-            Some(&id),
-            "lifecycle",
-            Some("key.lifecycle.denied"),
-        )
-        .await?;
-    let actor = audit::actor_from_client(&client);
+    let request_context = state.authorize_request(&headers).await?;
+    request_context.require_permission_for(Some(&id), "lifecycle", Some("key.lifecycle.denied"))?;
+    let actor = audit::actor_from_client(request_context.client());
     let request = match ops::keys::parse_update_lifecycle_input(request) {
         Ok(request) => request,
         Err(err) => {
@@ -297,11 +292,9 @@ pub async fn refresh_endpoint(
     State(state): State<HttpState>,
     headers: HeaderMap,
 ) -> Result<Json<ops::keys::ListKeysPropertiesOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    state
-        .require_permission_for(&client, None, "admin", Some("key.reload.denied"))
-        .await?;
-    let actor = audit::actor_from_client(&client);
+    let request = state.authorize_request(&headers).await?;
+    request.require_permission_for(None, "admin", Some("key.reload.denied"))?;
+    let actor = audit::actor_from_client(request.client());
 
     info!(
         endpoint = "POST /keys/reload",
@@ -319,14 +312,17 @@ pub async fn refresh_endpoint(
         );
         error_response(err.as_ref())
     })?;
-    state.refresh_loaded_gauges().await;
+    let (response, keys_count) = state
+        .with_keys_db_state(|keys_db_state| {
+            (
+                ops::keys::list_keys_properties_from_state(keys_db_state),
+                keys_db_state.len(),
+            )
+        })
+        .await;
+    let config = state.config_snapshot().await;
+    HttpState::set_loaded_gauges(&config, keys_count);
     metrics::record_keys_reload("success");
-    let response = state
-        .with_keys_db_state(ops::keys::list_keys_properties_from_state)
-        .await;
-    let keys_count = state
-        .with_keys_db_state(|keys_db_state| keys_db_state.len())
-        .await;
     info!(
         endpoint = "POST /keys/reload",
         keys_count, "keys reload response ready"

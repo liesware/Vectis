@@ -3,6 +3,7 @@ use crate::error::DynError;
 use crate::ops::keys::{self, KeysDbState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 use tracing::info;
 use zeroize::Zeroizing;
 
@@ -77,13 +78,13 @@ pub struct ValidatedMaskBatchInput {
 
 pub struct PreparedMask {
     kid: String,
-    profile: masking::MaskingProfile,
+    profile: Arc<masking::MaskingProfile>,
     input: ValidatedMaskInput,
 }
 
 pub struct PreparedMaskBatch {
     kid: String,
-    profile: masking::MaskingProfile,
+    profile: Arc<masking::MaskingProfile>,
     input: ValidatedMaskBatchInput,
 }
 
@@ -155,7 +156,7 @@ pub fn validate_mask_batch_input(
 pub fn prepare_mask(
     keys_db_state: &KeysDbState,
     kid: &str,
-    profile: masking::MaskingProfile,
+    profile: Arc<masking::MaskingProfile>,
     input: ValidatedMaskInput,
 ) -> Result<PreparedMask, DynError> {
     keys::prepare_profile_use(
@@ -176,7 +177,7 @@ pub fn prepare_mask(
 pub fn prepare_mask_batch(
     keys_db_state: &KeysDbState,
     kid: &str,
-    profile: masking::MaskingProfile,
+    profile: Arc<masking::MaskingProfile>,
     input: ValidatedMaskBatchInput,
 ) -> Result<PreparedMaskBatch, DynError> {
     keys::prepare_profile_use(
@@ -243,7 +244,7 @@ mod tests {
     const KID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const OTHER_KID: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-    fn masking_profile(kid: &str) -> masking::MaskingProfile {
+    fn masking_profile(kid: &str) -> Arc<masking::MaskingProfile> {
         let input = serde_json::from_value(json!({
             "name": "pan-display-v1",
             "kid": kid,
@@ -258,7 +259,6 @@ mod tests {
             .expect("masking profile must validate")
             .get("pan-display-v1")
             .expect("profile must exist")
-            .clone()
     }
 
     fn keys_state(status: &str) -> KeysDbState {

@@ -1,6 +1,9 @@
 use crate::error::DynError;
 use crate::ops::keys;
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use zeroize::Zeroize;
 
 pub const MASKING_PLAINTEXT_MAX_LEN: usize = 1024;
@@ -17,7 +20,7 @@ pub(crate) struct MaskingProfileInput {
     max_len: usize,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct MaskingProfile {
     name: String,
     kid: String,
@@ -30,7 +33,7 @@ pub struct MaskingProfile {
 
 #[derive(Clone, Debug, Default)]
 pub struct MaskingProfilesState {
-    profiles: Vec<MaskingProfile>,
+    profiles: Vec<Arc<MaskingProfile>>,
     by_name: HashMap<String, usize>,
 }
 
@@ -54,6 +57,7 @@ impl MaskingProfile {
 
 impl MaskingProfilesState {
     fn from_profiles(profiles: Vec<MaskingProfile>) -> Self {
+        let profiles = profiles.into_iter().map(Arc::new).collect::<Vec<_>>();
         let by_name = profiles
             .iter()
             .enumerate()
@@ -71,16 +75,19 @@ impl MaskingProfilesState {
         self.profiles.is_empty()
     }
 
-    pub fn get(&self, name: &str) -> Option<&MaskingProfile> {
+    pub fn get(&self, name: &str) -> Option<Arc<MaskingProfile>> {
         self.by_name
             .get(name)
             .and_then(|index| self.profiles.get(*index))
+            .map(Arc::clone)
     }
 }
 
 impl Zeroize for MaskingProfilesState {
     fn zeroize(&mut self) {
-        self.profiles.zeroize();
+        while let Some(profile) = self.profiles.pop() {
+            drop(profile);
+        }
         self.by_name.clear();
     }
 }
@@ -94,6 +101,12 @@ impl Zeroize for MaskingProfile {
         self.mask_char.zeroize();
         self.min_len = 0;
         self.max_len = 0;
+    }
+}
+
+impl Drop for MaskingProfile {
+    fn drop(&mut self) {
+        self.zeroize();
     }
 }
 
@@ -270,9 +283,29 @@ mod tests {
 
         assert_eq!(state.len(), 1);
         assert_eq!(
-            mask(state.get("pan-display-v1").unwrap(), "4111111111111111").unwrap(),
+            mask(&state.get("pan-display-v1").unwrap(), "4111111111111111").unwrap(),
             "411111******1111"
         );
+    }
+
+    #[test]
+    fn profile_lookups_share_ownership_across_state_zeroize() {
+        let mut state = validate_masking_profiles(
+            vec![input_for_tests("pan-display-v1", KID, 6, 4, "*", 12, 19)],
+            |kid| kid == KID,
+        )
+        .expect("profile must validate");
+        let first = state.get("pan-display-v1").expect("profile must exist");
+        let second = state.get("pan-display-v1").expect("profile must exist");
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(Arc::strong_count(&first), 3);
+        state.zeroize();
+        assert!(state.is_empty());
+        assert_eq!(first.name(), "pan-display-v1");
+        assert_eq!(Arc::strong_count(&first), 2);
+        drop(second);
+        assert_eq!(Arc::strong_count(&first), 1);
     }
 
     #[test]

@@ -1070,6 +1070,10 @@ These endpoints encrypt and decrypt internal messages with the symmetric key ass
 
 Requires auth.
 
+`plaintext` is limited to `1,047,552` bytes when encoded as UTF-8. Exceeding
+this functional limit returns `400`; exceeding the global 2 MiB HTTP request
+body limit returns `413` before operation validation.
+
 Request:
 
 ```json

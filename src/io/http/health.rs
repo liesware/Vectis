@@ -47,11 +47,12 @@ pub async fn ready_endpoint(
         return Err(error_response(err.as_ref()));
     }
 
+    let config = state.config_snapshot().await;
     Ok(Json(ReadyHealthOutput {
         status: String::from("ready"),
         unsealed: state.key_material_loaded(),
         storage: String::from("ok"),
         keys_loaded: state.keys_loaded().await,
-        routes_loaded: state.routes_loaded().await,
+        routes_loaded: config.routes.len(),
     }))
 }

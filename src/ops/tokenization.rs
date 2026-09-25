@@ -3,6 +3,7 @@ use crate::error::DynError;
 use crate::ops::keys::{self, KeysDbState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 use tracing::info;
 use zeroize::Zeroizing;
 
@@ -146,20 +147,20 @@ pub struct ValidatedTokenDecodeBatchInput {
 
 pub struct PreparedTokenEncode {
     kid: String,
-    profile: tokenization::TokenizationProfile,
+    profile: Arc<tokenization::TokenizationProfile>,
     input: ValidatedTokenEncodeInput,
 }
 
 pub struct PreparedTokenDecode {
     kid: String,
-    profile: tokenization::TokenizationProfile,
+    profile: Arc<tokenization::TokenizationProfile>,
     input: ValidatedTokenDecodeInput,
     data: String,
 }
 
 pub struct PreparedTokenEncodeBatch {
     kid: String,
-    profile: tokenization::TokenizationProfile,
+    profile: Arc<tokenization::TokenizationProfile>,
     input: ValidatedTokenEncodeBatchInput,
 }
 
@@ -171,7 +172,7 @@ pub struct PreparedTokenDecodeBatchItem {
 
 pub struct PreparedTokenDecodeBatch {
     kid: String,
-    profile: tokenization::TokenizationProfile,
+    profile: Arc<tokenization::TokenizationProfile>,
     items: Vec<PreparedTokenDecodeBatchItem>,
 }
 
@@ -390,7 +391,7 @@ pub fn validate_decode_batch_input(
 pub fn prepare_encode(
     keys_db_state: &KeysDbState,
     kid: &str,
-    profile: tokenization::TokenizationProfile,
+    profile: Arc<tokenization::TokenizationProfile>,
     input: ValidatedTokenEncodeInput,
 ) -> Result<PreparedTokenEncode, DynError> {
     keys::prepare_profile_use(
@@ -416,7 +417,7 @@ pub fn prepare_encode(
 pub fn prepare_encode_batch(
     keys_db_state: &KeysDbState,
     kid: &str,
-    profile: tokenization::TokenizationProfile,
+    profile: Arc<tokenization::TokenizationProfile>,
     input: ValidatedTokenEncodeBatchInput,
 ) -> Result<PreparedTokenEncodeBatch, DynError> {
     keys::prepare_profile_use(
@@ -443,7 +444,7 @@ pub fn prepare_encode_batch(
 
 pub fn prepare_decode(
     keys_db_state: &KeysDbState,
-    profile: tokenization::TokenizationProfile,
+    profile: Arc<tokenization::TokenizationProfile>,
     input: ValidatedTokenDecodeInput,
     data: String,
 ) -> Result<PreparedTokenDecode, DynError> {
@@ -480,7 +481,7 @@ pub fn authorize_decode_batch(
 }
 
 pub fn prepare_decode_batch(
-    profile: tokenization::TokenizationProfile,
+    profile: Arc<tokenization::TokenizationProfile>,
     kid: String,
     refs: Vec<String>,
     hashids: Vec<String>,

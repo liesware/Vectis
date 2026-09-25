@@ -22,16 +22,13 @@ pub async fn send_endpoint(
     headers: HeaderMap,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::message::SendMessageOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    state
-        .require_permission_for(
-            &client,
-            Some(&sender_kid),
-            "message",
-            Some("message.send.denied"),
-        )
-        .await?;
-    let actor = audit::actor_from_client(&client);
+    let request_context = state.authorize_request(&headers).await?;
+    request_context.require_permission_for(
+        Some(&sender_kid),
+        "message",
+        Some("message.send.denied"),
+    )?;
+    let actor = audit::actor_from_client(request_context.client());
 
     ops::keys::validate_key_id(&sender_kid).map_err(|err| {
         message_failed_response(
@@ -94,9 +91,10 @@ pub async fn send_endpoint(
             )
         })?;
     let recipient_kid = prepared.recipient_kid().to_string();
-    let remote_route = state
-        .remote_route_for(&sender_kid, &recipient_kid)
-        .await
+    let remote_route = request_context
+        .config()
+        .remote_routes
+        .route_for(&sender_kid, &recipient_kid)
         .map_err(|err| {
             message_failed_response(
                 MessageFailure::new(
@@ -145,6 +143,7 @@ pub async fn receive_endpoint(
     State(state): State<HttpState>,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::message::ReceiveMessageOutput>, (StatusCode, Json<ErrorResponse>)> {
+    let config = state.config_snapshot().await;
     let envelope = ops::message::parse_message_envelope(request).map_err(|err| {
         message_failed_response(
             MessageFailure::new("message.receive.failed", None, None, None, None, "receive"),
@@ -201,7 +200,7 @@ pub async fn receive_endpoint(
             )
         })?;
     let sender_host = prepared.sender_host().to_string();
-    let Some(peer) = state.remote_peer_public_keys(&sender_kid).await else {
+    let Some(peer) = config.remote_routes.public_keys_for(&sender_kid).cloned() else {
         audit::operation_denied(
             "message.receive.denied",
             &audit::Actor {
@@ -239,7 +238,7 @@ pub async fn receive_endpoint(
                 )
             },
         )?;
-    let final_app_route = state.final_app_route_for(&recipient_kid).await;
+    let final_app_route = config.routes.route_for(&recipient_kid);
 
     match ops::message::receive_message(prepared, sender_public_keys, final_app_route).await {
         Ok(output) => {
@@ -276,8 +275,8 @@ pub async fn decrypt_endpoint(
     headers: HeaderMap,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::message::DecryptMessageOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    let actor = audit::actor_from_client(&client);
+    let request_context = state.authorize_request(&headers).await?;
+    let actor = audit::actor_from_client(request_context.client());
 
     let request = ops::message::parse_decrypt_message_input(request).map_err(|err| {
         message_failed_response(
@@ -307,14 +306,11 @@ pub async fn decrypt_endpoint(
             err.as_ref(),
         )
     })?;
-    state
-        .require_permission_for(
-            &client,
-            Some(&recipient_kid),
-            "message",
-            Some("message.decrypt.denied"),
-        )
-        .await?;
+    request_context.require_permission_for(
+        Some(&recipient_kid),
+        "message",
+        Some("message.decrypt.denied"),
+    )?;
     state
         .ensure_keys_db_entry(&recipient_kid)
         .await
@@ -390,16 +386,13 @@ pub async fn internal_encrypt_endpoint(
     headers: HeaderMap,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::message::InternalMessageOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    state
-        .require_permission_for(
-            &client,
-            Some(&kid),
-            "message",
-            Some(AUDIT_MESSAGE_INTERNAL_ENCRYPT_DENIED),
-        )
-        .await?;
-    let actor = audit::actor_from_client(&client);
+    let request_context = state.authorize_request(&headers).await?;
+    request_context.require_permission_for(
+        Some(&kid),
+        "message",
+        Some(AUDIT_MESSAGE_INTERNAL_ENCRYPT_DENIED),
+    )?;
+    let actor = audit::actor_from_client(request_context.client());
 
     ops::keys::validate_key_id(&kid).map_err(|err| {
         message_failed_response(
@@ -502,8 +495,8 @@ pub async fn internal_decrypt_endpoint(
     headers: HeaderMap,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::message::DecryptMessageOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    let actor = audit::actor_from_client(&client);
+    let request_context = state.authorize_request(&headers).await?;
+    let actor = audit::actor_from_client(request_context.client());
 
     let request = ops::message::parse_internal_decrypt_message_input(request).map_err(|err| {
         message_failed_response(
@@ -519,14 +512,11 @@ pub async fn internal_decrypt_endpoint(
             err.as_ref(),
         )
     })?;
-    state
-        .require_permission_for(
-            &client,
-            Some(&request.kid),
-            "message",
-            Some(AUDIT_MESSAGE_INTERNAL_DECRYPT_DENIED),
-        )
-        .await?;
+    request_context.require_permission_for(
+        Some(&request.kid),
+        "message",
+        Some(AUDIT_MESSAGE_INTERNAL_DECRYPT_DENIED),
+    )?;
     let kid = request.kid.clone();
     ops::keys::validate_key_id(&kid).map_err(|err| {
         message_failed_response(

@@ -14,11 +14,9 @@ pub async fn sign_endpoint(
     headers: HeaderMap,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::sign::CompactSignatureToken>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    state
-        .require_permission_for(&client, Some(&id), "sign", Some("sign.denied"))
-        .await?;
-    let actor = audit::actor_from_client(&client);
+    let request_context = state.authorize_request(&headers).await?;
+    request_context.require_permission_for(Some(&id), "sign", Some("sign.denied"))?;
+    let actor = audit::actor_from_client(request_context.client());
 
     ops::keys::validate_key_id(&id).map_err(|err| {
         audit::operation_failed(
@@ -123,6 +121,7 @@ pub async fn sign_verification_endpoint(
     State(state): State<HttpState>,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::sign::VerificationOutput>, (StatusCode, Json<ErrorResponse>)> {
+    let config = state.config_snapshot().await;
     let request = ops::sign::parse_compact_signature_token(request).map_err(|err| {
         audit::operation_failed("verify.failed", None, None, None, None, &err.to_string());
         metrics::record_crypto_operation("verify", "failed");
@@ -151,7 +150,7 @@ pub async fn sign_verification_endpoint(
                 Err(err) => Err(err),
             }
         }
-        Err(local_err) => match state.remote_peer_public_keys(&kid).await {
+        Err(local_err) => match config.remote_routes.public_keys_for(&kid).cloned() {
             Some(peer) => {
                 blocking::spawn_blocking_crypto(move || {
                     ops::sign::verify_compact_timestamp_with_peer_keys(&request, &peer)

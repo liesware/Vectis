@@ -14,16 +14,13 @@ pub async fn encrypt_endpoint(
     headers: HeaderMap,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::fpe::FpeEncryptOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    state
-        .require_permission_for(
-            &client,
-            Some(&kid),
-            "fpe-encrypt",
-            Some("fpe.encrypt.denied"),
-        )
-        .await?;
-    let actor = audit::actor_from_client(&client);
+    let request_context = state.authorize_request(&headers).await?;
+    request_context.require_permission_for(
+        Some(&kid),
+        "fpe-encrypt",
+        Some("fpe.encrypt.denied"),
+    )?;
+    let actor = audit::actor_from_client(request_context.client());
 
     if let Err(err) = ops::keys::validate_key_id(&kid) {
         return Err(crypto_failed_response(
@@ -59,7 +56,7 @@ pub async fn encrypt_endpoint(
                 ));
             }
         };
-    let Some(profile) = state.fpe_profile(input.profile()).await else {
+    let Some(profile) = request_context.config().fpe_profiles.get(input.profile()) else {
         let err = crate::error::invalid_input("fpe profile not found");
         return Err(crypto_failed_response(
             "fpe.encrypt.failed",
@@ -122,16 +119,13 @@ pub async fn encrypt_batch_endpoint(
     headers: HeaderMap,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::fpe::FpeEncryptBatchOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    state
-        .require_permission_for(
-            &client,
-            Some(&kid),
-            "fpe-encrypt",
-            Some("fpe.encrypt.batch.denied"),
-        )
-        .await?;
-    let actor = audit::actor_from_client(&client);
+    let request_context = state.authorize_request(&headers).await?;
+    request_context.require_permission_for(
+        Some(&kid),
+        "fpe-encrypt",
+        Some("fpe.encrypt.batch.denied"),
+    )?;
+    let actor = audit::actor_from_client(request_context.client());
 
     if let Err(err) = ops::keys::validate_key_id(&kid) {
         return Err(crypto_failed_response(
@@ -168,7 +162,7 @@ pub async fn encrypt_batch_endpoint(
             ));
         }
     };
-    let Some(profile) = state.fpe_profile(input.profile()).await else {
+    let Some(profile) = request_context.config().fpe_profiles.get(input.profile()) else {
         let err = crate::error::invalid_input("fpe profile not found");
         return Err(crypto_failed_response(
             "fpe.encrypt.batch.failed",
@@ -234,7 +228,7 @@ pub async fn decrypt_endpoint(
     headers: HeaderMap,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::fpe::FpeDecryptOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
+    let request_context = state.authorize_request(&headers).await?;
     let input = ops::fpe::parse_decrypt_input(request)
         .and_then(ops::fpe::validate_decrypt_input)
         .map_err(|err| {
@@ -248,15 +242,12 @@ pub async fn decrypt_endpoint(
             )
         })?;
     let kid = input.kid().to_string();
-    state
-        .require_permission_for(
-            &client,
-            Some(&kid),
-            "fpe-decrypt",
-            Some("fpe.decrypt.denied"),
-        )
-        .await?;
-    let actor = audit::actor_from_client(&client);
+    request_context.require_permission_for(
+        Some(&kid),
+        "fpe-decrypt",
+        Some("fpe.decrypt.denied"),
+    )?;
+    let actor = audit::actor_from_client(request_context.client());
 
     if let Err(err) = state.ensure_keys_db_entry(&kid).await {
         return Err(crypto_failed_response(
@@ -268,7 +259,7 @@ pub async fn decrypt_endpoint(
             err.as_ref(),
         ));
     }
-    let Some(profile) = state.fpe_profile(input.profile()).await else {
+    let Some(profile) = request_context.config().fpe_profiles.get(input.profile()) else {
         let err = crate::error::invalid_input("fpe profile not found");
         return Err(crypto_failed_response(
             "fpe.decrypt.failed",
@@ -330,7 +321,7 @@ pub async fn decrypt_batch_endpoint(
     headers: HeaderMap,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::fpe::FpeDecryptBatchOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
+    let request_context = state.authorize_request(&headers).await?;
     let input = ops::fpe::parse_decrypt_batch_input(request)
         .and_then(ops::fpe::validate_decrypt_batch_input)
         .map_err(|err| {
@@ -344,15 +335,12 @@ pub async fn decrypt_batch_endpoint(
             )
         })?;
     let kid = input.kid().to_string();
-    state
-        .require_permission_for(
-            &client,
-            Some(&kid),
-            "fpe-decrypt",
-            Some("fpe.decrypt.batch.denied"),
-        )
-        .await?;
-    let actor = audit::actor_from_client(&client);
+    request_context.require_permission_for(
+        Some(&kid),
+        "fpe-decrypt",
+        Some("fpe.decrypt.batch.denied"),
+    )?;
+    let actor = audit::actor_from_client(request_context.client());
 
     if let Err(err) = state.ensure_keys_db_entry(&kid).await {
         return Err(crypto_failed_response(
@@ -364,7 +352,7 @@ pub async fn decrypt_batch_endpoint(
             err.as_ref(),
         ));
     }
-    let Some(profile) = state.fpe_profile(input.profile()).await else {
+    let Some(profile) = request_context.config().fpe_profiles.get(input.profile()) else {
         let err = crate::error::invalid_input("fpe profile not found");
         return Err(crypto_failed_response(
             "fpe.decrypt.batch.failed",

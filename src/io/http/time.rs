@@ -30,11 +30,9 @@ pub async fn attest_endpoint(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<time_attestation::TimeAttestationOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    state
-        .require_permission_for(&client, None, "time-attest", Some("time.attest.denied"))
-        .await?;
-    let actor = audit::actor_from_client(&client);
+    let request = state.authorize_request(&headers).await?;
+    request.require_permission_for(None, "time-attest", Some("time.attest.denied"))?;
+    let actor = audit::actor_from_client(request.client());
     if validate_empty_request_body(&body).is_err() {
         let err = crate::error::invalid_input("time attest request must not include a body");
         audit::operation_failed(
@@ -51,7 +49,7 @@ pub async fn attest_endpoint(
             Json(ErrorResponse::new(err.to_string())),
         ));
     }
-    let effective = state.time_attestation_config().await;
+    let effective = request.config().time_attestation.clone();
     let local_start = match time_attestation::local_unix_us() {
         Ok(value) => value,
         Err(err) => return internal_failure(&actor, err.as_ref()),

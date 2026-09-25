@@ -18,16 +18,13 @@ pub async fn encode_endpoint(
     headers: HeaderMap,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::tokenization::TokenEncodeOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    state
-        .require_permission_for(
-            &client,
-            Some(&kid),
-            "token-encode",
-            Some("token.encode.denied"),
-        )
-        .await?;
-    let actor = audit::actor_from_client(&client);
+    let request_context = state.authorize_request(&headers).await?;
+    request_context.require_permission_for(
+        Some(&kid),
+        "token-encode",
+        Some("token.encode.denied"),
+    )?;
+    let actor = audit::actor_from_client(request_context.client());
 
     if let Err(err) = ops::keys::validate_key_id(&kid) {
         return Err(crypto_failed_response(
@@ -64,7 +61,11 @@ pub async fn encode_endpoint(
             ));
         }
     };
-    let Some(profile) = state.tokenization_profile(input.profile()).await else {
+    let Some(profile) = request_context
+        .config()
+        .tokenization_profiles
+        .get(input.profile())
+    else {
         let err = crate::error::invalid_input("tokenization profile not found");
         return Err(crypto_failed_response(
             "token.encode.failed",
@@ -144,16 +145,13 @@ pub async fn encode_batch_endpoint(
     headers: HeaderMap,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::tokenization::TokenEncodeBatchOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    state
-        .require_permission_for(
-            &client,
-            Some(&kid),
-            "token-encode",
-            Some("token.encode.batch.denied"),
-        )
-        .await?;
-    let actor = audit::actor_from_client(&client);
+    let request_context = state.authorize_request(&headers).await?;
+    request_context.require_permission_for(
+        Some(&kid),
+        "token-encode",
+        Some("token.encode.batch.denied"),
+    )?;
+    let actor = audit::actor_from_client(request_context.client());
 
     if let Err(err) = ops::keys::validate_key_id(&kid) {
         return Err(crypto_failed_response(
@@ -190,7 +188,11 @@ pub async fn encode_batch_endpoint(
             ));
         }
     };
-    let Some(profile) = state.tokenization_profile(input.profile()).await else {
+    let Some(profile) = request_context
+        .config()
+        .tokenization_profiles
+        .get(input.profile())
+    else {
         let err = crate::error::invalid_input("tokenization profile not found");
         return Err(crypto_failed_response(
             "token.encode.batch.failed",
@@ -280,7 +282,7 @@ pub async fn decode_endpoint(
     headers: HeaderMap,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::tokenization::TokenDecodeOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
+    let request_context = state.authorize_request(&headers).await?;
     let input = ops::tokenization::parse_decode_input(request)
         .and_then(ops::tokenization::validate_decode_input)
         .map_err(|err| {
@@ -294,15 +296,12 @@ pub async fn decode_endpoint(
             )
         })?;
     let kid = input.kid().to_string();
-    state
-        .require_permission_for(
-            &client,
-            Some(&kid),
-            "token-decode",
-            Some("token.decode.denied"),
-        )
-        .await?;
-    let actor = audit::actor_from_client(&client);
+    request_context.require_permission_for(
+        Some(&kid),
+        "token-decode",
+        Some("token.decode.denied"),
+    )?;
+    let actor = audit::actor_from_client(request_context.client());
 
     if let Err(err) = state.ensure_keys_db_entry(&kid).await {
         return Err(crypto_failed_response(
@@ -314,7 +313,11 @@ pub async fn decode_endpoint(
             err.as_ref(),
         ));
     }
-    let Some(profile) = state.tokenization_profile(input.profile()).await else {
+    let Some(profile) = request_context
+        .config()
+        .tokenization_profiles
+        .get(input.profile())
+    else {
         let err = crate::error::invalid_input("tokenization profile not found");
         return Err(crypto_failed_response(
             "token.decode.failed",
@@ -413,7 +416,7 @@ pub async fn decode_batch_endpoint(
     headers: HeaderMap,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::tokenization::TokenDecodeBatchOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
+    let request_context = state.authorize_request(&headers).await?;
     let input = ops::tokenization::parse_decode_batch_input(request)
         .and_then(ops::tokenization::validate_decode_batch_input)
         .map_err(|err| {
@@ -427,15 +430,12 @@ pub async fn decode_batch_endpoint(
             )
         })?;
     let kid = input.kid().to_string();
-    state
-        .require_permission_for(
-            &client,
-            Some(&kid),
-            "token-decode",
-            Some("token.decode.batch.denied"),
-        )
-        .await?;
-    let actor = audit::actor_from_client(&client);
+    request_context.require_permission_for(
+        Some(&kid),
+        "token-decode",
+        Some("token.decode.batch.denied"),
+    )?;
+    let actor = audit::actor_from_client(request_context.client());
 
     if let Err(err) = state.ensure_keys_db_entry(&kid).await {
         return Err(crypto_failed_response(
@@ -447,7 +447,11 @@ pub async fn decode_batch_endpoint(
             err.as_ref(),
         ));
     }
-    let Some(profile) = state.tokenization_profile(input.profile()).await else {
+    let Some(profile) = request_context
+        .config()
+        .tokenization_profiles
+        .get(input.profile())
+    else {
         let err = crate::error::invalid_input("tokenization profile not found");
         return Err(crypto_failed_response(
             "token.decode.batch.failed",

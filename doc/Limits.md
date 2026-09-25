@@ -109,24 +109,19 @@ values must also be unique within the request.
 | Secret sharing | Encoded share envelope | `16 * 1024 = 16,384` (16 KiB) | ASCII characters | Explicit | Envelope text is bounded before base64 and JSON decoding | [`SHARE_ENVELOPE_MAX_CHARS`](../src/core/sharing.rs#L19), [`parse_share_envelope`](../src/core/sharing.rs#L496) |
 | Secret sharing | Context | `1..=128` | characters | Explicit | Signed profile uses structured labels | [`SHARING_CONTEXT_MAX_CHARS`](../src/core/sharing.rs#L14), [`validate_sharing_profile_fields`](../src/core/sharing.rs#L281) |
 | Protected messages | Plaintext | No dedicated maximum; the enclosing HTTP body applies | UTF-8 content | No dedicated limit | Send validation checks text shape but not length | [`validate_send_message_input`](../src/ops/message.rs#L662), [`INTERNAL_HTTP_MAX_SIZE`](../src/core/config.rs#L33) |
-| Internal messages | Encrypt plaintext | Up to `2,097,136` ASCII bytes in the minimal compact `{"plaintext":"..."}` request; less when JSON escaping or multibyte UTF-8 is required | bytes | Effective | There is no message-specific cap; the 2 MiB request-body cap supplies the bound | [`InternalEncryptMessageInput`](../src/ops/message.rs#L118), [`validate_internal_encrypt_message_input`](../src/ops/message.rs#L717), [`INTERNAL_HTTP_MAX_SIZE`](../src/core/config.rs#L33) |
-| Internal messages | Encrypt/decrypt round trip | Approximately `1` MiB of plaintext | bytes | Effective | Ciphertext is hex encoded, roughly doubling its contribution to the decrypt request body | [`InternalMessageCipher`](../src/ops/message.rs#L132), [`decrypt_internal_message`](../src/ops/message.rs#L596), [`INTERNAL_HTTP_MAX_SIZE`](../src/core/config.rs#L33) |
+| Internal messages | Encrypt plaintext | `(1024 * 1024) - 1024 = 1,047,552` | UTF-8 bytes | Explicit | Encrypt validation rejects plaintext above the inclusive functional limit | [`INTERNAL_MESSAGE_PLAINTEXT_MAX_SIZE`](../src/core/config.rs#L34), [`validate_internal_encrypt_message_input`](../src/ops/message.rs#L717) |
+| Internal messages | Encrypt/decrypt round trip | Up to `1,047,552` plaintext bytes | UTF-8 bytes | Effective | The explicit encrypt limit leaves room for hex expansion, AEAD overhead, nonce, AAD, and compact JSON under the 2 MiB decrypt request limit | [`INTERNAL_MESSAGE_PLAINTEXT_MAX_SIZE`](../src/core/config.rs#L34), [`InternalMessageCipher`](../src/ops/message.rs#L132), [`INTERNAL_HTTP_MAX_SIZE`](../src/core/config.rs#L33) |
 | Hybrid signatures | Compact signature | `64 * 1024 = 65,536` (64 KiB) | characters | Explicit | Compact JWS-like input is bounded before segment parsing | [`COMPACT_SIGNATURE_MAX_CHARS`](../src/ops/sign.rs#L23), [`split_compact_signature`](../src/ops/sign.rs#L353) |
 | Hybrid signatures | Message hash | `40`, `56`, `64`, `96`, or `128`, according to the declared hash | hex characters | Explicit | Hash encoding must exactly match the algorithm output size | [`hash_output_size_bytes`](../src/core/crypto.rs#L45), [`validate_hash_hex_field`](../src/core/validation.rs#L488) |
 
 ### Internal Message Round Trips
 
-`/message/internal/encrypt` can accept plaintext close to the 2 MiB HTTP
-request limit. Its output contains hex-encoded ciphertext and is therefore
-approximately twice as large. To ensure that the resulting artifact can be
-submitted to `/message/internal/decrypt`, keep plaintext below 1 MB
-(`1,000,000` bytes).
-
-With compact JSON, a 64-character KID, and a 10-digit Unix timestamp, the
-effective ceiling is approximately `1,048,393` plaintext bytes for AES-GCM and
-`1,048,376` bytes for ChaCha20Poly1305. JSON formatting, longer timestamps, and
-other encoding overhead can reduce it further. These are derived operational
-ceilings, not dedicated plaintext limits enforced by Vectis.
+`/message/internal/encrypt` enforces an inclusive plaintext limit of
+`1,047,552` UTF-8 bytes. Its output contains hex-encoded ciphertext and is
+therefore approximately twice as large. The 1 KiB margin below 1 MiB leaves
+room for the AEAD tag, nonce, AAD, and compact JSON so that the returned
+artifact remains below the 2 MiB request limit when submitted to
+`/message/internal/decrypt`, including with `ChaCha20Poly1305`.
 
 ## Storage
 

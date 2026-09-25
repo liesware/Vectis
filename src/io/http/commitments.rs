@@ -14,16 +14,13 @@ pub async fn create_endpoint(
     headers: HeaderMap,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::commitments::CommitCreateOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    state
-        .require_permission_for(
-            &client,
-            Some(&kid),
-            "commit-create",
-            Some("commit.create.denied"),
-        )
-        .await?;
-    let actor = audit::actor_from_client(&client);
+    let request_context = state.authorize_request(&headers).await?;
+    request_context.require_permission_for(
+        Some(&kid),
+        "commit-create",
+        Some("commit.create.denied"),
+    )?;
+    let actor = audit::actor_from_client(request_context.client());
 
     if let Err(err) = ops::keys::validate_key_id(&kid) {
         return Err(crypto_failed_response(
@@ -60,7 +57,11 @@ pub async fn create_endpoint(
             ));
         }
     };
-    let Some(profile) = state.commitment_profile(input.profile()).await else {
+    let Some(profile) = request_context
+        .config()
+        .commitment_profiles
+        .get(input.profile())
+    else {
         let err = crate::error::invalid_input("commitment profile not found");
         return Err(crypto_failed_response(
             "commit.create.failed",
@@ -122,8 +123,8 @@ pub async fn verify_endpoint(
     headers: HeaderMap,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::commitments::CommitVerifyOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    let actor = audit::actor_from_client(&client);
+    let request_context = state.authorize_request(&headers).await?;
+    let actor = audit::actor_from_client(request_context.client());
     let input = match ops::commitments::parse_verify_input(request)
         .and_then(ops::commitments::validate_verify_input)
     {
@@ -140,14 +141,11 @@ pub async fn verify_endpoint(
         }
     };
     let kid = input.kid().to_string();
-    state
-        .require_permission_for(
-            &client,
-            Some(&kid),
-            "commit-verify",
-            Some("commit.verify.denied"),
-        )
-        .await?;
+    request_context.require_permission_for(
+        Some(&kid),
+        "commit-verify",
+        Some("commit.verify.denied"),
+    )?;
 
     if let Err(err) = state.ensure_keys_db_entry(&kid).await {
         return Err(crypto_failed_response(
@@ -159,7 +157,11 @@ pub async fn verify_endpoint(
             err.as_ref(),
         ));
     }
-    let Some(profile) = state.commitment_profile(input.profile()).await else {
+    let Some(profile) = request_context
+        .config()
+        .commitment_profiles
+        .get(input.profile())
+    else {
         let err = crate::error::invalid_input("commitment profile not found");
         return Err(crypto_failed_response(
             "commit.verify.failed",
@@ -222,16 +224,13 @@ pub async fn create_batch_endpoint(
     headers: HeaderMap,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::commitments::CommitCreateBatchOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    state
-        .require_permission_for(
-            &client,
-            Some(&kid),
-            "commit-create",
-            Some("commit.create.batch.denied"),
-        )
-        .await?;
-    let actor = audit::actor_from_client(&client);
+    let request_context = state.authorize_request(&headers).await?;
+    request_context.require_permission_for(
+        Some(&kid),
+        "commit-create",
+        Some("commit.create.batch.denied"),
+    )?;
+    let actor = audit::actor_from_client(request_context.client());
 
     if let Err(err) = ops::keys::validate_key_id(&kid) {
         return Err(crypto_failed_response(
@@ -268,7 +267,11 @@ pub async fn create_batch_endpoint(
             ));
         }
     };
-    let Some(profile) = state.commitment_profile(input.profile()).await else {
+    let Some(profile) = request_context
+        .config()
+        .commitment_profiles
+        .get(input.profile())
+    else {
         let err = crate::error::invalid_input("commitment profile not found");
         return Err(crypto_failed_response(
             "commit.create.batch.failed",
@@ -330,8 +333,8 @@ pub async fn verify_batch_endpoint(
     headers: HeaderMap,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::commitments::CommitVerifyBatchOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    let actor = audit::actor_from_client(&client);
+    let request_context = state.authorize_request(&headers).await?;
+    let actor = audit::actor_from_client(request_context.client());
     let input = match ops::commitments::parse_verify_batch_input(request)
         .and_then(ops::commitments::validate_verify_batch_input)
     {
@@ -348,14 +351,11 @@ pub async fn verify_batch_endpoint(
         }
     };
     let kid = input.kid().to_string();
-    state
-        .require_permission_for(
-            &client,
-            Some(&kid),
-            "commit-verify",
-            Some("commit.verify.batch.denied"),
-        )
-        .await?;
+    request_context.require_permission_for(
+        Some(&kid),
+        "commit-verify",
+        Some("commit.verify.batch.denied"),
+    )?;
 
     if let Err(err) = state.ensure_keys_db_entry(&kid).await {
         return Err(crypto_failed_response(
@@ -367,7 +367,11 @@ pub async fn verify_batch_endpoint(
             err.as_ref(),
         ));
     }
-    let Some(profile) = state.commitment_profile(input.profile()).await else {
+    let Some(profile) = request_context
+        .config()
+        .commitment_profiles
+        .get(input.profile())
+    else {
         let err = crate::error::invalid_input("commitment profile not found");
         return Err(crypto_failed_response(
             "commit.verify.batch.failed",

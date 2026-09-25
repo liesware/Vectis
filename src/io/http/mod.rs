@@ -3,6 +3,7 @@ use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use zeroize::Zeroizing;
@@ -16,6 +17,7 @@ mod extract;
 mod fpe;
 mod health;
 mod indexes;
+mod key_load;
 mod keys;
 mod mac;
 mod masking;
@@ -32,18 +34,10 @@ mod test;
 mod time;
 mod token;
 
-use crate::core::commitments::CommitmentProfile;
 use crate::core::config::{AppConfig, INTERNAL_HTTP_MAX_SIZE};
 use crate::core::config_file::ConfigState;
-use crate::core::fpe::FpeProfile;
-use crate::core::mac::MacProfile;
-use crate::core::masking::MaskingProfile;
 use crate::core::permissions::AuthenticatedClient;
-use crate::core::remote_routes::{PeerPublicKeys, RemoteRoute};
-use crate::core::routes::FinalAppRoute;
-use crate::core::sharing::SharingProfile;
 use crate::core::storage::StorageState;
-use crate::core::tokenization::TokenizationProfile;
 use crate::core::{audit, blocking, metrics as core_metrics};
 use crate::error::DynError;
 use crate::ops::init::{InitValidationOutput, ValidatedInitState};
@@ -58,12 +52,15 @@ use zeroize::Zeroize;
 
 pub use app::run;
 
-#[derive(Clone)]
 struct ConfigKeySource {
-    kid: String,
     symmetric_key_hex: String,
     symmetric_algorithm: String,
     hash_algorithm: String,
+}
+
+#[derive(Default)]
+struct ConfigKeySources {
+    by_kid: HashMap<String, ConfigKeySource>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -75,12 +72,103 @@ enum ConfigReloadOutcome {
 const STALE_CONFIG_SIGNATURE_WARNING: &str =
     "config.json has changes not covered by config_sign.json — run 'vectis config sign' first";
 
+type HttpError = (StatusCode, Json<error::ErrorResponse>);
+type ConfigSnapshot = Arc<Zeroizing<ConfigState>>;
+
+struct AuthenticatedRequest {
+    client: Zeroizing<AuthenticatedClient>,
+    config: ConfigSnapshot,
+}
+
+impl AuthenticatedRequest {
+    fn client(&self) -> &AuthenticatedClient {
+        &self.client
+    }
+
+    fn config(&self) -> &ConfigState {
+        &self.config
+    }
+
+    fn require_permission(&self, kid: Option<&str>, action: &str) -> Result<(), HttpError> {
+        self.require_permission_for(kid, action, None)
+    }
+
+    fn require_permission_for(
+        &self,
+        kid: Option<&str>,
+        action: &str,
+        denied_event: Option<&str>,
+    ) -> Result<(), HttpError> {
+        let actor = audit::actor_from_client(self.client());
+
+        match self
+            .config()
+            .permissions
+            .require_permission(self.client(), kid, action)
+        {
+            Ok(()) => {
+                audit::permission_allowed(&actor, kid, action);
+                core_metrics::record_permission("allow");
+                Ok(())
+            }
+            Err(err) => {
+                let reason = err.to_string();
+                audit::permission_denied(&actor, kid, action, &reason);
+                core_metrics::record_permission("deny");
+                if let Some(event_name) = denied_event {
+                    audit::operation_denied(event_name, &actor, kid, None, Some(action), &reason);
+                    record_operation_denied_metric(event_name);
+                }
+
+                Err(error::error_response(err.as_ref()))
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ConfigLoadedCounts {
+    routes: usize,
+    remote_routes: usize,
+    permission_clients: usize,
+    fpe_profiles: usize,
+    tokenization_profiles: usize,
+    mac_profiles: usize,
+    masking_profiles: usize,
+    commitment_profiles: usize,
+    sharing_profiles: usize,
+}
+
+impl ConfigLoadedCounts {
+    fn from_config(config: &ConfigState) -> Self {
+        Self {
+            routes: config.routes.len(),
+            remote_routes: config.remote_routes.len(),
+            permission_clients: config.permissions.len(),
+            fpe_profiles: config.fpe_profiles.len(),
+            tokenization_profiles: config.tokenization_profiles.len(),
+            mac_profiles: config.mac_profiles.len(),
+            masking_profiles: config.masking_profiles.len(),
+            commitment_profiles: config.commitment_profiles.len(),
+            sharing_profiles: config.sharing_profiles.len(),
+        }
+    }
+}
+
 impl Zeroize for ConfigKeySource {
     fn zeroize(&mut self) {
-        self.kid.zeroize();
         self.symmetric_key_hex.zeroize();
         self.symmetric_algorithm.zeroize();
         self.hash_algorithm.zeroize();
+    }
+}
+
+impl Zeroize for ConfigKeySources {
+    fn zeroize(&mut self) {
+        for (mut kid, mut source) in self.by_kid.drain() {
+            kid.zeroize();
+            source.zeroize();
+        }
     }
 }
 
@@ -93,7 +181,8 @@ pub struct HttpState {
     storage: Arc<StorageState>,
     started_at: Arc<String>,
     keys_db_state: Arc<RwLock<Zeroizing<KeysDbState>>>,
-    config_state: Arc<RwLock<Zeroizing<ConfigState>>>,
+    key_loads: Arc<key_load::KeyLoadSingleflight>,
+    config_state: Arc<RwLock<ConfigSnapshot>>,
     metrics_handle: Option<Arc<PrometheusHandle>>,
 }
 
@@ -119,7 +208,8 @@ impl HttpState {
             storage: Arc::new(input.storage),
             started_at: Arc::new(input.started_at),
             keys_db_state: Arc::new(RwLock::new(input.keys_db_state)),
-            config_state: Arc::new(RwLock::new(Zeroizing::new(input.config_state))),
+            key_loads: Arc::new(key_load::KeyLoadSingleflight::new()),
+            config_state: Arc::new(RwLock::new(Arc::new(Zeroizing::new(input.config_state)))),
             metrics_handle: input.metrics_handle,
         }
     }
@@ -146,61 +236,25 @@ impl HttpState {
         &self.config
     }
 
-    async fn authorize_api_key(
+    async fn config_snapshot(&self) -> ConfigSnapshot {
+        let config = self.config_state.read().await;
+        Arc::clone(&config)
+    }
+
+    async fn authorize_request(
         &self,
         headers: &HeaderMap,
-    ) -> Result<Zeroizing<AuthenticatedClient>, (StatusCode, Json<error::ErrorResponse>)> {
-        let config_state = self.config_state.read().await;
-
-        auth::authorize_api_key(
+    ) -> Result<AuthenticatedRequest, HttpError> {
+        let config = self.config_snapshot().await;
+        let client = auth::authorize_api_key(
             headers,
             self.config(),
             &self.auth_state,
             self.internal_keys(),
-            &config_state.permissions,
-        )
-    }
+            &config.permissions,
+        )?;
 
-    async fn require_permission(
-        &self,
-        client: &AuthenticatedClient,
-        kid: Option<&str>,
-        action: &str,
-    ) -> Result<(), (StatusCode, Json<error::ErrorResponse>)> {
-        self.require_permission_for(client, kid, action, None).await
-    }
-
-    async fn require_permission_for(
-        &self,
-        client: &AuthenticatedClient,
-        kid: Option<&str>,
-        action: &str,
-        denied_event: Option<&str>,
-    ) -> Result<(), (StatusCode, Json<error::ErrorResponse>)> {
-        let config_state = self.config_state.read().await;
-        let actor = audit::actor_from_client(client);
-
-        match config_state
-            .permissions
-            .require_permission(client, kid, action)
-        {
-            Ok(()) => {
-                audit::permission_allowed(&actor, kid, action);
-                core_metrics::record_permission("allow");
-                Ok(())
-            }
-            Err(err) => {
-                let reason = err.to_string();
-                audit::permission_denied(&actor, kid, action, &reason);
-                core_metrics::record_permission("deny");
-                if let Some(event_name) = denied_event {
-                    audit::operation_denied(event_name, &actor, kid, None, Some(action), &reason);
-                    record_operation_denied_metric(event_name);
-                }
-
-                Err(error::error_response(err.as_ref()))
-            }
-        }
+        Ok(AuthenticatedRequest { client, config })
     }
 
     fn storage(&self) -> &StorageState {
@@ -217,136 +271,37 @@ impl HttpState {
         keys_db_state.len()
     }
 
-    async fn routes_loaded(&self) -> usize {
-        let config_state = self.config_state.read().await;
-
-        config_state.routes.len()
-    }
-
-    async fn remote_routes_loaded(&self) -> usize {
-        let config_state = self.config_state.read().await;
-
-        config_state.remote_routes.len()
-    }
-
-    async fn permissions_loaded(&self) -> usize {
-        let config_state = self.config_state.read().await;
-
-        config_state.permissions.len()
-    }
-
-    async fn fpe_profiles_loaded(&self) -> usize {
-        let config_state = self.config_state.read().await;
-
-        config_state.fpe_profiles.len()
-    }
-
-    async fn tokenization_profiles_loaded(&self) -> usize {
-        let config_state = self.config_state.read().await;
-
-        config_state.tokenization_profiles.len()
-    }
-
-    async fn mac_profiles_loaded(&self) -> usize {
-        let config_state = self.config_state.read().await;
-
-        config_state.mac_profiles.len()
-    }
-
-    async fn masking_profiles_loaded(&self) -> usize {
-        let config_state = self.config_state.read().await;
-
-        config_state.masking_profiles.len()
-    }
-
-    async fn commitment_profiles_loaded(&self) -> usize {
-        let config_state = self.config_state.read().await;
-
-        config_state.commitment_profiles.len()
-    }
-
-    async fn sharing_profiles_loaded(&self) -> usize {
-        let config_state = self.config_state.read().await;
-
-        config_state.sharing_profiles.len()
-    }
-
-    async fn routes_output(&self) -> crate::core::routes::ListRoutesOutput {
-        let config_state = self.config_state.read().await;
-
-        config_state.routes.list()
-    }
-
-    async fn remote_routes_output(&self) -> crate::core::remote_routes::ListRemoteRoutesOutput {
-        let config_state = self.config_state.read().await;
-
-        config_state.remote_routes.list()
-    }
-
-    async fn permissions_output(&self) -> crate::core::permissions::ListPermissionsOutput {
-        let config_state = self.config_state.read().await;
-
-        config_state.permissions.list()
-    }
-
-    async fn fpe_profile(&self, name: &str) -> Option<FpeProfile> {
-        let config_state = self.config_state.read().await;
-
-        config_state.fpe_profiles.get(name).cloned()
-    }
-
-    async fn tokenization_profile(&self, name: &str) -> Option<TokenizationProfile> {
-        let config_state = self.config_state.read().await;
-
-        config_state.tokenization_profiles.get(name).cloned()
-    }
-
-    async fn mac_profile(&self, name: &str) -> Option<MacProfile> {
-        let config_state = self.config_state.read().await;
-
-        config_state.mac_profiles.get(name).cloned()
-    }
-
-    async fn masking_profile(&self, name: &str) -> Option<MaskingProfile> {
-        let config_state = self.config_state.read().await;
-
-        config_state.masking_profiles.get(name).cloned()
-    }
-
-    async fn commitment_profile(&self, name: &str) -> Option<CommitmentProfile> {
-        let config_state = self.config_state.read().await;
-
-        config_state.commitment_profiles.get(name).cloned()
-    }
-
-    async fn sharing_profile(&self, name: &str) -> Option<SharingProfile> {
-        let config_state = self.config_state.read().await;
-
-        config_state.sharing_profiles.get(name).cloned()
-    }
-
-    async fn time_attestation_config(
-        &self,
-    ) -> crate::core::time_attestation::EffectiveTimeAttestationConfig {
-        let config_state = self.config_state.read().await;
-        config_state.time_attestation.clone()
-    }
-
     async fn reload_config_state(&self) -> Result<ConfigReloadOutcome, DynError> {
         let config_key_sources = {
             let keys_db_state = self.keys_db_state.read().await;
-            keys_db_state
+            let by_kid = keys_db_state
                 .ids()
                 .into_iter()
                 .filter_map(|kid| {
-                    keys_db_state.get(&kid).map(|loaded_key| ConfigKeySource {
-                        kid,
-                        symmetric_key_hex: loaded_key.keys().symmetric().key_hex().to_string(),
-                        symmetric_algorithm: loaded_key.keys().symmetric().variant().to_string(),
-                        hash_algorithm: loaded_key.key_material().hash_variant().to_string(),
+                    keys_db_state.get(&kid).map(|loaded_key| {
+                        (
+                            kid,
+                            ConfigKeySource {
+                                symmetric_key_hex: loaded_key
+                                    .keys()
+                                    .symmetric()
+                                    .key_hex()
+                                    .to_string(),
+                                symmetric_algorithm: loaded_key
+                                    .keys()
+                                    .symmetric()
+                                    .variant()
+                                    .to_string(),
+                                hash_algorithm: loaded_key
+                                    .key_material()
+                                    .hash_variant()
+                                    .to_string(),
+                            },
+                        )
                     })
                 })
-                .collect::<Vec<_>>()
+                .collect();
+            ConfigKeySources { by_kid }
         };
         let config = Arc::clone(&self.config);
         let init_state = (*self.init_state).clone();
@@ -368,29 +323,23 @@ impl HttpState {
                         &signature_content,
                     )
                 },
-                |kid| config_key_sources.iter().any(|source| source.kid == kid),
+                |kid| config_key_sources.by_kid.contains_key(kid),
                 |request| {
-                    let source = config_key_sources
-                        .iter()
-                        .find(|source| source.kid == request.kid)
-                        .ok_or_else(|| {
-                            crate::error::invalid_input(format!(
-                                "fpe profile references kid not loaded in memory: {}",
-                                request.kid
-                            ))
-                        })?;
+                    let source = config_key_sources.by_kid.get(request.kid).ok_or_else(|| {
+                        crate::error::invalid_input(format!(
+                            "fpe profile references kid not loaded in memory: {}",
+                            request.kid
+                        ))
+                    })?;
                     crate::core::fpe::derive_fpe_key_for_profile(&source.symmetric_key_hex, request)
                 },
                 |request| {
-                    let source = config_key_sources
-                        .iter()
-                        .find(|source| source.kid == request.kid)
-                        .ok_or_else(|| {
-                            crate::error::invalid_input(format!(
-                                "tokenization profile references kid not loaded in memory: {}",
-                                request.kid
-                            ))
-                        })?;
+                    let source = config_key_sources.by_kid.get(request.kid).ok_or_else(|| {
+                        crate::error::invalid_input(format!(
+                            "tokenization profile references kid not loaded in memory: {}",
+                            request.kid
+                        ))
+                    })?;
                     crate::core::tokenization::derive_tokenization_keys(
                         &source.symmetric_key_hex,
                         &source.symmetric_algorithm,
@@ -398,53 +347,41 @@ impl HttpState {
                     )
                 },
                 |kid| {
-                    let source = config_key_sources
-                        .iter()
-                        .find(|source| source.kid == kid)
-                        .ok_or_else(|| {
-                            crate::error::invalid_input(format!(
-                                "mac profile references kid not loaded in memory: {kid}"
-                            ))
-                        })?;
+                    let source = config_key_sources.by_kid.get(kid).ok_or_else(|| {
+                        crate::error::invalid_input(format!(
+                            "mac profile references kid not loaded in memory: {kid}"
+                        ))
+                    })?;
                     Ok(source.hash_algorithm.clone())
                 },
                 |request| {
-                    let source = config_key_sources
-                        .iter()
-                        .find(|source| source.kid == request.kid)
-                        .ok_or_else(|| {
-                            crate::error::invalid_input(format!(
-                                "mac profile references kid not loaded in memory: {}",
-                                request.kid
-                            ))
-                        })?;
+                    let source = config_key_sources.by_kid.get(request.kid).ok_or_else(|| {
+                        crate::error::invalid_input(format!(
+                            "mac profile references kid not loaded in memory: {}",
+                            request.kid
+                        ))
+                    })?;
                     crate::core::mac::derive_mac_key_for_profile(&source.symmetric_key_hex, request)
                 },
                 |request| {
-                    let source = config_key_sources
-                        .iter()
-                        .find(|source| source.kid == request.kid)
-                        .ok_or_else(|| {
-                            crate::error::invalid_input(format!(
-                                "commitment profile references kid not loaded in memory: {}",
-                                request.kid
-                            ))
-                        })?;
+                    let source = config_key_sources.by_kid.get(request.kid).ok_or_else(|| {
+                        crate::error::invalid_input(format!(
+                            "commitment profile references kid not loaded in memory: {}",
+                            request.kid
+                        ))
+                    })?;
                     crate::core::commitments::derive_commitment_key_for_profile(
                         &source.symmetric_key_hex,
                         request,
                     )
                 },
                 |request| {
-                    let source = config_key_sources
-                        .iter()
-                        .find(|source| source.kid == request.kid)
-                        .ok_or_else(|| {
-                            crate::error::invalid_input(format!(
-                                "sharing profile references kid not loaded in memory: {}",
-                                request.kid
-                            ))
-                        })?;
+                    let source = config_key_sources.by_kid.get(request.kid).ok_or_else(|| {
+                        crate::error::invalid_input(format!(
+                            "sharing profile references kid not loaded in memory: {}",
+                            request.kid
+                        ))
+                    })?;
                     crate::core::sharing::derive_sharing_key_for_profile(
                         &source.symmetric_key_hex,
                         request,
@@ -461,23 +398,34 @@ impl HttpState {
             Err(err) => return Err(err),
         };
         let mut config_state = self.config_state.write().await;
-        *config_state = Zeroizing::new(reloaded);
+        *config_state = Arc::new(Zeroizing::new(reloaded));
 
         Ok(ConfigReloadOutcome::Applied)
     }
 
     async fn refresh_loaded_gauges(&self) {
+        let config = self.config_snapshot().await;
+        self.refresh_loaded_gauges_from(&config).await;
+    }
+
+    async fn refresh_loaded_gauges_from(&self, config: &ConfigState) {
+        let keys_count = self.keys_loaded().await;
+        Self::set_loaded_gauges(config, keys_count);
+    }
+
+    fn set_loaded_gauges(config: &ConfigState, keys_count: usize) {
+        let counts = ConfigLoadedCounts::from_config(config);
         core_metrics::set_loaded_gauges(core_metrics::LoadedGaugeCounts {
-            keys: self.keys_loaded().await,
-            routes: self.routes_loaded().await,
-            remote_routes: self.remote_routes_loaded().await,
-            permission_clients: self.permissions_loaded().await,
-            fpe_profiles: self.fpe_profiles_loaded().await,
-            tokenization_profiles: self.tokenization_profiles_loaded().await,
-            mac_profiles: self.mac_profiles_loaded().await,
-            masking_profiles: self.masking_profiles_loaded().await,
-            commitment_profiles: self.commitment_profiles_loaded().await,
-            sharing_profiles: self.sharing_profiles_loaded().await,
+            keys: keys_count,
+            routes: counts.routes,
+            remote_routes: counts.remote_routes,
+            permission_clients: counts.permission_clients,
+            fpe_profiles: counts.fpe_profiles,
+            tokenization_profiles: counts.tokenization_profiles,
+            mac_profiles: counts.mac_profiles,
+            masking_profiles: counts.masking_profiles,
+            commitment_profiles: counts.commitment_profiles,
+            sharing_profiles: counts.sharing_profiles,
         });
     }
 
@@ -501,11 +449,24 @@ impl HttpState {
             }
         }
 
-        let loaded_key =
-            crate::ops::keys::load_keys_db_entry(self.storage(), self.internal_keys(), id).await?;
-        self.upsert_keys_db_entry(loaded_key).await;
+        self.key_loads
+            .run(id, || async {
+                {
+                    let keys_db_state = self.keys_db_state.read().await;
+                    if keys_db_state.contains_id(id) {
+                        return Ok(());
+                    }
+                }
 
-        Ok(())
+                let loaded_key =
+                    crate::ops::keys::load_keys_db_entry(self.storage(), self.internal_keys(), id)
+                        .await?;
+                let mut keys_db_state = self.keys_db_state.write().await;
+                keys_db_state.insert_if_absent(loaded_key);
+
+                Ok(())
+            })
+            .await
     }
 
     async fn reload_keys_db_state(&self) -> Result<(), DynError> {
@@ -515,30 +476,6 @@ impl HttpState {
         *keys_db_state = reloaded;
 
         Ok(())
-    }
-
-    async fn final_app_route_for(&self, kid: &str) -> FinalAppRoute {
-        let config_state = self.config_state.read().await;
-
-        config_state.routes.route_for(kid)
-    }
-
-    async fn remote_route_for(
-        &self,
-        sender_kid: &str,
-        recipient_kid: &str,
-    ) -> Result<RemoteRoute, DynError> {
-        let config_state = self.config_state.read().await;
-
-        config_state
-            .remote_routes
-            .route_for(sender_kid, recipient_kid)
-    }
-
-    async fn remote_peer_public_keys(&self, kid: &str) -> Option<PeerPublicKeys> {
-        let config_state = self.config_state.read().await;
-
-        config_state.remote_routes.public_keys_for(kid).cloned()
     }
 }
 
@@ -665,6 +602,166 @@ pub fn router(state: HttpState) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn test_config_state(final_app_addr: &str) -> ConfigState {
+        test_config_state_with_permissions(
+            final_app_addr,
+            crate::core::permissions::PermissionsState::default(),
+        )
+    }
+
+    fn test_config_state_with_permissions(
+        final_app_addr: &str,
+        permissions: crate::core::permissions::PermissionsState,
+    ) -> ConfigState {
+        ConfigState {
+            routes: crate::core::routes::RoutesState::from_parts(
+                final_app_addr.to_string(),
+                String::from("/message"),
+                Vec::new(),
+            ),
+            remote_routes: crate::core::remote_routes::RemoteRoutesState::default(),
+            permissions,
+            fpe_profiles: crate::core::fpe::FpeProfilesState::default(),
+            tokenization_profiles: crate::core::tokenization::TokenizationProfilesState::default(),
+            mac_profiles: crate::core::mac::MacProfilesState::default(),
+            masking_profiles: crate::core::masking::MaskingProfilesState::default(),
+            commitment_profiles: crate::core::commitments::CommitmentProfilesState::default(),
+            sharing_profiles: crate::core::sharing::SharingProfilesState::default(),
+            time_attestation:
+                crate::core::time_attestation::EffectiveTimeAttestationConfig::defaults(),
+        }
+    }
+
+    #[tokio::test]
+    async fn config_snapshot_remains_stable_after_swap() {
+        let state = RwLock::new(Arc::new(Zeroizing::new(test_config_state(
+            "old.example:443",
+        ))));
+        let old = {
+            let config = state.read().await;
+            Arc::clone(&config)
+        };
+        let same = {
+            let config = state.read().await;
+            Arc::clone(&config)
+        };
+        assert!(Arc::ptr_eq(&old, &same));
+
+        *state.write().await = Arc::new(Zeroizing::new(test_config_state("new.example:443")));
+        let current = {
+            let config = state.read().await;
+            Arc::clone(&config)
+        };
+
+        assert!(!Arc::ptr_eq(&old, &current));
+        assert_eq!(
+            old.routes.route_for("kid").final_app_addr(),
+            "old.example:443"
+        );
+        assert_eq!(
+            current.routes.route_for("kid").final_app_addr(),
+            "new.example:443"
+        );
+    }
+
+    #[tokio::test]
+    async fn authenticated_request_keeps_permissions_and_routes_from_one_snapshot() {
+        let kid = "a".repeat(64);
+        let apikey_hash = "b".repeat(64);
+        let inputs: Vec<crate::core::permissions::PermissionClientInput> =
+            serde_json::from_value(json!([{
+                "client": "snapshot-client",
+                "apikey_hash": apikey_hash,
+                "status": "active",
+                "permissions": [{
+                    "kid": kid,
+                    "actions": ["sign"]
+                }]
+            }]))
+            .unwrap();
+        let permissions = crate::core::permissions::validate_permission_clients(inputs, |_| true)
+            .expect("old permissions must be valid");
+        let old = Arc::new(Zeroizing::new(test_config_state_with_permissions(
+            "old.example:443",
+            permissions,
+        )));
+        let client = old
+            .permissions
+            .authenticate_hash(&apikey_hash)
+            .expect("configured client must authenticate");
+        let request = AuthenticatedRequest {
+            client: Zeroizing::new(client),
+            config: Arc::clone(&old),
+        };
+        let state = RwLock::new(old);
+
+        *state.write().await = Arc::new(Zeroizing::new(test_config_state("new.example:443")));
+        let current = {
+            let config = state.read().await;
+            Arc::clone(&config)
+        };
+
+        assert!(request.require_permission(Some(&kid), "sign").is_ok());
+        assert!(
+            current
+                .permissions
+                .require_permission(request.client(), Some(&kid), "sign")
+                .is_err()
+        );
+        assert_eq!(
+            request.config().routes.route_for(&kid).final_app_addr(),
+            "old.example:443"
+        );
+        assert_eq!(
+            current.routes.route_for(&kid).final_app_addr(),
+            "new.example:443"
+        );
+    }
+
+    #[test]
+    fn loaded_counts_are_derived_from_one_config() {
+        let config = test_config_state("localhost:3999");
+        let counts = ConfigLoadedCounts::from_config(&config);
+
+        assert_eq!(counts.routes, config.routes.len());
+        assert_eq!(counts.remote_routes, config.remote_routes.len());
+        assert_eq!(counts.permission_clients, config.permissions.len());
+        assert_eq!(counts.fpe_profiles, config.fpe_profiles.len());
+        assert_eq!(
+            counts.tokenization_profiles,
+            config.tokenization_profiles.len()
+        );
+        assert_eq!(counts.mac_profiles, config.mac_profiles.len());
+        assert_eq!(counts.masking_profiles, config.masking_profiles.len());
+        assert_eq!(counts.commitment_profiles, config.commitment_profiles.len());
+        assert_eq!(counts.sharing_profiles, config.sharing_profiles.len());
+    }
+
+    #[test]
+    fn config_key_sources_are_indexed_by_kid_and_zeroized() {
+        let kid = "a".repeat(64);
+        let mut sources = ConfigKeySources::default();
+        sources.by_kid.insert(
+            kid.clone(),
+            ConfigKeySource {
+                symmetric_key_hex: "b".repeat(64),
+                symmetric_algorithm: String::from("ChaCha20Poly1305"),
+                hash_algorithm: String::from("BLAKE2b(256)"),
+            },
+        );
+
+        let source = sources
+            .by_kid
+            .get(&kid)
+            .expect("configured KID must resolve through the index");
+        assert_eq!(source.symmetric_algorithm, "ChaCha20Poly1305");
+        assert!(!sources.by_kid.contains_key(&"c".repeat(64)));
+
+        sources.zeroize();
+        assert!(sources.by_kid.is_empty());
+    }
 
     #[test]
     fn stale_config_signature_classifier_matches_only_typed_stale_error() {

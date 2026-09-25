@@ -1,6 +1,6 @@
 use super::HttpState;
 use super::error::{ErrorResponse, error_response};
-use super::{ConfigReloadOutcome, STALE_CONFIG_SIGNATURE_WARNING};
+use super::{ConfigLoadedCounts, ConfigReloadOutcome, STALE_CONFIG_SIGNATURE_WARNING};
 use crate::core::{audit, metrics, validation};
 use axum::Json;
 use axum::extract::State;
@@ -28,11 +28,9 @@ pub async fn reload_endpoint(
     State(state): State<HttpState>,
     headers: HeaderMap,
 ) -> Result<Json<ReloadConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    state
-        .require_permission_for(&client, None, "admin", Some("config.reload.denied"))
-        .await?;
-    let actor = audit::actor_from_client(&client);
+    let request = state.authorize_request(&headers).await?;
+    request.require_permission_for(None, "admin", Some("config.reload.denied"))?;
+    let actor = audit::actor_from_client(request.client());
 
     info!(
         endpoint = "POST /config/reload",
@@ -64,29 +62,22 @@ pub async fn reload_endpoint(
         ),
     };
 
-    let routes_loaded = state.routes_loaded().await;
-    let remote_routes_loaded = state.remote_routes_loaded().await;
-    let clients_loaded = state.permissions_loaded().await;
-    let fpe_profiles_loaded = state.fpe_profiles_loaded().await;
-    let tokenization_profiles_loaded = state.tokenization_profiles_loaded().await;
-    let mac_profiles_loaded = state.mac_profiles_loaded().await;
-    let masking_profiles_loaded = state.masking_profiles_loaded().await;
-    let commitment_profiles_loaded = state.commitment_profiles_loaded().await;
-    let sharing_profiles_loaded = state.sharing_profiles_loaded().await;
-    state.refresh_loaded_gauges().await;
+    let config = state.config_snapshot().await;
+    let counts = ConfigLoadedCounts::from_config(&config);
+    state.refresh_loaded_gauges_from(&config).await;
     metrics::record_config_reload(reload_result);
     record_config_reload_timestamp(reload_result);
     info!(
         endpoint = "POST /config/reload",
-        routes_loaded,
-        remote_routes_loaded,
-        clients_loaded,
-        fpe_profiles_loaded,
-        tokenization_profiles_loaded,
-        mac_profiles_loaded,
-        masking_profiles_loaded,
-        commitment_profiles_loaded,
-        sharing_profiles_loaded,
+        routes_loaded = counts.routes,
+        remote_routes_loaded = counts.remote_routes,
+        clients_loaded = counts.permission_clients,
+        fpe_profiles_loaded = counts.fpe_profiles,
+        tokenization_profiles_loaded = counts.tokenization_profiles,
+        mac_profiles_loaded = counts.mac_profiles,
+        masking_profiles_loaded = counts.masking_profiles,
+        commitment_profiles_loaded = counts.commitment_profiles,
+        sharing_profiles_loaded = counts.sharing_profiles,
         warning = warning.as_deref(),
         "config reload response ready"
     );
@@ -95,15 +86,15 @@ pub async fn reload_endpoint(
     Ok(Json(ReloadConfigResponse {
         status: String::from("reloaded"),
         warning,
-        routes_loaded,
-        remote_routes_loaded,
-        clients_loaded,
-        fpe_profiles_loaded,
-        tokenization_profiles_loaded,
-        mac_profiles_loaded,
-        masking_profiles_loaded,
-        commitment_profiles_loaded,
-        sharing_profiles_loaded,
+        routes_loaded: counts.routes,
+        remote_routes_loaded: counts.remote_routes,
+        clients_loaded: counts.permission_clients,
+        fpe_profiles_loaded: counts.fpe_profiles,
+        tokenization_profiles_loaded: counts.tokenization_profiles,
+        mac_profiles_loaded: counts.mac_profiles,
+        masking_profiles_loaded: counts.masking_profiles,
+        commitment_profiles_loaded: counts.commitment_profiles,
+        sharing_profiles_loaded: counts.sharing_profiles,
     }))
 }
 

@@ -5,7 +5,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::fmt;
+use std::{fmt, sync::Arc};
 use zeroize::{Zeroize, Zeroizing};
 
 pub const SHARING_KEY_SALT: &[u8] = b"vectis/sharing/v1";
@@ -29,7 +29,6 @@ pub(crate) struct SharingProfileInput {
     context: String,
 }
 
-#[derive(Clone)]
 pub struct SharingProfile {
     name: String,
     kid: String,
@@ -45,7 +44,7 @@ pub struct SharingProfile {
 
 #[derive(Clone, Default)]
 pub struct SharingProfilesState {
-    profiles: Vec<SharingProfile>,
+    profiles: Vec<Arc<SharingProfile>>,
     by_name: HashMap<String, usize>,
 }
 
@@ -157,6 +156,7 @@ impl SharingProfile {
 
 impl SharingProfilesState {
     fn from_profiles(profiles: Vec<SharingProfile>) -> Self {
+        let profiles = profiles.into_iter().map(Arc::new).collect::<Vec<_>>();
         let by_name = profiles
             .iter()
             .enumerate()
@@ -174,16 +174,19 @@ impl SharingProfilesState {
         self.profiles.is_empty()
     }
 
-    pub fn get(&self, name: &str) -> Option<&SharingProfile> {
+    pub fn get(&self, name: &str) -> Option<Arc<SharingProfile>> {
         self.by_name
             .get(name)
             .and_then(|index| self.profiles.get(*index))
+            .map(Arc::clone)
     }
 }
 
 impl Zeroize for SharingProfilesState {
     fn zeroize(&mut self) {
-        self.profiles.zeroize();
+        while let Some(profile) = self.profiles.pop() {
+            drop(profile);
+        }
         self.by_name.clear();
     }
 }
@@ -200,6 +203,12 @@ impl Zeroize for SharingProfile {
         self.threshold = 0;
         self.shares = 0;
         self.max_secret_len = 0;
+    }
+}
+
+impl Drop for SharingProfile {
+    fn drop(&mut self) {
+        self.zeroize();
     }
 }
 
@@ -682,7 +691,7 @@ mod tests {
 
     const KID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-    fn profile() -> SharingProfile {
+    fn profile() -> Arc<SharingProfile> {
         let input = serde_json::from_value(serde_json::json!({
             "name": "customer-secret-3of5-v1",
             "kid": KID,
@@ -707,7 +716,51 @@ mod tests {
         .unwrap()
         .get("customer-secret-3of5-v1")
         .unwrap()
-        .clone()
+    }
+
+    fn profiles_state() -> SharingProfilesState {
+        let input = serde_json::from_value(serde_json::json!({
+            "name": "customer-secret-3of5-v1",
+            "kid": KID,
+            "threshold": 3,
+            "shares": 5,
+            "max_secret_len": 128,
+            "context": "tenant=acme;purpose=customer-secret-sharing;version=1"
+        }))
+        .unwrap();
+        validate_sharing_profiles(
+            vec![input],
+            |_| true,
+            |_| Ok("BLAKE2b(256)".to_string()),
+            |_| {
+                Ok(DerivedSharingKey {
+                    public_algorithm: "HMAC(BLAKE2b(256))".to_string(),
+                    botan_algorithm: "HMAC(BLAKE2b(256))".to_string(),
+                    share_auth_key: Zeroizing::new(vec![7; SHARING_KEY_SIZE_BYTES]),
+                })
+            },
+        )
+        .expect("profile must validate")
+    }
+
+    #[test]
+    fn profile_lookups_share_ownership_across_state_zeroize() {
+        let mut state = profiles_state();
+        let first = state
+            .get("customer-secret-3of5-v1")
+            .expect("profile must exist");
+        let second = state
+            .get("customer-secret-3of5-v1")
+            .expect("profile must exist");
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(Arc::strong_count(&first), 3);
+        state.zeroize();
+        assert!(state.is_empty());
+        assert_eq!(first.name(), "customer-secret-3of5-v1");
+        assert_eq!(Arc::strong_count(&first), 2);
+        drop(second);
+        assert_eq!(Arc::strong_count(&first), 1);
     }
 
     #[test]

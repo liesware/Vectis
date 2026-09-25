@@ -5,7 +5,7 @@ use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::fmt;
+use std::{fmt, sync::Arc};
 use zeroize::{Zeroize, Zeroizing};
 
 pub const TOKENIZATION_VERSION_RANDOM_V1: &str = "token-random-v1";
@@ -30,7 +30,6 @@ pub(crate) struct TokenizationProfileInput {
     one_time: bool,
 }
 
-#[derive(Clone)]
 pub struct TokenizationProfile {
     name: String,
     kid: String,
@@ -45,7 +44,7 @@ pub struct TokenizationProfile {
 
 #[derive(Clone, Default)]
 pub struct TokenizationProfilesState {
-    profiles: Vec<TokenizationProfile>,
+    profiles: Vec<Arc<TokenizationProfile>>,
     by_name: HashMap<String, usize>,
 }
 
@@ -128,6 +127,7 @@ impl TokenizationProfile {
 
 impl TokenizationProfilesState {
     fn from_profiles(profiles: Vec<TokenizationProfile>) -> Self {
+        let profiles = profiles.into_iter().map(Arc::new).collect::<Vec<_>>();
         let by_name = profiles
             .iter()
             .enumerate()
@@ -145,16 +145,19 @@ impl TokenizationProfilesState {
         self.profiles.is_empty()
     }
 
-    pub fn get(&self, name: &str) -> Option<&TokenizationProfile> {
+    pub fn get(&self, name: &str) -> Option<Arc<TokenizationProfile>> {
         self.by_name
             .get(name)
             .and_then(|index| self.profiles.get(*index))
+            .map(Arc::clone)
     }
 }
 
 impl Zeroize for TokenizationProfilesState {
     fn zeroize(&mut self) {
-        self.profiles.zeroize();
+        while let Some(profile) = self.profiles.pop() {
+            drop(profile);
+        }
         self.by_name.clear();
     }
 }
@@ -170,6 +173,12 @@ impl Zeroize for TokenizationProfile {
         self.cipher_algorithm.zeroize();
         self.hash_key.zeroize();
         self.data_key.zeroize();
+    }
+}
+
+impl Drop for TokenizationProfile {
+    fn drop(&mut self) {
+        self.zeroize();
     }
 }
 
@@ -490,7 +499,7 @@ mod tests {
         }
     }
 
-    fn profile() -> TokenizationProfile {
+    fn profile() -> Arc<TokenizationProfile> {
         validate_tokenization_profiles(
             vec![input("patient-id-token-v1")],
             |item| item == kid(),
@@ -499,7 +508,6 @@ mod tests {
         .unwrap()
         .get("patient-id-token-v1")
         .unwrap()
-        .clone()
     }
 
     #[test]
@@ -545,6 +553,31 @@ mod tests {
         assert_eq!(profile.hash_key().len(), TOKEN_KEY_SIZE_BYTES);
         assert_eq!(profile.data_key().len(), TOKEN_KEY_SIZE_BYTES);
         assert!(!format!("{profile:?}").contains("777777"));
+    }
+
+    #[test]
+    fn profile_lookups_share_ownership_across_state_zeroize() {
+        let mut state = validate_tokenization_profiles(
+            vec![input("patient-id-token-v1")],
+            |item| item == kid(),
+            |_| Ok(derived()),
+        )
+        .expect("profile must validate");
+        let first = state
+            .get("patient-id-token-v1")
+            .expect("profile must exist");
+        let second = state
+            .get("patient-id-token-v1")
+            .expect("profile must exist");
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(Arc::strong_count(&first), 3);
+        state.zeroize();
+        assert!(state.is_empty());
+        assert_eq!(first.name(), "patient-id-token-v1");
+        assert_eq!(Arc::strong_count(&first), 2);
+        drop(second);
+        assert_eq!(Arc::strong_count(&first), 1);
     }
 
     #[test]
@@ -860,7 +893,7 @@ mod tests {
             assert!(err.to_string().contains("must not contain ';' or '='"));
         }
 
-        let mut bad_profile = profile.clone();
+        let mut bad_profile = Arc::try_unwrap(profile).expect("profile must have one owner");
         bad_profile.name = String::from("bad;profile");
         let err = token_data_aad(&bad_profile, &"b".repeat(64))
             .expect_err("AAD delimiters in token data profile must fail");

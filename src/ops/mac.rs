@@ -3,6 +3,7 @@ use crate::error::DynError;
 use crate::ops::keys::{self, KeysDbState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 use zeroize::Zeroizing;
 
 #[derive(Deserialize)]
@@ -153,24 +154,24 @@ pub struct ValidatedMacVerifyBatchInput {
 
 pub struct PreparedMacCreate {
     kid: String,
-    profile: mac::MacProfile,
+    profile: Arc<mac::MacProfile>,
     input: ValidatedMacCreateInput,
 }
 
 pub struct PreparedMacVerify {
-    profile: mac::MacProfile,
+    profile: Arc<mac::MacProfile>,
     input: ValidatedMacVerifyInput,
 }
 
 pub struct PreparedMacCreateBatch {
     kid: String,
-    profile: mac::MacProfile,
+    profile: Arc<mac::MacProfile>,
     input: ValidatedMacCreateBatchInput,
 }
 
 pub struct PreparedMacVerifyBatch {
     kid: String,
-    profile: mac::MacProfile,
+    profile: Arc<mac::MacProfile>,
     input: ValidatedMacVerifyBatchInput,
 }
 
@@ -326,7 +327,7 @@ pub fn validate_verify_batch_input(
 pub fn prepare_create(
     keys_db_state: &KeysDbState,
     kid: &str,
-    profile: mac::MacProfile,
+    profile: Arc<mac::MacProfile>,
     input: ValidatedMacCreateInput,
 ) -> Result<PreparedMacCreate, DynError> {
     keys::prepare_profile_use(
@@ -346,7 +347,7 @@ pub fn prepare_create(
 
 pub fn prepare_verify(
     keys_db_state: &KeysDbState,
-    profile: mac::MacProfile,
+    profile: Arc<mac::MacProfile>,
     input: ValidatedMacVerifyInput,
 ) -> Result<PreparedMacVerify, DynError> {
     keys::prepare_profile_use(
@@ -363,7 +364,7 @@ pub fn prepare_verify(
 pub fn prepare_create_batch(
     keys_db_state: &KeysDbState,
     kid: &str,
-    profile: mac::MacProfile,
+    profile: Arc<mac::MacProfile>,
     input: ValidatedMacCreateBatchInput,
 ) -> Result<PreparedMacCreateBatch, DynError> {
     keys::prepare_profile_use(
@@ -383,7 +384,7 @@ pub fn prepare_create_batch(
 
 pub fn prepare_verify_batch(
     keys_db_state: &KeysDbState,
-    profile: mac::MacProfile,
+    profile: Arc<mac::MacProfile>,
     input: ValidatedMacVerifyBatchInput,
 ) -> Result<PreparedMacVerifyBatch, DynError> {
     keys::prepare_profile_use(
@@ -712,7 +713,7 @@ mod tests {
     const TEST_OPS_KEY_HEX: &str =
         "1111111111111111111111111111111111111111111111111111111111111111";
 
-    fn build_profile(name: &str, context: &str, hash: &'static str) -> mac::MacProfile {
+    fn build_profile(name: &str, context: &str, hash: &'static str) -> Arc<mac::MacProfile> {
         let inputs: Vec<mac::MacProfileInput> = serde_json::from_value(json!([
             {"name": name, "kid": TEST_KID, "context": context}
         ]))
@@ -725,7 +726,7 @@ mod tests {
         )
         .expect("mac profile must validate");
 
-        state.get(name).expect("profile must be present").clone()
+        state.get(name).expect("profile must be present")
     }
 
     #[test]

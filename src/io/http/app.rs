@@ -161,18 +161,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
     );
     if metrics_handle.is_some() {
         crate::core::metrics::set_unsealed_state(true);
-        crate::core::metrics::set_loaded_gauges(crate::core::metrics::LoadedGaugeCounts {
-            keys: keys_db_state.len(),
-            routes: config_state.routes.len(),
-            remote_routes: config_state.remote_routes.len(),
-            permission_clients: config_state.permissions.len(),
-            fpe_profiles: config_state.fpe_profiles.len(),
-            tokenization_profiles: config_state.tokenization_profiles.len(),
-            mac_profiles: config_state.mac_profiles.len(),
-            masking_profiles: config_state.masking_profiles.len(),
-            commitment_profiles: config_state.commitment_profiles.len(),
-            sharing_profiles: config_state.sharing_profiles.len(),
-        });
+        super::HttpState::set_loaded_gauges(&config_state, keys_db_state.len());
     }
     let app = super::router(super::HttpState::new(super::HttpStateInput {
         config: config.clone(),

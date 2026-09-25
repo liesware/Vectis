@@ -3,6 +3,7 @@ use crate::error::DynError;
 use crate::ops::keys::{self, KeysDbState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 use zeroize::Zeroizing;
 
 #[derive(Deserialize)]
@@ -140,25 +141,25 @@ pub struct ValidatedIndexVerifyBatchInput {
 
 pub struct PreparedIndexCreate {
     kid: String,
-    profile: mac::MacProfile,
+    profile: Arc<mac::MacProfile>,
     input: ValidatedIndexCreateInput,
 }
 
 pub struct PreparedIndexVerify {
     kid: String,
-    profile: mac::MacProfile,
+    profile: Arc<mac::MacProfile>,
     input: ValidatedIndexVerifyInput,
 }
 
 pub struct PreparedIndexCreateBatch {
     kid: String,
-    profile: mac::MacProfile,
+    profile: Arc<mac::MacProfile>,
     input: ValidatedIndexBatchInput,
 }
 
 pub struct PreparedIndexVerifyBatch {
     kid: String,
-    profile: mac::MacProfile,
+    profile: Arc<mac::MacProfile>,
     input: ValidatedIndexVerifyBatchInput,
 }
 
@@ -329,7 +330,7 @@ pub fn validate_verify_batch_input(
 pub fn prepare_create(
     keys_db_state: &KeysDbState,
     kid: &str,
-    profile: mac::MacProfile,
+    profile: Arc<mac::MacProfile>,
     input: ValidatedIndexCreateInput,
 ) -> Result<PreparedIndexCreate, DynError> {
     keys::prepare_profile_use(
@@ -349,7 +350,7 @@ pub fn prepare_create(
 
 pub fn prepare_verify(
     keys_db_state: &KeysDbState,
-    profile: mac::MacProfile,
+    profile: Arc<mac::MacProfile>,
     input: ValidatedIndexVerifyInput,
 ) -> Result<PreparedIndexVerify, DynError> {
     keys::prepare_profile_use(
@@ -370,7 +371,7 @@ pub fn prepare_verify(
 pub fn prepare_create_batch(
     keys_db_state: &KeysDbState,
     kid: &str,
-    profile: mac::MacProfile,
+    profile: Arc<mac::MacProfile>,
     input: ValidatedIndexBatchInput,
 ) -> Result<PreparedIndexCreateBatch, DynError> {
     keys::prepare_profile_use(
@@ -390,7 +391,7 @@ pub fn prepare_create_batch(
 
 pub fn prepare_verify_batch(
     keys_db_state: &KeysDbState,
-    profile: mac::MacProfile,
+    profile: Arc<mac::MacProfile>,
     input: ValidatedIndexVerifyBatchInput,
 ) -> Result<PreparedIndexVerifyBatch, DynError> {
     keys::prepare_profile_use(
@@ -523,7 +524,7 @@ mod tests {
     const KID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const OTHER_KID: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-    fn mac_profile(kid: &str) -> mac::MacProfile {
+    fn mac_profile(kid: &str) -> Arc<mac::MacProfile> {
         let input = serde_json::from_value(json!({
             "name": "pan-index-v1",
             "kid": kid,
@@ -539,7 +540,6 @@ mod tests {
         .expect("mac profile must validate")
         .get("pan-index-v1")
         .expect("profile must exist")
-        .clone()
     }
 
     fn create_input() -> IndexCreateInput {

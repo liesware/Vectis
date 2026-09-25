@@ -3,6 +3,7 @@ use crate::error::DynError;
 use crate::ops::keys::{self, KeysDbState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 use zeroize::Zeroizing;
 
 #[derive(Deserialize)]
@@ -50,13 +51,13 @@ pub struct ValidatedShareCombineInput {
 
 pub struct PreparedShareSplit {
     kid: String,
-    profile: sharing::SharingProfile,
+    profile: Arc<sharing::SharingProfile>,
     input: ValidatedShareSplitInput,
 }
 
 pub struct PreparedShareCombine {
     kid: String,
-    profile: sharing::SharingProfile,
+    profile: Arc<sharing::SharingProfile>,
     input: ValidatedShareCombineInput,
 }
 
@@ -133,7 +134,7 @@ pub fn validate_combine_input(
 pub fn prepare_split(
     keys_db_state: &KeysDbState,
     kid: &str,
-    profile: sharing::SharingProfile,
+    profile: Arc<sharing::SharingProfile>,
     input: ValidatedShareSplitInput,
 ) -> Result<PreparedShareSplit, DynError> {
     keys::prepare_profile_use(
@@ -154,7 +155,7 @@ pub fn prepare_split(
 
 pub fn prepare_combine(
     keys_db_state: &KeysDbState,
-    profile: sharing::SharingProfile,
+    profile: Arc<sharing::SharingProfile>,
     input: ValidatedShareCombineInput,
 ) -> Result<PreparedShareCombine, DynError> {
     keys::prepare_profile_use(
@@ -253,7 +254,7 @@ mod tests {
 
     const KID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-    fn profile() -> sharing::SharingProfile {
+    fn profile() -> Arc<sharing::SharingProfile> {
         let input = serde_json::from_value(json!({
             "name": "customer-secret-3of5-v1",
             "kid": KID,
@@ -272,7 +273,6 @@ mod tests {
         .unwrap()
         .get("customer-secret-3of5-v1")
         .unwrap()
-        .clone()
     }
 
     #[test]

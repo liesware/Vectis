@@ -718,6 +718,12 @@ fn validate_internal_encrypt_message_input(
     input: InternalEncryptMessageInput,
 ) -> Result<ValidatedInternalEncryptMessageInput, DynError> {
     validation::validate_text_field("plaintext", &input.plaintext)?;
+    if input.plaintext.len() > config::INTERNAL_MESSAGE_PLAINTEXT_MAX_SIZE {
+        return Err(crate::error::invalid_input(format!(
+            "plaintext exceeds maximum allowed size: {} bytes",
+            config::INTERNAL_MESSAGE_PLAINTEXT_MAX_SIZE
+        )));
+    }
 
     Ok(ValidatedInternalEncryptMessageInput {
         plaintext: Zeroizing::new(input.plaintext),
@@ -1761,6 +1767,66 @@ mod tests {
         }))
         .expect("invalid ctx remains structurally valid");
         assert!(validate_internal_decrypt_message_input_encoding(internal_decrypt).is_err());
+    }
+
+    #[test]
+    fn internal_encrypt_plaintext_limit_is_inclusive_and_measured_in_utf8_bytes() {
+        let exact = InternalEncryptMessageInput {
+            plaintext: "a".repeat(config::INTERNAL_MESSAGE_PLAINTEXT_MAX_SIZE),
+        };
+        assert!(validate_internal_encrypt_message_input(exact).is_ok());
+
+        let oversized = InternalEncryptMessageInput {
+            plaintext: "a".repeat(config::INTERNAL_MESSAGE_PLAINTEXT_MAX_SIZE + 1),
+        };
+        let err = match validate_internal_encrypt_message_input(oversized) {
+            Ok(_) => panic!("plaintext above the byte limit must fail"),
+            Err(err) => err,
+        };
+        assert_eq!(
+            err.to_string(),
+            "plaintext exceeds maximum allowed size: 1047552 bytes"
+        );
+
+        let exact_multibyte = InternalEncryptMessageInput {
+            plaintext: "é".repeat(config::INTERNAL_MESSAGE_PLAINTEXT_MAX_SIZE / 2),
+        };
+        assert!(validate_internal_encrypt_message_input(exact_multibyte).is_ok());
+
+        let oversized_multibyte = InternalEncryptMessageInput {
+            plaintext: "é".repeat((config::INTERNAL_MESSAGE_PLAINTEXT_MAX_SIZE / 2) + 1),
+        };
+        assert!(validate_internal_encrypt_message_input(oversized_multibyte).is_err());
+    }
+
+    #[test]
+    fn maximum_internal_plaintext_produces_decrypt_body_below_http_limit() {
+        const AEAD_TAG_SIZE_BYTES: usize = 16;
+
+        let kid = "a".repeat(64);
+        let timestamp = "9223372036854775807";
+        let cipher_alg = "ChaCha20Poly1305";
+        let cipher = crypto::symmetric_cipher(cipher_alg).expect("test cipher must be supported");
+        let output = InternalMessageOutput {
+            timestamp: timestamp.to_string(),
+            kid: kid.clone(),
+            message: InternalMessageCipher {
+                ctx: "a".repeat(
+                    (config::INTERNAL_MESSAGE_PLAINTEXT_MAX_SIZE + AEAD_TAG_SIZE_BYTES) * 2,
+                ),
+                nonce: "a".repeat(cipher.nonce_size_bytes * 2),
+                aad: build_internal_message_aad(&kid, timestamp, cipher_alg)
+                    .expect("worst-case internal message AAD must build"),
+                variant: cipher_alg.to_string(),
+            },
+        };
+
+        let serialized = serde_json::to_vec(&output).expect("internal message must serialize");
+        assert!(
+            serialized.len() <= config::INTERNAL_HTTP_MAX_SIZE,
+            "serialized decrypt request is {} bytes",
+            serialized.len()
+        );
     }
 
     proptest! {

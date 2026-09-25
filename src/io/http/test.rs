@@ -12,11 +12,9 @@ pub async fn init_endpoint(
     State(state): State<HttpState>,
     headers: HeaderMap,
 ) -> Result<Json<InitValidationOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    state
-        .require_permission_for(&client, None, "admin", Some("self_test.denied"))
-        .await?;
-    let actor = audit::actor_from_client(&client);
+    let request = state.authorize_request(&headers).await?;
+    request.require_permission_for(None, "admin", Some("self_test.denied"))?;
+    let actor = audit::actor_from_client(request.client());
 
     info!(
         endpoint = "GET /self-test/init",
@@ -59,11 +57,9 @@ pub async fn test_endpoint(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<ops::test::TestOutput>, (StatusCode, Json<ErrorResponse>)> {
-    let client = state.authorize_api_key(&headers).await?;
-    state
-        .require_permission_for(&client, Some(&id), "self-test", Some("self_test.denied"))
-        .await?;
-    let actor = audit::actor_from_client(&client);
+    let request = state.authorize_request(&headers).await?;
+    request.require_permission_for(Some(&id), "self-test", Some("self_test.denied"))?;
+    let actor = audit::actor_from_client(request.client());
 
     ops::keys::validate_key_id(&id).map_err(|err| {
         audit::operation_failed(

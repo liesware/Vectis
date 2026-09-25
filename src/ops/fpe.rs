@@ -3,6 +3,7 @@ use crate::error::DynError;
 use crate::ops::keys::{self, KeysDbState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 use tracing::info;
 use zeroize::Zeroizing;
 
@@ -148,25 +149,25 @@ pub struct ValidatedFpeDecryptBatchInput {
 
 pub struct PreparedFpeEncrypt {
     kid: String,
-    profile: fpe::FpeProfile,
+    profile: Arc<fpe::FpeProfile>,
     input: ValidatedFpeEncryptInput,
 }
 
 pub struct PreparedFpeDecrypt {
     kid: String,
-    profile: fpe::FpeProfile,
+    profile: Arc<fpe::FpeProfile>,
     input: ValidatedFpeDecryptInput,
 }
 
 pub struct PreparedFpeEncryptBatch {
     kid: String,
-    profile: fpe::FpeProfile,
+    profile: Arc<fpe::FpeProfile>,
     input: ValidatedFpeEncryptBatchInput,
 }
 
 pub struct PreparedFpeDecryptBatch {
     kid: String,
-    profile: fpe::FpeProfile,
+    profile: Arc<fpe::FpeProfile>,
     input: ValidatedFpeDecryptBatchInput,
 }
 
@@ -319,7 +320,7 @@ pub fn validate_decrypt_batch_input(
 pub fn prepare_encrypt(
     keys_db_state: &KeysDbState,
     kid: &str,
-    profile: fpe::FpeProfile,
+    profile: Arc<fpe::FpeProfile>,
     input: ValidatedFpeEncryptInput,
 ) -> Result<PreparedFpeEncrypt, DynError> {
     keys::prepare_profile_use(
@@ -339,7 +340,7 @@ pub fn prepare_encrypt(
 
 pub fn prepare_decrypt(
     keys_db_state: &KeysDbState,
-    profile: fpe::FpeProfile,
+    profile: Arc<fpe::FpeProfile>,
     input: ValidatedFpeDecryptInput,
 ) -> Result<PreparedFpeDecrypt, DynError> {
     keys::prepare_profile_use(
@@ -360,7 +361,7 @@ pub fn prepare_decrypt(
 pub fn prepare_encrypt_batch(
     keys_db_state: &KeysDbState,
     kid: &str,
-    profile: fpe::FpeProfile,
+    profile: Arc<fpe::FpeProfile>,
     input: ValidatedFpeEncryptBatchInput,
 ) -> Result<PreparedFpeEncryptBatch, DynError> {
     keys::prepare_profile_use(
@@ -380,7 +381,7 @@ pub fn prepare_encrypt_batch(
 
 pub fn prepare_decrypt_batch(
     keys_db_state: &KeysDbState,
-    profile: fpe::FpeProfile,
+    profile: Arc<fpe::FpeProfile>,
     input: ValidatedFpeDecryptBatchInput,
 ) -> Result<PreparedFpeDecryptBatch, DynError> {
     keys::prepare_profile_use(
