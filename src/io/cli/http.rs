@@ -393,7 +393,9 @@ async fn validate_config_for_local_node() -> Result<
                 config.config_path.display()
             ))
         })?;
-    let internal_keys = ops::internal_keys::InternalDerivedKeysState::from_init_state(&init_state)?;
+    let internal_keys = std::sync::Arc::new(zeroize::Zeroizing::new(
+        ops::internal_keys::InternalDerivedKeysState::from_init_state(&init_state)?,
+    ));
     let storage = StorageState::new(&config).await?;
     let keys_db_state = ops::keys::load_keys_db_state(&storage, &internal_keys).await?;
     let config_state = crate::core::config_file::validate_config_content(

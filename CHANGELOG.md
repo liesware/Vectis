@@ -11,6 +11,12 @@ Changes staged for v0.9.0, the first official release.
 
 - Updated rustls to 0.23.45 to address RUSTSEC-2026-0285.
 
+### Performance
+- Key reload no longer decrypts keys sequentially on the async runtime. Keys are now
+  decrypted concurrently on the blocking pool with a bounded window, removing head-of-line
+  blocking during startup and `POST /keys/reload`. Original key ordering and per-key
+  skip-on-failure behavior are preserved.
+
 ## Main
 - Update from 1.97.1 to 1.98
 - fuzz testing improvements

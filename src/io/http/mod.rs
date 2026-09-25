@@ -101,7 +101,7 @@ struct HttpStateInput {
     config: Arc<AppConfig>,
     auth_state: auth::HttpAuthState,
     init_state: ValidatedInitState,
-    internal_keys: Zeroizing<InternalDerivedKeysState>,
+    internal_keys: Arc<Zeroizing<InternalDerivedKeysState>>,
     storage: StorageState,
     keys_db_state: Zeroizing<KeysDbState>,
     config_state: ConfigState,
@@ -115,7 +115,7 @@ impl HttpState {
             config: input.config,
             auth_state: Arc::new(input.auth_state),
             init_state: Arc::new(input.init_state),
-            internal_keys: Arc::new(input.internal_keys),
+            internal_keys: input.internal_keys,
             storage: Arc::new(input.storage),
             started_at: Arc::new(input.started_at),
             keys_db_state: Arc::new(RwLock::new(input.keys_db_state)),
@@ -350,7 +350,7 @@ impl HttpState {
         };
         let config = Arc::clone(&self.config);
         let init_state = (*self.init_state).clone();
-        let reload_result = blocking::spawn_blocking_crypto(move || {
+        let reload_result = blocking::spawn_blocking_unbounded(move || {
             let config_key_sources = Zeroizing::new(config_key_sources);
             crate::core::config_file::reload_config_state(
                 &config,
@@ -510,7 +510,7 @@ impl HttpState {
 
     async fn reload_keys_db_state(&self) -> Result<(), DynError> {
         let reloaded =
-            crate::ops::keys::load_keys_db_state(self.storage(), self.internal_keys()).await?;
+            crate::ops::keys::load_keys_db_state(self.storage(), &self.internal_keys).await?;
         let mut keys_db_state = self.keys_db_state.write().await;
         *keys_db_state = reloaded;
 

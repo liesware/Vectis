@@ -18,6 +18,7 @@ use zeroize::Zeroizing;
 
 pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
     let config = Arc::new(config::app_config()?);
+    crate::core::blocking::init_crypto_limit(config.max_concurrent_crypto);
     let metrics_handle = if config.metrics_enabled {
         Some(Arc::new(crate::core::metrics::init()?))
     } else {
@@ -27,9 +28,9 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
     let logging = crate::core::logging::logging_config();
     crate::core::audit_chain::initialize(&logging, &init_state)?;
     let storage = StorageState::new(&config).await?;
-    let internal_keys = Zeroizing::new(
+    let internal_keys = Arc::new(Zeroizing::new(
         crate::ops::internal_keys::InternalDerivedKeysState::from_init_state(&init_state)?,
-    );
+    ));
     let keys_db_state = keys::load_keys_db_state(&storage, &internal_keys).await?;
     let config_state = crate::core::config_file::load_config_state(
         &config,

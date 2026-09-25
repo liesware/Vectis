@@ -86,6 +86,7 @@ pub fn status_for_error(err: &(dyn std::error::Error + 'static)) -> StatusCode {
             | VectisError::ConfigSignatureStale(_) => StatusCode::BAD_REQUEST,
             VectisError::NotFound(_) => StatusCode::NOT_FOUND,
             VectisError::Forbidden(_) => StatusCode::FORBIDDEN,
+            VectisError::Overloaded(_) => StatusCode::TOO_MANY_REQUESTS,
             VectisError::RemoteUnreachable(_)
             | VectisError::Storage(_)
             | VectisError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -110,6 +111,7 @@ pub fn public_error_message(status: StatusCode) -> String {
         StatusCode::UNAUTHORIZED => String::from("unauthorized"),
         StatusCode::FORBIDDEN => String::from("forbidden"),
         StatusCode::NOT_FOUND => String::from("not found"),
+        StatusCode::TOO_MANY_REQUESTS => String::from("too many requests"),
         _ => String::from("internal server error"),
     }
 }
@@ -198,6 +200,18 @@ mod tests {
             status_for_error(&VectisError::Storage(String::from("x"))),
             StatusCode::INTERNAL_SERVER_ERROR
         );
+        assert_eq!(
+            status_for_error(&VectisError::Overloaded(String::from("x"))),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+    }
+
+    #[test]
+    fn overloaded_error_returns_generic_too_many_requests_message() {
+        let err = crate::error::overloaded("crypto capacity exhausted");
+        let (status, body) = error_response(err.as_ref());
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(body.0.error, "too many requests");
     }
 
     #[test]

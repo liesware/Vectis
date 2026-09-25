@@ -1951,6 +1951,7 @@ mod tests {
                 crypto_policy: String::from("profile-only"),
                 plaintext_message: String::from("hello"),
                 metrics_enabled: true,
+                max_concurrent_crypto: 8,
             },
             value: empty_config(),
         }

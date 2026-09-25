@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::task::JoinSet;
 use tracing::{error, info};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -661,25 +662,57 @@ pub fn parse_update_lifecycle_input(request: Value) -> Result<UpdateLifecycleInp
     Ok(input)
 }
 
+type KeyLoadOutcome = (usize, Result<LoadedOpsKey, (String, DynError)>);
+
 pub async fn load_keys_db_state(
     storage: &StorageState,
-    internal_keys: &InternalDerivedKeysState,
+    internal_keys: &Arc<Zeroizing<InternalDerivedKeysState>>,
 ) -> Result<Zeroizing<KeysDbState>, DynError> {
     let rows = storage.list_ops_keys().await?;
-    let mut keys_db = Vec::new();
+    let limit = config::default_crypto_concurrency();
 
-    for row in rows {
-        let kid = row.kid.clone();
-        match load_ops_key_from_row(internal_keys, row) {
-            Ok(loaded_key) => {
+    let mut loaded: Vec<Option<Arc<LoadedOpsKey>>> = vec![None; rows.len()];
+    let mut pending: JoinSet<KeyLoadOutcome> = JoinSet::new();
+    let mut rows = rows.into_iter().enumerate();
+
+    for (index, row) in rows.by_ref().take(limit) {
+        let internal_keys = Arc::clone(internal_keys);
+        pending.spawn_blocking(move || {
+            let kid = row.kid.clone();
+            (
+                index,
+                load_ops_key_from_row(&internal_keys, row).map_err(|err| (kid, err)),
+            )
+        });
+    }
+
+    while let Some(joined) = pending.join_next().await {
+        match joined {
+            Ok((index, Ok(loaded_key))) => {
                 info!(kid = %loaded_key.id, "decrypted ops key loaded from db");
-                keys_db.push(Arc::new(loaded_key));
+                loaded[index] = Some(Arc::new(loaded_key));
             }
-            Err(err) => {
+            Ok((_, Err((kid, err)))) => {
                 error!(kid = %kid, error = %err, "failed to decrypt ops key from db");
             }
+            Err(err) => {
+                error!(error = %err, "ops key decryption task failed");
+            }
+        }
+
+        if let Some((index, row)) = rows.next() {
+            let internal_keys = Arc::clone(internal_keys);
+            pending.spawn_blocking(move || {
+                let kid = row.kid.clone();
+                (
+                    index,
+                    load_ops_key_from_row(&internal_keys, row).map_err(|err| (kid, err)),
+                )
+            });
         }
     }
+
+    let keys_db = loaded.into_iter().flatten().collect();
 
     Ok(Zeroizing::new(KeysDbState::from_keys(keys_db)))
 }

@@ -37,6 +37,7 @@ cargo run -- serve
 | `VECTIS_TLS_SKIP_VERIFY` | `false` | `true` or `false` | Disables TLS certificate verification for outbound HTTPS clients. It only has practical effect when `VECTIS_MODE=prod` or the CLI calls an HTTPS `VECTIS_API_URL`. |
 | `VECTIS_PUBLIC_ADDR` | `127.0.0.1:3000` | Valid host:port, for example `localhost:3000` or `vectis-a.example.com:443` | Public address advertised as `sender.host` in protected messages. Useful when Vectis runs behind a load balancer. |
 | `VECTIS_PROTOCOL_VERSION` | `v1` | `v1` | Protocol version used by generated payloads and AAD. Currently only `v1` is supported. |
+| `VECTIS_MAX_CONCURRENT_CRYPTO` | One less than the number of CPU cores (minimum 1) | Positive integer | Global cap on cryptographic operations running concurrently on the blocking pool. The default leaves one core for the async runtime. When exhausted, further crypto requests are rejected immediately with `429 Too Many Requests`. Prevents CPU-bound work from piling up under overload. |
 
 Notes:
 

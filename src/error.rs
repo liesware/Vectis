@@ -23,6 +23,8 @@ pub enum VectisError {
     #[error("{0}")]
     Storage(String),
     #[error("{0}")]
+    Overloaded(String),
+    #[error("{0}")]
     Internal(String),
 }
 
@@ -52,6 +54,10 @@ pub fn remote_unreachable(message: impl Into<String>) -> DynError {
 
 pub fn storage(message: impl Into<String>) -> DynError {
     Box::new(VectisError::Storage(message.into()))
+}
+
+pub fn overloaded(message: impl Into<String>) -> DynError {
+    Box::new(VectisError::Overloaded(message.into()))
 }
 
 pub fn internal(message: impl Into<String>) -> DynError {
@@ -135,6 +141,7 @@ pub fn with_prefix(prefix: &str, err: DynError) -> DynError {
             remote_unreachable(format!("{prefix}: {message}"))
         }
         Some(VectisError::Storage(message)) => storage(format!("{prefix}: {message}")),
+        Some(VectisError::Overloaded(message)) => overloaded(format!("{prefix}: {message}")),
         Some(VectisError::Internal(message)) => internal(format!("{prefix}: {message}")),
         None => internal(format!("{prefix}: {err}")),
     }

@@ -92,6 +92,7 @@ pub struct AppConfig {
     pub crypto_policy: String,
     pub plaintext_message: String,
     pub metrics_enabled: bool,
+    pub max_concurrent_crypto: usize,
 }
 
 #[cfg(test)]
@@ -121,7 +122,35 @@ pub(crate) fn test_app_config() -> AppConfig {
         crypto_policy: String::from("profile-only"),
         plaintext_message: String::from("hello"),
         metrics_enabled: true,
+        max_concurrent_crypto: 8,
     }
+}
+
+pub(crate) fn default_crypto_concurrency() -> usize {
+    std::thread::available_parallelism()
+        .map(|cores| cores.get().saturating_sub(1).max(1))
+        .unwrap_or(4)
+}
+
+fn parse_max_concurrent_crypto(value: &str) -> Result<usize, DynError> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(default_crypto_concurrency());
+    }
+    let parsed: usize = value.parse().map_err(|_| {
+        crate::error::invalid_input("VECTIS_MAX_CONCURRENT_CRYPTO must be a positive integer")
+    })?;
+    if parsed == 0 {
+        return Err(crate::error::invalid_input(
+            "VECTIS_MAX_CONCURRENT_CRYPTO must be greater than zero",
+        ));
+    }
+    if parsed > tokio::sync::Semaphore::MAX_PERMITS {
+        return Err(crate::error::invalid_input(
+            "VECTIS_MAX_CONCURRENT_CRYPTO exceeds the maximum supported value",
+        ));
+    }
+    Ok(parsed)
 }
 
 pub fn app_config() -> Result<AppConfig, DynError> {
@@ -190,6 +219,8 @@ pub fn app_config() -> Result<AppConfig, DynError> {
         "VECTIS_METRICS_ENABLED",
         &config_value(&env_file, "VECTIS_METRICS_ENABLED", "true"),
     )?;
+    let max_concurrent_crypto =
+        parse_max_concurrent_crypto(&config_value(&env_file, "VECTIS_MAX_CONCURRENT_CRYPTO", ""))?;
     let plaintext_message = config_value(
         &env_file,
         "VECTIS_PLAINTEXT_MESSAGE",
@@ -267,6 +298,7 @@ pub fn app_config() -> Result<AppConfig, DynError> {
         crypto_policy,
         plaintext_message,
         metrics_enabled,
+        max_concurrent_crypto,
     })
 }
 
@@ -578,6 +610,21 @@ mod tests {
         let mode = validate_vectis_mode("prod").expect("prod mode must be valid");
 
         assert_eq!(transport_scheme_for_mode(&mode), "https");
+    }
+
+    #[test]
+    fn max_concurrent_crypto_parses_and_validates() {
+        assert_eq!(
+            parse_max_concurrent_crypto("5").expect("positive integer is valid"),
+            5
+        );
+        // Empty falls back to a positive default derived from available cores.
+        assert!(parse_max_concurrent_crypto("").expect("empty uses default") >= 1);
+        assert!(parse_max_concurrent_crypto("  ").expect("blank uses default") >= 1);
+        parse_max_concurrent_crypto("0").expect_err("zero is rejected");
+        parse_max_concurrent_crypto("abc").expect_err("non-numeric is rejected");
+        parse_max_concurrent_crypto(&usize::MAX.to_string())
+            .expect_err("value above the semaphore maximum is rejected");
     }
 
     #[test]

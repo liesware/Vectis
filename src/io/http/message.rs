@@ -1,7 +1,7 @@
 use super::HttpState;
 use super::error::{ErrorResponse, error_response};
 use super::extract::JsonBody;
-use crate::core::{audit, metrics};
+use crate::core::{audit, blocking, metrics};
 use crate::ops;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -352,7 +352,7 @@ pub async fn decrypt_endpoint(
             )
         })?;
 
-    match ops::message::decrypt_message(prepared) {
+    match blocking::spawn_blocking_crypto(move || ops::message::decrypt_message(prepared)).await {
         Ok(output) => {
             audit::operation_success(
                 "message.decrypt.success",
@@ -463,7 +463,9 @@ pub async fn internal_encrypt_endpoint(
             )
         })?;
 
-    match ops::message::encrypt_internal_message(prepared) {
+    match blocking::spawn_blocking_crypto(move || ops::message::encrypt_internal_message(prepared))
+        .await
+    {
         Ok(output) => {
             audit::operation_success(
                 AUDIT_MESSAGE_INTERNAL_ENCRYPT_SUCCESS,
@@ -574,7 +576,9 @@ pub async fn internal_decrypt_endpoint(
             )
         })?;
 
-    match ops::message::decrypt_internal_message(prepared) {
+    match blocking::spawn_blocking_crypto(move || ops::message::decrypt_internal_message(prepared))
+        .await
+    {
         Ok(output) => {
             audit::operation_success(
                 AUDIT_MESSAGE_INTERNAL_DECRYPT_SUCCESS,
