@@ -67,10 +67,10 @@ fuzz_target!(|data: &[u8]| {
     // return the exact plaintext. A rejection from encrypt is not a bug (the
     // profile legitimately constrains its domain); a failed decrypt or a
     // mismatch is.
-    let Ok(ciphertext) = fpe::fpe_encrypt(profile, &plaintext) else {
+    let Ok(ciphertext) = fpe::fpe_encrypt(&profile, &plaintext) else {
         return;
     };
     let recovered =
-        fpe::fpe_decrypt(profile, &ciphertext).expect("decrypt of our own ciphertext must succeed");
+        fpe::fpe_decrypt(&profile, &ciphertext).expect("decrypt of our own ciphertext must succeed");
     assert_eq!(recovered, plaintext, "FPE roundtrip must preserve the plaintext");
 });

@@ -33,6 +33,7 @@ pub fn fuzz_config() -> config::AppConfig {
         crypto_policy: String::from("profile-only"),
         plaintext_message: String::new(),
         metrics_enabled: true,
+        max_concurrent_crypto: 8,
     }
 }
 

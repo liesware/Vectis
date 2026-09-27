@@ -57,12 +57,12 @@ fuzz_target!(|data: &[u8]| {
     let plaintext =
         String::from_utf8_lossy(&tail[..tail.len().min(profile.max_plaintext_len())]).into_owned();
 
-    let Ok(commitment) = commitments::compute_commitment(profile, &opening, &plaintext) else {
+    let Ok(commitment) = commitments::compute_commitment(&profile, &opening, &plaintext) else {
         return;
     };
 
     // verify: the commitment is deterministic in its inputs.
-    let recomputed = commitments::compute_commitment(profile, &opening, &plaintext)
+    let recomputed = commitments::compute_commitment(&profile, &opening, &plaintext)
         .expect("recomputing a valid commitment must succeed");
     assert_eq!(
         commitment, recomputed,
@@ -71,7 +71,7 @@ fuzz_target!(|data: &[u8]| {
 
     // binding: perturbing the plaintext must change the tag.
     let perturbed = format!("{plaintext}\u{0}");
-    if let Ok(other) = commitments::compute_commitment(profile, &opening, &perturbed) {
+    if let Ok(other) = commitments::compute_commitment(&profile, &opening, &perturbed) {
         assert_ne!(
             commitment, other,
             "commitment must bind: a different plaintext must change the tag"

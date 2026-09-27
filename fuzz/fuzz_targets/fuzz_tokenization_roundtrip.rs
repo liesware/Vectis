@@ -70,10 +70,10 @@ fuzz_target!(|data: &[u8]| {
         created_at: String::from("2026-01-01T00:00:00Z"),
     };
 
-    let Ok(encoded) = tokenization::encrypt_token_data(profile, HASHID, &payload) else {
+    let Ok(encoded) = tokenization::encrypt_token_data(&profile, HASHID, &payload) else {
         return;
     };
-    let recovered = tokenization::decrypt_token_data(profile, HASHID, &encoded)
+    let recovered = tokenization::decrypt_token_data(&profile, HASHID, &encoded)
         .expect("decrypt of our own token data must succeed");
 
     assert_eq!(
