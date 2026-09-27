@@ -4,12 +4,11 @@ This changelog records notable public changes to Vectis. It is maintained
 manually for releases; the Git history remains the detailed engineering record.
 
 ## Unreleased
-
 Changes staged for v0.9.0, the first official release.
 
 ### Security
-
 - Updated rustls to 0.23.45 to address RUSTSEC-2026-0285.
+- Config key material (`ConfigKeySource`/`ConfigKeySources`) is now zeroized on drop.
 
 ### Performance
 - Key reload no longer decrypts keys sequentially on the async runtime. Keys are now
@@ -23,6 +22,15 @@ Changes staged for v0.9.0, the first official release.
   limit are rejected with `429 Too Many Requests`. Key-set loading at startup and on
   reload now decrypts keys concurrently instead of sequentially, and the three internal
   message endpoints no longer block the async runtime.  
+
+### Reliability & Observability
+- Operational key loading now reports a load summary. `POST /keys/reload` returns a
+  `partial` result (instead of `success`) when some keys fail to load, and per-reason
+  failure counts are exported via the `vectis_key_load_failures_total` and
+  `vectis_keys_load_skipped` metrics — partial key sets are no longer silent.
+- The reload response, key count, gauges, and audit event are now derived from a single
+  consistent snapshot of the just-loaded key set (fixes a read-after-write race under
+  concurrent reloads).
 
 ## Main
 - Update from 1.97.1 to 1.98
