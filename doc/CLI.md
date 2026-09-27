@@ -536,6 +536,12 @@ vectis keys reload
 `keys reload` is explicit. It reloads local key state from storage into the node.
 It is not a cluster-wide operation.
 
+Reload is resilient per key: valid keys remain available when another stored row
+cannot be decrypted or validated. The command still succeeds and prints the keys
+that were loaded. Operators must use the node logs, the `key.reload.partial`
+audit event, and the `vectis_keys_load_skipped` and
+`vectis_key_load_failures_total` metrics to detect and investigate omissions.
+
 `keys create` only exposes `--tag` and `--profile`. It does not expose every
 HTTP field on purpose. Profile selection is the supported CLI path.
 

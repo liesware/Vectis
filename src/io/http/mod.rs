@@ -6,7 +6,7 @@ use axum::routing::{get, post};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 mod app;
 mod auth;
@@ -43,14 +43,12 @@ use crate::error::DynError;
 use crate::ops::init::{InitValidationOutput, ValidatedInitState};
 use crate::ops::internal_keys::InternalDerivedKeysState;
 use crate::ops::keys::{KeysDbState, LoadedOpsKey};
+pub use app::run;
 use commitments::{
     create_batch_endpoint as commit_create_batch_endpoint,
     verify_batch_endpoint as commit_verify_batch_endpoint,
 };
 use metrics_exporter_prometheus::PrometheusHandle;
-use zeroize::Zeroize;
-
-pub use app::run;
 
 struct ConfigKeySource {
     symmetric_key_hex: String,
@@ -67,6 +65,12 @@ struct ConfigKeySources {
 enum ConfigReloadOutcome {
     Applied,
     StaleSignatureKeptPrevious,
+}
+
+struct KeysReloadOutcome {
+    summary: crate::ops::keys::KeysLoadSummary,
+    response: crate::ops::keys::ListKeysPropertiesOutput,
+    keys_count: usize,
 }
 
 const STALE_CONFIG_SIGNATURE_WARNING: &str =
@@ -163,6 +167,14 @@ impl Zeroize for ConfigKeySource {
     }
 }
 
+impl Drop for ConfigKeySource {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for ConfigKeySource {}
+
 impl Zeroize for ConfigKeySources {
     fn zeroize(&mut self) {
         for (mut kid, mut source) in self.by_kid.drain() {
@@ -171,6 +183,14 @@ impl Zeroize for ConfigKeySources {
         }
     }
 }
+
+impl Drop for ConfigKeySources {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for ConfigKeySources {}
 
 #[derive(Clone)]
 pub struct HttpState {
@@ -306,7 +326,6 @@ impl HttpState {
         let config = Arc::clone(&self.config);
         let init_state = (*self.init_state).clone();
         let reload_result = blocking::spawn_blocking_unbounded(move || {
-            let config_key_sources = Zeroizing::new(config_key_sources);
             crate::core::config_file::reload_config_state(
                 &config,
                 |config_path, config_content| {
@@ -469,13 +488,20 @@ impl HttpState {
             .await
     }
 
-    async fn reload_keys_db_state(&self) -> Result<(), DynError> {
+    async fn reload_keys_db_state(&self) -> Result<KeysReloadOutcome, DynError> {
         let reloaded =
             crate::ops::keys::load_keys_db_state(self.storage(), &self.internal_keys).await?;
+        let (reloaded, summary) = reloaded.into_parts();
+        let response = crate::ops::keys::list_keys_properties_from_state(&reloaded);
+        let keys_count = reloaded.len();
         let mut keys_db_state = self.keys_db_state.write().await;
         *keys_db_state = reloaded;
 
-        Ok(())
+        Ok(KeysReloadOutcome {
+            summary,
+            response,
+            keys_count,
+        })
     }
 }
 
@@ -761,6 +787,14 @@ mod tests {
 
         sources.zeroize();
         assert!(sources.by_kid.is_empty());
+    }
+
+    #[test]
+    fn config_key_sources_zeroize_on_drop() {
+        fn assert_zeroize_on_drop<T: ZeroizeOnDrop>() {}
+
+        assert_zeroize_on_drop::<ConfigKeySource>();
+        assert_zeroize_on_drop::<ConfigKeySources>();
     }
 
     #[test]

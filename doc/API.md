@@ -245,7 +245,7 @@ were valid but did not meet the signed policy.
 
 ### GET /metrics
 
-Prometheus metrics in the text exposition format (`text/plain; version=0.0.4`). Requires auth with root, `admin`, or the `metrics` permission. Enabled by `VECTIS_METRICS_ENABLED` (default `true`); returns `404` when disabled after auth succeeds. Labels are low cardinality and carry no sensitive data. Current labels are limited to stable dimensions such as `method`, `endpoint` route template, `status`, `outcome`, `operation`, and `result`.
+Prometheus metrics in the text exposition format (`text/plain; version=0.0.4`). Requires auth with root, `admin`, or the `metrics` permission. Enabled by `VECTIS_METRICS_ENABLED` (default `true`); returns `404` when disabled after auth succeeds. Labels are low cardinality and carry no sensitive data. Current labels are limited to stable dimensions such as `method`, `endpoint` route template, `status`, `outcome`, `operation`, `reason`, and `result`.
 
 Exposed metrics:
 
@@ -266,7 +266,9 @@ Exposed metrics:
 - `vectis_permission_total{result}` (`allow` or `deny`)
 - `vectis_config_reload_total{result}` (`success`, `stale`, or `failed`)
 - `vectis_config_last_reload_timestamp_seconds{result}` (`success`, `stale`, or `failed`)
-- `vectis_keys_reload_total{result}` (`success` or `failed`)
+- `vectis_keys_reload_total{result}` (`success`, `partial`, or `failed`)
+- `vectis_key_load_failures_total{reason}` (`decrypt_or_validate`, `task_panic`, `task_cancelled`, or `task_join`)
+- `vectis_keys_load_skipped` (keys omitted by the most recently completed key-set load attempt)
 - `vectis_message_total{operation,result}` (`send`, `receive`, or `decrypt`; `success`, `denied`, or `failed`)
 - `vectis_crypto_operation_total{operation,result}` (`sign`, `verify`, `encrypt`, `decrypt`, `fpe_encrypt`, `fpe_decrypt`, `fpe_encrypt_batch`, `fpe_decrypt_batch`, `token_encode`, `token_decode`, `token_encode_batch`, `token_decode_batch`, `mac_create`, `mac_verify`, `mac_create_batch`, `mac_verify_batch`, `commit_create`, `commit_verify`, `commit_create_batch`, `commit_verify_batch`, `share_split`, `share_combine`, `index_create`, `index_verify`, `index_create_batch`, `index_verify_batch`, `mask`, or `mask_batch`; `success` or `failed`)
 
@@ -417,6 +419,14 @@ Response:
 ### POST /keys/reload
 
 Administrative refresh operation. Reloads the local in-memory key state from storage, decrypting the keys and properties this node can load, then returns the refreshed state with properties.
+
+The operation is intentionally resilient per key. A row that cannot be decrypted
+or validated is omitted while other valid keys are installed, and the endpoint
+still returns `200` with the keys that were loaded. Vectis logs the affected KID
+and an internal cause, emits the `key.reload.partial` audit event, increments
+`vectis_key_load_failures_total{reason}`, sets `vectis_keys_load_skipped`, and
+records `vectis_keys_reload_total{result="partial"}`. Failure causes and KIDs are
+not added to the response or metric labels.
 
 This endpoint uses `POST` because it changes server memory state.
 

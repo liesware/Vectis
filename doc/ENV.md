@@ -365,7 +365,7 @@ Logging is JSON by default. With `VECTIS_LOG_TARGET=file`, operational events go
 The Helm chart sets `VECTIS_LOG_TARGET=stdout` by default because Kubernetes
 expects containers to write logs to stdout/stderr.
 
-Audit events use stable event names such as `auth.success`, `permission.denied`, `config.reload.success`, `config.reload.stale`, `key.lifecycle.changed`, `message.send.failed`, `message.internal.encrypt.success`, `message.internal.decrypt.success`, and `sign.success`. `message.send.*` is reserved for remote message sends. `message.internal.encrypt.*` and `message.internal.decrypt.*` are reserved for local internal message encryption and decryption. Audit records include logical identity fields such as `actor`, `actor_fp`, `root`, `admin`, `kid`, `remote_kid`, `action`, `outcome`, and `reason`. They must not include plaintext, ciphertext, API keys, unseal keys, private keys, or full sensitive payloads.
+Audit events use stable event names such as `auth.success`, `permission.denied`, `config.reload.success`, `config.reload.stale`, `key.reload.success`, `key.reload.partial`, `key.lifecycle.changed`, `message.send.failed`, `message.internal.encrypt.success`, `message.internal.decrypt.success`, and `sign.success`. `message.send.*` is reserved for remote message sends. `message.internal.encrypt.*` and `message.internal.decrypt.*` are reserved for local internal message encryption and decryption. Audit records include logical identity fields such as `actor`, `actor_fp`, `root`, `admin`, `kid`, `remote_kid`, `action`, `outcome`, and `reason`. They must not include plaintext, ciphertext, API keys, unseal keys, private keys, or full sensitive payloads.
 
 ## Observability
 
@@ -373,7 +373,7 @@ Audit events use stable event names such as `auth.success`, `permission.denied`,
 | --- | --- | --- | --- |
 | `VECTIS_METRICS_ENABLED` | `true` | `true` or `false` | Enable the Prometheus `/metrics` endpoint. The endpoint requires `X-API-Key` with root, `admin`, or `metrics` permission. When `false`, authorized requests return `404`. |
 
-Metrics include runtime gauges for unsealed state and loaded keys/routes/permissions, counters for auth and permission decisions, config/key reload results, message send/receive/decrypt results, and cryptographic sign/verify/encrypt/decrypt/FPE results. Labels are intentionally low cardinality and must not include KIDs, API keys, actors, remote addresses, plaintext, ciphertext, or free-form errors.
+Metrics include runtime gauges for unsealed state and loaded keys/routes/permissions, counters for auth and permission decisions, config/key reload results, operational-key load failures, message send/receive/decrypt results, and cryptographic sign/verify/encrypt/decrypt/FPE results. `vectis_keys_load_skipped` reports omissions from the most recent key-set load, while `vectis_key_load_failures_total{reason}` aggregates bounded failure categories. Labels are intentionally low cardinality and must not include KIDs, API keys, actors, remote addresses, plaintext, ciphertext, or free-form errors.
 
 ## Hostnames
 

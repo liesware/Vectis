@@ -605,8 +605,16 @@ vectis_commitment_profiles_loaded
 vectis_sharing_profiles_loaded
 vectis_masking_profiles_loaded
 vectis_config_reload_total
+vectis_keys_reload_total
+vectis_key_load_failures_total
+vectis_keys_load_skipped
 vectis_message_total
 ```
+
+A non-zero `vectis_keys_load_skipped` means the most recent key-set load was
+partial. Correlate it with `vectis_key_load_failures_total{reason}` and the
+operational log entries that identify each omitted KID. KIDs are deliberately
+excluded from metric labels.
 
 ### Recovery
 

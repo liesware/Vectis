@@ -502,8 +502,17 @@ that recovery automatically.
 
 Metrics are Prometheus-compatible. Labels must stay low-cardinality. Allowed
 labels are stable dimensions such as method, endpoint route template, status,
-operation, outcome, and result. Labels must not include KIDs, API keys, actors,
+operation, outcome, reason, and result. Labels must not include KIDs, API keys, actors,
 remote addresses, free-form errors, plaintext, or ciphertext.
+
+Operational-key loading is resilient per row. Decrypt or validation failures and
+blocking-task failures omit only the affected KID. Logs identify that KID and the
+internal cause, while metrics aggregate bounded categories through
+`vectis_key_load_failures_total{reason}` and expose the latest omission count in
+`vectis_keys_load_skipped`. The bounded reasons are `decrypt_or_validate`,
+`task_panic`, `task_cancelled`, and `task_join`; KIDs must never become metric
+labels. Explicit partial reloads use `vectis_keys_reload_total{result="partial"}`
+and the `key.reload.partial` audit event.
 
 ## Error Boundary
 

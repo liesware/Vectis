@@ -300,7 +300,7 @@ pub async fn refresh_endpoint(
         endpoint = "POST /keys/reload",
         "keys reload request accepted"
     );
-    state.reload_keys_db_state().await.map_err(|err| {
+    let outcome = state.reload_keys_db_state().await.map_err(|err| {
         metrics::record_keys_reload("failed");
         audit::operation_failed(
             "key.reload.failed",
@@ -312,32 +312,42 @@ pub async fn refresh_endpoint(
         );
         error_response(err.as_ref())
     })?;
-    let (response, keys_count) = state
-        .with_keys_db_state(|keys_db_state| {
-            (
-                ops::keys::list_keys_properties_from_state(keys_db_state),
-                keys_db_state.len(),
-            )
-        })
-        .await;
     let config = state.config_snapshot().await;
-    HttpState::set_loaded_gauges(&config, keys_count);
-    metrics::record_keys_reload("success");
+    HttpState::set_loaded_gauges(&config, outcome.keys_count);
+    debug_assert_eq!(outcome.summary.loaded(), outcome.keys_count);
+    let (reload_result, audit_event) = reload_outcome(outcome.summary.skipped());
+    metrics::record_keys_reload(reload_result);
     info!(
         endpoint = "POST /keys/reload",
-        keys_count, "keys reload response ready"
+        keys_count = outcome.keys_count,
+        skipped = outcome.summary.skipped(),
+        reload_result,
+        "keys reload response ready"
     );
-    audit::operation_success(
-        "key.reload.success",
-        Some(&actor),
-        None,
-        None,
-        Some("admin"),
-    );
+    audit::operation_success(audit_event, Some(&actor), None, None, Some("admin"));
 
-    Ok(Json(response))
+    Ok(Json(outcome.response))
+}
+
+fn reload_outcome(skipped: usize) -> (&'static str, &'static str) {
+    if skipped == 0 {
+        ("success", "key.reload.success")
+    } else {
+        ("partial", "key.reload.partial")
+    }
 }
 
 fn request_status(request: &ops::keys::UpdateLifecycleInput) -> &str {
     request.status()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reload_outcome;
+
+    #[test]
+    fn reload_outcome_distinguishes_complete_and_partial_loads() {
+        assert_eq!(reload_outcome(0), ("success", "key.reload.success"));
+        assert_eq!(reload_outcome(1), ("partial", "key.reload.partial"));
+    }
 }

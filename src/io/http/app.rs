@@ -31,7 +31,8 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
     let internal_keys = Arc::new(Zeroizing::new(
         crate::ops::internal_keys::InternalDerivedKeysState::from_init_state(&init_state)?,
     ));
-    let keys_db_state = keys::load_keys_db_state(&storage, &internal_keys).await?;
+    let keys_load = keys::load_keys_db_state(&storage, &internal_keys).await?;
+    let (keys_db_state, _) = keys_load.into_parts();
     let config_state = crate::core::config_file::load_config_state(
         &config,
         |config_path, config_content| {

@@ -1,5 +1,5 @@
 use crate::core::validation::{aad_field, parse_aad_fields};
-use crate::core::{blocking, config, crypto, storage::StorageState, validation};
+use crate::core::{blocking, config, crypto, metrics, storage::StorageState, validation};
 use crate::error::DynError;
 use crate::ops::internal_keys::InternalDerivedKeysState;
 use crate::ops::key_material::{
@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::task::JoinSet;
-use tracing::{error, info};
+use tokio::task::{Id, JoinSet};
+use tracing::{error, info, warn};
 use zeroize::{Zeroize, Zeroizing};
 
 pub(crate) type OpsKeysOutput = KeyMaterialOutput;
@@ -28,6 +28,97 @@ const LIFECYCLE_STATUSES: &[&str] = &["active", "disabled", "retired", "compromi
 pub struct KeysDbState {
     keys_db: Vec<Arc<LoadedOpsKey>>,
     by_id: HashMap<String, usize>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct KeysLoadSummary {
+    total: usize,
+    loaded: usize,
+    decrypt_or_validate_failed: usize,
+    task_panicked: usize,
+    task_cancelled: usize,
+    task_join_failed: usize,
+}
+
+impl KeysLoadSummary {
+    pub(crate) fn loaded(&self) -> usize {
+        self.loaded
+    }
+
+    pub(crate) fn skipped(&self) -> usize {
+        self.decrypt_or_validate_failed
+            + self.task_panicked
+            + self.task_cancelled
+            + self.task_join_failed
+    }
+
+    fn record_failure(&mut self, reason: KeyLoadFailureReason) {
+        match reason {
+            KeyLoadFailureReason::DecryptOrValidate => self.decrypt_or_validate_failed += 1,
+            KeyLoadFailureReason::TaskPanic => self.task_panicked += 1,
+            KeyLoadFailureReason::TaskCancelled => self.task_cancelled += 1,
+            KeyLoadFailureReason::TaskJoin => self.task_join_failed += 1,
+        }
+    }
+
+    fn record_metrics(&self) {
+        metrics::record_key_load_failures(
+            KeyLoadFailureReason::DecryptOrValidate.as_str(),
+            self.decrypt_or_validate_failed,
+        );
+        metrics::record_key_load_failures(
+            KeyLoadFailureReason::TaskPanic.as_str(),
+            self.task_panicked,
+        );
+        metrics::record_key_load_failures(
+            KeyLoadFailureReason::TaskCancelled.as_str(),
+            self.task_cancelled,
+        );
+        metrics::record_key_load_failures(
+            KeyLoadFailureReason::TaskJoin.as_str(),
+            self.task_join_failed,
+        );
+        metrics::set_keys_load_skipped(self.skipped());
+    }
+}
+
+pub(crate) struct KeysDbLoad {
+    state: Zeroizing<KeysDbState>,
+    summary: KeysLoadSummary,
+}
+
+impl KeysDbLoad {
+    pub(crate) fn into_parts(self) -> (Zeroizing<KeysDbState>, KeysLoadSummary) {
+        (self.state, self.summary)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum KeyLoadFailureReason {
+    DecryptOrValidate,
+    TaskPanic,
+    TaskCancelled,
+    TaskJoin,
+}
+
+impl KeyLoadFailureReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::DecryptOrValidate => "decrypt_or_validate",
+            Self::TaskPanic => "task_panic",
+            Self::TaskCancelled => "task_cancelled",
+            Self::TaskJoin => "task_join",
+        }
+    }
+
+    fn task_cause(self) -> &'static str {
+        match self {
+            Self::DecryptOrValidate => "key decryption or validation failed",
+            Self::TaskPanic => "blocking key loader task panicked",
+            Self::TaskCancelled => "blocking key loader task was cancelled",
+            Self::TaskJoin => "blocking key loader task could not be joined",
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -672,58 +763,145 @@ pub fn parse_update_lifecycle_input(request: Value) -> Result<UpdateLifecycleInp
 }
 
 type KeyLoadOutcome = (usize, Result<LoadedOpsKey, (String, DynError)>);
+type KeyLoader =
+    Arc<dyn Fn(crate::core::storage::OpsKeyRow) -> Result<LoadedOpsKey, DynError> + Send + Sync>;
 
-pub async fn load_keys_db_state(
+pub(crate) async fn load_keys_db_state(
     storage: &StorageState,
     internal_keys: &Arc<Zeroizing<InternalDerivedKeysState>>,
-) -> Result<Zeroizing<KeysDbState>, DynError> {
+) -> Result<KeysDbLoad, DynError> {
     let rows = storage.list_ops_keys().await?;
     let limit = config::default_crypto_concurrency();
+    let internal_keys = Arc::clone(internal_keys);
+    let loader: KeyLoader = Arc::new(move |row| load_ops_key_from_row(&internal_keys, row));
+
+    Ok(load_keys_from_rows(rows, limit, loader).await)
+}
+
+async fn load_keys_from_rows(
+    rows: Vec<crate::core::storage::OpsKeyRow>,
+    limit: usize,
+    loader: KeyLoader,
+) -> KeysDbLoad {
+    let total = rows.len();
+    let mut summary = KeysLoadSummary {
+        total,
+        ..KeysLoadSummary::default()
+    };
 
     let mut loaded: Vec<Option<Arc<LoadedOpsKey>>> = vec![None; rows.len()];
     let mut pending: JoinSet<KeyLoadOutcome> = JoinSet::new();
+    let mut task_kids = HashMap::<Id, String>::new();
     let mut rows = rows.into_iter().enumerate();
 
-    for (index, row) in rows.by_ref().take(limit) {
-        let internal_keys = Arc::clone(internal_keys);
-        pending.spawn_blocking(move || {
-            let kid = row.kid.clone();
-            (
-                index,
-                load_ops_key_from_row(&internal_keys, row).map_err(|err| (kid, err)),
-            )
-        });
+    for (index, row) in rows.by_ref().take(limit.max(1)) {
+        spawn_key_load(&mut pending, &mut task_kids, &loader, index, row);
     }
 
-    while let Some(joined) = pending.join_next().await {
+    while let Some(joined) = pending.join_next_with_id().await {
         match joined {
-            Ok((index, Ok(loaded_key))) => {
-                info!(kid = %loaded_key.id, "decrypted ops key loaded from db");
-                loaded[index] = Some(Arc::new(loaded_key));
-            }
-            Ok((_, Err((kid, err)))) => {
-                error!(kid = %kid, error = %err, "failed to decrypt ops key from db");
+            Ok((task_id, (index, result))) => {
+                let tracked_kid = take_task_kid(&mut task_kids, task_id);
+                match result {
+                    Ok(loaded_key) => {
+                        info!(kid = %loaded_key.id, "decrypted ops key loaded from db");
+                        loaded[index] = Some(Arc::new(loaded_key));
+                    }
+                    Err((kid, err)) => {
+                        debug_assert_eq!(tracked_kid, kid);
+                        let reason = KeyLoadFailureReason::DecryptOrValidate;
+                        summary.record_failure(reason);
+                        error!(
+                            kid = %kid,
+                            reason = reason.as_str(),
+                            error = %err,
+                            "failed to load ops key from db"
+                        );
+                    }
+                }
             }
             Err(err) => {
-                error!(error = %err, "ops key decryption task failed");
+                let task_id = err.id();
+                let kid = take_task_kid(&mut task_kids, task_id);
+                let reason = classify_join_failure(err.is_panic(), err.is_cancelled());
+                summary.record_failure(reason);
+                error!(
+                    kid = %kid,
+                    reason = reason.as_str(),
+                    cause = reason.task_cause(),
+                    task_id = ?task_id,
+                    "ops key loading task failed"
+                );
             }
         }
 
         if let Some((index, row)) = rows.next() {
-            let internal_keys = Arc::clone(internal_keys);
-            pending.spawn_blocking(move || {
-                let kid = row.kid.clone();
-                (
-                    index,
-                    load_ops_key_from_row(&internal_keys, row).map_err(|err| (kid, err)),
-                )
-            });
+            spawn_key_load(&mut pending, &mut task_kids, &loader, index, row);
         }
     }
 
-    let keys_db = loaded.into_iter().flatten().collect();
+    debug_assert!(task_kids.is_empty());
+    let keys_db: Vec<_> = loaded.into_iter().flatten().collect();
+    summary.loaded = keys_db.len();
+    debug_assert_eq!(summary.total, summary.loaded + summary.skipped());
+    summary.record_metrics();
 
-    Ok(Zeroizing::new(KeysDbState::from_keys(keys_db)))
+    if summary.skipped() == 0 {
+        info!(
+            total = summary.total,
+            loaded = summary.loaded,
+            skipped = 0,
+            "operational key set loaded"
+        );
+    } else {
+        warn!(
+            total = summary.total,
+            loaded = summary.loaded,
+            skipped = summary.skipped(),
+            decrypt_or_validate_failed = summary.decrypt_or_validate_failed,
+            task_panicked = summary.task_panicked,
+            task_cancelled = summary.task_cancelled,
+            task_join_failed = summary.task_join_failed,
+            "operational key set loaded partially"
+        );
+    }
+
+    KeysDbLoad {
+        state: Zeroizing::new(KeysDbState::from_keys(keys_db)),
+        summary,
+    }
+}
+
+fn spawn_key_load(
+    pending: &mut JoinSet<KeyLoadOutcome>,
+    task_kids: &mut HashMap<Id, String>,
+    loader: &KeyLoader,
+    index: usize,
+    row: crate::core::storage::OpsKeyRow,
+) {
+    let kid = row.kid.clone();
+    let loader = Arc::clone(loader);
+    let handle = pending.spawn_blocking(move || {
+        let failed_kid = row.kid.clone();
+        (index, loader(row).map_err(|err| (failed_kid, err)))
+    });
+    task_kids.insert(handle.id(), kid);
+}
+
+fn take_task_kid(task_kids: &mut HashMap<Id, String>, task_id: Id) -> String {
+    task_kids
+        .remove(&task_id)
+        .unwrap_or_else(|| String::from("<unknown>"))
+}
+
+fn classify_join_failure(is_panic: bool, is_cancelled: bool) -> KeyLoadFailureReason {
+    if is_panic {
+        KeyLoadFailureReason::TaskPanic
+    } else if is_cancelled {
+        KeyLoadFailureReason::TaskCancelled
+    } else {
+        KeyLoadFailureReason::TaskJoin
+    }
 }
 
 pub(crate) async fn load_keys_db_entry(
@@ -1335,6 +1513,175 @@ mod tests {
         loaded_key.id = id.to_string();
 
         loaded_key
+    }
+
+    fn stored_key_row(id: &str) -> crate::core::storage::OpsKeyRow {
+        crate::core::storage::OpsKeyRow {
+            kid: id.to_string(),
+            keys: String::from("encrypted-keys"),
+            properties: String::from("encrypted-properties"),
+        }
+    }
+
+    #[tokio::test]
+    async fn key_set_load_reports_complete_summary_and_preserves_order() {
+        let ids = ["a".repeat(64), "b".repeat(64), "c".repeat(64)];
+        let rows = ids.iter().map(|id| stored_key_row(id)).collect();
+        let loader: KeyLoader =
+            Arc::new(|row| Ok(loaded_key_with_id_and_lifecycle(&row.kid, "active")));
+
+        let load = load_keys_from_rows(rows, 2, loader).await;
+        let (state, summary) = load.into_parts();
+        let loaded_ids: Vec<_> = state
+            .keys_db
+            .iter()
+            .map(|loaded_key| loaded_key.id.as_str())
+            .collect();
+
+        assert_eq!(
+            loaded_ids,
+            ids.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+        assert_eq!(summary.total, 3);
+        assert_eq!(summary.loaded, 3);
+        assert_eq!(summary.skipped(), 0);
+    }
+
+    #[tokio::test]
+    async fn key_set_load_skips_decrypt_failure_and_keeps_valid_rows_in_order() {
+        let first = "a".repeat(64);
+        let failed = "b".repeat(64);
+        let last = "c".repeat(64);
+        let rows = [&first, &failed, &last]
+            .into_iter()
+            .map(|id| stored_key_row(id))
+            .collect();
+        let failed_for_loader = failed.clone();
+        let loader: KeyLoader = Arc::new(move |row| {
+            if row.kid == failed_for_loader {
+                return Err(crate::error::invalid_input("synthetic decrypt failure"));
+            }
+
+            Ok(loaded_key_with_id_and_lifecycle(&row.kid, "active"))
+        });
+
+        let load = load_keys_from_rows(rows, 2, loader).await;
+        let (state, summary) = load.into_parts();
+        let loaded_ids: Vec<_> = state
+            .keys_db
+            .iter()
+            .map(|loaded_key| loaded_key.id.as_str())
+            .collect();
+
+        assert_eq!(loaded_ids, vec![first.as_str(), last.as_str()]);
+        assert_eq!(summary.total, 3);
+        assert_eq!(summary.loaded, 2);
+        assert_eq!(summary.decrypt_or_validate_failed, 1);
+        assert_eq!(summary.skipped(), 1);
+    }
+
+    #[tokio::test]
+    async fn key_set_load_attributes_panics_without_stopping_remaining_rows() {
+        let first = "a".repeat(64);
+        let panicking = "b".repeat(64);
+        let last = "c".repeat(64);
+        let rows = [&first, &panicking, &last]
+            .into_iter()
+            .map(|id| stored_key_row(id))
+            .collect();
+        let panicking_for_loader = panicking.clone();
+        let loader: KeyLoader = Arc::new(move |row| {
+            assert_ne!(row.kid, panicking_for_loader, "synthetic loader panic");
+            Ok(loaded_key_with_id_and_lifecycle(&row.kid, "active"))
+        });
+
+        let load = load_keys_from_rows(rows, 2, loader).await;
+        let (state, summary) = load.into_parts();
+        let loaded_ids: Vec<_> = state
+            .keys_db
+            .iter()
+            .map(|loaded_key| loaded_key.id.as_str())
+            .collect();
+
+        assert_eq!(loaded_ids, vec![first.as_str(), last.as_str()]);
+        assert_eq!(summary.total, 3);
+        assert_eq!(summary.loaded, 2);
+        assert_eq!(summary.task_panicked, 1);
+        assert_eq!(summary.skipped(), 1);
+    }
+
+    #[tokio::test]
+    async fn task_kid_registry_is_drained_when_a_task_completes() {
+        let kid = "a".repeat(64);
+        let mut pending = JoinSet::new();
+        let handle = pending.spawn(async {});
+        let task_id = handle.id();
+        let mut task_kids = HashMap::from([(task_id, kid.clone())]);
+
+        let (joined_id, ()) = pending
+            .join_next_with_id()
+            .await
+            .expect("task must complete")
+            .expect("task must not fail");
+
+        assert_eq!(joined_id, task_id);
+        assert_eq!(take_task_kid(&mut task_kids, joined_id), kid);
+        assert!(task_kids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn cancelled_task_remains_attributable_to_its_kid() {
+        let kid = "a".repeat(64);
+        let mut pending = JoinSet::new();
+        let handle = pending.spawn(async { std::future::pending::<()>().await });
+        let task_id = handle.id();
+        let mut task_kids = HashMap::from([(task_id, kid.clone())]);
+        handle.abort();
+
+        let err = pending
+            .join_next_with_id()
+            .await
+            .expect("cancelled task must complete")
+            .expect_err("aborted task must return a join error");
+
+        assert_eq!(err.id(), task_id);
+        assert_eq!(
+            classify_join_failure(err.is_panic(), err.is_cancelled()),
+            KeyLoadFailureReason::TaskCancelled
+        );
+        assert_eq!(take_task_kid(&mut task_kids, err.id()), kid);
+        assert!(task_kids.is_empty());
+    }
+
+    #[test]
+    fn join_failures_use_bounded_metric_categories() {
+        assert_eq!(
+            classify_join_failure(true, false),
+            KeyLoadFailureReason::TaskPanic
+        );
+        assert_eq!(
+            classify_join_failure(false, true),
+            KeyLoadFailureReason::TaskCancelled
+        );
+        assert_eq!(
+            classify_join_failure(false, false),
+            KeyLoadFailureReason::TaskJoin
+        );
+        assert_eq!(
+            [
+                KeyLoadFailureReason::DecryptOrValidate,
+                KeyLoadFailureReason::TaskPanic,
+                KeyLoadFailureReason::TaskCancelled,
+                KeyLoadFailureReason::TaskJoin,
+            ]
+            .map(KeyLoadFailureReason::as_str),
+            [
+                "decrypt_or_validate",
+                "task_panic",
+                "task_cancelled",
+                "task_join",
+            ]
+        );
     }
 
     #[test]

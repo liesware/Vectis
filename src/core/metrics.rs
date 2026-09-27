@@ -9,6 +9,8 @@ const VECTIS_CONFIG_RELOAD_TOTAL: &str = "vectis_config_reload_total";
 const VECTIS_CONFIG_LAST_RELOAD_TIMESTAMP_SECONDS: &str =
     "vectis_config_last_reload_timestamp_seconds";
 const VECTIS_KEYS_RELOAD_TOTAL: &str = "vectis_keys_reload_total";
+const VECTIS_KEY_LOAD_FAILURES_TOTAL: &str = "vectis_key_load_failures_total";
+const VECTIS_KEYS_LOAD_SKIPPED: &str = "vectis_keys_load_skipped";
 const VECTIS_MESSAGE_TOTAL: &str = "vectis_message_total";
 const VECTIS_CRYPTO_OPERATION_TOTAL: &str = "vectis_crypto_operation_total";
 
@@ -113,6 +115,19 @@ pub fn set_config_last_reload_timestamp(result: &str, timestamp_seconds: f64) {
 
 pub fn record_keys_reload(result: &str) {
     counter!(VECTIS_KEYS_RELOAD_TOTAL, "result" => result.to_string()).increment(1);
+}
+
+pub fn record_key_load_failures(reason: &str, count: usize) {
+    if count == 0 {
+        return;
+    }
+
+    counter!(VECTIS_KEY_LOAD_FAILURES_TOTAL, "reason" => reason.to_string())
+        .increment(count as u64);
+}
+
+pub fn set_keys_load_skipped(count: usize) {
+    gauge!(VECTIS_KEYS_LOAD_SKIPPED).set(count as f64);
 }
 
 pub fn record_message(operation: &str, result: &str) {

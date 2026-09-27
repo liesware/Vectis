@@ -181,8 +181,15 @@ Recovery:
 
 ### Storage Corrupt Or Key Not Decryptable
 
-Expected behavior: affected key loads fail. Startup or reload may skip or fail
-depending on the path and error.
+Expected behavior: a stored operational-key row that cannot be decrypted or
+validated is omitted while the remaining valid rows are loaded. Startup and an
+explicit key reload preserve this partial availability. Vectis identifies the
+affected KID and cause in internal logs, records aggregate failures in
+`vectis_key_load_failures_total{reason}`, and publishes the most recent omission
+count in `vectis_keys_load_skipped`. An explicit partial reload emits
+`key.reload.partial` and still returns `200` with the loaded keys. A signed config
+that references an omitted KID can still make subsequent config validation or
+startup fail closed.
 
 Recovery:
 

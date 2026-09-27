@@ -927,6 +927,7 @@ avoidable interleaving, but stdout is not durable local evidence and does not
 provide universal write atomicity. Audit records are hash-chained locally and
 use stable security event names such as `auth.success`,
 `permission.denied`, `config.reload.failed`, `key.create.success`,
+`key.reload.success`, `key.reload.partial`,
 `message.receive.denied`, `message.internal.encrypt.success`, and
 `verify.failed`. Remote sends use `message.send.*`; local internal encryption
 and decryption use `message.internal.encrypt.*` and
@@ -940,7 +941,8 @@ sensitive payloads.
 Metrics are exposed in Prometheus text format and should avoid sensitive labels.
 Labels should remain low cardinality. Runtime metrics cover unsealed state,
 loaded keys/routes/permissions/profiles, auth and permission decisions,
-config/key reload results, message send/receive/decrypt results, and
+config/key reload results, aggregate key-load failures and omissions,
+message send/receive/decrypt results, and
 cryptographic sign/verify/encrypt/decrypt/FPE/token/MAC/commit/index/mask
 results.
 

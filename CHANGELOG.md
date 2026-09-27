@@ -15,7 +15,9 @@ Changes staged for v0.9.0, the first official release.
 - Key reload no longer decrypts keys sequentially on the async runtime. Keys are now
   decrypted concurrently on the blocking pool with a bounded window, removing head-of-line
   blocking during startup and `POST /keys/reload`. Original key ordering and per-key
-  skip-on-failure behavior are preserved.
+  skip-on-failure behavior are preserved. Partial loads now identify the affected KID and
+  cause in logs, emit aggregate failure and omission metrics, and classify explicit reloads
+  as `partial` in metrics and audit without changing the successful response contract.
 - Cryptographic operations now run on the blocking pool under a global concurrency
   limit (`VECTIS_MAX_CONCURRENT_CRYPTO`, default: CPU cores − 1). Requests beyond the
   limit are rejected with `429 Too Many Requests`. Key-set loading at startup and on
