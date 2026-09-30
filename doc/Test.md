@@ -316,6 +316,46 @@ the step. Both JSON summaries are published for 30 days as
 diversity. Missing reports are identified explicitly. Findings retain their
 existing failure artifact publication.
 
+The fuzz client uses direct HTTP/HTTPS connections with certificate validation,
+without automatic redirects or environment proxies. Each request has a 15-second
+deadline shared by upload and response reading. If the server rejects an upload
+early, the client attempts to read the HTTP response on the same connection after
+a broken pipe or reset; it never resends the request. Only a complete HTTP response
+is accepted. A disconnect without a response remains status `0` and a finding,
+even when a subsequent health probe succeeds.
+
+Findings use `http-fuzz-finding-v2`. The JSON records seeds, case index, transport
+phase, exception type/errno, request byte counts and timing, without arbitrary
+exception messages or authentication headers. Body previews are at most 2,000
+characters and explicitly marked when truncated. Complete request bodies and
+mutated config files are saved only for findings, as sibling `.payload.gz` files;
+multi-request cases may include additional `.request-N.payload.gz` files. Payload
+references include original and stored uncompressed sizes and SHA-256 hashes.
+The declared API key and unseal key are redacted before previews and payloads are
+written. A payload marked `redacted` is not a byte-for-byte reproduction of the
+original. Summaries remain aggregate-only.
+
+Payloads are published before their JSON metadata using atomic file replacement.
+Storage failures propagate; existing artifacts, including historical truncated
+ones, are not overwritten. To inspect a downloaded payload:
+
+```sh
+gzip -dc crash_<target>_<seed>_<index>.payload.gz > request-body.bin
+sha256sum request-body.bin
+```
+
+Compare the uncompressed bytes with `stored_bytes` and `stored_sha256` in the
+JSON, not the hash of the compressed file. Saved payloads may contain synthetic
+sensitive test data; run and retain findings only for disposable laboratories.
+There is no automatic replay command for this format.
+
+`--self-check` includes offline transport and artifact regressions. To also run
+disposable HTTP/HTTPS early-rejection tests (requires OpenSSL and local sockets):
+
+```sh
+uv run python -m unittest discover -s tests/security/fuzz -p test_fuzz_io.py -v
+```
+
 `http_fuzz.py` is only the entry point; the substance lives in sibling modules:
 `targets.py` (the `TARGETS` table, one dict per target, and the runners),
 `seeds.py` / `mutations.py` (domain-aware seed corpora and mutators),

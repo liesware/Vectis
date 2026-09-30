@@ -339,7 +339,7 @@ def run_config(target, client, rng, args, secrets):
         description = {
             "endpoint": "POST /config/reload",
             "mutated_file": target_file,
-            "content": mutated[:2000].decode("latin-1"),
+            "_payload_bytes": mutated,
         }
         aborted = check_and_record("config", client, args, index, status, findings, description, counters)
         CONFIG_PATH.write_bytes(baseline_cfg)
