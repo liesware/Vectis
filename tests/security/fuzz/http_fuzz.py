@@ -106,6 +106,7 @@ def run(args, selected, summary):
         else ""
     )
     secrets = (apikey, unseal)
+    client.declared_secrets = secrets
 
     passed = 0
     failed = 0

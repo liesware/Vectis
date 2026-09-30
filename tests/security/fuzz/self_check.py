@@ -775,11 +775,26 @@ def self_check():
     expect(time_attest_source_unavailable_semantic(time_case), "time attest flags partial source output")
 
     campaign_self_check(expect)
+    io_self_check(expect)
 
     for label in failures:
         print(f"SELF-CHECK FAIL: {label}")
     print(f"SUMMARY self-check passed={total - len(failures)} failed={len(failures)}")
     return 1 if failures else 0
+
+
+def io_self_check(expect):
+    import unittest
+    from test_fuzz_io import ReportingTests, TransportTests
+
+    suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(cls)
+                               for cls in (TransportTests, ReportingTests))
+    output = io.StringIO()
+    with redirect_stdout(output):
+        result = unittest.TextTestRunner(stream=output).run(suite)
+    if not result.wasSuccessful():
+        print(output.getvalue())
+    expect(result.wasSuccessful(), "transport and artifact regression checks")
 
 
 def campaign_self_check(expect):
@@ -833,8 +848,8 @@ def campaign_self_check(expect):
     metrics.record_input("POST", "/self", body)
     metrics.record_input("POST", "/self", body)
     metrics.record_input("POST", "/self", body + b"y")
-    expect(describe("POST", "/self", True, body) == describe("POST", "/self", True, body + b"y"),
-           "campaign test exceeds description truncation")
+    expect(describe("POST", "/self", True, body) != describe("POST", "/self", True, body + b"y"),
+           "campaign descriptions retain complete payload until reporting")
     measured = metrics.summary(True)
     expect(measured["unique_inputs"] == 2 and measured["duplicate_inputs"] == 1,
            "campaign fingerprints complete input")
