@@ -1,18 +1,21 @@
 import json
 from pathlib import Path
 
+from campaign import SEED_DERIVATION
 from oracle import slow_response_findings
 
 
 CORPUS_DIR = Path(__file__).resolve().parent / "fuzz-corpus"
 
 
-def save_crash(target, seed, index, description, findings):
+def save_crash(target, seed, index, description, findings, *, target_seed):
     CORPUS_DIR.mkdir(parents=True, exist_ok=True)
     artifact = CORPUS_DIR / f"crash_{target}_{seed}_{index}.json"
     payload = {
         "target": target,
         "seed": seed,
+        "target_seed": target_seed,
+        "seed_derivation": SEED_DERIVATION,
         "index": index,
         "findings": findings,
         "request": description,
@@ -62,9 +65,10 @@ def check_and_record(
             ),
             2,
         )
+    args.metrics.record_result(status, bool(findings))
     if findings:
         counters["failed"] += 1
-        artifact = save_crash(name, args.seed, index, description, findings)
+        artifact = save_crash(name, args.seed, index, description, findings, target_seed=args.metrics.seed)
         print(f"[{name}] FINDING at #{index}: {findings} -> {artifact}")
         if status == 0 and client.get_status("/healthz/live") != 200:
             print(f"[{name}] server appears down; aborting target")
@@ -75,7 +79,7 @@ def check_and_record(
 
 
 def print_target_start(name, args):
-    print(f"[{name}] start iterations={args.iterations}", flush=True)
+    print(f"[{name}] start iterations={args.iterations} target_seed={args.metrics.seed}", flush=True)
 
 
 def print_target_done(name, counters):

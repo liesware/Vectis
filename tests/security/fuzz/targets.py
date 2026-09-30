@@ -115,11 +115,13 @@ def run_body(target, client, rng, args, secrets):
         path, seed_obj = rng.choice(seeds)
         if rng.random() < 0.3:
             body = mutate_raw(seed_obj, rng)
+            args.metrics.record_input("POST", path, body)
             status, response = client.post_raw(path, body, auth=auth)
             sent_value = _parse(body.decode("utf-8", "replace"))
             description = describe("POST", path, True, body)
         else:
             body = mutate_structured(seed_obj, rng)
+            args.metrics.record_input("POST", path, json.dumps(body).encode("utf-8"))
             status, response = client.post_json(path, body, auth=auth)
             sent_value = body
             description = describe("POST", path, False, body)
@@ -143,6 +145,7 @@ def run_path_param(target, client, rng, args, secrets):
         template, auth = rng.choice(endpoints)
         raw_kid = rng.choice(NASTY_KIDS) if rng.random() < 0.5 else corrupt_string(KID_HEX, rng)
         path = template.format(urllib.parse.quote(raw_kid, safe=""))
+        args.metrics.record_input("GET", path)
         status, response = client.request("GET", path, auth=auth)
         description = {"method": "GET", "path": path[:2000], "kid": raw_kid[:200]}
         findings = oracle(status, response, apikey, unseal, allowed, False, require_json_error=require_json)
@@ -160,12 +163,14 @@ def run_headers(target, client, rng, args, secrets):
     for index in range(args.iterations):
         if rng.random() < 0.5:
             bad_key = rng.choice(BAD_APIKEYS)
+            args.metrics.record_input("GET", "/keys/properties", invalid_headers={"X-API-Key": bad_key})
             status, response = client.request(
                 "GET", "/keys/properties", headers={"X-API-Key": bad_key}
             )
             description = {"mode": "apikey", "apikey_len": len(bad_key)}
         else:
             method = rng.choice(WRONG_METHODS)
+            args.metrics.record_input(method, "/sign/verification", b"{}")
             status, response = client.request(
                 method, "/sign/verification", data=b"{}",
                 headers={"Content-Type": "application/json"},
@@ -327,6 +332,7 @@ def run_config(target, client, rng, args, secrets):
             CONFIG_PATH.write_bytes(baseline_cfg)
             CONFIG_SIGN_PATH.write_bytes(mutated)
             target_file = "config_sign.json"
+        args.metrics.record_input("POST", "/config/reload", mutated, file=target_file)
         status, response = client.post_json("/config/reload", {}, auth=True)
         findings = oracle(status, response, apikey, unseal, ALLOWED_STATUS, False)
         findings.extend(config_semantic(status, response))
@@ -1171,5 +1177,11 @@ TARGETS = [
     ]},
     {"name": "headers", "runner": run_headers, "allowed_status": FRAMEWORK_STATUS},
 ]
+
+for target in TARGETS:
+    target["kind"] = (
+        "mutation" if target["runner"] in (run_body, run_path_param, run_headers, run_config)
+        else "probe" if target["runner"] is run_no_body else "scenario"
+    )
 
 TARGET_NAMES = [t["name"] for t in TARGETS]

@@ -2082,7 +2082,7 @@ mod tests {
         assert!(loaded_key.id.is_empty());
         assert!(loaded_key.aad.is_empty());
         assert!(loaded_key.properties_aad.is_empty());
-        assert!(loaded_key.key_material.hash_variant().is_empty());
+        assert_eq!(loaded_key.key_material.hash_variant(), "SHA-256");
         assert!(
             loaded_key
                 .key_material

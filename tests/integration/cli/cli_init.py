@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from support.vectis import vectis_command
 
 ROOT = Path(__file__).resolve().parents[3]
 SECRET_MARKERS = ("VECTIS_UNSEAL_KEY=", "VECTIS_APIKEY=", "VECTIS_APIKEY_HASH=")
@@ -18,7 +21,7 @@ def run_init(init_keys_file):
     env["VECTIS_INIT_KEYS_FILE"] = str(init_keys_file)
     env["VECTIS_INIT_PUBLIC_KEYS_FILE"] = str(init_public_keys_file(init_keys_file))
     return subprocess.run(
-        ["cargo", "run", "--quiet", "--", "init"],
+        vectis_command(["init"], env=env, quiet=True),
         cwd=ROOT,
         env=env,
         text=True,
@@ -33,7 +36,7 @@ def run_apikey_create(init_keys_file, unseal_key):
     env["VECTIS_INIT_PUBLIC_KEYS_FILE"] = str(init_public_keys_file(init_keys_file))
     env["VECTIS_UNSEAL_KEY"] = unseal_key
     return subprocess.run(
-        ["cargo", "run", "--quiet", "--", "apikey", "create"],
+        vectis_command(["apikey", "create"], env=env, quiet=True),
         cwd=ROOT,
         env=env,
         text=True,

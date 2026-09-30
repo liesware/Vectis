@@ -68,9 +68,39 @@ uv run tests/integration/http/http_all.py \
     --base-url "$VECTIS_API_URL" \
     --apikey "$VECTIS_APIKEY"
 
-uv run tests/security/fuzz/http_fuzz.py \
+uv run tests/security/fuzz/http_fuzz.py --self-check
+
+fuzz_reports="$ci_dir/http-fuzz"
+mkdir -p "$fuzz_reports"
+fuzz_status=0
+if uv run tests/security/fuzz/http_fuzz.py \
     --base-url "$VECTIS_API_URL" \
-    --apikey "$VECTIS_APIKEY"
+    --apikey "$VECTIS_APIKEY" \
+    --seed 1337 --iterations 300 \
+    --summary-json "$fuzz_reports/regression.json"; then
+    :
+else
+    fuzz_status="$?"
+fi
+
+if curl --fail --silent --show-error --max-time 5 "$VECTIS_API_URL/healthz/ready" >/dev/null; then
+    if uv run tests/security/fuzz/http_fuzz.py \
+        --base-url "$VECTIS_API_URL" \
+        --apikey "$VECTIS_APIKEY" \
+        --random-seed --mutation-only --iterations 100 \
+        --summary-json "$fuzz_reports/exploration.json"; then
+        :
+    else
+        fuzz_status="$?"
+    fi
+else
+    printf '%s\n' "Skipping exploratory HTTP fuzz: Vectis is not ready."
+    fuzz_status=1
+fi
+
+if [ "$fuzz_status" -ne 0 ]; then
+    exit "$fuzz_status"
+fi
 
 uv sync --locked --group fuzz
 

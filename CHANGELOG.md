@@ -6,9 +6,26 @@ manually for releases; the Git history remains the detailed engineering record.
 ## Unreleased
 Changes staged for v0.9.0, the first official release.
 
+### Testing
+- HTTP fuzz suite: each target now derives its own RNG stream from the root seed
+  (per-target seed isolation), plus a new exploration mode (`--random-seed`,
+  `--mutation-only`) that complements the deterministic seed-1337 regression run,
+  and per-run input-diversity metrics (unique vs. duplicate inputs) written via
+  `--summary-json`.
+- CI runs two HTTP fuzz campaigns — a fixed-seed regression pass and a random-seed
+  exploration pass — and publishes a per-target summary (result, seeds, status
+  distribution, diversity) as a job step summary and a retained artifact.
+- Shared `tests/support` module lets the fuzz and integration harnesses reuse a
+  single prebuilt Vectis binary instead of rebuilding per invocation.
+
 ### Security
 - Updated rustls to 0.23.45 to address RUSTSEC-2026-0285.
 - Config key material (`ConfigKeySource`/`ConfigKeySources`) is now zeroized on drop.
+- Key material now zeroizes on drop at the owning-type level: `KeyMaterialOutput`
+  and `KeyMaterialKeys` derive `Zeroize`/`ZeroizeOnDrop`, so the aggregate that
+  owns secret material wipes it on drop instead of relying on each field's own
+  `Drop`. Public algorithm-identifier metadata (`variant`, hash name) is excluded
+  from zeroization via `#[zeroize(skip)]`.
 
 ### Performance
 - Key reload no longer decrypts keys sequentially on the async runtime. Keys are now

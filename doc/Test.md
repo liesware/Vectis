@@ -130,8 +130,9 @@ The HTTP suite is structured so that adding a case is adding one function:
   execution across modules.
 - `tests/integration/http/lib/` is private to this suite: transport clients,
   assertions, the `HttpTestContext` (`ctx`), configuration transactions,
-  fixtures, and the case runner. No shared cross-suite helper package exists;
-  each suite owns its helpers and must not import another suite's private `lib/`.
+  fixtures, and the case runner. Each suite owns these helpers and must not
+  import another suite's private `lib/`. Only executable resolution is shared
+  through `tests/support/vectis.py`.
 - A case receives `ctx`: `ctx.http` for status-preserving requests, `ctx.client`
   for successful authenticated ones, `ctx.expect`/`ctx.require` for assertions,
   `ctx.set_*`/`ctx.write_config()` for signed-config changes (both config files
@@ -150,8 +151,8 @@ The HTTP suite is structured so that adding a case is adding one function:
   ```
 
   They keep the split from regressing: every declared `CASES` module must be
-  composed by the registry and use the `@cases`/`ctx` model, and no shared
-  `support/` package may reappear.
+  composed by the registry and use the `@cases`/`ctx` model. Shared fixtures and
+  assertions remain forbidden; `support.vectis` is the sole allowed shared helper.
 
 ### Adding an HTTP case
 
@@ -270,19 +271,58 @@ Beyond crash/status hygiene it runs semantic oracles that flag verification,
 AEAD, FPE, tokenization, batch-atomicity, lifecycle, and config-integrity
 bypasses, plus a secret-leak oracle that fails any response containing the API
 key or the on-disk unseal key; the entry point reads `.unseal_key` only to feed
-that oracle, never to unseal. `--self-check` tests those oracles offline. Runs
-are deterministic for a given `--seed`, so a finding reproduces exactly, and
-output ends with `SUMMARY fuzz passed=<N> failed=<M>` (non-zero exit if any case
-failed or the server is unhealthy afterward). Run it only against a disposable
-instance you own.
+that oracle, never to unseal. `--self-check` tests those oracles and campaign
+measurements offline. Output ends with `SUMMARY fuzz passed=<N> failed=<M>`
+(non-zero exit if any case failed or the server is unhealthy afterward). Run it
+only against a disposable instance you own.
+
+The harness combines random mutation with regression scenarios. Local runs
+default to root seed `1337`; `--seed <integer>` selects a reproducible sequence
+of mutation decisions when fixtures are identical. Each target has an independent
+RNG derived using SHA-256 (`http-fuzz-target-seed-v1`), so selection or execution
+order does not change another target's RNG. This does not reproduce server-generated
+KIDs, signatures, ciphertexts, state or race scheduling. Findings include both
+the root seed and derived target seed; rerun using the root seed and `--target`.
+
+Use fresh exploration seeds with:
+
+```sh
+uv run tests/security/fuzz/http_fuzz.py --random-seed --mutation-only \
+  --iterations 100 --summary-json .ci/http-fuzz/exploration.json
+```
+
+`--random-seed` generates and prints a 64-bit root seed before requests and is
+mutually exclusive with `--seed`. `--mutation-only` selects body, path, headers
+and config mutation targets, excluding deterministic scenarios and no-body probes.
+An incompatible `--target` is rejected before bootstrap.
+
+`--summary-json <path>` records run configuration, target seeds, completed cases,
+passed/failed counts and primary status distributions. Status counts exclude
+setup, downstream requests and health probes: they measure the response supplied
+to the case oracle, not all HTTP traffic. Mutation targets also report generated,
+unique and duplicate inputs. Fingerprints use complete input before description
+truncation, never valid auth headers or responses, and remain only in memory.
+Reports contain aggregate counts, not payloads, credentials or fingerprints.
+Uniqueness is scoped to one target in one run; fresh fixtures make cross-run
+comparisons unsuitable as accumulated coverage. The harness has neither
+instrumented coverage nor an evolving corpus; saved findings are not seed input.
+A run without findings does not establish saturation or absence of vulnerabilities.
+
+CI keeps the complete regression pass (`--seed 1337 --iterations 300`) and adds
+an exploratory pass (`--random-seed --mutation-only --iterations 100`). The latter
+still runs after regression findings if Vectis remains ready. Either failure fails
+the step. Both JSON summaries are published for 30 days as
+`http-fuzz-summaries-<run_id>`, with a Job Summary showing seeds, results and input
+diversity. Missing reports are identified explicitly. Findings retain their
+existing failure artifact publication.
 
 `http_fuzz.py` is only the entry point; the substance lives in sibling modules:
 `targets.py` (the `TARGETS` table, one dict per target, and the runners),
 `seeds.py` / `mutations.py` (domain-aware seed corpora and mutators),
 `oracle.py` / `semantics.py` (the leak oracle and per-capability semantic
-oracles), and `self_check.py` (offline self-tests of those oracles). Each of
-`client.py`, `config.py`, `reporting.py` and `credentials.py` is private to this
-suite.
+oracles), `campaign.py` (seed isolation and aggregate measurements), and
+`self_check.py` (offline self-tests). Each of `client.py`, `config.py`,
+`reporting.py` and `credentials.py` is private to this suite.
 
 To add a target:
 
@@ -593,23 +633,61 @@ The high-level project test script is:
 It currently runs:
 
 ```sh
-cargo fmt
-cargo test --test crypto_integration
-cargo check
-cargo test
-cargo clippy --all-targets --all-features -- -D warnings
-uv sync
-uv run tests/integration/cli/cli_all.py
-uv run tests/integration/http/http_all.py
-uv run tests/security/fuzz/http_fuzz.py
-uv sync --group fuzz
-uv run tests/security/openapi/http_schemathesis.py --profile prepared
+cargo fmt -- --check
+cargo audit
+cargo test --locked
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo build --locked
+export VECTIS_BIN="$PWD/target/debug/vectis"
+uv sync --locked --group fuzz
+export UV_NO_SYNC=1 UV_LOCKED=1
+uv run --no-sync tests/integration/cli/cli_all.py
+uv run --no-sync tests/integration/http/http_all.py
+uv run --no-sync tests/security/fuzz/http_fuzz.py \
+  --random-seed --mutation-only --iterations 100
+uv run --no-sync tests/security/openapi/http_schemathesis.py --profile prepared
+bash tests/integration/tls/tls.sh
 ```
 
-`tests.sh` runs Rust checks and local CLI tests first. It then asks the operator
-to start Vectis before the HTTP, manual fuzz, and Schemathesis layers. The HTTP
-tests need an API key available through the environment or `.env` flow used by
-its own local credential helper.
+`tests.sh` always runs from the repository root, including when invoked from
+another directory. It runs Rust checks and builds the debug binary once, then
+checks readiness before the CLI, HTTP, fuzz and Schemathesis suites. The operator
+must start the main service separately against a disposable database; TLS creates
+its own isolated server. HTTP tests need an API key available through the
+environment or `.env` flow used by their local credential helper.
+
+The runner exports an absolute `VECTIS_BIN` so every CLI invocation, including
+HTTP fixture setup, config signing, fuzz setup and Schemathesis provisioning,
+executes that binary directly. An explicitly configured binary must be an
+executable file; an invalid path fails rather than falling back to Cargo.
+Relative `VECTIS_BIN` paths used outside this runner resolve from the repository
+root. Without the variable, standalone suites retain their Cargo fallbacks;
+the standalone fuzzer builds once per process. Only binary resolution is shared
+in `tests/support/vectis.py`; fixtures and assertions remain suite-private.
+
+Python dependencies are synchronized once with the `fuzz` group. `UV_NO_SYNC`
+and `UV_LOCKED` also apply to nested Schemathesis invocations. Rust tests still
+compile their own test artifacts; `cargo test` already includes
+`crypto_integration`, so no separate invocation is needed. Suites remain sequential.
+
+The local fuzz pass uses a fresh seed and 100 iterations per mutation target.
+It excludes deterministic scenarios and non-mutation probes; CI retains the
+complete regression pass with seed `1337` and 300 iterations, plus its exploration
+pass. Run the complete suite explicitly when changing those scenarios or before
+a release. Use the printed seed with `--seed` to repeat mutation decisions with
+identical fixtures; this does not restore remote state or scheduling.
+
+Each stage records elapsed wall-clock seconds and its exit code. A final table
+and total duration are printed on success or failure; the runner stops at the
+first failed stage and preserves its exit code. Timing output contains stage
+names, never command arguments or credentials. Compare warm-cache runs under
+equivalent conditions before attributing improvements to these changes.
+
+Run the resolver and runner regression checks offline with:
+
+```sh
+python3 -m unittest discover -s tests/support -v
+```
 
 `tests_cargo-fuzz.sh` is intentionally separate because it requires nightly,
 uses sanitizer builds, and is heavier than the normal HTTP test suite.

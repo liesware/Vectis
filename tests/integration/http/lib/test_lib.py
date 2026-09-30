@@ -203,13 +203,13 @@ class StructuralGuardTests(unittest.TestCase):
             f"these modules declare CASES but the registry never composes them: {orphans}",
         )
 
-    def test_shared_support_package_does_not_exist(self):
+    def test_integration_shared_support_package_does_not_exist(self):
         self.assertFalse(
             SUPPORT_DIR.exists(),
-            "every test suite must own its own helpers; shared support is forbidden",
+            "integration fixtures must remain suite-private; only tests/support/vectis.py is shared",
         )
 
-    def test_test_suites_do_not_import_a_shared_support_package(self):
+    def test_test_suites_only_share_binary_resolution(self):
         shared_module = "support"
         offenders = [
             str(path.relative_to(TESTS_DIR))
@@ -222,12 +222,13 @@ class StructuralGuardTests(unittest.TestCase):
                         isinstance(node, ast.ImportFrom)
                         and node.module is not None
                         and node.module.startswith(f"{shared_module}.")
+                        and node.module != "support.vectis"
                     )
                     or (
                         isinstance(node, ast.Import)
                         and any(
                             alias.name == shared_module
-                            or alias.name.startswith(f"{shared_module}.")
+                            or (alias.name.startswith(f"{shared_module}.") and alias.name != "support.vectis")
                             for alias in node.names
                         )
                     )
@@ -238,7 +239,7 @@ class StructuralGuardTests(unittest.TestCase):
         self.assertEqual(
             offenders,
             [],
-            f"test suites must not import a shared support package: {offenders}",
+            f"test suites may share only support.vectis, not fixtures or assertions: {offenders}",
         )
 
     def test_suites_do_not_import_another_suite_private_package(self):

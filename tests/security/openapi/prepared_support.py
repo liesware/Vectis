@@ -6,11 +6,14 @@ small amount of provisioning instead of importing ``tests/integration/http``.
 
 import json
 import subprocess
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from support.vectis import vectis_command
 
 DEFAULT_BASE_URL = "http://127.0.0.1:3000"
 DEFAULT_FINAL_APP_ADDR = "localhost:3999"
@@ -132,7 +135,7 @@ def _load_config():
 def _sign_and_write(config):
     CONFIG_PATH.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
     result = subprocess.run(
-        ["cargo", "run", "--", "config", "sign", "--output", "json"],
+        vectis_command(["config", "sign", "--output", "json"]),
         check=False,
         capture_output=True,
         text=True,

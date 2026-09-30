@@ -1,15 +1,16 @@
 use crate::core::{config, crypto};
 use crate::error::DynError;
 use serde::{Deserialize, Serialize};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize, Zeroize, ZeroizeOnDrop)]
 pub struct KeyMaterialOutput {
+    #[zeroize(skip)]
     pub(crate) hash: VariantHash,
     pub(crate) keys: KeyMaterialKeys,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize, Zeroize, ZeroizeOnDrop)]
 pub struct KeyMaterialKeys {
     pub(crate) symmetric: VariantSymmetricKey,
     pub(crate) eddsa: VariantDerKeyPair,
@@ -85,51 +86,49 @@ impl KeyMaterialSpec {
     }
 }
 
-impl Zeroize for KeyMaterialOutput {
-    fn zeroize(&mut self) {
-        self.hash.zeroize();
-        self.keys.zeroize();
-    }
-}
-
-impl Zeroize for KeyMaterialKeys {
-    fn zeroize(&mut self) {
-        self.symmetric.zeroize();
-        self.eddsa.zeroize();
-        self.xecdh.zeroize();
-        self.ml_dsa.zeroize();
-        self.ml_kem.zeroize();
-    }
-}
-
-impl Zeroize for VariantHash {
-    fn zeroize(&mut self) {
-        self.variant.zeroize();
-    }
-}
-
 impl Zeroize for VariantSymmetricKey {
     fn zeroize(&mut self) {
-        self.variant.zeroize();
         self.key_hex.zeroize();
     }
 }
 
+impl Drop for VariantSymmetricKey {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for VariantSymmetricKey {}
+
 impl Zeroize for VariantDerKeyPair {
     fn zeroize(&mut self) {
-        self.variant.zeroize();
         self.private_key_der_hex.zeroize();
         self.public_key_der_hex.zeroize();
     }
 }
 
+impl Drop for VariantDerKeyPair {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for VariantDerKeyPair {}
+
 impl Zeroize for VariantKeyAgreementKeyPair {
     fn zeroize(&mut self) {
-        self.variant.zeroize();
         self.private_key_der_hex.zeroize();
         self.public_key_hex.zeroize();
     }
 }
+
+impl Drop for VariantKeyAgreementKeyPair {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for VariantKeyAgreementKeyPair {}
 
 impl KeyMaterialOutput {
     pub fn hash_variant(&self) -> &str {
@@ -268,4 +267,110 @@ pub fn create_key_material(spec: &KeyMaterialSpec) -> Result<KeyMaterialOutput, 
             },
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_key_material() -> KeyMaterialOutput {
+        KeyMaterialOutput {
+            hash: VariantHash {
+                variant: String::from("SHA-512"),
+            },
+            keys: KeyMaterialKeys {
+                symmetric: VariantSymmetricKey {
+                    variant: String::from("AES-256/GCM"),
+                    key_hex: String::from("0011"),
+                },
+                eddsa: VariantDerKeyPair {
+                    variant: String::from("Ed25519"),
+                    private_key_der_hex: String::from("1122"),
+                    public_key_der_hex: String::from("3344"),
+                },
+                xecdh: VariantKeyAgreementKeyPair {
+                    variant: String::from("X25519"),
+                    private_key_der_hex: String::from("5566"),
+                    public_key_hex: String::from("7788"),
+                },
+                ml_dsa: VariantDerKeyPair {
+                    variant: String::from("ML-DSA-44"),
+                    private_key_der_hex: String::from("99aa"),
+                    public_key_der_hex: String::from("bbcc"),
+                },
+                ml_kem: VariantDerKeyPair {
+                    variant: String::from("ML-KEM-512"),
+                    private_key_der_hex: String::from("ddee"),
+                    public_key_der_hex: String::from("ff00"),
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn secret_key_material_is_zeroize_on_drop() {
+        fn assert_zeroize_on_drop<T: ZeroizeOnDrop>() {}
+
+        assert_zeroize_on_drop::<VariantSymmetricKey>();
+        assert_zeroize_on_drop::<VariantDerKeyPair>();
+        assert_zeroize_on_drop::<VariantKeyAgreementKeyPair>();
+        assert_zeroize_on_drop::<KeyMaterialKeys>();
+        assert_zeroize_on_drop::<KeyMaterialOutput>();
+    }
+
+    #[test]
+    fn zeroize_clears_all_key_material_fields() {
+        let mut material = sample_key_material();
+
+        material.zeroize();
+
+        assert!(material.keys.symmetric.key_hex.is_empty());
+        assert!(material.keys.eddsa.private_key_der_hex.is_empty());
+        assert!(material.keys.eddsa.public_key_der_hex.is_empty());
+        assert!(material.keys.xecdh.private_key_der_hex.is_empty());
+        assert!(material.keys.xecdh.public_key_hex.is_empty());
+        assert!(material.keys.ml_dsa.private_key_der_hex.is_empty());
+        assert!(material.keys.ml_dsa.public_key_der_hex.is_empty());
+        assert!(material.keys.ml_kem.private_key_der_hex.is_empty());
+        assert!(material.keys.ml_kem.public_key_der_hex.is_empty());
+
+        assert_eq!(material.hash.variant, "SHA-512");
+        assert_eq!(material.keys.symmetric.variant, "AES-256/GCM");
+        assert_eq!(material.keys.eddsa.variant, "Ed25519");
+        assert_eq!(material.keys.xecdh.variant, "X25519");
+        assert_eq!(material.keys.ml_dsa.variant, "ML-DSA-44");
+        assert_eq!(material.keys.ml_kem.variant, "ML-KEM-512");
+    }
+
+    #[test]
+    fn cloned_key_material_has_independent_ownership() {
+        let mut original = sample_key_material();
+        let cloned = original.clone();
+
+        original.zeroize();
+
+        assert_eq!(cloned.keys.symmetric.key_hex(), "0011");
+        assert_eq!(cloned.keys.eddsa.private_key_der_hex(), "1122");
+        assert_eq!(cloned.keys.xecdh.private_key_der_hex(), "5566");
+        assert_eq!(cloned.keys.ml_dsa.private_key_der_hex(), "99aa");
+        assert_eq!(cloned.keys.ml_kem.private_key_der_hex(), "ddee");
+    }
+
+    #[test]
+    fn key_material_json_contract_is_unchanged() {
+        let material = sample_key_material();
+        let serialized = serde_json::to_string(&material).expect("key material must serialize");
+
+        assert_eq!(
+            serialized,
+            r#"{"hash":{"variant":"SHA-512"},"keys":{"symmetric":{"variant":"AES-256/GCM","key_hex":"0011"},"eddsa":{"variant":"Ed25519","private_key_der_hex":"1122","public_key_der_hex":"3344"},"xecdh":{"variant":"X25519","private_key_der_hex":"5566","public_key_hex":"7788"},"ml-dsa":{"variant":"ML-DSA-44","private_key_der_hex":"99aa","public_key_der_hex":"bbcc"},"ml-kem":{"variant":"ML-KEM-512","private_key_der_hex":"ddee","public_key_der_hex":"ff00"}}}"#
+        );
+
+        let deserialized: KeyMaterialOutput =
+            serde_json::from_str(&serialized).expect("key material must deserialize");
+        let round_trip =
+            serde_json::to_string(&deserialized).expect("key material must reserialize");
+
+        assert_eq!(round_trip, serialized);
+    }
 }

@@ -7,7 +7,11 @@ longer carries the old global-config plumbing.
 
 import hashlib
 import subprocess
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from support.vectis import vectis_command
 
 from lib.assertions import require, require_hex
 from lib.fixtures import create_api_key_pair
@@ -59,7 +63,7 @@ def tamper_hex(value):
 
 def try_sign_config():
     return subprocess.run(
-        ["cargo", "run", "--", "config", "sign", "--output", "json"],
+        vectis_command(["config", "sign", "--output", "json"]),
         check=False,
         capture_output=True,
         text=True,

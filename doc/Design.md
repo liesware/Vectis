@@ -885,7 +885,9 @@ telemetry labels — every channel you did not explicitly close.
 
 **How**:
 
-- zeroize secret material in memory when dropped;
+- make zeroization a property of the type that owns secret material, not a
+  convention its callers must remember; the owner cleans itself when dropped,
+  and APIs that create secrets return protected values from the start;
 - avoid credential timing leaks; use constant-time comparison for secret
   material, and keep authorization indexes separate from authentication
   matching;
@@ -893,8 +895,15 @@ telemetry labels — every channel you did not explicitly close.
 - encrypt stored key material and bind it to its identity so a swapped record
   fails closed.
 
-**Rust note**: `zeroize`/`Zeroizing`; a constant-time `eq` helper for secret
-comparison; structured logging with an explicit field allowlist mindset.
+Zeroization reduces residual secret material in application-owned buffers. It
+does not guarantee removal of copies created by allocators, serializers, FFI
+libraries, the operating system, or hardware.
+
+**Rust note**: prefer `Zeroizing<T>` for secret fields and return values. When a
+secret-owning type must retain its existing representation, implement
+`Zeroize`, `Drop`, and `ZeroizeOnDrop` on the owning type. Use a constant-time
+`eq` helper for secret comparison and structured logging with an explicit field
+allowlist mindset.
 
 **In Vectis**: 180+ `Zeroizing` uses; `PermissionsState` keeps an index for
 permission lookup while `authenticate_hash` still compares credential hashes
@@ -1088,6 +1097,12 @@ and why it failed. Audit logs record stable security events with actor,
 resource, action, outcome, and reason, but no secrets or payloads. Metrics expose
 runtime health and behavior using counters/gauges/histograms with
 low-cardinality labels only.
+
+Make partial processing observable. Any resilient operation that skips an item
+after an error must identify the item in internal logs when safe, maintain
+aggregate success and failure counts, and expose whether the overall result was
+complete or partial. Metrics must use bounded failure categories rather than
+item identifiers as labels.
 
 **In Vectis**: JSON operational logs, a dedicated hash-chained audit JSONL
 stream through `core/audit.rs` and `core/audit_chain.rs`, hybrid-signed

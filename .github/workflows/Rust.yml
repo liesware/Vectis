@@ -114,6 +114,45 @@ jobs:
           VECTIS_BIN: ${{ github.workspace }}/vectis
         run: bash tests/ci/test-tls.sh
 
+      - name: Summarize HTTP fuzz campaigns
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
+              output.write("## HTTP fuzz\n\nDiversity is per-run input uniqueness, not code coverage.\n\n")
+              for mode in ("regression", "exploration"):
+                  path = Path(".ci/http-fuzz") / f"{mode}.json"
+                  output.write(f"### {mode.title()}\n\n")
+                  if not path.exists():
+                      output.write("No summary generated; the campaign was skipped or could not start.\n\n")
+                      continue
+                  report = json.loads(path.read_text(encoding="utf-8"))
+                  config = report["config"]
+                  output.write(f"Result: **{report['result']}**; root seed: `{config['seed']}`; "
+                               f"budget: {config['iterations']} cases per target.\n\n")
+                  output.write("| Target | Kind | Completed | Cases | Passed | Failed | Unique | Duplicates |\n")
+                  output.write("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |\n")
+                  for target in report["targets"]:
+                      output.write(f"| {target['target']} | {target['kind']} | {target['completed']} | "
+                                   f"{target['cases']} | {target['passed']} | {target['failed']} | "
+                                   f"{target.get('unique_inputs', '-')} | {target.get('duplicate_inputs', '-')} |\n")
+                  output.write("\nFull seeds, primary status distributions and counts are in the summary artifact.\n\n")
+          PY
+
+      - name: Upload HTTP fuzz summaries
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: http-fuzz-summaries-${{ github.run_id }}
+          path: .ci/http-fuzz/*.json
+          if-no-files-found: warn
+          retention-days: 30
+
       - name: Upload HTTP fuzz findings
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

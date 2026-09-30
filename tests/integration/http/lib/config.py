@@ -4,7 +4,11 @@ import atexit
 import copy
 import json
 import subprocess
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from support.vectis import vectis_command
 
 from .client import StatusClient, WorkflowError
 
@@ -28,7 +32,7 @@ CONFIG_SECTIONS = (
 
 def sign_config():
     result = subprocess.run(
-        ["cargo", "run", "--", "config", "sign", "--output", "json"],
+        vectis_command(["config", "sign", "--output", "json"]),
         check=False,
         capture_output=True,
         text=True,

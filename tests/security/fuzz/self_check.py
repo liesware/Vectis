@@ -1,4 +1,4 @@
-"""Offline self-tests for the semantic oracles in semantics.py.
+"""Offline self-tests for semantic oracles and campaign measurements.
 
 Each oracle is exercised with hand-built mock responses to prove it both accepts
 a valid flow and flags the specific defect it exists to catch. Run with
@@ -6,9 +6,19 @@ a valid flow and flags the specific defect it exists to catch. Run with
 semantics.py stays a library of oracles rather than a library-plus-test-suite.
 """
 
+import io
 import json
+import subprocess
+import sys
+import tempfile
+from contextlib import redirect_stdout
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
+from campaign import RunSummary, TargetMetrics, resolve_seed, select_targets, target_rng, target_seed
 from client import FuzzResponse
+from mutations import mutate_raw, mutate_structured
 from oracle import MAX_RESPONSE_DURATION_MS, slow_response_findings
 from semantics import (
     FPE_BATCH_PLAINTEXTS,
@@ -764,7 +774,153 @@ def self_check():
     time_case["response"] = (502, '{"error":"time attestation source unavailable","sources":{}}')
     expect(time_attest_source_unavailable_semantic(time_case), "time attest flags partial source output")
 
+    campaign_self_check(expect)
+
     for label in failures:
         print(f"SELF-CHECK FAIL: {label}")
     print(f"SUMMARY self-check passed={total - len(failures)} failed={len(failures)}")
     return 1 if failures else 0
+
+
+def campaign_self_check(expect):
+    from targets import TARGETS, run_body, run_config, run_headers, run_path_param
+    from http_fuzz import run
+    from reporting import check_and_record, describe, save_crash
+
+    seed = {"kid": "a" * 64, "plaintext": "123456789", "nested": [1, 2]}
+
+    def sequence(root, name):
+        rng = target_rng(root, name)
+        return [mutate_structured(seed, rng) if rng.random() < 0.7 else mutate_raw(seed, rng)
+                for _ in range(30)]
+
+    expect(sequence(1337, "fpe") == sequence(1337, "fpe"), "campaign repeats mutations")
+    expect(sequence(1337, "fpe") != sequence(1338, "fpe"), "campaign changes mutations with seed")
+    first = sequence(1337, "fpe")
+    sequence(1337, "tokenization")
+    expect(first == sequence(1337, "fpe"), "campaign isolates target order")
+    expect(target_seed(1337, "fpe") != target_seed(1337, "mac"), "campaign isolates target names")
+    expect(resolve_seed(None, False) == 1337, "campaign retains local default")
+    expect(resolve_seed(0, False) == 0, "campaign preserves explicit zero seed")
+    with patch("campaign.secrets.randbits", return_value=123) as random_bits:
+        expect(resolve_seed(None, True) == 123, "campaign resolves random root seed")
+        expect(random_bits.call_args.args == (64,), "campaign uses 64 random bits")
+
+    selected = select_targets(TARGETS, "all", True)
+    expected = [t for t in TARGETS if t["runner"] in (run_body, run_config, run_headers, run_path_param)]
+    expect(selected == expected, "campaign selects exactly mutation runners")
+    expect(select_targets(TARGETS, "fpe", True) == [t for t in expected if t["name"] == "fpe"],
+           "campaign supports isolated mutation target")
+    expect(len(select_targets(TARGETS, "all", False)) == len(TARGETS), "campaign retains full suite")
+    for name in ("no_body", "one_time_token_race", "unknown"):
+        try:
+            select_targets(TARGETS, name, True)
+        except ValueError:
+            expect(True, f"campaign rejects incompatible {name}")
+        else:
+            expect(False, f"campaign rejects incompatible {name}")
+
+    entrypoint = Path(__file__).with_name("http_fuzz.py")
+    for options in (("--random-seed", "--seed", "1337"),
+                    ("--mutation-only", "--target", "no_body")):
+        result = subprocess.run([sys.executable, str(entrypoint), *options], capture_output=True, text=True)
+        expect(result.returncode == 2 and "HTTP fuzz:" not in result.stdout,
+               f"campaign rejects flags before bootstrap {options}")
+
+    target = {"name": "self", "kind": "mutation"}
+    metrics = TargetMetrics(target, 1337)
+    body = b"x" * 2500
+    metrics.record_input("POST", "/self", body)
+    metrics.record_input("POST", "/self", body)
+    metrics.record_input("POST", "/self", body + b"y")
+    expect(describe("POST", "/self", True, body) == describe("POST", "/self", True, body + b"y"),
+           "campaign test exceeds description truncation")
+    measured = metrics.summary(True)
+    expect(measured["unique_inputs"] == 2 and measured["duplicate_inputs"] == 1,
+           "campaign fingerprints complete input")
+    path_metrics = TargetMetrics(target, 1337)
+    for method, path in (("GET", "/" + "x" * 2500), ("GET", "/" + "x" * 2500 + "y"),
+                         ("POST", "/" + "x" * 2500)):
+        path_metrics.record_input(method, path)
+    expect(path_metrics.summary(True)["unique_inputs"] == 3,
+           "campaign fingerprints complete path and method")
+    config_metrics = TargetMetrics(target, 1337)
+    for file, content in (("config.json", b"{}"), ("config_sign.json", b"{}"), ("config.json", b"[]")):
+        config_metrics.record_input("POST", "/config/reload", content, file=file)
+    expect(config_metrics.summary(True)["unique_inputs"] == 3, "campaign distinguishes config file and bytes")
+    header_metrics = TargetMetrics(target, 1337)
+    for value in ("bad", "bad", "other"):
+        header_metrics.record_input("GET", "/keys", invalid_headers={"X-API-Key": value})
+    expect(header_metrics.summary(True)["unique_inputs"] == 2, "campaign distinguishes invalid headers")
+
+    args = SimpleNamespace(seed=1337, random_seed=False, iterations=2, target="self", mutation_only=True,
+                           liveness_every=1, progress_every=0, metrics=metrics,
+                           apikey="AUTH-SECRET", base_url="http://unused")
+    client = SimpleNamespace(consume_timings=lambda: [], get_status=lambda path: 200)
+    counters = {"passed": 0, "failed": 0}
+    with redirect_stdout(io.StringIO()), patch("reporting.save_crash", return_value="mock-finding.json") as crash:
+        check_and_record("self", client, args, 0, 400, [], {}, counters)
+        check_and_record("self", client, args, 1, 200, ["mock finding"], {}, counters)
+        expect(crash.call_args.kwargs["target_seed"] == target_seed(1337, "self"),
+               "campaign records derived seed in findings")
+    measured = metrics.summary(True)
+    expect(measured["primary_statuses"] == {"200": 1, "400": 1} and measured["cases"] == 2,
+           "campaign counts cases rather than probes")
+    expect(measured["passed"] == counters["passed"] == 1 and measured["failed"] == counters["failed"] == 1,
+           "campaign counts findings consistently")
+
+    summary = RunSummary(args)
+    metrics.record_input("POST", "/self", b"PAYLOAD-SECRET")
+    summary.targets.append(metrics.summary(True))
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "nested" / "summary.json"
+        summary.write(path)
+        saved = path.read_text(encoding="utf-8")
+        expect(not any(word in saved for word in ("AUTH-SECRET", "PAYLOAD-SECRET", "fingerprints", "request")),
+               "campaign summary excludes secrets payloads and fingerprints")
+        expect(json.loads(saved)["totals"] == {"cases": 2, "passed": 1, "failed": 1},
+               "campaign writes aggregate totals")
+        with patch("reporting.CORPUS_DIR", Path(directory)):
+            artifact = save_crash("self", 1337, 0, {}, ["mock"], target_seed=metrics.seed)
+        expect(json.loads(artifact.read_text())["target_seed"] == metrics.seed,
+               "campaign persists both seeds")
+
+    scenario = TargetMetrics({"name": "scenario", "kind": "scenario"}, 1337)
+    expect("unique_inputs" not in scenario.summary(True), "campaign does not claim scenario diversity")
+
+    def broken_runner(target, client, rng, args, secrets):
+        args.metrics.record_result(400, False)
+        raise RuntimeError("PAYLOAD-SECRET")
+
+    broken = {"name": "broken", "kind": "mutation", "runner": broken_runner}
+    summary = RunSummary(args)
+    with redirect_stdout(io.StringIO()), \
+         patch("http_fuzz.require_apikey", return_value="AUTH-SECRET"), \
+         patch("http_fuzz.FuzzClient", return_value=client), \
+         patch("http_fuzz.UNSEAL_KEY_FILE") as key_file:
+        key_file.exists.return_value = False
+        try:
+            run(args, [broken], summary)
+        except RuntimeError:
+            pass
+    expect(summary.result == "error" and not summary.targets[0]["completed"],
+           "campaign marks interrupted targets as incomplete")
+    expect(summary.payload()["totals"]["cases"] == 1 and "PAYLOAD-SECRET" not in json.dumps(summary.payload()),
+           "campaign retains partial counts without exception data")
+
+    from http_fuzz import main
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "not-ready.json"
+        not_ready = SimpleNamespace(get_status=lambda path: 0)
+        with redirect_stdout(io.StringIO()), \
+             patch("sys.argv", [str(entrypoint), "--target", "headers", "--summary-json", str(path)]), \
+             patch("http_fuzz.require_apikey", return_value="AUTH-SECRET"), \
+             patch("http_fuzz.FuzzClient", return_value=not_ready), \
+             patch("sys.stderr", io.StringIO()):
+            try:
+                main()
+            except SystemExit as error:
+                expect(error.code == 1, "campaign preserves infrastructure exit code")
+        report = json.loads(path.read_text())
+        expect(report["result"] == "error" and report["config"]["seed"] == 1337 and not report["targets"],
+               "campaign writes summary even when readiness fails")

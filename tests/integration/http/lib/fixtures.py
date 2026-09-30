@@ -3,9 +3,14 @@
 import http.server
 import json
 import subprocess
+import sys
 import threading
 import urllib.parse
 from dataclasses import dataclass, field
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from support.vectis import vectis_command
 
 from .assertions import require, require_hex, require_kid
 from .client import WorkflowError
@@ -99,7 +104,7 @@ def start_final_app(addr):
 
 def create_api_key_pair():
     result = subprocess.run(
-        ["cargo", "run", "--", "apikey", "create", "--output", "json"],
+        vectis_command(["apikey", "create", "--output", "json"]),
         check=False,
         capture_output=True,
         text=True,

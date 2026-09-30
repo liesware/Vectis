@@ -2,7 +2,11 @@ import atexit
 import functools
 import json
 import subprocess
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from support.vectis import configured_binary
 
 from oracle import _parse
 from semantics import (
@@ -23,16 +27,14 @@ UNSEAL_KEY_FILE = Path(".unseal_key")
 VECTIS_BIN = Path(__file__).resolve().parents[3] / "target" / "debug" / "vectis"
 
 
-@functools.lru_cache(maxsize=1)
 def _vectis_binary():
-    """Build the debug binary once per process and return its path.
+    binary = configured_binary()
+    return str(binary) if binary is not None else _build_vectis_binary()
 
-    `sign_config_file` is invoked once per provisioning target (every batch and
-    crypto-semantics target signs its profile), and `cargo run` pays Cargo's
-    freshness check (~1.8s) on every call even when nothing recompiles. Building
-    once here and then exec'ing the binary directly drops each subsequent sign
-    from ~1.8s to ~10ms while still rebuilding when `src/` changed.
-    """
+
+@functools.lru_cache(maxsize=1)
+def _build_vectis_binary():
+    """Standalone fallback: build once per process when no binary was supplied."""
     result = subprocess.run(
         ["cargo", "build", "--quiet"],
         check=False,
@@ -400,8 +402,7 @@ def configure_lifecycle_profiles(client, batches):
     `batches` is a list of {state: kid} maps (one per fuzz iteration). Each KID
     is bound only within its batch, so the profile names carry the batch index to
     stay globally unique. Returns the matching list of {state: {role: name}} maps.
-    Signing the config spawns a `cargo` subprocess, so doing it once here — rather
-    than once per iteration — is the whole point of taking every batch at once.
+    Signing and reloading once avoids repeated setup for every iteration.
     """
     original_cfg = CONFIG_PATH.read_bytes() if CONFIG_PATH.exists() else None
     original_sig = CONFIG_SIGN_PATH.read_bytes() if CONFIG_SIGN_PATH.exists() else None

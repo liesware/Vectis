@@ -3,8 +3,11 @@ import json
 import os
 import subprocess
 import sqlite3
+import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from support.vectis import vectis_command
 
 ROOT = Path(__file__).resolve().parents[4]
 NEXT_REMINDER = "run `vectis config sign`, then `vectis config reload`"
@@ -47,7 +50,7 @@ def ensure_sqlite_schema(env):
 
 def run_cli(args, env, expect_success=True):
     result = subprocess.run(
-        ["cargo", "run", "--quiet", "--", *args],
+        vectis_command(args, env=env, quiet=True),
         cwd=ROOT,
         env=env,
         text=True,
