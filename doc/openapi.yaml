@@ -679,6 +679,8 @@ paths:
       description: >
         Creates a random visible token using a tokenization profile loaded from
         signed config. The database stores only kid, hashid, and encrypted data.
+        The profile allows up to 16,384 Unicode plaintext characters; the
+        encrypted storage envelope is limited to 131,072 Base64 characters.
         The key must be active. The client ref is echoed in the response.
       security:
         - ApiKeyAuth: []
@@ -763,6 +765,47 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
+  /token/delete:
+    post:
+      tags: [Tokenization]
+      summary: Delete a stored token without decrypting its payload
+      description: >
+        Requires the independent token-delete grant for the request KID.
+        Deletion is permitted in any key lifecycle state, so token rows can be
+        purged even after the key is disabled or destroyed. Deletes reusable or
+        one-time tokens after computing their HMAC hashid, without reading the
+        envelope. Success is
+        returned only after commit. Missing, deleted, or consumed tokens return
+        404 token not found. An already-running reusable decode may complete;
+        older backups can restore deleted tokens.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenDeleteInput"
+      responses:
+        "200":
+          description: The token row was deleted and committed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenDeleteOutput"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/RequestBodyTooLarge"
+        default:
+          $ref: "#/components/responses/Error"
+
   /token/decode/batch:
     post:
       tags: [Tokenization]
@@ -772,7 +815,10 @@ paths:
         Each item must include a unique client ref, which is echoed in the
         corresponding response item. Decode permits active and retired keys. If
         any item fails, the response is one error and no partial items are
-        returned.
+        returned. Incremental storage reads have a fixed 5 MiB envelope budget,
+        counting each requested occurrence, including repeated reusable tokens.
+        Exceeding it returns 413 before decrypt or one-time consumption. Accepted
+        batches return complete results without an additional response-size cap.
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -789,7 +835,18 @@ paths:
               schema:
                 $ref: "#/components/schemas/TokenDecodeBatchOutput"
         "413":
-          $ref: "#/components/responses/RequestBodyTooLarge"
+          description: Request body exceeds 2 MiB or stored token envelopes exceed the 5 MiB batch budget
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                request:
+                  value:
+                    error: request body exceeds maximum allowed size
+                envelopes:
+                  value:
+                    error: token decode batch exceeds maximum allowed envelope size
         default:
           $ref: "#/components/responses/Error"
 
@@ -2248,6 +2305,8 @@ components:
           example: patient-id-token-v1
         plaintext:
           $ref: "#/components/schemas/TextField"
+          maxLength: 16384
+          description: Unicode character count must also fit the selected signed profile maximum.
           example: "123456"
         metadata:
           type: object
@@ -2284,6 +2343,8 @@ components:
           $ref: "#/components/schemas/ClientRef"
         plaintext:
           $ref: "#/components/schemas/TextField"
+          maxLength: 16384
+          description: Unicode character count must also fit the selected signed profile maximum.
           example: "123456"
         metadata:
           type: object
@@ -2351,6 +2412,31 @@ components:
           $ref: "#/components/schemas/TextField"
           description: Visible token in the form <token_prefix>_<base64url-no-pad random bytes>. Decode validates the configured prefix (capped at 16 characters) and decoded byte length before lookup.
           example: tok_patient_vGqyEeXKcKz5QK1jwBQTyQ
+
+    TokenDeleteInput:
+      type: object
+      additionalProperties: false
+      required: [ref, kid, profile, token]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+        token:
+          $ref: "#/components/schemas/TextField"
+
+    TokenDeleteOutput:
+      type: object
+      additionalProperties: false
+      required: [ref, deleted]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        deleted:
+          type: boolean
+          const: true
 
     TokenDecodeOutput:
       type: object

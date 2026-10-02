@@ -277,6 +277,74 @@ pub async fn encode_batch_endpoint(
     Ok(Json(batch.output))
 }
 
+pub async fn delete_endpoint(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    JsonBody(request): JsonBody,
+) -> Result<Json<ops::tokenization::TokenDeleteOutput>, (StatusCode, Json<ErrorResponse>)> {
+    let request_context = state.authorize_request(&headers).await?;
+    let actor = audit::actor_from_client(request_context.client());
+    let failed = |kid: Option<&str>, err: &crate::error::DynError| {
+        crypto_failed_response(
+            "token.delete.failed",
+            Some(&actor),
+            kid,
+            Some("token-delete"),
+            "token_delete",
+            err.as_ref(),
+        )
+    };
+    let input = ops::tokenization::parse_delete_input(request)
+        .and_then(ops::tokenization::validate_delete_input)
+        .map_err(|err| failed(None, &err))?;
+    let kid = input.kid().to_string();
+    request_context.require_permission_for(
+        Some(&kid),
+        "token-delete",
+        Some("token.delete.denied"),
+    )?;
+    state
+        .ensure_keys_db_entry(&kid)
+        .await
+        .map_err(|err| failed(Some(&kid), &err))?;
+    let profile = request_context
+        .config()
+        .tokenization_profiles
+        .get(input.profile())
+        .ok_or_else(|| {
+            failed(
+                Some(&kid),
+                &crate::error::invalid_input("tokenization profile not found"),
+            )
+        })?;
+    let prepared = state
+        .with_keys_db_state(|keys_db_state| {
+            ops::tokenization::prepare_delete(keys_db_state, profile, input)
+        })
+        .await
+        .map_err(|err| failed(Some(&kid), &err))?;
+    let (ref_id, hashid) =
+        blocking::spawn_blocking_crypto(move || ops::tokenization::delete_hashid(prepared))
+            .await
+            .map_err(|err| failed(Some(&kid), &err))?;
+    state
+        .storage()
+        .delete_token(&kid, &hashid)
+        .await
+        .map_err(|err| failed(Some(&kid), &err))?;
+    audit::operation_success(
+        "token.delete.success",
+        Some(&actor),
+        Some(&kid),
+        None,
+        Some("token-delete"),
+    );
+    metrics::record_crypto_operation("token_delete", "success");
+    Ok(Json(ops::tokenization::TokenDeleteOutput::committed(
+        ref_id,
+    )))
+}
+
 pub async fn decode_endpoint(
     State(state): State<HttpState>,
     headers: HeaderMap,
@@ -515,7 +583,15 @@ pub async fn decode_batch_endpoint(
         }
     }
     let refs = input.refs().map(str::to_string).collect::<Vec<_>>();
-    let found = match state.storage().get_tokens_batch(&kid, &hashids).await {
+    let found = match state
+        .storage()
+        .get_tokens_batch(
+            &kid,
+            &hashids,
+            crate::core::config::TOKEN_DECODE_BATCH_MAX_ENVELOPE_BYTES,
+        )
+        .await
+    {
         Ok(found) => found,
         Err(err) => {
             return Err(crypto_failed_response(
@@ -529,8 +605,8 @@ pub async fn decode_batch_endpoint(
         }
     };
     let mut rows = Vec::with_capacity(hashids.len());
-    for (index, hashid) in hashids.iter().enumerate() {
-        let Some(data) = found.get(hashid) else {
+    for (index, data) in found.into_iter().enumerate() {
+        let Some(data) = data else {
             let err = crate::error::with_prefix(
                 &format!("batch item {index} failed"),
                 crate::error::not_found("token not found"),
@@ -544,7 +620,7 @@ pub async fn decode_batch_endpoint(
                 err.as_ref(),
             ));
         };
-        rows.push(data.clone());
+        rows.push(data);
     }
     let hashid_indexes = one_time.then(|| {
         hashids

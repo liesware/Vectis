@@ -26,7 +26,7 @@ const CONFIG: &str = r#"{
       "kid": "e04daae3fa0ab03ab91e8c80608f176a0010dc4514263c6f02ce78288153bde1",
       "token_prefix": "tok_fuzz",
       "token_len": 32,
-      "max_plaintext_len": 128,
+      "max_plaintext_len": 16384,
       "one_time": false
     }
   ],

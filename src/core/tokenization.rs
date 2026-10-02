@@ -14,7 +14,7 @@ pub const TOKEN_HASH_KEY_PURPOSE: &str = "token-hash";
 pub const TOKEN_DATA_KEY_PURPOSE: &str = "token-data";
 pub const TOKEN_KEY_SIZE_BYTES: usize = 32;
 pub const TOKEN_LEN_MIN_BYTES: usize = 32;
-pub const TOKEN_PLAINTEXT_MAX_LEN: usize = 1024;
+pub const TOKEN_PLAINTEXT_MAX_LEN: usize = 16_384;
 pub const TOKEN_METADATA_MAX_CHARS: usize = 128;
 pub const TOKEN_PREFIX_MAX_CHARS: usize = 16;
 pub const TOKEN_DATA_TYPE: &str = "token-data";
@@ -426,7 +426,7 @@ pub fn decrypt_token_data(
     let envelope = validation::decode_base64_standard_envelope(
         "tokens.data",
         data,
-        config::STORAGE_ENVELOPE_MAX_CHARS,
+        config::STORAGE_TOKEN_ENVELOPE_MAX_CHARS,
         cipher.nonce_size_bytes,
     )?;
     let aad = std::str::from_utf8(&envelope.aad)
@@ -829,6 +829,38 @@ mod tests {
             validate_tokenization_profiles(vec![input("unloaded")], |_| false, |_| Ok(derived()))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn token_plaintext_profile_limits() {
+        for limit in [1, 1024, 16_384] {
+            assert!(validate_token_lengths(TOKEN_LEN_MIN_BYTES, limit).is_ok());
+        }
+        for limit in [0, 16_385] {
+            assert!(validate_token_lengths(TOKEN_LEN_MIN_BYTES, limit).is_err());
+        }
+    }
+
+    #[test]
+    fn token_data_round_trips_maximum_unicode_and_metadata() {
+        let profile = profile();
+        let hashid = "b".repeat(64);
+        for character in ['a', '\u{1f600}'] {
+            let payload = TokenDataPayload {
+                profile: profile.name().to_string(),
+                plaintext: character.to_string().repeat(TOKEN_PLAINTEXT_MAX_LEN),
+                metadata: Some(serde_json::json!({"a": "x".repeat(TOKEN_METADATA_MAX_CHARS - 8)})),
+                created_at: String::from("1782058090"),
+            };
+            let data = encrypt_token_data(&profile, &hashid, &payload).unwrap();
+            assert!(data.len() <= config::STORAGE_TOKEN_ENVELOPE_MAX_CHARS);
+            if character != 'a' {
+                assert!(data.len() > config::STORAGE_ENVELOPE_MAX_CHARS);
+            }
+            let recovered = decrypt_token_data(&profile, &hashid, &data).unwrap();
+            assert_eq!(recovered.plaintext, payload.plaintext);
+            assert_eq!(recovered.metadata, payload.metadata);
+        }
     }
 
     #[test]

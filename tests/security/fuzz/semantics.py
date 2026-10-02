@@ -1,6 +1,25 @@
 import json
-
 from oracle import _parse
+
+
+def token_batch_budget_semantic(case, context):
+    findings = []
+    for label, status, body in case["checks"]:
+        parsed = _parse(body)
+        if label == "over-budget":
+            if status != 413 or parsed != {"error": "token decode batch exceeds maximum allowed envelope size"}:
+                findings.append("token batch budget must reject without partial output")
+        else:
+            expected_refs = case["refs"]
+            items = parsed.get("items") if isinstance(parsed, dict) else None
+            if status != 200 or not isinstance(items, list) or len(items) != len(expected_refs):
+                findings.append("token batch under budget must return every item")
+                continue
+            if any(not isinstance(item, dict) or item.get("ref") != ref or item.get("plaintext") != context["plaintext"]
+                   for item, ref in zip(items, expected_refs)):
+                findings.append("token batch budget response must preserve order and plaintext")
+    return findings
+
 
 
 KID_HEX = "a" * 64
@@ -292,6 +311,18 @@ def _response_items(response):
     parsed = _parse(response[1])
     items = parsed.get("items") if isinstance(parsed, dict) else None
     return items if isinstance(items, list) else []
+
+
+def token_delete_semantic(sent_value, seed, status, response):
+    findings = reject_malformed_body_semantic(sent_value, seed, status, response)
+    if status == 200:
+        expected = {"ref": sent_value.get("ref"), "deleted": True} if isinstance(sent_value, dict) else None
+        if _parse(response) != expected:
+            findings.append("SEMANTIC: token delete success must echo ref and deleted true only")
+    token = sent_value.get("token") if isinstance(sent_value, dict) else None
+    if isinstance(token, str) and token and token in response:
+        findings.append("SEMANTIC: token delete response reflects the token")
+    return findings
 
 
 def reject_malformed_body_semantic(sent_value, _seed_obj, status, _response):

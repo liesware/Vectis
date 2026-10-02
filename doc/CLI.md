@@ -399,6 +399,8 @@ vectis config token delete patient-id-token-v1
 ```
 
 Vectis uses the fixed internal tokenization scheme `token-random-v1`.
+`max_plaintext_len` accepts 1 through 16,384 Unicode characters. Existing
+profiles retain their maximum; sign and reload config after increasing it.
 `token_len` is the number of random bytes before base64url encoding and must be
 at least `32`. `token_prefix` is a visible prefix, is limited to 16 characters,
 and cannot contain whitespace, control characters, `;`, or `=`. The CLI

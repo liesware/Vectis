@@ -1,5 +1,7 @@
+use super::TokenBatchReadBudget;
 use crate::core::storage::{IndexRow, OpsKeyRow, TokenBatchConsumeError, TokenRow};
 use crate::error::DynError;
+use futures_util::TryStreamExt;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::{Postgres, Row, Transaction};
 use std::collections::{HashMap, HashSet};
@@ -154,8 +156,9 @@ impl PostgresStorage {
         &self,
         kid: &str,
         hashids: &[String],
+        max_envelope_bytes: usize,
     ) -> Result<HashMap<String, String>, DynError> {
-        let rows = sqlx::query(
+        let mut rows = sqlx::query(
             "
             SELECT hashid, data
             FROM tokens
@@ -165,12 +168,14 @@ impl PostgresStorage {
         )
         .bind(kid)
         .bind(hashids)
-        .fetch_all(&self.pool)
-        .await?;
-
-        let mut found = HashMap::with_capacity(rows.len());
-        for row in rows {
-            found.insert(row.get("hashid"), row.get("data"));
+        .fetch(&self.pool);
+        let mut budget = TokenBatchReadBudget::new(hashids, max_envelope_bytes);
+        let mut found = HashMap::with_capacity(hashids.len());
+        while let Some(row) = rows.try_next().await? {
+            let hashid: String = row.try_get("hashid")?;
+            let data: String = row.try_get("data")?;
+            budget.retain(&hashid, &data)?;
+            found.insert(hashid, data);
         }
         Ok(found)
     }
@@ -200,7 +205,7 @@ impl PostgresStorage {
         })
     }
 
-    pub async fn consume_token(&self, kid: &str, hashid: &str) -> Result<(), DynError> {
+    pub async fn delete_token(&self, kid: &str, hashid: &str) -> Result<(), DynError> {
         let mut tx = self.pool.begin().await?;
         let result = sqlx::query(
             "
@@ -217,7 +222,7 @@ impl PostgresStorage {
             return Err(crate::error::not_found("token not found"));
         }
         tx.commit().await?;
-        info!(kid, hashid, "consumed token");
+        info!(kid, "deleted token row");
         Ok(())
     }
 
@@ -729,6 +734,78 @@ async fn validate_primary_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires VECTIS_TEST_POSTGRES_DSN and the Vectis schema in a test database"]
+    async fn token_batch_read_budget_is_incremental_and_counts_duplicates() {
+        let dsn = std::env::var("VECTIS_TEST_POSTGRES_DSN").expect("test DSN required");
+        let storage = PostgresStorage::new(&dsn).await.unwrap();
+        let kid = format!(
+            "budget-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let ids = vec!["a".repeat(64), "b".repeat(64)];
+        let data = "AAAAAAAAAAAAAAAAAAAAAA==.AAAAAAAAAAAAAAAA.AA==";
+        for id in &ids {
+            storage.save_token(&kid, id, data).await.unwrap();
+        }
+        assert_eq!(
+            storage
+                .get_tokens_batch(&kid, &ids, data.len() * 2)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(matches!(
+            storage
+                .get_tokens_batch(&kid, &ids, data.len() * 2 - 1)
+                .await
+                .unwrap_err()
+                .downcast_ref(),
+            Some(crate::error::VectisError::TokenDecodeBatchTooLarge)
+        ));
+        assert!(
+            storage
+                .get_tokens_batch(&kid, &[ids[0].clone(), ids[0].clone()], data.len())
+                .await
+                .is_err()
+        );
+        for id in &ids {
+            storage.delete_token(&kid, id).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires VECTIS_TEST_POSTGRES_DSN and the Vectis schema in a test database"]
+    async fn explicit_delete_is_atomic_and_single_use() {
+        let dsn = std::env::var("VECTIS_TEST_POSTGRES_DSN").expect("test DSN required");
+        let storage = PostgresStorage::new(&dsn).await.unwrap();
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let kid = format!("delete-test-{unique}");
+        storage.save_token(&kid, "hash", "corrupt").await.unwrap();
+        let (first, second) = tokio::join!(
+            storage.delete_token(&kid, "hash"),
+            storage.delete_token(&kid, "hash")
+        );
+        assert_ne!(first.is_ok(), second.is_ok());
+        assert!(crate::error::is_not_found(
+            storage
+                .delete_token(&kid, "hash")
+                .await
+                .unwrap_err()
+                .as_ref()
+        ));
+        assert!(crate::error::is_not_found(
+            storage.get_token(&kid, "hash").await.unwrap_err().as_ref()
+        ));
+    }
 
     #[test]
     fn postgres_context_redacts_credentials() {

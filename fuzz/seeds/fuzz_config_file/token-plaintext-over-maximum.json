@@ -1,0 +1,1 @@
+{"version":"v1","tokenization_profiles":[{"name":"fuzz-token-max-v1","kid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","token_prefix":"tok_max","token_len":32,"max_plaintext_len":16385,"one_time":false}]}

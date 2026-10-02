@@ -328,9 +328,10 @@ Operational keys have a lifecycle status:
 
 - `active`: normal use.
 - `disabled`: blocked for all cryptographic operations.
-- `retired`: allowed only for decrypt and verification; blocked for new
+- `retired`: allowed for decrypt, verification, and explicit token deletion; blocked for new
   encryption, signing, sending, and `/pub`.
-- `compromised`: blocked for all cryptographic operations.
+- `compromised`: blocked for production and recovery; explicit token deletion
+  remains permitted with `token-delete`.
 - `destroyed`: logically destroyed; administrative metadata is retained, but
   cryptographic operations are blocked.
 
@@ -486,6 +487,7 @@ Supported actions:
 - `fpe-decrypt`;
 - `token-encode`;
 - `token-decode`;
+- `token-delete` (explicit token deletion; permitted in any lifecycle state);
 - `mac-create`;
 - `mac-verify`;
 - `index-create`;
@@ -578,6 +580,7 @@ need stable-looking tokens while storing the original value encrypted:
 
 - `POST /token/encode/{kid}`;
 - `POST /token/decode`.
+- `POST /token/delete` (independent `token-delete` permission).
 
 Tokenization profiles live in signed config under `tokenization_profiles`.
 Requests select a profile by name; token prefix, token length, plaintext length
@@ -588,6 +591,10 @@ returns only the token. Decode hashes the presented token, looks up the encrypte
 payload, decrypts it, and returns the original plaintext plus optional metadata.
 Tokenization hash/data keys are derived per profile, KID, and internal scheme;
 the encrypted token payload AAD also binds that scheme.
+
+Delete computes the hash and removes the stored row without decrypting it.
+It permits active, retired, and compromised keys, and rejects disabled and
+destroyed keys. An absent or consumed token returns `token not found`.
 
 ## MAC Profiles
 

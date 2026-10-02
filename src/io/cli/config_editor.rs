@@ -2528,7 +2528,7 @@ mod tests {
         .expect_err("invalid plaintext length must fail during parsing");
         assert_eq!(
             invalid_plaintext_len.to_string(),
-            "tokenization_profiles.max_plaintext_len must be between 1 and 1024"
+            "tokenization_profiles.max_plaintext_len must be between 1 and 16384"
         );
     }
 
@@ -2594,7 +2594,7 @@ mod tests {
         .expect_err("invalid plaintext length must fail before mutation");
         assert_eq!(
             invalid_plaintext_len.to_string(),
-            "tokenization_profiles.max_plaintext_len must be between 1 and 1024"
+            "tokenization_profiles.max_plaintext_len must be between 1 and 16384"
         );
         assert_eq!(local.value, before);
     }

@@ -30,7 +30,25 @@ measures how a known valid flow behaves under load.
 
 ## Prerequisites
 
+Token deletion coverage includes independent permissions, lifecycle, repeated
+deletion, and races with one-time consumption in the positive HTTP suite.
+The `token_delete` HTTP fuzz target mutates delete input. SQLite tests also
+cover corrupt envelopes and rollback on DELETE or COMMIT failure.
+The optional PostgreSQL deletion test requires a dedicated test database with
+the Vectis schema:
+
+```sh
+VECTIS_TEST_POSTGRES_DSN='<test-dsn>' cargo test explicit_delete_is_atomic_and_single_use -- --ignored
+```
+
 Rust checks require the normal Rust toolchain used by the project.
+
+The `token_batch_budget` HTTP fuzz target checks rejection of repeated reusable
+tokens whose envelopes exceed 5 MiB, then verifies a smaller batch returns its
+complete plaintexts. The positive HTTP suite additionally checks one-time tokens
+remain available after budget rejection and that accepted responses may exceed
+2 MiB. Storage tests cover exact limits, duplicate accounting and overflow;
+PostgreSQL budget tests require `VECTIS_TEST_POSTGRES_DSN` and `--ignored`.
 
 Python tests are executed with [uv](https://docs.astral.sh/uv). Do not run the
 Python scripts directly with `python3` for the standard workflow; use `uv run`

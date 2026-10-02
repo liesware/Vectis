@@ -224,7 +224,7 @@ def _configure_tokenization_profiles(client, profiles, context):
     atexit.register(restore)
 
 
-def configure_tokenization_profile(client, kid):
+def configure_tokenization_profile(client, kid, max_plaintext_len=1024):
     _configure_tokenization_profiles(
         client,
         [
@@ -233,7 +233,7 @@ def configure_tokenization_profile(client, kid):
                 "kid": kid,
                 "token_prefix": "tok_fuzz",
                 "token_len": 32,
-                "max_plaintext_len": 1024,
+                "max_plaintext_len": max_plaintext_len,
                 "one_time": False,
             }
         ],

@@ -8,6 +8,8 @@ const SANITIZED_SERDE_FALLBACK: &str = "invalid JSON";
 
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum VectisError {
+    #[error("token decode batch exceeds maximum allowed envelope size")]
+    TokenDecodeBatchTooLarge,
     #[error("{0}")]
     InvalidInput(String),
     #[error("{0}")]
@@ -128,6 +130,7 @@ fn redact_serde_value(message: &str) -> String {
 
 pub fn with_prefix(prefix: &str, err: DynError) -> DynError {
     match err.downcast_ref::<VectisError>() {
+        Some(VectisError::TokenDecodeBatchTooLarge) => err,
         Some(VectisError::InvalidInput(message)) => invalid_input(format!("{prefix}: {message}")),
         Some(VectisError::NotFound(message)) => not_found(format!("{prefix}: {message}")),
         Some(VectisError::Forbidden(message)) => forbidden(format!("{prefix}: {message}")),

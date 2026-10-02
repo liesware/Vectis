@@ -551,9 +551,10 @@ Lifecycle behavior:
 
 - `active`: normal use.
 - `disabled`: blocked for all cryptographic operations.
-- `retired`: allowed only for decrypt and verification; blocked for new
+- `retired`: allowed for decrypt, verification, and explicit token deletion; blocked for new
   encryption/signing/sending operations and `/pub`.
-- `compromised`: blocked for all cryptographic operations.
+- `compromised`: blocked for cryptographic production and recovery; explicit
+  `token-delete` is permitted with its independent grant.
 - `destroyed`: logically destroyed; administrative metadata is retained, but
   cryptographic operations are blocked.
 
@@ -689,6 +690,7 @@ Allowed actions:
 - `fpe-decrypt`
 - `token-encode`
 - `token-decode`
+- `token-delete`
 - `mac-create`
 - `mac-verify`
 - `index-create`
@@ -711,6 +713,7 @@ Permission mapping:
 | `fpe-decrypt` | `POST /fpe/decrypt`, `POST /fpe/decrypt/batch` |
 | `token-encode` | `POST /token/encode/{kid}`, `POST /token/encode/batch/{kid}` |
 | `token-decode` | `POST /token/decode`, `POST /token/decode/batch` |
+| `token-delete` | `POST /token/delete` |
 | `mac-create` | `POST /mac/{kid}`, `POST /mac/batch/{kid}` |
 | `mac-verify` | `POST /mac/verify`, `POST /mac/verify/batch` |
 | `commit-create` | `POST /commit/{kid}`, `POST /commit/batch/{kid}` |
@@ -1321,6 +1324,36 @@ Response:
 }
 ```
 
+### POST /token/delete
+
+Requires authentication and the independent `token-delete` permission for the
+request KID. Root and admin remain authorized. The signed profile must belong
+to that KID. Deletion is permitted in any lifecycle state, so token rows can be
+purged even after the key is `disabled` or `destroyed`; allowing deletion does
+not permit encode or decode with that key.
+
+```json
+{"ref":"delete-001","kid":"<operational-kid>","profile":"patient-id-token-v1","token":"<token>"}
+```
+
+After the storage transaction commits, the response is HTTP 200:
+
+```json
+{"ref":"delete-001","deleted":true}
+```
+
+Deletion computes the token hash and deletes the row without reading or
+decrypting its envelope, including corrupt or oversized stored envelopes.
+It works for reusable and one-time tokens. An absent, already deleted, or
+consumed token returns HTTP 404 with `{"error":"token not found"}`.
+Invalid input or token encoding returns 400; an invalid credential returns
+401; insufficient permissions or a profile/KID mismatch returns 403. Storage
+failures never return a successful deletion.
+
+A reusable decode that already read the row may still complete. Deletion
+does not erase older backups; restoring a backup can restore the token.
+There is no batch delete or dedicated CLI delete command in this version.
+
 ### POST /token/encode/batch/{kid}
 
 Requires auth and `token-encode` permission for the path `kid`. The key must be `active`.
@@ -1353,6 +1386,8 @@ Response:
 ### POST /token/decode/batch
 
 Requires auth and `token-decode` permission for the request `kid`. The key may be `active` or `retired`.
+
+Stored envelopes are read incrementally under a fixed 5 MiB (`5,242,880` bytes) budget. Each requested occurrence counts, including repeated reusable tokens. Exactly the budget is accepted; exceeding it returns `413` with `{"error":"token decode batch exceeds maximum allowed envelope size"}`, without plaintext, partial items or one-time consumption. Accepted batches return their complete results without an additional response-size cap. This budget bounds retained encrypted material, not total process memory or serialized response bytes.
 
 Request:
 
@@ -2056,7 +2091,7 @@ Top level:
 | `client` | yes | text, unique | Client label. |
 | `apikey_hash` | yes | 64 hex (32 bytes) | Server-side verifier for this client's `X-API-Key`. |
 | `status` | yes | `active` \| `disabled` \| `revoked` | Only `active` clients are authorized. |
-| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `fpe-encrypt`, `fpe-decrypt`, `token-encode`, `token-decode`, `mac-create`, `mac-verify`, `commit-create`, `commit-verify`, `share-split`, `share-combine`, `index-create`, `index-verify`, `mask`, `metrics`, `time-attest`. `kid: "*"` is required for global actions `admin`, `metrics`, and `time-attest`; crypto profile actions require explicit KIDs. An `admin` action grants all endpoints and ignores kid-scoped grants. |
+| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `fpe-encrypt`, `fpe-decrypt`, `token-encode`, `token-decode`, `token-delete`, `mac-create`, `mac-verify`, `commit-create`, `commit-verify`, `share-split`, `share-combine`, `index-create`, `index-verify`, `mask`, `metrics`, `time-attest`. `kid: "*"` is required for global actions `admin`, `metrics`, and `time-attest`; crypto profile actions require explicit KIDs. An `admin` action grants all endpoints and ignores kid-scoped grants. |
 
 `fpe_profiles[]` entries:
 
@@ -2078,7 +2113,7 @@ Top level:
 | `kid` | yes | loaded local KID | Operational key whose symmetric key derives tokenization keys. |
 | `token_prefix` | yes | non-empty visible token prefix, max 16 chars, no whitespace/control chars, no `;` or `=` | Prefix used in returned tokens. |
 | `token_len` | yes | integer >= 32 | Random bytes generated before base64url-no-pad encoding; decode requires this exact decoded byte length. |
-| `max_plaintext_len` | yes | integer 1..1024 | Maximum plaintext length accepted by encode. |
+| `max_plaintext_len` | yes | integer 1..16384 | Maximum Unicode character count accepted by encode (single and batch). |
 | `one_time` | yes | boolean | When true, a successful decode consumes the token. The signed profile currently loaded by Vectis controls this policy. |
 
 `mac_profiles[]` entries:

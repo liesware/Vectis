@@ -592,6 +592,7 @@ pub fn router(state: HttpState) -> Router {
         .route("/token/decode/batch", post(token::decode_batch_endpoint))
         .route("/token/encode/{kid}", post(token::encode_endpoint))
         .route("/token/decode", post(token::decode_endpoint))
+        .route("/token/delete", post(token::delete_endpoint))
         .route("/mac/batch/{kid}", post(mac::create_batch_endpoint))
         .route("/mac/verify/batch", post(mac::verify_batch_endpoint))
         .route("/mac/verify", post(mac::verify_endpoint))

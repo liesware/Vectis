@@ -17,6 +17,7 @@ pub const PERMISSION_ACTIONS: &[&str] = &[
     "fpe-decrypt",
     "token-encode",
     "token-decode",
+    "token-delete",
     "mac-create",
     "mac-verify",
     "index-create",
@@ -499,6 +500,12 @@ mod tests {
         )];
         let state = validate_permission_clients(clients, |_| true).unwrap();
         let authed = state.authenticate_hash(&hex64('8')).unwrap();
+
+        assert!(
+            state
+                .require_permission(&authed, Some(&hex64('a')), "token-delete")
+                .is_err()
+        );
 
         assert!(
             state

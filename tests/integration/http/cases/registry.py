@@ -26,6 +26,8 @@ from . import (
     positive_sharing,
     positive_signatures,
     positive_tokenization,
+    positive_token_delete,
+    positive_token_budget,
 )
 
 
@@ -38,6 +40,8 @@ POSITIVE_CASES = (
     *positive_keys.CASES,  # keys.create, inventory, lifecycle, routes, remote-public-keys
     *positive_fpe.CASES,  # fpe (profile load + stale-config warning + round-trips)
     *positive_tokenization.CASES,  # tokenization, tokenization.one-time
+    *positive_token_delete.CASES,
+    *positive_token_budget.CASES,
     *positive_mac_index.CASES,  # mac, index
     *positive_commitments.CASES,  # commit
     *positive_sharing.CASES,  # shares

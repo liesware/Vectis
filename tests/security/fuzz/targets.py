@@ -53,8 +53,11 @@ from seeds import (
     token_seeds,
     tokenization_batch_seeds,
     tokenization_seeds,
+    token_delete_seeds,
+    token_batch_budget_context,
 )
 from semantics import (
+    token_batch_budget_semantic,
     COMMITMENT_PLAINTEXTS,
     KID_HEX,
     FPE_BATCH_PLAINTEXTS,
@@ -67,6 +70,7 @@ from semantics import (
     TOKENIZATION_PROFILE,
     TOKEN_BATCH_PLAINTEXTS,
     TOKEN_PLAINTEXT,
+    token_delete_semantic,
     _response_items,
     commitment_batch_contract_semantic,
     commitment_randomness_semantic,
@@ -786,6 +790,31 @@ def run_batch_contract(target, client, _rng, args, secrets):
     return counters
 
 
+def run_token_batch_budget(target, client, _rng, args, secrets):
+    context = token_batch_budget_context(client)
+    counters = {"passed": 0, "failed": 0}
+    client.clear_timings()
+    for index in range(args.iterations):
+        status, _body, token = issue_token(client, context, context["profile"], f"budget-{index}", context["plaintext"])
+        if status != 200 or not token:
+            raise RuntimeError("could not prepare token budget fixture")
+        client.declared_secrets += (token,)
+        refs = [f"budget-{index}-{item}" for item in range(32)]
+        items = [{"ref": f"budget-{index}-{item}", "token": token} for item in range(64)]
+        request = {"kid": context["kid"], "profile": context["profile"], "items": items}
+        rejected = client.post_json("/token/decode/batch", request, auth=True)
+        accepted = client.post_json("/token/decode/batch", dict(request, items=items[:32]), auth=True)
+        case = {"refs": refs, "checks": [("over-budget", *rejected), ("under-budget", *accepted)]}
+        findings = token_batch_budget_semantic(case, context)
+        for response in [rejected, accepted]:
+            findings.extend(oracle(*response, *secrets, {200, 413}, False))
+        if check_and_record(target["name"], client, args, index, accepted.status, findings,
+                            {"scenario": target["name"], "kid": context["kid"], "statuses": [rejected.status, accepted.status]}, counters):
+            break
+        print_progress(target["name"], index, args, counters)
+    return counters
+
+
 def _mac_determinism_case(client, context, index):
     plaintext = MAC_PLAINTEXTS[0]
     first = client.post_json(
@@ -1111,10 +1140,13 @@ TARGETS = [
      "scenario": _fpe_batch_contract_case, "semantic": fpe_batch_contract_semantic},
     {"name": "tokenization", "runner": run_body, "seed_factory": tokenization_seeds,
      "auth": True, "semantic": tokenization_semantic},
+    {"name": "token_delete", "runner": run_body, "seed_factory": token_delete_seeds,
+     "auth": True, "semantic": token_delete_semantic},
     {"name": "tokenization_batch", "runner": run_body, "seed_factory": tokenization_batch_seeds,
      "auth": True, "semantic": tokenization_batch_semantic},
     {"name": "token_batch_contract", "runner": run_batch_contract, "capability": "token",
      "scenario": _token_batch_contract_case, "semantic": token_batch_contract_semantic},
+    {"name": "token_batch_budget", "runner": run_token_batch_budget},
     {"name": "one_time_token", "runner": run_one_time_scenario,
      "scenario": _one_time_single_case,
      "semantic": lambda results: one_time_single_semantic(results, ONE_TIME_TOKEN_PLAINTEXT)},

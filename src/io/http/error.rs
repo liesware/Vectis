@@ -81,6 +81,7 @@ fn log_internal_error(status: StatusCode, err: &(dyn std::error::Error + 'static
 pub fn status_for_error(err: &(dyn std::error::Error + 'static)) -> StatusCode {
     if let Some(vectis_err) = err.downcast_ref::<VectisError>() {
         return match vectis_err {
+            VectisError::TokenDecodeBatchTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             VectisError::InvalidInput(_)
             | VectisError::InvalidSignature(_)
             | VectisError::ConfigSignatureStale(_) => StatusCode::BAD_REQUEST,
@@ -125,6 +126,7 @@ fn public_error_message_for_error(
     }
 
     match err.downcast_ref::<VectisError>() {
+        Some(VectisError::TokenDecodeBatchTooLarge) => err.to_string(),
         Some(VectisError::NotFound(message)) => message.clone(),
         Some(VectisError::RemoteUnreachable(_)) => {
             String::from("internal server error final app can't be reached")
@@ -135,6 +137,18 @@ fn public_error_message_for_error(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn token_batch_budget_error_is_public_413() {
+        let err = super::VectisError::TokenDecodeBatchTooLarge;
+        assert_eq!(
+            super::status_for_error(&err),
+            super::StatusCode::PAYLOAD_TOO_LARGE
+        );
+        assert_eq!(
+            super::public_error_message_for_error(super::StatusCode::PAYLOAD_TOO_LARGE, &err),
+            "token decode batch exceeds maximum allowed envelope size"
+        );
+    }
     use super::*;
 
     #[test]

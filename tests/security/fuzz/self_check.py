@@ -21,6 +21,7 @@ from client import FuzzResponse
 from mutations import mutate_raw, mutate_structured
 from oracle import MAX_RESPONSE_DURATION_MS, slow_response_findings
 from semantics import (
+    token_batch_budget_semantic,
     FPE_BATCH_PLAINTEXTS,
     FPE_PLAINTEXT,
     FPE_PROFILE,
@@ -55,6 +56,7 @@ from semantics import (
     token_semantic,
     tokenization_batch_semantic,
     tokenization_semantic,
+    token_delete_semantic,
     sharing_integrity_semantic,
     time_attest_source_unavailable_semantic,
 )
@@ -69,6 +71,22 @@ def self_check():
         total += 1
         if not condition:
             failures.append(label)
+
+    delete = {"ref":"delete-1", "token":"tok_synthetic"}
+    budget_context = {"plaintext": "synthetic"}
+    budget_case = {"refs": ["r"], "checks": [
+        ("over-budget", 413, '{"error":"token decode batch exceeds maximum allowed envelope size"}'),
+        ("under-budget", 200, '{"items":[{"ref":"r","plaintext":"synthetic"}]}'),
+    ]}
+    expect(not token_batch_budget_semantic(budget_case, budget_context), "token budget valid contract")
+    budget_case["checks"][0] = ("over-budget", 413, '{"error":"invalid","items":[]}')
+    expect(token_batch_budget_semantic(budget_case, budget_context), "token budget rejects partial output")
+    budget_case["checks"] = [("under-budget", 200, '{"items":[]}')]
+    expect(token_batch_budget_semantic(budget_case, budget_context), "token budget rejects truncated success")
+    expect(not token_delete_semantic(delete, delete, 200, '{"ref":"delete-1","deleted":true}'), "delete valid output")
+    expect(token_delete_semantic(delete, delete, 200, '{"ref":"delete-1","deleted":false}'), "delete rejects false success")
+    expect(token_delete_semantic(delete, delete, 400, '{"error":"tok_synthetic"}'), "delete detects token reflection")
+    expect(not token_delete_semantic({"token": []}, delete, 400, '{"error":"invalid"}'), "delete oracle handles malformed token type")
 
     token = {
         "kid": "a" * 64,

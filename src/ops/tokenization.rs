@@ -9,6 +9,92 @@ use zeroize::Zeroizing;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct TokenDeleteInput {
+    #[serde(rename = "ref")]
+    ref_id: String,
+    kid: String,
+    profile: String,
+    token: String,
+}
+
+#[derive(Serialize)]
+pub struct TokenDeleteOutput {
+    #[serde(rename = "ref")]
+    ref_id: String,
+    deleted: bool,
+}
+
+impl TokenDeleteOutput {
+    pub fn committed(ref_id: String) -> Self {
+        Self {
+            ref_id,
+            deleted: true,
+        }
+    }
+}
+
+pub struct ValidatedTokenDeleteInput {
+    ref_id: String,
+    kid: String,
+    profile: String,
+    token: Zeroizing<String>,
+}
+
+impl ValidatedTokenDeleteInput {
+    pub fn kid(&self) -> &str {
+        &self.kid
+    }
+    pub fn profile(&self) -> &str {
+        &self.profile
+    }
+}
+
+pub struct PreparedTokenDelete {
+    profile: Arc<tokenization::TokenizationProfile>,
+    input: ValidatedTokenDeleteInput,
+}
+
+pub fn parse_delete_input(request: Value) -> Result<TokenDeleteInput, DynError> {
+    crate::ops::json::parse_json_request(request, "token delete request")
+}
+
+pub fn validate_delete_input(
+    input: TokenDeleteInput,
+) -> Result<ValidatedTokenDeleteInput, DynError> {
+    let ref_id = validation::validate_ref(&input.ref_id)?;
+    keys::validate_key_id(&input.kid)?;
+    validation::validate_aad_config_name("profile", &input.profile)?;
+    validation::validate_text_field("token", &input.token)?;
+    Ok(ValidatedTokenDeleteInput {
+        ref_id,
+        kid: input.kid,
+        profile: input.profile,
+        token: Zeroizing::new(input.token),
+    })
+}
+
+pub fn prepare_delete(
+    keys_db_state: &KeysDbState,
+    profile: Arc<tokenization::TokenizationProfile>,
+    input: ValidatedTokenDeleteInput,
+) -> Result<PreparedTokenDelete, DynError> {
+    keys::prepare_profile_use(
+        keys_db_state,
+        &input.kid,
+        profile.kid(),
+        "tokenization",
+        keys::ProfileUse::TokenDelete,
+    )?;
+    Ok(PreparedTokenDelete { profile, input })
+}
+
+pub fn delete_hashid(prepared: PreparedTokenDelete) -> Result<(String, String), DynError> {
+    let hashid = tokenization::hash_token(&prepared.profile, &prepared.input.token)?;
+    Ok((prepared.input.ref_id, hashid))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TokenEncodeInput {
     #[serde(rename = "ref")]
     ref_id: String,
@@ -670,6 +756,77 @@ fn validate_request_metadata(request: &Value) -> Result<(), DynError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn delete_validates_shape_profile_token_and_lifecycle() {
+        let kid = "a".repeat(64);
+        let profiles = tokenization::validate_tokenization_profiles(
+            serde_json::from_value(serde_json::json!([{
+                "name":"delete-v1", "kid":kid, "token_prefix":"tok_delete",
+                "token_len":32, "max_plaintext_len":128, "one_time":false
+            }]))
+            .unwrap(),
+            |_| true,
+            |_| {
+                Ok(tokenization::DerivedTokenizationKeys {
+                    hash_key: Zeroizing::new(vec![7; 32]),
+                    data_key: Zeroizing::new(vec![9; 32]),
+                    cipher_algorithm: "AES-256/GCM".to_string(),
+                })
+            },
+        )
+        .unwrap();
+        let profile = profiles.get("delete-v1").unwrap();
+        let token = tokenization::generate_token(&profile).unwrap();
+        let request =
+            serde_json::json!({"ref":"delete-1", "kid":kid, "profile":"delete-v1", "token":token});
+        for status in ["active", "retired", "compromised", "disabled", "destroyed"] {
+            let state = keys::test_keys_state_with_lifecycle(&kid, status);
+            let input =
+                validate_delete_input(parse_delete_input(request.clone()).unwrap()).unwrap();
+            let prepared = prepare_delete(&state, profile.clone(), input);
+            assert!(prepared.is_ok());
+            let (ref_id, hashid) = delete_hashid(prepared.unwrap()).unwrap();
+            assert_eq!(ref_id, "delete-1");
+            assert_eq!(hashid, tokenization::hash_token(&profile, &token).unwrap());
+        }
+        let mut unknown = request.clone();
+        unknown["extra"] = serde_json::json!(true);
+        assert!(parse_delete_input(unknown).is_err());
+        for field in ["ref", "kid", "profile", "token"] {
+            let mut missing = request.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(parse_delete_input(missing).is_err());
+            let mut empty = request.clone();
+            empty[field] = serde_json::json!("");
+            assert!(
+                parse_delete_input(empty)
+                    .and_then(validate_delete_input)
+                    .is_err()
+            );
+        }
+        let mut wrong_kid = request.clone();
+        wrong_kid["kid"] = serde_json::json!("b".repeat(64));
+        let input = parse_delete_input(wrong_kid)
+            .and_then(validate_delete_input)
+            .unwrap();
+        let state = keys::test_keys_state_with_lifecycle(&"b".repeat(64), "active");
+        assert!(prepare_delete(&state, profile.clone(), input).is_err());
+        let state = keys::test_keys_state_with_lifecycle(&kid, "active");
+        for invalid in ["wrong_prefix", "tok_delete_AAAA", "tok_delete_!!!!"] {
+            let mut bad = request.clone();
+            bad["token"] = serde_json::json!(invalid);
+            let input = parse_delete_input(bad)
+                .and_then(validate_delete_input)
+                .unwrap();
+            assert!(
+                delete_hashid(prepare_delete(&state, profile.clone(), input).unwrap()).is_err()
+            );
+        }
+        assert_eq!(
+            serde_json::to_value(TokenDeleteOutput::committed("delete-1".to_string())).unwrap(),
+            serde_json::json!({"ref":"delete-1", "deleted":true})
+        );
+    }
     use serde_json::json;
 
     fn encode_input(metadata: Option<Value>) -> TokenEncodeInput {
