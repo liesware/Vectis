@@ -196,7 +196,7 @@ GRANT CONNECT ON DATABASE vectis TO vectis_usr;
 GRANT USAGE ON SCHEMA public TO vectis_usr;
 GRANT SELECT, INSERT, UPDATE ON TABLE public.opskeys TO vectis_usr;
 GRANT SELECT, INSERT, DELETE ON TABLE public.tokens TO vectis_usr;
-GRANT SELECT, INSERT, DELETE ON TABLE public.subjects TO vectis_usr;
+GRANT SELECT, INSERT, DELETE, UPDATE(seed) ON TABLE public.subjects TO vectis_usr;
 GRANT SELECT, INSERT ON TABLE public.indexes TO vectis_usr;
 SQL
 ```
@@ -302,7 +302,7 @@ GRANT CONNECT ON DATABASE vectis TO vectis_usr;
 GRANT USAGE ON SCHEMA public TO vectis_usr;
 GRANT SELECT, INSERT, UPDATE ON TABLE public.opskeys TO vectis_usr;
 GRANT SELECT, INSERT, DELETE ON TABLE public.tokens TO vectis_usr;
-GRANT SELECT, INSERT, DELETE ON TABLE public.subjects TO vectis_usr;
+GRANT SELECT, INSERT, DELETE, UPDATE(seed) ON TABLE public.subjects TO vectis_usr;
 GRANT SELECT, INSERT ON TABLE public.indexes TO vectis_usr;
 SQL
 ```

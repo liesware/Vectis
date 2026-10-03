@@ -349,7 +349,7 @@ CREATE TABLE indexes (
 - For one-time token profiles, grant the runtime role `DELETE` on `tokens`:
   ```sql
   GRANT SELECT, INSERT, DELETE ON TABLE public.tokens TO vectis_usr;
-GRANT SELECT, INSERT, DELETE ON TABLE public.subjects TO vectis_usr;
+GRANT SELECT, INSERT, DELETE, UPDATE(seed) ON TABLE public.subjects TO vectis_usr;
   ```
 - Ask the DBA to apply the schema if the table is missing.
 - Restart Vectis after the database is corrected.

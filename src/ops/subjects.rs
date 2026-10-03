@@ -78,6 +78,18 @@ pub fn prepare_create(
     Ok(PreparedCreateSubject { profile, input })
 }
 
+pub fn subject_identifier(prepared: &PreparedCreateSubject) -> Result<String, DynError> {
+    subjects::subject_id(&prepared.profile, &prepared.input.subject_name)
+}
+
+pub fn existing_output(prepared: &PreparedCreateSubject, subject: String) -> CreateSubjectOutput {
+    CreateSubjectOutput {
+        kid: prepared.profile.kid().to_owned(),
+        profile: prepared.profile.name().to_owned(),
+        subject,
+    }
+}
+
 pub fn create(
     prepared: PreparedCreateSubject,
 ) -> Result<(SubjectRow, CreateSubjectOutput), DynError> {

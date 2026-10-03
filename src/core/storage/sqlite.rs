@@ -119,7 +119,8 @@ impl SqliteStorage {
         hashid: &str,
         data: &str,
     ) -> Result<TokenRow, DynError> {
-        self.save_token_for_subject(kid, hashid, data, None).await
+        self.save_token_for_subject(kid, hashid, data, None, None)
+            .await
     }
 
     pub async fn save_token_for_subject(
@@ -128,7 +129,27 @@ impl SqliteStorage {
         hashid: &str,
         data: &str,
         subject: Option<&str>,
+        expected_seed: Option<&str>,
     ) -> Result<TokenRow, DynError> {
+        if let Some(subject) = subject {
+            let seed = expected_seed.ok_or_else(|| {
+                crate::error::invalid_input("subject write requires a generation guard")
+            })?;
+            let row = TokenRow {
+                kid: kid.to_owned(),
+                hashid: hashid.to_owned(),
+                data: data.to_owned(),
+                subject: Some(subject.to_owned()),
+            };
+            let guard = super::SubjectWriteGuard {
+                kid: kid.to_owned(),
+                subject: subject.to_owned(),
+                seed: zeroize::Zeroizing::new(seed.to_owned()),
+            };
+            self.save_tokens_batch_guarded(std::slice::from_ref(&row), &[guard])
+                .await?;
+            return Ok(row);
+        }
         sqlx::query(
             "
             INSERT INTO tokens (kid, hashid, data, subject)
@@ -152,7 +173,25 @@ impl SqliteStorage {
     }
 
     pub async fn save_tokens_batch(&self, records: &[TokenRow]) -> Result<(), DynError> {
-        let mut tx = self.pool.begin().await?;
+        self.save_tokens_batch_guarded(records, &[]).await
+    }
+
+    pub async fn save_tokens_batch_guarded(
+        &self,
+        records: &[TokenRow],
+        guards: &[super::SubjectWriteGuard],
+    ) -> Result<(), DynError> {
+        let ordered = super::subject_write_guards(records, guards)?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        for guard in ordered {
+            let seed: Option<String> =
+                sqlx::query_scalar("SELECT seed FROM subjects WHERE kid = ? AND subject = ?")
+                    .bind(&guard.kid)
+                    .bind(&guard.subject)
+                    .fetch_optional(&mut *tx)
+                    .await?;
+            super::check_subject_generation(seed, &guard.seed)?;
+        }
         for record in records {
             sqlx::query(
                 "
@@ -344,13 +383,19 @@ impl SqliteStorage {
         })
     }
 
-    pub async fn save_subject(&self, row: &SubjectRow) -> Result<(), DynError> {
+    pub async fn save_subject(&self, row: &SubjectRow) -> Result<bool, DynError> {
         let result = sqlx::query("INSERT INTO subjects (kid, subject, seed) VALUES (?, ?, ?) ON CONFLICT (kid, subject) DO NOTHING")
             .bind(&row.kid).bind(&row.subject).bind(&row.seed).execute(&self.pool).await?;
-        if result.rows_affected() == 0 {
-            return Err(crate::error::conflict("subject already exists"));
-        }
-        Ok(())
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn subject_exists(&self, kid: &str, subject: &str) -> Result<bool, DynError> {
+        let row = sqlx::query("SELECT 1 FROM subjects WHERE kid = ? AND subject = ?")
+            .bind(kid)
+            .bind(subject)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.is_some())
     }
 
     pub async fn get_subject(&self, kid: &str, subject: &str) -> Result<SubjectRow, DynError> {
@@ -369,11 +414,18 @@ impl SqliteStorage {
     }
 
     pub async fn delete_subject(&self, kid: &str, subject: &str) -> Result<(), DynError> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        sqlx::query("DELETE FROM tokens WHERE kid = ? AND subject = ?")
+            .bind(kid)
+            .bind(subject)
+            .execute(&mut *tx)
+            .await?;
         let result = sqlx::query("DELETE FROM subjects WHERE kid = ? AND subject = ?")
             .bind(kid)
             .bind(subject)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+        tx.commit().await?;
         if result.rows_affected() == 0 {
             return Err(crate::error::not_found("subject not found"));
         }
@@ -825,6 +877,80 @@ mod tests {
 
     async fn cleanup(path: PathBuf) {
         let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn subject_purge_rolls_back_when_token_delete_fails() {
+        let (storage, path) = test_storage("subject-purge-rollback").await;
+        let kid = "a".repeat(64);
+        let subject = "b".repeat(64);
+        let hashid = "c".repeat(64);
+        let seed = "AAAAAAAAAAAAAAAAAAAAAA==.AAAAAAAAAAAAAAAA.AA==";
+        storage
+            .save_subject(&SubjectRow {
+                kid: kid.clone(),
+                subject: subject.clone(),
+                seed: seed.to_owned(),
+            })
+            .await
+            .unwrap();
+        storage
+            .save_token_for_subject(&kid, &hashid, seed, Some(&subject), Some(seed))
+            .await
+            .unwrap();
+        sqlx::raw_sql("CREATE TRIGGER fail_subject_purge BEFORE DELETE ON tokens BEGIN SELECT RAISE(ABORT, 'injected failure'); END;")
+            .execute(&storage.pool).await.unwrap();
+        assert!(storage.delete_subject(&kid, &subject).await.is_err());
+        assert_eq!(
+            storage.get_subject(&kid, &subject).await.unwrap().seed,
+            seed
+        );
+        assert!(storage.get_token(&kid, &hashid).await.is_ok());
+        sqlx::raw_sql("DROP TRIGGER fail_subject_purge;")
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        storage.delete_subject(&kid, &subject).await.unwrap();
+        assert!(storage.get_token(&kid, &hashid).await.is_err());
+        storage.pool.close().await;
+        cleanup(path).await;
+    }
+
+    #[tokio::test]
+    async fn subject_purge_rolls_back_when_commit_fails() {
+        let (storage, path) = test_storage("subject-purge-commit").await;
+        let kid = "a".repeat(64);
+        let subject = "b".repeat(64);
+        let hashid = "c".repeat(64);
+        let seed = "AAAAAAAAAAAAAAAAAAAAAA==.AAAAAAAAAAAAAAAA.AA==";
+        storage
+            .save_subject(&SubjectRow {
+                kid: kid.clone(),
+                subject: subject.clone(),
+                seed: seed.to_owned(),
+            })
+            .await
+            .unwrap();
+        storage
+            .save_token_for_subject(&kid, &hashid, seed, Some(&subject), Some(seed))
+            .await
+            .unwrap();
+        // Deferred constraint lets both deletes execute, but rejects COMMIT.
+        sqlx::raw_sql("CREATE TABLE purge_parent (id INTEGER PRIMARY KEY); CREATE TABLE purge_child (id INTEGER REFERENCES purge_parent(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER fail_purge_commit AFTER DELETE ON tokens BEGIN INSERT INTO purge_child VALUES (1); END;")
+            .execute(&storage.pool).await.unwrap();
+        assert!(storage.delete_subject(&kid, &subject).await.is_err());
+        assert_eq!(
+            storage.get_subject(&kid, &subject).await.unwrap().seed,
+            seed
+        );
+        assert!(storage.get_token(&kid, &hashid).await.is_ok());
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM purge_child")
+            .fetch_one(&storage.pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        storage.pool.close().await;
+        cleanup(path).await;
     }
 
     #[tokio::test]

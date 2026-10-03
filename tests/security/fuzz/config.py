@@ -266,6 +266,14 @@ def configure_one_time_tokenization_profiles(client, kid):
     )
 
 
+def configure_subject_profile(client, kid):
+    _configure_tokenization_profiles(client, [{
+        "name": "fuzz-subject-v1", "kid": kid, "token_prefix": "tok_subject",
+        "token_len": 32, "max_plaintext_len": 128, "one_time": False,
+        "subject_mode": "stored",
+    }], "subject contract")
+
+
 def configure_mac_profile(client, kid):
     original_cfg = CONFIG_PATH.read_bytes() if CONFIG_PATH.exists() else None
     original_sig = CONFIG_SIGN_PATH.read_bytes() if CONFIG_SIGN_PATH.exists() else None

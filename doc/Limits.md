@@ -138,8 +138,10 @@ artifact remains below the 2 MiB request limit when submitted to
 
 Profiles keep their existing 128-character AAD-safe bound. Token `subject` is
 nullable only for legacy rows. Subject-aware requests retain all existing token
-limits and the shared HTTP/batch limits. Subject deletion leaves token rows;
-their non-null association is never treated as a legacy row.
+limits and the shared HTTP/batch limits. Subject deletion atomically purges the
+seed and associated token rows. Subject-bound inserts verify the opened seed
+generation under a database lock; stale writes are rejected, never downgraded
+to legacy rows. Older orphan rows are not automatically cleaned up.
 
 | Area | Aspect | Current limit | Unit | Kind | Enforcement | Source |
 |---|---|---:|---|---|---|---|

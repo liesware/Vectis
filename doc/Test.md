@@ -146,7 +146,9 @@ runtime.
 ## Python HTTP Tests
 
 The positive suite races eight subject creations and expects one `201` and
-seven `409` responses. Run its isolated server with
+seven `200` responses with the same ID and unchanged seed. Storage tests cover
+transactional token purging, stale-generation writes and encode/delete races.
+Run its isolated server with
 `VECTIS_MAX_CONCURRENT_CRYPTO=8` (or greater) so crypto admission does not turn
 this storage-uniqueness check into an overload test. The CI integration runner
 sets eight slots explicitly; the production default remains unchanged.
@@ -294,6 +296,9 @@ reusable and one-time token behavior, batch ordering and atomicity
 (`*_batch_contract` and `index_batch_transaction`), and the single-item
 cryptographic capabilities. `compact_signature_integrity` creates fresh tokens
 and verifies the ML-DSA-before-EdDSA failure order for every compact segment.
+`subject_contract` verifies `201/200` idempotent creation, preservation of the
+seed on retry, and token unavailability after deletion and recreation. It uses
+fresh names per iteration and redacts names, plaintexts and tokens in artifacts.
 `time_attest_offline` temporarily configures loopback-only unavailable sources
 and verifies the fail-closed `502` contract without using the Internet or
 affecting readiness. `http_protocol` checks the 2 MiB request boundary,

@@ -805,3 +805,18 @@ def time_attest_source_unavailable_semantic(case):
     if case["ready_before"] != 200 or case["ready_after"] != 200:
         findings.append("SEMANTIC: time attestation source failure changed readiness")
     return findings
+def subject_contract_semantic(responses):
+    expected = [201, 200, 200, 200, 200, 204, 201, 404, 204]
+    if [status for status, _ in responses] != expected:
+        return ["subject idempotency/deletion status contract violated"]
+    outputs = [_parse(body) for _, body in responses]
+    created = outputs[0]
+    if not isinstance(created, dict) or set(created) != {"kid", "profile", "subject"}:
+        return ["subject create response shape invalid"]
+    if any(outputs[index] != created for index in [1, 3, 6]):
+        return ["subject retry/recreation identifier changed"]
+    if outputs[4] != {"ref": "subject-token", "plaintext": "synthetic subject contract"}:
+        return ["subject retry replaced the seed or failed recovery"]
+    if outputs[7] != {"error": "token not found"}:
+        return ["subject deletion did not invalidate the stored token"]
+    return []

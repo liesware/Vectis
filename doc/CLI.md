@@ -702,13 +702,17 @@ vectis subject delete <kid> <subject>
 
 `create` requires `subject-create`, an active KID and a signed `stored` profile;
 it displays the API's `201` response containing `kid`, `profile` and `subject`.
-Creating the same subject again returns `409`, without replacing its seed.
+Creating the same subject again returns `200` with the same identifiers, without
+replacing its seed. This allows recovery after a lost create response.
 `delete` requires `subject-delete` and follows the API's independent cleanup
 policy, not token delete lifecycle restrictions. Success is `204`, exit code
 zero and empty stdout, including with `--output json|yaml`; a second deletion
 returns `404` and a nonzero exit code. Subject identifiers must be exactly 64
 lowercase ASCII hexadecimal characters. Deleting a subject prevents subsequent
-recovery of its tokens but does not physically delete their rows.
+recovery of its tokens and physically deletes their rows in the same transaction.
+It does not require an additional `token-delete` grant. Subject-bound encode
+fails with `404` if deletion wins before storage insert, or `409` if the seed
+generation changed during the operation; no tokens are inserted on failure.
 
 ### `vectis mac`
 

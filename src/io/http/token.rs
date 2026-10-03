@@ -113,6 +113,7 @@ async fn encode(
             err.as_ref(),
         )
     })?;
+    let write_guard = profile.write_guard();
     let prepared = match state
         .with_keys_db_state(|keys_db_state| {
             ops::tokenization::prepare_encode(keys_db_state, &kid, profile, input)
@@ -155,6 +156,7 @@ async fn encode(
             &record.hashid,
             &record.data,
             record.subject.as_deref(),
+            write_guard.as_ref().map(|guard| guard.seed.as_str()),
         )
         .await
     {
@@ -282,6 +284,7 @@ async fn encode_batch(
             err.as_ref(),
         )
     })?;
+    let write_guard = profile.write_guard();
     let prepared = match state
         .with_keys_db_state(|keys_db_state| {
             ops::tokenization::prepare_encode_batch(keys_db_state, &kid, profile, input)
@@ -329,7 +332,11 @@ async fn encode_batch(
         })
         .collect::<Vec<_>>();
 
-    if let Err(err) = state.storage().save_tokens_batch(&rows).await {
+    if let Err(err) = state
+        .storage()
+        .save_tokens_batch_guarded(&rows, write_guard.as_slice())
+        .await
+    {
         error!(error = %err, kid = %kid, "token encode batch storage insert failed");
         return Err(crypto_failed_response(
             "token.encode.batch.failed",

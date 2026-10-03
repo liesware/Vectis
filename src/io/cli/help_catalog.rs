@@ -1313,7 +1313,7 @@ const SUBJECT_HELP: CommandHelp = CommandHelp {
         HelpSection {
             title: "Results:",
             lines: &[
-                "  create                POST /subject/{kid}; 201 JSON response",
+                "  create                POST /subject/{kid}; 201 new, 200 existing, same ID",
                 "  delete                DELETE /subject/{kid}/{subject}; 204 with no stdout",
                 "  subject               Exactly 64 lowercase ASCII hex characters",
                 "  authentication        Requires VECTIS_APIKEY",

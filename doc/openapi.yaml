@@ -678,8 +678,11 @@ paths:
       summary: Create a stored subject seed
       description: >
         Requires subject-create for this KID, an active key and a matching stored
-        tokenization profile. The name is not stored. Duplicate creation returns
-        409 and never replaces the seed. Caller names are not normalized.
+        tokenization profile. The name is not stored. Idempotent retries return
+        200 with the same ID and never replace or repair the seed. Caller names are not normalized.
+        The subject identifier is deterministic for the same KID, profile and
+        exact name; the seed is random and is never returned. Retain the returned
+        identifier for subject-bound token operations. No ref is required.
       security:
         - ApiKeyAuth: []
       parameters:
@@ -690,15 +693,46 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/CreateSubjectInput"
+            example:
+              profile: patient-subject-v1
+              subject_name: synthetic-user
       responses:
+        "200":
+          description: Existing subject; same identifiers returned, seed unchanged
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateSubjectOutput"
         "201":
           description: Created subject; seed material is never returned
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/CreateSubjectOutput"
-        "409":
-          description: Subject already exists
+              example:
+                kid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                profile: patient-subject-v1
+                subject: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        "400":
+          description: Invalid input, unknown profile or profile not configured as stored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Missing subject-create grant, profile/KID mismatch or key not active
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Operational key not found
           content:
             application/json:
               schema:
@@ -709,11 +743,17 @@ paths:
   /subject/{kid}/{subject}:
     delete:
       tags: [Tokenization]
-      summary: Delete a stored subject seed without deleting tokens
+      summary: Atomically delete a stored subject seed and its tokens
       description: >
         Requires subject-delete for this KID. Does not require a usable key or
-        decrypt the seed. Retained tokens keep their subject and cannot use the
-        legacy path. In-flight requests may finish; backups can restore seeds.
+        decrypt the seed. No request body, profile or JSON content type is required.
+        Does not enforce key lifecycle or require the key to be loaded; authorization
+        and valid path identifiers remain mandatory. All token rows for this KID
+        and subject are purged in the same transaction; no additional token-delete
+        grant is required. Subject-bound writes check the opened seed generation
+        under a database lock and cannot insert after deletion or recreation.
+        Operations that already read data may finish; backups can restore deleted
+        material. No subject list/get endpoint is exposed.
       security:
         - ApiKeyAuth: []
       parameters:
@@ -721,13 +761,33 @@ paths:
         - $ref: "#/components/parameters/Subject"
       responses:
         "204":
-          description: Subject deleted
+          description: Subject seed and associated tokens deleted; empty response body
+        "400":
+          description: Invalid KID or subject identifier
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Missing subject-delete grant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Subject not found
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: subject not found
         default:
           $ref: "#/components/responses/Error"
 
@@ -735,7 +795,12 @@ paths:
     post:
       tags: [Tokenization]
       summary: Create a subject-bound token
-      description: Requires token-encode, an active key, a matching stored profile and an existing subject seed.
+      description: >
+        Requires token-encode, an active key, a matching stored profile and an
+        existing subject seed. The insert checks the opened seed generation under
+        a database lock. Concurrent deletion returns 404 subject not found;
+        deletion followed by recreation returns 409 subject changed during token
+        operation. Neither failure inserts or returns a token.
       security:
         - ApiKeyAuth: []
       parameters:
@@ -761,7 +826,13 @@ paths:
     post:
       tags: [Tokenization]
       summary: Create an atomic batch of subject-bound tokens
-      description: Requires token-encode and a stored profile; one existing subject applies to all items. Maximum 128 items.
+      description: >
+        Requires token-encode, an active key and a matching stored profile; one
+        existing subject applies to all items. Maximum 128 items. Before inserting,
+        the transaction checks the opened seed generation under a database lock.
+        Concurrent deletion returns 404 subject not found; recreation with a
+        different seed returns 409 subject changed during token operation.
+        Failures insert no tokens and return no partial items.
       security:
         - ApiKeyAuth: []
       parameters:

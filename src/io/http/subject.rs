@@ -34,7 +34,7 @@ pub async fn token_context(
     let row = state.storage().get_subject(kid, subject).await?;
     blocking::spawn_blocking_crypto(move || {
         let keys = subjects::open_seed(&profile, &row.subject, &row.seed)?;
-        Ok(TokenContext::with_subject(profile, keys))
+        Ok(TokenContext::with_subject(profile, keys).with_subject_generation(row.seed))
     })
     .await
 }
@@ -77,10 +77,30 @@ pub async fn create_endpoint(
         .with_keys_db_state(|keys| ops::subjects::prepare_create(keys, &kid, profile, input))
         .await
         .map_err(&failed)?;
+    let subject = ops::subjects::subject_identifier(&prepared).map_err(&failed)?;
+    if state
+        .storage()
+        .subject_exists(&kid, &subject)
+        .await
+        .map_err(&failed)?
+    {
+        audit::operation_success(
+            "subject.create.success",
+            Some(&actor),
+            Some(&kid),
+            None,
+            Some("subject-create"),
+        );
+        metrics::record_crypto_operation("subject_create", "success");
+        return Ok((
+            StatusCode::OK,
+            Json(ops::subjects::existing_output(&prepared, subject)),
+        ));
+    }
     let (row, output) = blocking::spawn_blocking_crypto(move || ops::subjects::create(prepared))
         .await
         .map_err(&failed)?;
-    state.storage().save_subject(&row).await.map_err(&failed)?;
+    let created = state.storage().save_subject(&row).await.map_err(&failed)?;
     audit::operation_success(
         "subject.create.success",
         Some(&actor),
@@ -89,7 +109,14 @@ pub async fn create_endpoint(
         Some("subject-create"),
     );
     metrics::record_crypto_operation("subject_create", "success");
-    Ok((StatusCode::CREATED, Json(output)))
+    Ok((
+        if created {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        Json(output),
+    ))
 }
 
 pub async fn delete_endpoint(

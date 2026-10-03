@@ -588,19 +588,28 @@ Profiles default to `subject_mode: none`; new `stored` profiles use authenticate
 32-byte random seeds in `subjects(kid, subject, seed)` and request-scoped derived
 keys. `POST /subject/{kid}` and `DELETE /subject/{kid}/{subject}` require independent
 `subject-create` / `subject-delete` grants. Subject encode paths include the ID;
-decode and token-delete bodies supply it. See [API](API.md#subject-keys) for limits,
-derivation and error semantics.
+decode and token-delete bodies supply it. See [subject create](API.md#post-subjectkid)
+and [subject delete](API.md#delete-subjectkidsubject) for request/response examples,
+independent permissions and error statuses, and [Subject Keys](API.md#subject-keys)
+for limits and derivation. Create requires an active operational key; subject
+delete takes no body, does not enforce key lifecycle and returns an empty `204`.
 
 Create/delete emit `subject.create.success` / `subject.delete.success` audit
 events (and `.failed` / `.denied` events) and bounded
 `vectis_crypto_operation_total{operation,result}` counters. Operation is
 `subject_create` or `subject_delete`; result is `success` or `failed`.
 Neither subject identifiers nor names or seeds are metric labels.
-Deletion removes only the seed, not tokens, does not cancel in-flight operations,
-and does not prevent a backup from restoring the seed. Database upgrades require
+Creation returns `201` for a new subject or `200` with the same ID on retry,
+without replacing the seed. Deletion atomically removes the seed and its tokens,
+does not cancel operations that already read their data,
+and does not prevent a backup from restoring deleted material. Subject-bound
+inserts verify the opened seed generation under a database lock; deletion or
+recreation rejects stale writes with `404` or `409`, respectively. Preexisting
+orphan rows are not automatically purged. Database upgrades require
 the explicit [subject keys migrations](../src/db/migrations); startup never
 migrates schemas. Grant PostgreSQL runtime roles `SELECT, INSERT, DELETE` on
-`public.subjects`, and upgrade every node before activating `stored` profiles.
+`public.subjects`, plus `UPDATE(seed)` for row locking, and upgrade every node
+before activating `stored` profiles. Vectis never replaces a seed on retry.
 Requests select a profile by name; token prefix, token length, plaintext length
 limit, and bound KID come from signed config. Vectis uses the fixed internal
 tokenization scheme `token-random-v1`. Encode

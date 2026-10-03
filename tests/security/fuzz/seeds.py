@@ -12,6 +12,7 @@ from config import (
     configure_masking_profile,
     configure_one_time_tokenization_profiles,
     configure_sharing_profile,
+    configure_subject_profile,
     configure_tokenization_profile,
 )
 from semantics import (
@@ -149,6 +150,12 @@ def compact_signature_context(client):
             client, {"tag": "fuzz-compact-signature", "profile": "hybrid-standard-v1"}
         )
     }
+
+
+def subject_contract_context(client):
+    kid = _create_key(client, {"tag": "fuzz-subject", "profile": "hybrid-performance-v1"})
+    configure_subject_profile(client, kid)
+    return {"kid": kid, "profile": "fuzz-subject-v1"}
 
 
 def mutate_share_tag(encoded):

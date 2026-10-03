@@ -295,7 +295,8 @@ Current SQLite schema:
 Existing installations must apply the matching SQL in
 [`src/db/migrations`](../src/db/migrations) before upgrading. `CREATE TABLE IF
 NOT EXISTS` does not add `tokens.subject` to an older table. PostgreSQL runtime
-roles also need `SELECT, INSERT, DELETE` on `public.subjects`.
+roles also need `SELECT, INSERT, DELETE` and `UPDATE(seed)` on `public.subjects`.
+The column-level UPDATE privilege enables row locking; retry never replaces seeds.
 
 ```sql
 CREATE TABLE IF NOT EXISTS opskeys (

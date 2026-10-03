@@ -13,13 +13,16 @@ async fn contract(storage: StorageState) {
         seed: ENVELOPE.to_owned(),
     };
     let results = futures_util::future::join_all((0..16).map(|_| storage.save_subject(&row))).await;
-    assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
-    for error in results.into_iter().filter_map(Result::err) {
-        assert!(matches!(
-            error.downcast_ref::<crate::error::VectisError>(),
-            Some(crate::error::VectisError::Conflict(_))
-        ));
-    }
+    assert_eq!(results.iter().filter(|r| matches!(r, Ok(true))).count(), 1);
+    assert_eq!(
+        results.iter().filter(|r| matches!(r, Ok(false))).count(),
+        15
+    );
+    let guard = SubjectWriteGuard {
+        kid: kid.clone(),
+        subject: subject.clone(),
+        seed: zeroize::Zeroizing::new(ENVELOPE.to_owned()),
+    };
     assert_eq!(
         storage.get_subject(&kid, &subject).await.unwrap().seed,
         ENVELOPE
@@ -27,7 +30,7 @@ async fn contract(storage: StorageState) {
     let first = "d".repeat(64);
     let second = "e".repeat(64);
     storage
-        .save_token_for_subject(&kid, &first, ENVELOPE, Some(&subject))
+        .save_token_for_subject(&kid, &first, ENVELOPE, Some(&subject), Some(ENVELOPE))
         .await
         .unwrap();
     storage.save_token(&kid, &second, ENVELOPE).await.unwrap();
@@ -62,7 +65,12 @@ async fn contract(storage: StorageState) {
             },
         ],
     ] {
-        assert!(storage.save_tokens_batch(&records).await.is_err());
+        assert!(
+            storage
+                .save_tokens_batch_guarded(&records, std::slice::from_ref(&guard))
+                .await
+                .is_err()
+        );
         assert!(storage.get_token(&kid, &fresh).await.is_err());
     }
     assert!(storage.delete_token(&kid, &first).await.is_err());
@@ -110,22 +118,103 @@ async fn contract(storage: StorageState) {
             .unwrap()
             .as_ref()
     ));
-    assert_eq!(
+    assert!(storage.get_token(&kid, &first).await.is_err());
+    assert!(storage.get_token(&kid, &second).await.is_ok());
+    assert!(storage.delete_subject(&kid, &subject).await.is_err());
+    assert!(
         storage
-            .get_token(&kid, &first)
+            .save_token_for_subject(&kid, &fresh, ENVELOPE, Some(&subject), Some(ENVELOPE))
             .await
-            .unwrap()
-            .subject
-            .as_deref(),
-        Some(subject.as_str())
+            .is_err()
     );
     storage.save_subject(&row).await.unwrap();
-    storage.delete_subject(&kid, &subject).await.unwrap();
+    let other_row = SubjectRow {
+        kid: kid.clone(),
+        subject: other.clone(),
+        seed: ENVELOPE.to_owned(),
+    };
+    storage.save_subject(&other_row).await.unwrap();
+    let other_guard = SubjectWriteGuard {
+        kid: kid.clone(),
+        subject: other.clone(),
+        seed: zeroize::Zeroizing::new(ENVELOPE.to_owned()),
+    };
+    let records = vec![
+        TokenRow {
+            kid: kid.clone(),
+            hashid: first.clone(),
+            data: ENVELOPE.to_owned(),
+            subject: Some(subject.clone()),
+        },
+        TokenRow {
+            kid: kid.clone(),
+            hashid: fresh.clone(),
+            data: ENVELOPE.to_owned(),
+            subject: Some(other.clone()),
+        },
+    ];
+    assert!(storage.save_tokens_batch(&records).await.is_err());
+    assert!(storage.get_token(&kid, &first).await.is_err());
     storage
-        .consume_tokens_batch_for_subject(&kid, &[first], Some(&subject))
+        .save_tokens_batch_guarded(&records, &[other_guard.clone(), guard.clone()])
         .await
         .unwrap();
+    storage.delete_subject(&kid, &subject).await.unwrap();
+    assert!(storage.get_token(&kid, &first).await.is_err());
+    assert!(storage.get_token(&kid, &fresh).await.is_ok());
+    let replacement = SubjectRow {
+        kid: kid.clone(),
+        subject: subject.clone(),
+        seed: "AAAAAAAAAAAAAAAAAAAAAQ==.AAAAAAAAAAAAAAAA.AA==".to_owned(),
+    };
+    storage.save_subject(&replacement).await.unwrap();
+    let err = storage
+        .save_token_for_subject(&kid, &first, ENVELOPE, Some(&subject), Some(ENVELOPE))
+        .await
+        .unwrap_err();
+    assert_eq!(err.to_string(), "subject changed during token operation");
+    assert!(
+        storage
+            .save_tokens_batch_guarded(&records, &[guard, other_guard])
+            .await
+            .is_err()
+    );
+    assert!(storage.get_token(&kid, &first).await.is_err());
+    storage.delete_subject(&kid, &subject).await.unwrap();
+    storage.delete_subject(&kid, &other).await.unwrap();
     storage.consume_token(&kid, &second).await.unwrap();
+
+    // Whichever transaction wins, a completed deletion leaves no stale insert.
+    for batch in [false, true] {
+        storage.save_subject(&row).await.unwrap();
+        let records = [TokenRow {
+            kid: kid.clone(),
+            hashid: first.clone(),
+            data: ENVELOPE.to_owned(),
+            subject: Some(subject.clone()),
+        }];
+        let guards = [SubjectWriteGuard {
+            kid: kid.clone(),
+            subject: subject.clone(),
+            seed: zeroize::Zeroizing::new(ENVELOPE.to_owned()),
+        }];
+        let write = async {
+            if batch {
+                storage.save_tokens_batch_guarded(&records, &guards).await
+            } else {
+                storage
+                    .save_token_for_subject(&kid, &first, ENVELOPE, Some(&subject), Some(ENVELOPE))
+                    .await
+                    .map(|_| ())
+            }
+        };
+        let (written, deleted) = tokio::join!(write, storage.delete_subject(&kid, &subject));
+        deleted.unwrap();
+        if let Err(err) = written {
+            assert!(crate::error::is_not_found(err.as_ref()));
+        }
+        assert!(storage.get_token(&kid, &first).await.is_err());
+    }
 }
 
 #[tokio::test]

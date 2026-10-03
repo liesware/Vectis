@@ -84,6 +84,8 @@ def _runtime_contracts(env, configuration, directory):
     created = json_command(["subject", "create", kid], create_body, credentials["subject-create"], file=True)
     subject = created["subject"]
     require(created["kid"] == kid, "subject create returns the requested KID")
+    require(json_command(["subject", "create", kid], create_body, credentials["subject-create"]) == created,
+            "subject create retry recovers the same ID")
     for mode in ["none", "stored"]:
         profile = f"cli-{mode}"
         route = ["--subject", subject] if mode == "stored" else []

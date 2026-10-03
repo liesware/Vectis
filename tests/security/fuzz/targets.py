@@ -55,6 +55,7 @@ from seeds import (
     tokenization_seeds,
     token_delete_seeds,
     token_batch_budget_context,
+    subject_contract_context,
 )
 from semantics import (
     token_batch_budget_semantic,
@@ -99,6 +100,7 @@ from semantics import (
     tokenization_semantic,
     sharing_integrity_semantic,
     time_attest_source_unavailable_semantic,
+    subject_contract_semantic,
 )
 
 HTTP_MAX_SIZE = 2 * 1024 * 1024
@@ -527,20 +529,22 @@ def _token_batch_duplicate_policy_case(client, context, index):
 
 def run_one_time_scenario(target, client, _rng, args, secrets):
     apikey, unseal = secrets
-    context = one_time_token_context(client)
+    context = target.get("setup", one_time_token_context)(client)
     counters = {"passed": 0, "failed": 0}
     # Concurrent scenarios share one pool for the whole run instead of spinning up
     # and tearing down a ThreadPoolExecutor on every iteration.
     executor = ThreadPoolExecutor(max_workers=2) if target.get("concurrent") else None
+    declared_secrets = client.declared_secrets
     if executor is not None:
         context["executor"] = executor
     try:
         client.clear_timings()  # drop setup-phase timings so they don't attach to case 0
         for index in range(args.iterations):
+            client.declared_secrets = declared_secrets
             responses = target["scenario"](client, context, index)
             findings = []
             for status, body in responses:
-                findings.extend(oracle(status, body, apikey, unseal, ALLOWED_STATUS, False))
+                findings.extend(oracle(status, body, apikey, unseal, target.get("allowed_status", ALLOWED_STATUS), False))
             findings.extend(target["semantic"](responses))
             status = 0 if any(response_status == 0 for response_status, _body in responses) else 200
             description = {
@@ -552,9 +556,38 @@ def run_one_time_scenario(target, client, _rng, args, secrets):
                 break
             print_progress(target["name"], index, args, counters)
     finally:
+        client.declared_secrets = declared_secrets
         if executor is not None:
             executor.shutdown(wait=True)
     return counters
+
+
+def _subject_contract_case(client, context, index):
+    kid, profile = context["kid"], context["profile"]
+    plaintext = "synthetic subject contract"
+    name = f"subject-contract-{index}"
+    client.declared_secrets = tuple(dict.fromkeys((*client.declared_secrets, plaintext, name)))
+    create = {"profile": profile, "subject_name": name}
+    results = [client.post_json(f"/subject/{kid}", create, auth=True)]
+    created = _parse(results[0][1]) or {}
+    subject = created.get("subject")
+    if results[0][0] != 201 or not isinstance(subject, str):
+        return results
+    results.append(client.post_json(f"/subject/{kid}", create, auth=True))
+    route = f"/token/encode/{kid}/subject/{subject}"
+    results.append(client.post_json(route, {"ref": "subject-token", "profile": profile, "plaintext": plaintext}, auth=True))
+    token = (_parse(results[2][1]) or {}).get("token")
+    if results[2][0] != 200 or not isinstance(token, str):
+        return results
+    client.declared_secrets = (*client.declared_secrets, token)
+    inverse = {"ref": "subject-token", "kid": kid, "profile": profile, "subject": subject, "token": token}
+    results.append(client.post_json(f"/subject/{kid}", create, auth=True))
+    results.append(client.post_json("/token/decode", inverse, auth=True))
+    results.append(client.request("DELETE", f"/subject/{kid}/{subject}", auth=True))
+    results.append(client.post_json(f"/subject/{kid}", create, auth=True))
+    results.append(client.post_json("/token/decode", inverse, auth=True))
+    results.append(client.request("DELETE", f"/subject/{kid}/{subject}", auth=True))
+    return results
 
 
 def _duplicate_refs(items):
@@ -1160,6 +1193,9 @@ TARGETS = [
     {"name": "token_batch_duplicate_policy", "runner": run_one_time_scenario,
      "scenario": _token_batch_duplicate_policy_case,
      "semantic": lambda results: token_batch_duplicate_policy_semantic(results, ONE_TIME_TOKEN_PLAINTEXT)},
+    {"name": "subject_contract", "runner": run_one_time_scenario,
+     "setup": subject_contract_context, "scenario": _subject_contract_case,
+     "semantic": subject_contract_semantic, "allowed_status": ALLOWED_STATUS | {201, 204}},
     {"name": "mac", "runner": run_body, "seed_factory": mac_seeds, "auth": True},
     {"name": "mac_batch", "runner": run_body, "seed_factory": mac_batch_seeds, "auth": True},
     {"name": "mac_batch_contract", "runner": run_batch_contract, "capability": "mac",

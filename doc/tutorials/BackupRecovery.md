@@ -213,7 +213,7 @@ GRANT CONNECT ON DATABASE vectis_backup_lab TO vectis_usr;
 GRANT USAGE ON SCHEMA public TO vectis_usr;
 GRANT SELECT, INSERT, UPDATE ON TABLE public.opskeys TO vectis_usr;
 GRANT SELECT, INSERT, DELETE ON TABLE public.tokens TO vectis_usr;
-GRANT SELECT, INSERT, DELETE ON TABLE public.subjects TO vectis_usr;
+GRANT SELECT, INSERT, DELETE, UPDATE(seed) ON TABLE public.subjects TO vectis_usr;
 GRANT SELECT, INSERT ON TABLE public.indexes TO vectis_usr;
 SQL
 fi
@@ -294,7 +294,9 @@ chmod 600 .env
 Start the node and create an operational key, a reversible token, and a blind
 index. Together they exercise the key, token and index storage tables. The
 `subjects` table is also included in full database backups; restoring a deleted
-seed can make its retained tokens readable again. Backup retention must be part
+seed together with its token rows can make those tokens readable again. Subject
+deletion purges both transactionally in the live database, not in existing
+backups. Backup retention must be part
 of any subject-erasure policy.
 
 ```sh
@@ -544,7 +546,7 @@ GRANT CONNECT ON DATABASE vectis_backup_lab TO vectis_usr;
 GRANT USAGE ON SCHEMA public TO vectis_usr;
 GRANT SELECT, INSERT, UPDATE ON TABLE public.opskeys TO vectis_usr;
 GRANT SELECT, INSERT, DELETE ON TABLE public.tokens TO vectis_usr;
-GRANT SELECT, INSERT, DELETE ON TABLE public.subjects TO vectis_usr;
+GRANT SELECT, INSERT, DELETE, UPDATE(seed) ON TABLE public.subjects TO vectis_usr;
 GRANT SELECT, INSERT ON TABLE public.indexes TO vectis_usr;
 SQL
 fi

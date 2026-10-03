@@ -76,6 +76,7 @@ pub struct DerivedTokenizationKeys {
 pub struct TokenContext {
     profile: Arc<TokenizationProfile>,
     subject_keys: Option<Arc<crate::core::subjects::SubjectTokenKeys>>,
+    subject_seed: Option<Zeroizing<String>>,
 }
 
 impl From<Arc<TokenizationProfile>> for TokenContext {
@@ -83,6 +84,7 @@ impl From<Arc<TokenizationProfile>> for TokenContext {
         Self {
             profile,
             subject_keys: None,
+            subject_seed: None,
         }
     }
 }
@@ -102,7 +104,21 @@ impl TokenContext {
         Self {
             profile,
             subject_keys: Some(Arc::new(keys)),
+            subject_seed: None,
         }
+    }
+
+    pub fn with_subject_generation(mut self, seed: String) -> Self {
+        self.subject_seed = Some(Zeroizing::new(seed));
+        self
+    }
+
+    pub fn write_guard(&self) -> Option<crate::core::storage::SubjectWriteGuard> {
+        Some(crate::core::storage::SubjectWriteGuard {
+            kid: self.kid().to_owned(),
+            subject: self.subject()?.to_owned(),
+            seed: self.subject_seed.clone()?,
+        })
     }
 
     pub fn subject(&self) -> Option<&str> {

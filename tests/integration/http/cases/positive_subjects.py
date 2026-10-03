@@ -39,11 +39,10 @@ def run_subjects(ctx):
             for _ in range(8)
         ])
         statuses = sorted(status for status, _ in concurrent)
-        require(statuses == [201] + [409] * 7, f"subject creation has one winner; received statuses: {statuses}")
+        require(statuses == [200] * 7 + [201], f"subject creation has one winner; received statuses: {statuses}")
         subject = next(output["subject"] for status, output in concurrent if status == 201)
         for status, output in concurrent:
-            if status == 409:
-                require(output == {"error": "subject already exists"}, "duplicate never replaces seed")
+            require(output == {"kid": kid, "profile": names[0], "subject": subject}, "retry returns the same subject ID")
         other = ctx.http.post(f"/subject/{kid}", dict(create_body, subject_name="other-user"), auth=True)[1]["subject"]
         other_profile = ctx.http.post(f"/subject/{kid}", dict(create_body, profile=names[2]), auth=True)[1]["subject"]
         require(len(subject) == 64 and subject != other != other_profile and subject != other_profile, "domain-scoped ids")
@@ -52,6 +51,9 @@ def run_subjects(ctx):
         require(status == 200 and encoded["subject"] == subject, "encode echoes subject")
         inverse = {"ref": "subject-decode", "kid": kid, "profile": names[0], "token": encoded["token"], "subject": subject}
         require(app.post("/token/decode", inverse, auth=True)[1]["plaintext"] == body["plaintext"], "subject round trip")
+        retry = ctx.http.post(f"/subject/{kid}", create_body, auth=True)
+        require(retry[0] == 200 and retry[1]["subject"] == subject, "lost-response retry recovers ID")
+        require(app.post("/token/decode", inverse, auth=True)[1]["plaintext"] == body["plaintext"], "retry preserves original seed")
         require(app.post("/token/decode", dict(inverse, subject=other), auth=True)[0] == 404, "other subject cannot decode")
         require(app.post("/token/delete", dict(inverse, subject=other), auth=True)[0] == 404, "other subject cannot delete")
         missing = dict(inverse)
@@ -86,7 +88,7 @@ def run_subjects(ctx):
         require(ctx.http.post(f"/subject/{kid}", dict(create_body, subject_name="disabled-new"), auth=True)[0] == 403, "create requires active key")
         require(delete(ctx.http, f"/subject/{kid}/{once}")[0] == 204, "delete works with disabled key")
         require(delete(ctx.http, f"/subject/{kid}/{once}")[0] == 404, "delete absent subject")
-        print("- subject isolation, create conflicts, batching, one-time races and cleanup: OK", flush=True)
+        print("- subject isolation, idempotent create, batching, one-time races and cleanup: OK", flush=True)
         return CaseResult()
     finally:
         ctx.config_data = original

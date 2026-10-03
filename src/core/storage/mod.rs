@@ -96,6 +96,49 @@ pub struct SubjectRow {
     pub seed: String,
 }
 
+/// Generation opened by encode; never serialized or included in diagnostics.
+#[derive(Clone)]
+pub struct SubjectWriteGuard {
+    pub kid: String,
+    pub subject: String,
+    pub seed: zeroize::Zeroizing<String>,
+}
+
+pub(super) fn subject_write_guards<'a>(
+    records: &[TokenRow],
+    guards: &'a [SubjectWriteGuard],
+) -> Result<Vec<&'a SubjectWriteGuard>, DynError> {
+    if records.iter().all(|record| record.subject.is_none()) {
+        return Ok(Vec::new());
+    }
+    let mut ordered = std::collections::BTreeMap::new();
+    for record in records {
+        if let Some(subject) = &record.subject {
+            let guard = guards
+                .iter()
+                .find(|guard| guard.kid == record.kid && guard.subject == *subject)
+                .ok_or_else(|| {
+                    crate::error::invalid_input("subject write requires a generation guard")
+                })?;
+            ordered.insert((&guard.kid, &guard.subject), guard);
+        }
+    }
+    Ok(ordered.into_values().collect())
+}
+
+pub(super) fn check_subject_generation(
+    seed: Option<String>,
+    expected: &str,
+) -> Result<(), DynError> {
+    let seed = seed.ok_or_else(|| crate::error::not_found("subject not found"))?;
+    if seed != expected {
+        return Err(crate::error::conflict(
+            "subject changed during token operation",
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Serialize)]
 pub struct IndexRow {
     pub kid: String,
@@ -178,7 +221,8 @@ impl StorageState {
         hashid: &str,
         data: &str,
     ) -> Result<TokenRow, DynError> {
-        self.save_token_for_subject(kid, hashid, data, None).await
+        self.save_token_for_subject(kid, hashid, data, None, None)
+            .await
     }
 
     pub async fn save_token_for_subject(
@@ -187,18 +231,19 @@ impl StorageState {
         hashid: &str,
         data: &str,
         subject: Option<&str>,
+        expected_seed: Option<&str>,
     ) -> Result<TokenRow, DynError> {
         validate_token_fields(kid, hashid, data)?;
         validate_optional_subject(subject)?;
         match &self.backend {
             StorageBackend::Sqlite(sqlite) => {
                 sqlite
-                    .save_token_for_subject(kid, hashid, data, subject)
+                    .save_token_for_subject(kid, hashid, data, subject, expected_seed)
                     .await
             }
             StorageBackend::Postgres(postgres) => {
                 postgres
-                    .save_token_for_subject(kid, hashid, data, subject)
+                    .save_token_for_subject(kid, hashid, data, subject, expected_seed)
                     .await
             }
         }
@@ -211,6 +256,24 @@ impl StorageState {
         match &self.backend {
             StorageBackend::Sqlite(sqlite) => sqlite.save_tokens_batch(records).await,
             StorageBackend::Postgres(postgres) => postgres.save_tokens_batch(records).await,
+        }
+    }
+
+    pub async fn save_tokens_batch_guarded(
+        &self,
+        records: &[TokenRow],
+        guards: &[SubjectWriteGuard],
+    ) -> Result<(), DynError> {
+        for record in records {
+            validate_token_row(record)?;
+        }
+        match &self.backend {
+            StorageBackend::Sqlite(sqlite) => {
+                sqlite.save_tokens_batch_guarded(records, guards).await
+            }
+            StorageBackend::Postgres(postgres) => {
+                postgres.save_tokens_batch_guarded(records, guards).await
+            }
         }
     }
 
@@ -314,13 +377,22 @@ impl StorageState {
         }
     }
 
-    pub async fn save_subject(&self, row: &SubjectRow) -> Result<(), DynError> {
+    pub async fn save_subject(&self, row: &SubjectRow) -> Result<bool, DynError> {
         validate_storage_kid("subjects.kid", &row.kid)?;
         crate::core::subjects::validate_subject(&row.subject)?;
         crate::core::subjects::validate_seed_envelope(&row.seed)?;
         match &self.backend {
             StorageBackend::Sqlite(db) => db.save_subject(row).await,
             StorageBackend::Postgres(db) => db.save_subject(row).await,
+        }
+    }
+
+    pub async fn subject_exists(&self, kid: &str, subject: &str) -> Result<bool, DynError> {
+        validate_storage_kid("subjects.kid", kid)?;
+        crate::core::subjects::validate_subject(subject)?;
+        match &self.backend {
+            StorageBackend::Sqlite(db) => db.subject_exists(kid, subject).await,
+            StorageBackend::Postgres(db) => db.subject_exists(kid, subject).await,
         }
     }
 

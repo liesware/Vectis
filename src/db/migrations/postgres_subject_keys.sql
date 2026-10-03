@@ -8,4 +8,5 @@ CREATE TABLE subjects (
     PRIMARY KEY (kid, subject)
 );
 COMMIT;
--- Separately grant SELECT, INSERT, DELETE on public.subjects to the runtime role.
+-- Separately grant SELECT, INSERT, DELETE and UPDATE(seed) on public.subjects
+-- to the runtime role; PostgreSQL row locking requires UPDATE privileges.
