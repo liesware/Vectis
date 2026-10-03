@@ -45,9 +45,9 @@ impl<'a> TokenBatchReadBudget<'a> {
 }
 
 fn resolve_tokens_in_request_order(
-    mut found: HashMap<String, String>,
+    mut found: HashMap<String, TokenRow>,
     hashids: &[String],
-) -> Vec<Option<String>> {
+) -> Vec<Option<TokenRow>> {
     let mut occurrences: HashMap<&str, usize> = HashMap::new();
     for hashid in hashids {
         *occurrences.entry(hashid.as_str()).or_insert(0) += 1;
@@ -70,6 +70,8 @@ fn resolve_tokens_in_request_order(
 
 mod postgres;
 mod sqlite;
+#[cfg(test)]
+mod subject_tests;
 
 pub const STORAGE_TYPES: &[&str] = &["sqlite", "postgres"];
 
@@ -80,11 +82,18 @@ pub struct OpsKeyRow {
     pub properties: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct TokenRow {
     pub kid: String,
     pub hashid: String,
     pub data: String,
+    pub subject: Option<String>,
+}
+
+pub struct SubjectRow {
+    pub kid: String,
+    pub subject: String,
+    pub seed: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -169,10 +178,29 @@ impl StorageState {
         hashid: &str,
         data: &str,
     ) -> Result<TokenRow, DynError> {
+        self.save_token_for_subject(kid, hashid, data, None).await
+    }
+
+    pub async fn save_token_for_subject(
+        &self,
+        kid: &str,
+        hashid: &str,
+        data: &str,
+        subject: Option<&str>,
+    ) -> Result<TokenRow, DynError> {
         validate_token_fields(kid, hashid, data)?;
+        validate_optional_subject(subject)?;
         match &self.backend {
-            StorageBackend::Sqlite(sqlite) => sqlite.save_token(kid, hashid, data).await,
-            StorageBackend::Postgres(postgres) => postgres.save_token(kid, hashid, data).await,
+            StorageBackend::Sqlite(sqlite) => {
+                sqlite
+                    .save_token_for_subject(kid, hashid, data, subject)
+                    .await
+            }
+            StorageBackend::Postgres(postgres) => {
+                postgres
+                    .save_token_for_subject(kid, hashid, data, subject)
+                    .await
+            }
         }
     }
 
@@ -191,7 +219,7 @@ impl StorageState {
         kid: &str,
         hashids: &[String],
         max_envelope_bytes: usize,
-    ) -> Result<Vec<Option<String>>, DynError> {
+    ) -> Result<Vec<Option<TokenRow>>, DynError> {
         validate_storage_kid("tokens.kid", kid)?;
         for hashid in hashids {
             validate_token_hashid(hashid)?;
@@ -208,6 +236,9 @@ impl StorageState {
                     .await
             }
         }?;
+        for row in found.values() {
+            validate_token_row(row)?;
+        }
         Ok(resolve_tokens_in_request_order(found, hashids))
     }
 
@@ -227,11 +258,27 @@ impl StorageState {
     }
 
     pub async fn delete_token(&self, kid: &str, hashid: &str) -> Result<(), DynError> {
+        self.delete_token_for_subject(kid, hashid, None).await
+    }
+
+    pub async fn delete_token_for_subject(
+        &self,
+        kid: &str,
+        hashid: &str,
+        subject: Option<&str>,
+    ) -> Result<(), DynError> {
         validate_storage_kid("tokens.kid", kid)?;
         validate_token_hashid(hashid)?;
+        validate_optional_subject(subject)?;
         match &self.backend {
-            StorageBackend::Sqlite(sqlite) => sqlite.delete_token(kid, hashid).await,
-            StorageBackend::Postgres(postgres) => postgres.delete_token(kid, hashid).await,
+            StorageBackend::Sqlite(sqlite) => {
+                sqlite.delete_token_for_subject(kid, hashid, subject).await
+            }
+            StorageBackend::Postgres(postgres) => {
+                postgres
+                    .delete_token_for_subject(kid, hashid, subject)
+                    .await
+            }
         }
     }
 
@@ -240,11 +287,64 @@ impl StorageState {
         kid: &str,
         hashids: &[String],
     ) -> Result<(), TokenBatchConsumeError> {
+        self.consume_tokens_batch_for_subject(kid, hashids, None)
+            .await
+    }
+
+    pub async fn consume_tokens_batch_for_subject(
+        &self,
+        kid: &str,
+        hashids: &[String],
+        subject: Option<&str>,
+    ) -> Result<(), TokenBatchConsumeError> {
         validate_storage_kid("tokens.kid", kid).map_err(TokenBatchConsumeError::from)?;
         validate_unique_token_hashids(hashids).map_err(TokenBatchConsumeError::from)?;
+        validate_optional_subject(subject).map_err(TokenBatchConsumeError::from)?;
         match &self.backend {
-            StorageBackend::Sqlite(sqlite) => sqlite.consume_tokens_batch(kid, hashids).await,
-            StorageBackend::Postgres(postgres) => postgres.consume_tokens_batch(kid, hashids).await,
+            StorageBackend::Sqlite(sqlite) => {
+                sqlite
+                    .consume_tokens_batch_for_subject(kid, hashids, subject)
+                    .await
+            }
+            StorageBackend::Postgres(postgres) => {
+                postgres
+                    .consume_tokens_batch_for_subject(kid, hashids, subject)
+                    .await
+            }
+        }
+    }
+
+    pub async fn save_subject(&self, row: &SubjectRow) -> Result<(), DynError> {
+        validate_storage_kid("subjects.kid", &row.kid)?;
+        crate::core::subjects::validate_subject(&row.subject)?;
+        crate::core::subjects::validate_seed_envelope(&row.seed)?;
+        match &self.backend {
+            StorageBackend::Sqlite(db) => db.save_subject(row).await,
+            StorageBackend::Postgres(db) => db.save_subject(row).await,
+        }
+    }
+
+    pub async fn get_subject(&self, kid: &str, subject: &str) -> Result<SubjectRow, DynError> {
+        validate_storage_kid("subjects.kid", kid)?;
+        crate::core::subjects::validate_subject(subject)?;
+        let row = match &self.backend {
+            StorageBackend::Sqlite(db) => db.get_subject(kid, subject).await,
+            StorageBackend::Postgres(db) => db.get_subject(kid, subject).await,
+        }?;
+        if row.kid != kid || row.subject != subject {
+            return Err(crate::error::internal("stored subject context mismatch"));
+        }
+        crate::core::subjects::validate_seed_envelope(&row.seed)
+            .map_err(|_| crate::error::internal("stored subject seed is invalid"))?;
+        Ok(row)
+    }
+
+    pub async fn delete_subject(&self, kid: &str, subject: &str) -> Result<(), DynError> {
+        validate_storage_kid("subjects.kid", kid)?;
+        crate::core::subjects::validate_subject(subject)?;
+        match &self.backend {
+            StorageBackend::Sqlite(db) => db.delete_subject(kid, subject).await,
+            StorageBackend::Postgres(db) => db.delete_subject(kid, subject).await,
         }
     }
 
@@ -390,7 +490,15 @@ fn validate_token_fields(kid: &str, hashid: &str, data: &str) -> Result<(), DynE
 }
 
 fn validate_token_row(row: &TokenRow) -> Result<(), DynError> {
+    validate_optional_subject(row.subject.as_deref())?;
     validate_token_fields(&row.kid, &row.hashid, &row.data)
+}
+
+fn validate_optional_subject(subject: Option<&str>) -> Result<(), DynError> {
+    if let Some(subject) = subject {
+        crate::core::subjects::validate_subject(subject)?;
+    }
+    Ok(())
 }
 
 fn validate_unique_token_hashids(hashids: &[String]) -> Result<(), DynError> {
@@ -492,6 +600,7 @@ mod tests {
         assert!(validate_token_fields(KID, &"b".repeat(64), &encrypted).is_ok());
         assert!(
             validate_token_row(&TokenRow {
+                subject: None,
                 kid: KID.to_string(),
                 hashid: "b".repeat(64),
                 data: encrypted.clone(),

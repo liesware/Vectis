@@ -1,5 +1,5 @@
 use super::TokenBatchReadBudget;
-use crate::core::storage::{IndexRow, OpsKeyRow, TokenBatchConsumeError, TokenRow};
+use crate::core::storage::{IndexRow, OpsKeyRow, SubjectRow, TokenBatchConsumeError, TokenRow};
 use crate::error::DynError;
 use futures_util::TryStreamExt;
 use sqlx::postgres::{PgPool, PgPoolOptions};
@@ -13,6 +13,21 @@ pub struct PostgresStorage {
 }
 
 impl PostgresStorage {
+    #[cfg(test)]
+    pub async fn save_token(
+        &self,
+        kid: &str,
+        hashid: &str,
+        data: &str,
+    ) -> Result<TokenRow, DynError> {
+        self.save_token_for_subject(kid, hashid, data, None).await
+    }
+
+    #[cfg(test)]
+    pub async fn delete_token(&self, kid: &str, hashid: &str) -> Result<(), DynError> {
+        self.delete_token_for_subject(kid, hashid, None).await
+    }
+
     pub async fn new(dsn: &str) -> Result<Self, DynError> {
         let dsn_context = postgres_context(dsn);
         let pool = PgPoolOptions::new()
@@ -29,6 +44,7 @@ impl PostgresStorage {
         validate_opskeys_schema(&pool, &dsn_context).await?;
         info!("validated opskeys postgres schema");
         validate_tokens_schema(&pool, &dsn_context).await?;
+        validate_subjects_schema(&pool, &dsn_context).await?;
         info!("validated tokens postgres schema");
         validate_indexes_schema(&pool, &dsn_context).await?;
         info!("validated indexes postgres schema");
@@ -93,22 +109,24 @@ impl PostgresStorage {
         Ok(keys)
     }
 
-    pub async fn save_token(
+    pub async fn save_token_for_subject(
         &self,
         kid: &str,
         hashid: &str,
         data: &str,
+        subject: Option<&str>,
     ) -> Result<TokenRow, DynError> {
         let mut tx = self.pool.begin().await?;
         sqlx::query(
             "
-            INSERT INTO tokens (kid, hashid, data)
-            VALUES ($1, $2, $3)
+            INSERT INTO tokens (kid, hashid, data, subject)
+            VALUES ($1, $2, $3, $4)
             ",
         )
         .bind(kid)
         .bind(hashid)
         .bind(data)
+        .bind(subject)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -118,6 +136,7 @@ impl PostgresStorage {
             kid: kid.to_string(),
             hashid: hashid.to_string(),
             data: data.to_string(),
+            subject: subject.map(str::to_owned),
         })
     }
 
@@ -131,20 +150,26 @@ impl PostgresStorage {
             .map(|record| record.hashid.as_str())
             .collect();
         let data: Vec<&str> = records.iter().map(|record| record.data.as_str()).collect();
+        let subjects: Vec<Option<&str>> = records
+            .iter()
+            .map(|record| record.subject.as_deref())
+            .collect();
         sqlx::query(
             "
-            INSERT INTO tokens (kid, hashid, data)
-            SELECT kid, hashid, data
+            INSERT INTO tokens (kid, hashid, data, subject)
+            SELECT kid, hashid, data, subject
             FROM UNNEST(
                 $1::text[],
                 $2::text[],
-                $3::text[]
-            ) AS batch(kid, hashid, data)
+                $3::text[],
+                $4::text[]
+            ) AS batch(kid, hashid, data, subject)
             ",
         )
         .bind(&kids)
         .bind(&hashids)
         .bind(&data)
+        .bind(&subjects)
         .execute(&self.pool)
         .await?;
         info!(items_count = records.len(), "inserted token batch");
@@ -157,10 +182,10 @@ impl PostgresStorage {
         kid: &str,
         hashids: &[String],
         max_envelope_bytes: usize,
-    ) -> Result<HashMap<String, String>, DynError> {
+    ) -> Result<HashMap<String, TokenRow>, DynError> {
         let mut rows = sqlx::query(
             "
-            SELECT hashid, data
+            SELECT hashid, data, subject
             FROM tokens
             WHERE kid = $1
               AND hashid = ANY($2)
@@ -175,7 +200,17 @@ impl PostgresStorage {
             let hashid: String = row.try_get("hashid")?;
             let data: String = row.try_get("data")?;
             budget.retain(&hashid, &data)?;
-            found.insert(hashid, data);
+            let subject: Option<String> = row.try_get("subject")?;
+            super::validate_optional_subject(subject.as_deref())?;
+            found.insert(
+                hashid.clone(),
+                TokenRow {
+                    kid: kid.to_owned(),
+                    hashid,
+                    data,
+                    subject,
+                },
+            );
         }
         Ok(found)
     }
@@ -183,7 +218,7 @@ impl PostgresStorage {
     pub async fn get_token(&self, kid: &str, hashid: &str) -> Result<TokenRow, DynError> {
         let row = sqlx::query(
             "
-            SELECT kid, hashid, data
+            SELECT kid, hashid, data, subject
             FROM tokens
             WHERE kid = $1
               AND hashid = $2
@@ -202,20 +237,28 @@ impl PostgresStorage {
             kid: row.get("kid"),
             hashid: row.get("hashid"),
             data: row.get("data"),
+            subject: row.get("subject"),
         })
     }
 
-    pub async fn delete_token(&self, kid: &str, hashid: &str) -> Result<(), DynError> {
+    pub async fn delete_token_for_subject(
+        &self,
+        kid: &str,
+        hashid: &str,
+        subject: Option<&str>,
+    ) -> Result<(), DynError> {
         let mut tx = self.pool.begin().await?;
         let result = sqlx::query(
             "
             DELETE FROM tokens
             WHERE kid = $1
               AND hashid = $2
+              AND subject IS NOT DISTINCT FROM $3
             ",
         )
         .bind(kid)
         .bind(hashid)
+        .bind(subject)
         .execute(&mut *tx)
         .await?;
         if result.rows_affected() != 1 {
@@ -226,10 +269,11 @@ impl PostgresStorage {
         Ok(())
     }
 
-    pub async fn consume_tokens_batch(
+    pub async fn consume_tokens_batch_for_subject(
         &self,
         kid: &str,
         hashids: &[String],
+        subject: Option<&str>,
     ) -> Result<(), TokenBatchConsumeError> {
         let mut ordered = hashids.to_vec();
         ordered.sort_unstable();
@@ -244,11 +288,13 @@ impl PostgresStorage {
             DELETE FROM tokens
             WHERE kid = $1
               AND hashid = ANY($2)
+              AND subject IS NOT DISTINCT FROM $3
             RETURNING hashid
             ",
         )
         .bind(kid)
         .bind(&ordered)
+        .bind(subject)
         .fetch_all(&mut *tx)
         .await
         .map_err(|err| TokenBatchConsumeError::Other(Box::new(err)))?;
@@ -288,6 +334,42 @@ impl PostgresStorage {
             kid: kid.to_string(),
             digest: digest.to_string(),
         })
+    }
+
+    pub async fn save_subject(&self, row: &SubjectRow) -> Result<(), DynError> {
+        let result = sqlx::query("INSERT INTO subjects (kid, subject, seed) VALUES ($1, $2, $3) ON CONFLICT (kid, subject) DO NOTHING")
+            .bind(&row.kid).bind(&row.subject).bind(&row.seed).execute(&self.pool).await?;
+        if result.rows_affected() == 0 {
+            return Err(crate::error::conflict("subject already exists"));
+        }
+        Ok(())
+    }
+
+    pub async fn get_subject(&self, kid: &str, subject: &str) -> Result<SubjectRow, DynError> {
+        let row =
+            sqlx::query("SELECT kid, subject, seed FROM subjects WHERE kid = $1 AND subject = $2")
+                .bind(kid)
+                .bind(subject)
+                .fetch_optional(&self.pool)
+                .await?
+                .ok_or_else(|| crate::error::not_found("subject not found"))?;
+        Ok(SubjectRow {
+            kid: row.try_get("kid")?,
+            subject: row.try_get("subject")?,
+            seed: row.try_get("seed")?,
+        })
+    }
+
+    pub async fn delete_subject(&self, kid: &str, subject: &str) -> Result<(), DynError> {
+        let result = sqlx::query("DELETE FROM subjects WHERE kid = $1 AND subject = $2")
+            .bind(kid)
+            .bind(subject)
+            .execute(&self.pool)
+            .await?;
+        if result.rows_affected() == 0 {
+            return Err(crate::error::not_found("subject not found"));
+        }
+        Ok(())
     }
 
     pub async fn save_indexes_batch(&self, records: &[IndexRow]) -> Result<(), DynError> {
@@ -588,9 +670,31 @@ async fn validate_tokens_schema(pool: &PgPool, context: &str) -> Result<(), DynE
     validate_varchar_column(&kid, "tokens", "kid", 128, false, context)?;
     validate_varchar_column(&hashid, "tokens", "hashid", 128, false, context)?;
     validate_text_column(&data, "tokens", "data", false, context)?;
+    let subject = find_column(&columns, "subject").ok_or_else(|| {
+        crate::error::storage(
+            "postgres schema is missing tokens.subject column; apply subject keys migration",
+        )
+    })?;
+    validate_varchar_column(&subject, "tokens", "subject", 128, true, context)?;
     validate_primary_key(pool, "tokens", &["kid", "hashid"], context).await?;
 
     Ok(())
+}
+
+async fn validate_subjects_schema(pool: &PgPool, context: &str) -> Result<(), DynError> {
+    let rows = sqlx::query("SELECT column_name, data_type, character_maximum_length, is_nullable FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'subjects'").fetch_all(pool).await?;
+    for name in ["kid", "subject"] {
+        let column = find_column(&rows, name).ok_or_else(|| {
+            crate::error::storage(
+                "postgres schema is missing subjects table or column; apply subject keys migration",
+            )
+        })?;
+        validate_varchar_column(&column, "subjects", name, 128, false, context)?;
+    }
+    let seed = find_column(&rows, "seed")
+        .ok_or_else(|| crate::error::storage("postgres schema is missing subjects.seed"))?;
+    validate_text_column(&seed, "subjects", "seed", false, context)?;
+    validate_primary_key(pool, "subjects", &["kid", "subject"], context).await
 }
 
 async fn validate_indexes_schema(pool: &PgPool, context: &str) -> Result<(), DynError> {

@@ -86,6 +86,7 @@ pub fn status_for_error(err: &(dyn std::error::Error + 'static)) -> StatusCode {
             | VectisError::InvalidSignature(_)
             | VectisError::ConfigSignatureStale(_) => StatusCode::BAD_REQUEST,
             VectisError::NotFound(_) => StatusCode::NOT_FOUND,
+            VectisError::Conflict(_) => StatusCode::CONFLICT,
             VectisError::Forbidden(_) => StatusCode::FORBIDDEN,
             VectisError::Overloaded(_) => StatusCode::TOO_MANY_REQUESTS,
             VectisError::RemoteUnreachable(_)
@@ -112,6 +113,7 @@ pub fn public_error_message(status: StatusCode) -> String {
         StatusCode::UNAUTHORIZED => String::from("unauthorized"),
         StatusCode::FORBIDDEN => String::from("forbidden"),
         StatusCode::NOT_FOUND => String::from("not found"),
+        StatusCode::CONFLICT => String::from("conflict"),
         StatusCode::TOO_MANY_REQUESTS => String::from("too many requests"),
         _ => String::from("internal server error"),
     }
@@ -128,6 +130,7 @@ fn public_error_message_for_error(
     match err.downcast_ref::<VectisError>() {
         Some(VectisError::TokenDecodeBatchTooLarge) => err.to_string(),
         Some(VectisError::NotFound(message)) => message.clone(),
+        Some(VectisError::Conflict(message)) => message.clone(),
         Some(VectisError::RemoteUnreachable(_)) => {
             String::from("internal server error final app can't be reached")
         }

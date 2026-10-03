@@ -19,6 +19,20 @@ pub const TOKEN_METADATA_MAX_CHARS: usize = 128;
 pub const TOKEN_PREFIX_MAX_CHARS: usize = 16;
 pub const TOKEN_DATA_TYPE: &str = "token-data";
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SubjectMode {
+    #[default]
+    None,
+    Stored,
+}
+
+impl SubjectMode {
+    fn is_none(&self) -> bool {
+        *self == Self::None
+    }
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TokenizationProfileInput {
@@ -28,6 +42,8 @@ pub(crate) struct TokenizationProfileInput {
     token_len: usize,
     max_plaintext_len: usize,
     one_time: bool,
+    #[serde(default, skip_serializing_if = "SubjectMode::is_none")]
+    subject_mode: SubjectMode,
 }
 
 pub struct TokenizationProfile {
@@ -37,6 +53,7 @@ pub struct TokenizationProfile {
     token_len: usize,
     max_plaintext_len: usize,
     one_time: bool,
+    subject_mode: SubjectMode,
     cipher_algorithm: String,
     hash_key: Zeroizing<Vec<u8>>,
     data_key: Zeroizing<Vec<u8>>,
@@ -52,6 +69,124 @@ pub struct DerivedTokenizationKeys {
     pub hash_key: Zeroizing<Vec<u8>>,
     pub data_key: Zeroizing<Vec<u8>>,
     pub cipher_algorithm: String,
+}
+
+/// Owned, request-scoped key selection, transferable to a blocking worker.
+#[derive(Clone)]
+pub struct TokenContext {
+    profile: Arc<TokenizationProfile>,
+    subject_keys: Option<Arc<crate::core::subjects::SubjectTokenKeys>>,
+}
+
+impl From<Arc<TokenizationProfile>> for TokenContext {
+    fn from(profile: Arc<TokenizationProfile>) -> Self {
+        Self {
+            profile,
+            subject_keys: None,
+        }
+    }
+}
+
+impl std::ops::Deref for TokenContext {
+    type Target = TokenizationProfile;
+    fn deref(&self) -> &Self::Target {
+        &self.profile
+    }
+}
+
+impl TokenContext {
+    pub fn with_subject(
+        profile: Arc<TokenizationProfile>,
+        keys: crate::core::subjects::SubjectTokenKeys,
+    ) -> Self {
+        Self {
+            profile,
+            subject_keys: Some(Arc::new(keys)),
+        }
+    }
+
+    pub fn subject(&self) -> Option<&str> {
+        self.subject_keys.as_ref().map(|keys| keys.subject.as_str())
+    }
+
+    pub fn validate_mode(&self, expected: Option<&str>) -> Result<(), DynError> {
+        validate_subject_mode(&self.profile, expected)?;
+        if self.subject() != expected {
+            return Err(crate::error::invalid_input(
+                "subject does not match token context",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn hash(&self, token: &str) -> Result<String, DynError> {
+        self.validate_mode(self.subject())?;
+        match &self.subject_keys {
+            None => hash_token(&self.profile, token),
+            Some(keys) => {
+                validate_token_value(&self.profile, token)?;
+                let message = validation::build_validated_aad(&[
+                    ("version", "v2"),
+                    ("profile", self.name()),
+                    ("subject", &keys.subject),
+                    ("token", token),
+                ])?;
+                Ok(hex::encode(crypto::create_hmac(
+                    &keys.hash_key,
+                    message.as_bytes(),
+                )?))
+            }
+        }
+    }
+
+    fn aad(&self, hashid: &str) -> Result<String, DynError> {
+        match self.subject() {
+            None => token_data_aad(&self.profile, hashid),
+            Some(subject) => validation::build_validated_aad(&[
+                ("version", "v2"),
+                ("type", TOKEN_DATA_TYPE),
+                ("kid", self.kid()),
+                ("profile", self.name()),
+                ("tokenization_version", TOKENIZATION_VERSION_RANDOM_V1),
+                ("hashid", hashid),
+                ("subject", subject),
+                ("cipher", self.cipher_algorithm()),
+            ]),
+        }
+    }
+
+    pub fn encrypt(&self, hashid: &str, payload: &TokenDataPayload) -> Result<String, DynError> {
+        self.validate_mode(self.subject())?;
+        let key = self
+            .subject_keys
+            .as_ref()
+            .map_or(self.data_key(), |keys| keys.data_key.as_slice());
+        encrypt_token_data_with_key(&self.profile, key, &self.aad(hashid)?, payload)
+    }
+
+    pub fn decrypt(&self, hashid: &str, data: &str) -> Result<TokenDataPayload, DynError> {
+        self.validate_mode(self.subject())?;
+        let key = self
+            .subject_keys
+            .as_ref()
+            .map_or(self.data_key(), |keys| keys.data_key.as_slice());
+        decrypt_token_data_with_key(&self.profile, key, &self.aad(hashid)?, data)
+    }
+}
+
+pub fn validate_subject_mode(
+    profile: &TokenizationProfile,
+    subject: Option<&str>,
+) -> Result<(), DynError> {
+    if let Some(subject) = subject {
+        crate::core::subjects::validate_subject(subject)?;
+    }
+    if (profile.subject_mode() == SubjectMode::Stored) != subject.is_some() {
+        return Err(crate::error::invalid_input(
+            "subject is required only for stored tokenization profiles",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize)]
@@ -110,6 +245,10 @@ impl TokenizationProfile {
 
     pub fn one_time(&self) -> bool {
         self.one_time
+    }
+
+    pub fn subject_mode(&self) -> SubjectMode {
+        self.subject_mode
     }
 
     pub fn cipher_algorithm(&self) -> &str {
@@ -240,6 +379,7 @@ pub(crate) fn validate_tokenization_profiles(
             token_len: profile.token_len,
             max_plaintext_len: profile.max_plaintext_len,
             one_time: profile.one_time,
+            subject_mode: profile.subject_mode,
             cipher_algorithm: derived.cipher_algorithm,
             hash_key: derived.hash_key,
             data_key: derived.data_key,
@@ -393,19 +533,27 @@ pub fn encrypt_token_data(
     hashid: &str,
     payload: &TokenDataPayload,
 ) -> Result<String, DynError> {
+    encrypt_token_data_with_key(
+        profile,
+        profile.data_key(),
+        &token_data_aad(profile, hashid)?,
+        payload,
+    )
+}
+
+fn encrypt_token_data_with_key(
+    profile: &TokenizationProfile,
+    key: &[u8],
+    aad: &str,
+    payload: &TokenDataPayload,
+) -> Result<String, DynError> {
     let cipher = crypto::symmetric_cipher(profile.cipher_algorithm()).ok_or_else(|| {
         crate::error::invalid_input("tokenization symmetric algorithm is not supported")
     })?;
     let nonce = Zeroizing::new(crypto::random_bytes(cipher.nonce_size_bytes)?);
-    let aad = token_data_aad(profile, hashid)?;
     let plaintext = Zeroizing::new(serde_json::to_string(payload)?);
-    let ciphertext = crypto::encrypt_symmetric(
-        cipher.algorithm,
-        &plaintext,
-        profile.data_key(),
-        &nonce,
-        aad.as_bytes(),
-    )?;
+    let ciphertext =
+        crypto::encrypt_symmetric(cipher.algorithm, &plaintext, key, &nonce, aad.as_bytes())?;
 
     Ok(format!(
         "{}.{}.{}",
@@ -420,6 +568,20 @@ pub fn decrypt_token_data(
     hashid: &str,
     data: &str,
 ) -> Result<TokenDataPayload, DynError> {
+    decrypt_token_data_with_key(
+        profile,
+        profile.data_key(),
+        &token_data_aad(profile, hashid)?,
+        data,
+    )
+}
+
+fn decrypt_token_data_with_key(
+    profile: &TokenizationProfile,
+    key: &[u8],
+    expected_aad: &str,
+    data: &str,
+) -> Result<TokenDataPayload, DynError> {
     let cipher = crypto::symmetric_cipher(profile.cipher_algorithm()).ok_or_else(|| {
         crate::error::invalid_input("tokenization symmetric algorithm is not supported")
     })?;
@@ -431,7 +593,6 @@ pub fn decrypt_token_data(
     )?;
     let aad = std::str::from_utf8(&envelope.aad)
         .map_err(|_| crate::error::invalid_input("tokens.data.aad is not valid UTF-8"))?;
-    let expected_aad = token_data_aad(profile, hashid)?;
     if aad != expected_aad {
         return Err(crate::error::invalid_input(
             "token data aad does not match request",
@@ -440,15 +601,17 @@ pub fn decrypt_token_data(
     let mut plaintext_bytes = Zeroizing::new(crypto::decrypt_symmetric(
         cipher.algorithm,
         &envelope.ciphertext,
-        profile.data_key(),
+        key,
         &envelope.nonce,
         &envelope.aad,
     )?);
-    let plaintext = String::from_utf8(std::mem::take(&mut *plaintext_bytes)).map_err(|err| {
-        let mut bytes = err.into_bytes();
-        bytes.zeroize();
-        crate::error::invalid_input("token data plaintext is not valid UTF-8")
-    })?;
+    let plaintext = Zeroizing::new(
+        String::from_utf8(std::mem::take(&mut *plaintext_bytes)).map_err(|err| {
+            let mut bytes = err.into_bytes();
+            bytes.zeroize();
+            crate::error::invalid_input("token data plaintext is not valid UTF-8")
+        })?,
+    );
     let payload: TokenDataPayload = serde_json::from_str(&plaintext)
         .map_err(|_| crate::error::invalid_input("token data payload is not valid JSON"))?;
     if payload.profile != profile.name() {
@@ -488,6 +651,7 @@ mod tests {
             token_len: TOKEN_LEN_MIN_BYTES,
             max_plaintext_len: TOKEN_PLAINTEXT_MAX_LEN,
             one_time: false,
+            subject_mode: SubjectMode::None,
         }
     }
 
@@ -991,5 +1155,27 @@ mod tests {
         let data = encrypt_token_data(&profile, &hashid, &payload).unwrap();
 
         assert!(decrypt_token_data(&other_profile, &hashid, &data).is_err());
+    }
+    #[test]
+    fn subject_mode_defaults_preserve_signed_legacy_representation() {
+        let legacy = serde_json::json!({"name":"legacy-v1", "kid":kid(), "token_prefix":"tok",
+            "token_len":32,"max_plaintext_len":128,"one_time":false});
+        let input: TokenizationProfileInput = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(input.subject_mode, SubjectMode::None);
+        assert_eq!(serde_json::to_value(&input).unwrap(), legacy);
+        let stored = serde_json::json!({"name":"stored-v1", "kid":kid(), "token_prefix":"tok",
+            "token_len":32,"max_plaintext_len":128,"one_time":false,"subject_mode":"stored"});
+        let input: TokenizationProfileInput = serde_json::from_value(stored.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&input).unwrap(), stored);
+        for mode in [
+            serde_json::json!("derived"),
+            serde_json::json!("STORED"),
+            serde_json::json!(null),
+            serde_json::json!(true),
+        ] {
+            let mut invalid = legacy.clone();
+            invalid["subject_mode"] = mode;
+            assert!(serde_json::from_value::<TokenizationProfileInput>(invalid).is_err());
+        }
     }
 }

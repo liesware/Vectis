@@ -2,7 +2,7 @@ use axum::Json;
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderMap, StatusCode};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -30,6 +30,7 @@ mod remote_routes;
 mod routes;
 mod sharing;
 mod sign;
+mod subject;
 mod test;
 mod time;
 mod token;
@@ -591,6 +592,16 @@ pub fn router(state: HttpState) -> Router {
         .route("/token/encode/batch/{kid}", post(token_encode_batch))
         .route("/token/decode/batch", post(token::decode_batch_endpoint))
         .route("/token/encode/{kid}", post(token::encode_endpoint))
+        .route("/subject/{kid}", post(subject::create_endpoint))
+        .route("/subject/{kid}/{subject}", delete(subject::delete_endpoint))
+        .route(
+            "/token/encode/{kid}/subject/{subject}",
+            post(token::encode_subject_endpoint),
+        )
+        .route(
+            "/token/encode/batch/{kid}/subject/{subject}",
+            post(token::encode_subject_batch_endpoint),
+        )
         .route("/token/decode", post(token::decode_endpoint))
         .route("/token/delete", post(token::delete_endpoint))
         .route("/mac/batch/{kid}", post(mac::create_batch_endpoint))

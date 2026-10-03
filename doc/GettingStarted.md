@@ -162,7 +162,15 @@ CREATE TABLE IF NOT EXISTS tokens (
     kid VARCHAR(128) NOT NULL,
     hashid VARCHAR(128) NOT NULL,
     data VARCHAR(10240) NOT NULL,
+    subject VARCHAR(128),
     PRIMARY KEY (kid, hashid)
+);
+
+CREATE TABLE IF NOT EXISTS subjects (
+    kid VARCHAR(128) NOT NULL,
+    subject VARCHAR(128) NOT NULL,
+    seed TEXT NOT NULL,
+    PRIMARY KEY (kid, subject)
 );
 
 CREATE TABLE IF NOT EXISTS indexes (

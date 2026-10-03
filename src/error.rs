@@ -15,6 +15,8 @@ pub enum VectisError {
     #[error("{0}")]
     NotFound(String),
     #[error("{0}")]
+    Conflict(String),
+    #[error("{0}")]
     Forbidden(String),
     #[error("{0}")]
     InvalidSignature(String),
@@ -36,6 +38,10 @@ pub fn invalid_input(message: impl Into<String>) -> DynError {
 
 pub fn not_found(message: impl Into<String>) -> DynError {
     Box::new(VectisError::NotFound(message.into()))
+}
+
+pub fn conflict(message: impl Into<String>) -> DynError {
+    Box::new(VectisError::Conflict(message.into()))
 }
 
 pub fn forbidden(message: impl Into<String>) -> DynError {
@@ -133,6 +139,7 @@ pub fn with_prefix(prefix: &str, err: DynError) -> DynError {
         Some(VectisError::TokenDecodeBatchTooLarge) => err,
         Some(VectisError::InvalidInput(message)) => invalid_input(format!("{prefix}: {message}")),
         Some(VectisError::NotFound(message)) => not_found(format!("{prefix}: {message}")),
+        Some(VectisError::Conflict(message)) => conflict(format!("{prefix}: {message}")),
         Some(VectisError::Forbidden(message)) => forbidden(format!("{prefix}: {message}")),
         Some(VectisError::InvalidSignature(message)) => {
             invalid_signature(format!("{prefix}: {message}"))

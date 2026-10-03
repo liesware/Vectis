@@ -292,6 +292,11 @@ Clients with `status` other than `active` are ignored. Invalid JSON, invalid act
 
 Current SQLite schema:
 
+Existing installations must apply the matching SQL in
+[`src/db/migrations`](../src/db/migrations) before upgrading. `CREATE TABLE IF
+NOT EXISTS` does not add `tokens.subject` to an older table. PostgreSQL runtime
+roles also need `SELECT, INSERT, DELETE` on `public.subjects`.
+
 ```sql
 CREATE TABLE IF NOT EXISTS opskeys (
     kid VARCHAR(128) PRIMARY KEY,
@@ -303,7 +308,15 @@ CREATE TABLE IF NOT EXISTS tokens (
     kid VARCHAR(128) NOT NULL,
     hashid VARCHAR(128) NOT NULL,
     data VARCHAR(10240) NOT NULL,
+    subject VARCHAR(128),
     PRIMARY KEY (kid, hashid)
+);
+
+CREATE TABLE IF NOT EXISTS subjects (
+    kid VARCHAR(128) NOT NULL,
+    subject VARCHAR(128) NOT NULL,
+    seed TEXT NOT NULL,
+    PRIMARY KEY (kid, subject)
 );
 
 CREATE TABLE IF NOT EXISTS indexes (
@@ -332,7 +345,15 @@ CREATE TABLE tokens (
     kid VARCHAR(128) NOT NULL,
     hashid VARCHAR(128) NOT NULL,
     data TEXT NOT NULL,
+    subject VARCHAR(128),
     PRIMARY KEY (kid, hashid)
+);
+
+CREATE TABLE subjects (
+    kid VARCHAR(128) NOT NULL,
+    subject VARCHAR(128) NOT NULL,
+    seed TEXT NOT NULL,
+    PRIMARY KEY (kid, subject)
 );
 
 CREATE TABLE indexes (

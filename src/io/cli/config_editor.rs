@@ -70,6 +70,7 @@ enum FieldKind {
     PermissionAction,
     Usize,
     Bool,
+    SubjectMode,
     FpeProfileName,
     FpeVersion,
     FpeAlphabet,
@@ -342,6 +343,15 @@ const TOKENIZATION_PROFILES_SECTION: SectionSpec = SectionSpec {
     item_name: "tokenization profile name",
     command_context: "config token",
     fields: &[
+        FieldSpec {
+            flag: "--subject-mode",
+            json_field: "subject_mode",
+            kind: FieldKind::SubjectMode,
+            cardinality: FieldCardinality::One,
+            required_on_add: false,
+            mutable_on_update: true,
+            default_on_add: Some(DefaultValue::String("none")),
+        },
         FieldSpec {
             flag: "--name",
             json_field: "name",
@@ -1225,6 +1235,12 @@ fn parse_fields(
 
 fn parse_field_value(field: &FieldSpec, raw: &str) -> Result<Value, DynError> {
     match field.kind {
+        FieldKind::SubjectMode => match raw {
+            "none" | "stored" => Ok(Value::String(raw.to_owned())),
+            _ => Err(crate::error::invalid_input(
+                "subject_mode must be none or stored",
+            )),
+        },
         FieldKind::ConfigName => {
             validation::validate_config_name(field.json_field, raw)?;
             Ok(Value::String(raw.to_string()))
@@ -2507,6 +2523,26 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn token_profile_subject_mode_defaults_and_is_strict() {
+        let default = parse_section_add(
+            &TOKENIZATION_PROFILES_SECTION,
+            valid_token_profile_args("32", "1024"),
+        )
+        .unwrap();
+        assert_eq!(default["subject_mode"], "none");
+        for mode in ["none", "stored", "derived", "STORED", ""] {
+            let mut args = valid_token_profile_args("32", "1024");
+            args.extend(["--subject-mode".to_owned(), mode.to_owned()]);
+            let parsed = parse_section_add(&TOKENIZATION_PROFILES_SECTION, args);
+            if matches!(mode, "none" | "stored") {
+                assert_eq!(parsed.unwrap()["subject_mode"], mode);
+            } else {
+                assert!(parsed.is_err());
+            }
+        }
     }
 
     #[test]

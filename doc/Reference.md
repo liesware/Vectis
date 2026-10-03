@@ -583,6 +583,24 @@ need stable-looking tokens while storing the original value encrypted:
 - `POST /token/delete` (independent `token-delete` permission).
 
 Tokenization profiles live in signed config under `tokenization_profiles`.
+
+Profiles default to `subject_mode: none`; new `stored` profiles use authenticated
+32-byte random seeds in `subjects(kid, subject, seed)` and request-scoped derived
+keys. `POST /subject/{kid}` and `DELETE /subject/{kid}/{subject}` require independent
+`subject-create` / `subject-delete` grants. Subject encode paths include the ID;
+decode and token-delete bodies supply it. See [API](API.md#subject-keys) for limits,
+derivation and error semantics.
+
+Create/delete emit `subject.create.success` / `subject.delete.success` audit
+events (and `.failed` / `.denied` events) and bounded
+`vectis_crypto_operation_total{operation,result}` counters. Operation is
+`subject_create` or `subject_delete`; result is `success` or `failed`.
+Neither subject identifiers nor names or seeds are metric labels.
+Deletion removes only the seed, not tokens, does not cancel in-flight operations,
+and does not prevent a backup from restoring the seed. Database upgrades require
+the explicit [subject keys migrations](../src/db/migrations); startup never
+migrates schemas. Grant PostgreSQL runtime roles `SELECT, INSERT, DELETE` on
+`public.subjects`, and upgrade every node before activating `stored` profiles.
 Requests select a profile by name; token prefix, token length, plaintext length
 limit, and bound KID come from signed config. Vectis uses the fixed internal
 tokenization scheme `token-random-v1`. Encode
@@ -742,7 +760,15 @@ CREATE TABLE IF NOT EXISTS tokens (
     kid VARCHAR(128) NOT NULL,
     hashid VARCHAR(128) NOT NULL,
     data VARCHAR(10240) NOT NULL,
+    subject VARCHAR(128),
     PRIMARY KEY (kid, hashid)
+);
+
+CREATE TABLE IF NOT EXISTS subjects (
+    kid VARCHAR(128) NOT NULL,
+    subject VARCHAR(128) NOT NULL,
+    seed TEXT NOT NULL,
+    PRIMARY KEY (kid, subject)
 );
 
 CREATE TABLE IF NOT EXISTS indexes (
@@ -765,7 +791,15 @@ CREATE TABLE tokens (
     kid VARCHAR(128) NOT NULL,
     hashid VARCHAR(128) NOT NULL,
     data TEXT NOT NULL,
+    subject VARCHAR(128),
     PRIMARY KEY (kid, hashid)
+);
+
+CREATE TABLE subjects (
+    kid VARCHAR(128) NOT NULL,
+    subject VARCHAR(128) NOT NULL,
+    seed TEXT NOT NULL,
+    PRIMARY KEY (kid, subject)
 );
 
 CREATE TABLE indexes (

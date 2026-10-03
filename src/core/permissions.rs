@@ -18,6 +18,8 @@ pub const PERMISSION_ACTIONS: &[&str] = &[
     "token-encode",
     "token-decode",
     "token-delete",
+    "subject-create",
+    "subject-delete",
     "mac-create",
     "mac-verify",
     "index-create",

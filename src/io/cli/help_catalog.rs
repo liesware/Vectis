@@ -987,9 +987,9 @@ const CONFIG_TOKEN_HELP: CommandHelp = CommandHelp {
     heading: "Usage:",
     usage: &[
         "vectis config token list",
-        "vectis config token add --name <name> --kid <kid> --token-prefix <prefix> --token-len <n> --max-plaintext-len <n>",
+        "vectis config token add --name <name> --kid <kid> --token-prefix <prefix> --token-len <n> --max-plaintext-len <n> --one-time <bool> [--subject-mode none|stored]",
         "vectis config token get <name>",
-        "vectis config token update <name> [--kid <kid>] [--token-prefix <prefix>] [--token-len <n>] [--max-plaintext-len <n>]",
+        "vectis config token update <name> [--kid <kid>] [--token-prefix <prefix>] [--token-len <n>] [--max-plaintext-len <n>] [--subject-mode none|stored]",
         "vectis config token delete <name>",
     ],
     summary: Some("Lists or edits local config tokenization profiles by unique name."),

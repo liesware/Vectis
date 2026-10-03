@@ -50,6 +50,18 @@ remain available after budget rejection and that accepted responses may exceed
 2 MiB. Storage tests cover exact limits, duplicate accounting and overflow;
 PostgreSQL budget tests require `VECTIS_TEST_POSTGRES_DSN` and `--ignored`.
 
+Subject-key HTTP cases cover independent grants, concurrent creation, subject
+isolation, one-time batch races and deletion/recreation without legacy fallback.
+Storage contracts run on SQLite and optionally on disposable PostgreSQL:
+
+```sh
+VECTIS_TEST_POSTGRES_DSN='<migrated-test-dsn>' cargo test postgres_subject_contract -- --ignored
+```
+
+The tokenization input and config fuzz targets accept `subject` and
+`subject_mode`; the separate `fuzz_tokenization_roundtrip` crypto target also
+checks authenticated seed opening, subject-key round trips and seed replacement.
+
 Python tests are executed with [uv](https://docs.astral.sh/uv). Do not run the
 Python scripts directly with `python3` for the standard workflow; use `uv run`
 so the pinned interpreter and dependency groups are used consistently.

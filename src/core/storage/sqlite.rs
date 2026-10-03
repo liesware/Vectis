@@ -1,5 +1,5 @@
 use super::TokenBatchReadBudget;
-use crate::core::storage::{IndexRow, OpsKeyRow, TokenBatchConsumeError, TokenRow};
+use crate::core::storage::{IndexRow, OpsKeyRow, SubjectRow, TokenBatchConsumeError, TokenRow};
 use crate::error::DynError;
 use futures_util::TryStreamExt;
 use sqlx::Row;
@@ -29,6 +29,7 @@ impl SqliteStorage {
         validate_opskeys_schema(&pool, &context).await?;
         info!("validated opskeys sqlite schema");
         validate_tokens_schema(&pool, &context).await?;
+        validate_subjects_schema(&pool, &context).await?;
         info!("validated tokens sqlite schema");
         validate_indexes_schema(&pool, &context).await?;
         info!("validated indexes sqlite schema");
@@ -111,21 +112,33 @@ impl SqliteStorage {
         Ok(keys)
     }
 
+    #[cfg(test)]
     pub async fn save_token(
         &self,
         kid: &str,
         hashid: &str,
         data: &str,
     ) -> Result<TokenRow, DynError> {
+        self.save_token_for_subject(kid, hashid, data, None).await
+    }
+
+    pub async fn save_token_for_subject(
+        &self,
+        kid: &str,
+        hashid: &str,
+        data: &str,
+        subject: Option<&str>,
+    ) -> Result<TokenRow, DynError> {
         sqlx::query(
             "
-            INSERT INTO tokens (kid, hashid, data)
-            VALUES (?, ?, ?)
+            INSERT INTO tokens (kid, hashid, data, subject)
+            VALUES (?, ?, ?, ?)
             ",
         )
         .bind(kid)
         .bind(hashid)
         .bind(data)
+        .bind(subject)
         .execute(&self.pool)
         .await?;
         info!(kid, hashid, "inserted token");
@@ -134,6 +147,7 @@ impl SqliteStorage {
             kid: kid.to_string(),
             hashid: hashid.to_string(),
             data: data.to_string(),
+            subject: subject.map(str::to_owned),
         })
     }
 
@@ -142,13 +156,14 @@ impl SqliteStorage {
         for record in records {
             sqlx::query(
                 "
-                INSERT INTO tokens (kid, hashid, data)
-                VALUES (?, ?, ?)
+                INSERT INTO tokens (kid, hashid, data, subject)
+                VALUES (?, ?, ?, ?)
                 ",
             )
             .bind(&record.kid)
             .bind(&record.hashid)
             .bind(&record.data)
+            .bind(&record.subject)
             .execute(&mut *tx)
             .await?;
         }
@@ -163,15 +178,16 @@ impl SqliteStorage {
         kid: &str,
         hashids: &[String],
         max_envelope_bytes: usize,
-    ) -> Result<HashMap<String, String>, DynError> {
+    ) -> Result<HashMap<String, TokenRow>, DynError> {
         if hashids.is_empty() {
             return Ok(HashMap::new());
         }
         let placeholders = std::iter::repeat_n("?", hashids.len())
             .collect::<Vec<_>>()
             .join(", ");
-        let sql =
-            format!("SELECT hashid, data FROM tokens WHERE kid = ? AND hashid IN ({placeholders})");
+        let sql = format!(
+            "SELECT hashid, data, subject FROM tokens WHERE kid = ? AND hashid IN ({placeholders})"
+        );
         let mut query = sqlx::query(&sql).bind(kid);
         for hashid in hashids {
             query = query.bind(hashid);
@@ -183,7 +199,17 @@ impl SqliteStorage {
             let hashid: String = row.try_get("hashid")?;
             let data: String = row.try_get("data")?;
             budget.retain(&hashid, &data)?;
-            found.insert(hashid, data);
+            let subject: Option<String> = row.try_get("subject")?;
+            super::validate_optional_subject(subject.as_deref())?;
+            found.insert(
+                hashid.clone(),
+                TokenRow {
+                    kid: kid.to_owned(),
+                    hashid,
+                    data,
+                    subject,
+                },
+            );
         }
         Ok(found)
     }
@@ -191,7 +217,7 @@ impl SqliteStorage {
     pub async fn get_token(&self, kid: &str, hashid: &str) -> Result<TokenRow, DynError> {
         let row = sqlx::query(
             "
-            SELECT kid, hashid, data
+            SELECT kid, hashid, data, subject
             FROM tokens
             WHERE kid = ?
               AND hashid = ?
@@ -210,20 +236,33 @@ impl SqliteStorage {
             kid: row.get("kid"),
             hashid: row.get("hashid"),
             data: row.get("data"),
+            subject: row.get("subject"),
         })
     }
 
+    #[cfg(test)]
     pub async fn delete_token(&self, kid: &str, hashid: &str) -> Result<(), DynError> {
+        self.delete_token_for_subject(kid, hashid, None).await
+    }
+
+    pub async fn delete_token_for_subject(
+        &self,
+        kid: &str,
+        hashid: &str,
+        subject: Option<&str>,
+    ) -> Result<(), DynError> {
         let mut tx = self.pool.begin().await?;
         let result = sqlx::query(
             "
             DELETE FROM tokens
             WHERE kid = ?
               AND hashid = ?
+              AND subject IS ?
             ",
         )
         .bind(kid)
         .bind(hashid)
+        .bind(subject)
         .execute(&mut *tx)
         .await?;
         if result.rows_affected() != 1 {
@@ -234,10 +273,21 @@ impl SqliteStorage {
         Ok(())
     }
 
+    #[cfg(test)]
     pub async fn consume_tokens_batch(
         &self,
         kid: &str,
         hashids: &[String],
+    ) -> Result<(), TokenBatchConsumeError> {
+        self.consume_tokens_batch_for_subject(kid, hashids, None)
+            .await
+    }
+
+    pub async fn consume_tokens_batch_for_subject(
+        &self,
+        kid: &str,
+        hashids: &[String],
+        subject: Option<&str>,
     ) -> Result<(), TokenBatchConsumeError> {
         let mut ordered = hashids.to_vec();
         ordered.sort_unstable();
@@ -253,10 +303,12 @@ impl SqliteStorage {
                 DELETE FROM tokens
                 WHERE kid = ?
                   AND hashid = ?
+                  AND subject IS ?
                 ",
             )
             .bind(kid)
             .bind(hashid)
+            .bind(subject)
             .execute(&mut *tx)
             .await
             .map_err(|err| TokenBatchConsumeError::Other(Box::new(err)))?;
@@ -290,6 +342,42 @@ impl SqliteStorage {
             kid: kid.to_string(),
             digest: digest.to_string(),
         })
+    }
+
+    pub async fn save_subject(&self, row: &SubjectRow) -> Result<(), DynError> {
+        let result = sqlx::query("INSERT INTO subjects (kid, subject, seed) VALUES (?, ?, ?) ON CONFLICT (kid, subject) DO NOTHING")
+            .bind(&row.kid).bind(&row.subject).bind(&row.seed).execute(&self.pool).await?;
+        if result.rows_affected() == 0 {
+            return Err(crate::error::conflict("subject already exists"));
+        }
+        Ok(())
+    }
+
+    pub async fn get_subject(&self, kid: &str, subject: &str) -> Result<SubjectRow, DynError> {
+        let row =
+            sqlx::query("SELECT kid, subject, seed FROM subjects WHERE kid = ? AND subject = ?")
+                .bind(kid)
+                .bind(subject)
+                .fetch_optional(&self.pool)
+                .await?
+                .ok_or_else(|| crate::error::not_found("subject not found"))?;
+        Ok(SubjectRow {
+            kid: row.try_get("kid")?,
+            subject: row.try_get("subject")?,
+            seed: row.try_get("seed")?,
+        })
+    }
+
+    pub async fn delete_subject(&self, kid: &str, subject: &str) -> Result<(), DynError> {
+        let result = sqlx::query("DELETE FROM subjects WHERE kid = ? AND subject = ?")
+            .bind(kid)
+            .bind(subject)
+            .execute(&self.pool)
+            .await?;
+        if result.rows_affected() == 0 {
+            return Err(crate::error::not_found("subject not found"));
+        }
+        Ok(())
     }
 
     pub async fn save_indexes_batch(&self, records: &[IndexRow]) -> Result<(), DynError> {
@@ -505,6 +593,21 @@ async fn validate_tokens_schema(db: &SqlitePool, context: &str) -> Result<(), Dy
         ))
     })?;
 
+    let subject = find_column(&rows, "subject").ok_or_else(|| {
+        crate::error::storage(
+            "sqlite schema is missing tokens.subject column; apply subject keys migration",
+        )
+    })?;
+    validate_column(
+        &subject,
+        "tokens",
+        "subject",
+        "VARCHAR(128)",
+        false,
+        None,
+        context,
+    )?;
+
     validate_column(
         &kid,
         "tokens",
@@ -533,6 +636,25 @@ async fn validate_tokens_schema(db: &SqlitePool, context: &str) -> Result<(), Dy
         context,
     )?;
 
+    Ok(())
+}
+
+async fn validate_subjects_schema(db: &SqlitePool, context: &str) -> Result<(), DynError> {
+    let rows = sqlx::query("PRAGMA table_info(subjects)")
+        .fetch_all(db)
+        .await?;
+    for (name, ty, position) in [
+        ("kid", "VARCHAR(128)", Some(1)),
+        ("subject", "VARCHAR(128)", Some(2)),
+        ("seed", "TEXT", None),
+    ] {
+        let column = find_column(&rows, name).ok_or_else(|| {
+            crate::error::storage(
+                "sqlite schema is missing subjects table or column; apply subject keys migration",
+            )
+        })?;
+        validate_column(&column, "subjects", name, ty, true, position, context)?;
+    }
     Ok(())
 }
 
@@ -671,6 +793,7 @@ mod tests {
                 kid VARCHAR(128) NOT NULL,
                 hashid VARCHAR(128) NOT NULL,
                 data VARCHAR(10240) NOT NULL,
+                subject VARCHAR(128),
                 PRIMARY KEY (kid, hashid)
             )
             ",
@@ -690,6 +813,7 @@ mod tests {
         .execute(&pool)
         .await
         .expect("test index schema must be created");
+        sqlx::raw_sql("CREATE TABLE subjects (kid VARCHAR(128) NOT NULL, subject VARCHAR(128) NOT NULL, seed TEXT NOT NULL, PRIMARY KEY(kid, subject));").execute(&pool).await.unwrap();
         pool.close().await;
 
         let storage = SqliteStorage::new(&path)
@@ -729,6 +853,7 @@ mod tests {
         assert_eq!(storage.get_token(&kid, &first).await.unwrap().data, data);
         storage
             .save_tokens_batch(&[TokenRow {
+                subject: None,
                 kid: kid.clone(),
                 hashid: second.clone(),
                 data: data.clone(),
@@ -743,7 +868,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(found[1].as_deref(), Some(data.as_str()));
+        assert_eq!(
+            found[1].as_ref().map(|row| row.data.as_str()),
+            Some(data.as_str())
+        );
         let oversized = format!(
             "{}.{}.{}",
             STANDARD.encode(vec![0; 100_000]),
@@ -754,6 +882,7 @@ mod tests {
         assert!(
             storage
                 .save_tokens_batch(&[TokenRow {
+                    subject: None,
                     kid: kid.clone(),
                     hashid: second.clone(),
                     data: oversized.clone()
@@ -907,11 +1036,13 @@ mod tests {
         let (storage, path) = test_storage("token-batch-rollback").await;
         let records = vec![
             TokenRow {
+                subject: None,
                 kid: String::from("kid-1"),
                 hashid: String::from("hash-1"),
                 data: String::from("ciphertext-1.nonce.aad"),
             },
             TokenRow {
+                subject: None,
                 kid: String::from("kid-1"),
                 hashid: String::from("hash-1"),
                 data: String::from("ciphertext-2.nonce.aad"),
@@ -958,8 +1089,8 @@ mod tests {
             .expect("batch lookup must succeed");
 
         assert_eq!(found.len(), 2);
-        assert_eq!(found.get(&first).map(String::as_str), Some(data));
-        assert_eq!(found.get(&second).map(String::as_str), Some(data));
+        assert_eq!(found.get(&first).map(|row| row.data.as_str()), Some(data));
+        assert_eq!(found.get(&second).map(|row| row.data.as_str()), Some(data));
         assert!(!found.contains_key(&missing));
 
         cleanup(path).await;
@@ -983,7 +1114,10 @@ mod tests {
             .get_tokens_batch("kid-budget", &ids, limit)
             .await
             .unwrap();
-        assert_eq!(found.values().map(String::len).sum::<usize>(), limit);
+        assert_eq!(
+            found.values().map(|row| row.data.len()).sum::<usize>(),
+            limit
+        );
         let err = storage
             .get_tokens_batch("kid-budget", &ids, limit - 1)
             .await
@@ -1033,7 +1167,7 @@ mod tests {
                 .unwrap_err()
                 .as_ref()
         ));
-        sqlx::query("INSERT INTO tokens VALUES (?, ?, 'corrupt')")
+        sqlx::query("INSERT INTO tokens (kid, hashid, data) VALUES (?, ?, 'corrupt')")
             .bind(&kid)
             .bind(&hashid)
             .execute(&pool)

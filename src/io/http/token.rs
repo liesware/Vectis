@@ -18,6 +18,25 @@ pub async fn encode_endpoint(
     headers: HeaderMap,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::tokenization::TokenEncodeOutput>, (StatusCode, Json<ErrorResponse>)> {
+    encode(state, kid, None, headers, request).await
+}
+
+pub async fn encode_subject_endpoint(
+    State(state): State<HttpState>,
+    Path((kid, subject)): Path<(String, String)>,
+    headers: HeaderMap,
+    JsonBody(request): JsonBody,
+) -> Result<Json<ops::tokenization::TokenEncodeOutput>, (StatusCode, Json<ErrorResponse>)> {
+    encode(state, kid, Some(subject), headers, request).await
+}
+
+async fn encode(
+    state: HttpState,
+    kid: String,
+    subject: Option<String>,
+    headers: HeaderMap,
+    request: serde_json::Value,
+) -> Result<Json<ops::tokenization::TokenEncodeOutput>, (StatusCode, Json<ErrorResponse>)> {
     let request_context = state.authorize_request(&headers).await?;
     request_context.require_permission_for(
         Some(&kid),
@@ -76,6 +95,24 @@ pub async fn encode_endpoint(
             err.as_ref(),
         ));
     };
+    let profile = super::subject::token_context(
+        &state,
+        profile,
+        &kid,
+        subject.as_deref(),
+        ops::keys::ProfileUse::NewUse,
+    )
+    .await
+    .map_err(|err| {
+        crypto_failed_response(
+            "token.encode.failed",
+            Some(&actor),
+            Some(&kid),
+            Some("token-encode"),
+            "token_encode",
+            err.as_ref(),
+        )
+    })?;
     let prepared = match state
         .with_keys_db_state(|keys_db_state| {
             ops::tokenization::prepare_encode(keys_db_state, &kid, profile, input)
@@ -113,7 +150,12 @@ pub async fn encode_endpoint(
 
     if let Err(err) = state
         .storage()
-        .save_token(&record.kid, &record.hashid, &record.data)
+        .save_token_for_subject(
+            &record.kid,
+            &record.hashid,
+            &record.data,
+            record.subject.as_deref(),
+        )
         .await
     {
         error!(error = %err, kid = %kid, "token encode storage insert failed");
@@ -144,6 +186,25 @@ pub async fn encode_batch_endpoint(
     Path(kid): Path<String>,
     headers: HeaderMap,
     JsonBody(request): JsonBody,
+) -> Result<Json<ops::tokenization::TokenEncodeBatchOutput>, (StatusCode, Json<ErrorResponse>)> {
+    encode_batch(state, kid, None, headers, request).await
+}
+
+pub async fn encode_subject_batch_endpoint(
+    State(state): State<HttpState>,
+    Path((kid, subject)): Path<(String, String)>,
+    headers: HeaderMap,
+    JsonBody(request): JsonBody,
+) -> Result<Json<ops::tokenization::TokenEncodeBatchOutput>, (StatusCode, Json<ErrorResponse>)> {
+    encode_batch(state, kid, Some(subject), headers, request).await
+}
+
+async fn encode_batch(
+    state: HttpState,
+    kid: String,
+    subject: Option<String>,
+    headers: HeaderMap,
+    request: serde_json::Value,
 ) -> Result<Json<ops::tokenization::TokenEncodeBatchOutput>, (StatusCode, Json<ErrorResponse>)> {
     let request_context = state.authorize_request(&headers).await?;
     request_context.require_permission_for(
@@ -203,6 +264,24 @@ pub async fn encode_batch_endpoint(
             err.as_ref(),
         ));
     };
+    let profile = super::subject::token_context(
+        &state,
+        profile,
+        &kid,
+        subject.as_deref(),
+        ops::keys::ProfileUse::NewUse,
+    )
+    .await
+    .map_err(|err| {
+        crypto_failed_response(
+            "token.encode.batch.failed",
+            Some(&actor),
+            Some(&kid),
+            Some("token-encode"),
+            "token_encode_batch",
+            err.as_ref(),
+        )
+    })?;
     let prepared = match state
         .with_keys_db_state(|keys_db_state| {
             ops::tokenization::prepare_encode_batch(keys_db_state, &kid, profile, input)
@@ -243,6 +322,7 @@ pub async fn encode_batch_endpoint(
         .records
         .into_iter()
         .map(|record| TokenRow {
+            subject: record.subject,
             kid: record.kid,
             hashid: record.hashid,
             data: record.data,
@@ -317,6 +397,16 @@ pub async fn delete_endpoint(
                 &crate::error::invalid_input("tokenization profile not found"),
             )
         })?;
+    let subject = input.subject().map(str::to_owned);
+    let profile = super::subject::token_context(
+        &state,
+        profile,
+        &kid,
+        subject.as_deref(),
+        ops::keys::ProfileUse::TokenDelete,
+    )
+    .await
+    .map_err(|err| failed(Some(&kid), &err))?;
     let prepared = state
         .with_keys_db_state(|keys_db_state| {
             ops::tokenization::prepare_delete(keys_db_state, profile, input)
@@ -329,7 +419,7 @@ pub async fn delete_endpoint(
             .map_err(|err| failed(Some(&kid), &err))?;
     state
         .storage()
-        .delete_token(&kid, &hashid)
+        .delete_token_for_subject(&kid, &hashid, subject.as_deref())
         .await
         .map_err(|err| failed(Some(&kid), &err))?;
     audit::operation_success(
@@ -397,7 +487,28 @@ pub async fn decode_endpoint(
         ));
     };
     let one_time = profile.one_time();
-    let hashid = match crate::core::tokenization::hash_token(&profile, input.token()) {
+    let subject = input.subject().map(str::to_owned);
+    let profile = super::subject::token_context(
+        &state,
+        profile,
+        &kid,
+        subject.as_deref(),
+        ops::keys::ProfileUse::Verify,
+    )
+    .await
+    .map_err(|err| {
+        crypto_failed_response(
+            "token.decode.failed",
+            Some(&actor),
+            Some(&kid),
+            Some("token-decode"),
+            "token_decode",
+            err.as_ref(),
+        )
+    })?;
+    let hash_profile = profile.clone();
+    let token = zeroize::Zeroizing::new(input.token().to_owned());
+    let hashid = match blocking::spawn_blocking_crypto(move || hash_profile.hash(&token)).await {
         Ok(hashid) => hashid,
         Err(err) => {
             return Err(crypto_failed_response(
@@ -423,6 +534,17 @@ pub async fn decode_endpoint(
             ));
         }
     };
+    if row.subject.as_deref() != subject.as_deref() {
+        let err = crate::error::internal("stored token subject does not match request");
+        return Err(crypto_failed_response(
+            "token.decode.failed",
+            Some(&actor),
+            Some(&kid),
+            Some("token-decode"),
+            "token_decode",
+            err.as_ref(),
+        ));
+    }
     let prepared = match state
         .with_keys_db_state(|keys_db_state| {
             ops::tokenization::prepare_decode(keys_db_state, profile, input, row.data)
@@ -444,7 +566,12 @@ pub async fn decode_endpoint(
 
     match blocking::spawn_blocking_crypto(move || ops::tokenization::decode(prepared)).await {
         Ok(output) => {
-            if one_time && let Err(err) = state.storage().consume_token(&kid, &hashid).await {
+            if one_time
+                && let Err(err) = state
+                    .storage()
+                    .delete_token_for_subject(&kid, &hashid, subject.as_deref())
+                    .await
+            {
                 return Err(crypto_failed_response(
                     "token.decode.failed",
                     Some(&actor),
@@ -546,23 +673,52 @@ pub async fn decode_batch_endpoint(
             err.as_ref(),
         ));
     }
-    let mut hashids = Vec::new();
-    for (index, token) in input.tokens().enumerate() {
-        match crate::core::tokenization::hash_token(&profile, token) {
-            Ok(hashid) => hashids.push(hashid),
-            Err(err) => {
-                let err = crate::error::with_prefix(&format!("batch item {index} failed"), err);
-                return Err(crypto_failed_response(
-                    "token.decode.batch.failed",
-                    Some(&actor),
-                    Some(&kid),
-                    Some("token-decode"),
-                    "token_decode_batch",
-                    err.as_ref(),
-                ));
-            }
-        }
-    }
+    let subject = input.subject().map(str::to_owned);
+    let profile = super::subject::token_context(
+        &state,
+        profile,
+        &kid,
+        subject.as_deref(),
+        ops::keys::ProfileUse::Verify,
+    )
+    .await
+    .map_err(|err| {
+        crypto_failed_response(
+            "token.decode.batch.failed",
+            Some(&actor),
+            Some(&kid),
+            Some("token-decode"),
+            "token_decode_batch",
+            err.as_ref(),
+        )
+    })?;
+    let hash_profile = profile.clone();
+    let tokens = input
+        .tokens()
+        .map(|token| zeroize::Zeroizing::new(token.to_owned()))
+        .collect::<Vec<_>>();
+    let hashids = blocking::spawn_blocking_crypto(move || {
+        tokens
+            .iter()
+            .enumerate()
+            .map(|(index, token)| {
+                hash_profile.hash(token).map_err(|err| {
+                    crate::error::with_prefix(&format!("batch item {index} failed"), err)
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
+    })
+    .await
+    .map_err(|err| {
+        crypto_failed_response(
+            "token.decode.batch.failed",
+            Some(&actor),
+            Some(&kid),
+            Some("token-decode"),
+            "token_decode_batch",
+            err.as_ref(),
+        )
+    })?;
     if one_time {
         let mut seen_hashids = HashSet::with_capacity(hashids.len());
         for (index, hashid) in hashids.iter().enumerate() {
@@ -620,7 +776,18 @@ pub async fn decode_batch_endpoint(
                 err.as_ref(),
             ));
         };
-        rows.push(data);
+        if data.subject.as_deref() != subject.as_deref() {
+            let err = crate::error::internal("stored token subject does not match request");
+            return Err(crypto_failed_response(
+                "token.decode.batch.failed",
+                Some(&actor),
+                Some(&kid),
+                Some("token-decode"),
+                "token_decode_batch",
+                err.as_ref(),
+            ));
+        }
+        rows.push(data.data);
     }
     let hashid_indexes = one_time.then(|| {
         hashids
@@ -648,7 +815,10 @@ pub async fn decode_batch_endpoint(
     match blocking::spawn_blocking_crypto(move || ops::tokenization::decode_batch(prepared)).await {
         Ok(output) => {
             if let Some(hashids) = hashids_for_consume
-                && let Err(err) = state.storage().consume_tokens_batch(&kid, &hashids).await
+                && let Err(err) = state
+                    .storage()
+                    .consume_tokens_batch_for_subject(&kid, &hashids, subject.as_deref())
+                    .await
             {
                 let err = map_token_batch_consume_error(err, hashid_indexes.as_ref());
                 return Err(crypto_failed_response(

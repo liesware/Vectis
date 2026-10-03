@@ -270,7 +270,7 @@ Exposed metrics:
 - `vectis_key_load_failures_total{reason}` (`decrypt_or_validate`, `task_panic`, `task_cancelled`, or `task_join`)
 - `vectis_keys_load_skipped` (keys omitted by the most recently completed key-set load attempt)
 - `vectis_message_total{operation,result}` (`send`, `receive`, or `decrypt`; `success`, `denied`, or `failed`)
-- `vectis_crypto_operation_total{operation,result}` (`sign`, `verify`, `encrypt`, `decrypt`, `fpe_encrypt`, `fpe_decrypt`, `fpe_encrypt_batch`, `fpe_decrypt_batch`, `token_encode`, `token_decode`, `token_encode_batch`, `token_decode_batch`, `mac_create`, `mac_verify`, `mac_create_batch`, `mac_verify_batch`, `commit_create`, `commit_verify`, `commit_create_batch`, `commit_verify_batch`, `share_split`, `share_combine`, `index_create`, `index_verify`, `index_create_batch`, `index_verify_batch`, `mask`, or `mask_batch`; `success` or `failed`)
+- `vectis_crypto_operation_total{operation,result}` (`sign`, `verify`, `encrypt`, `decrypt`, `fpe_encrypt`, `fpe_decrypt`, `fpe_encrypt_batch`, `fpe_decrypt_batch`, `token_encode`, `token_decode`, `token_encode_batch`, `token_decode_batch`, `subject_create`, `subject_delete`, `mac_create`, `mac_verify`, `mac_create_batch`, `mac_verify_batch`, `commit_create`, `commit_verify`, `commit_create_batch`, `commit_verify_batch`, `share_split`, `share_combine`, `index_create`, `index_verify`, `index_create_batch`, `index_verify_batch`, `mask`, or `mask_batch`; `success` or `failed`)
 
 ### GET /self-test/init
 
@@ -691,6 +691,8 @@ Allowed actions:
 - `token-encode`
 - `token-decode`
 - `token-delete`
+- `subject-create`
+- `subject-delete`
 - `mac-create`
 - `mac-verify`
 - `index-create`
@@ -711,9 +713,11 @@ Permission mapping:
 | `message` | `POST /message/{sender_kid}`, `POST /message/decrypt`, `POST /message/internal/encrypt/{kid}`, `POST /message/internal/decrypt` |
 | `fpe-encrypt` | `POST /fpe/encrypt/{kid}`, `POST /fpe/encrypt/batch/{kid}` |
 | `fpe-decrypt` | `POST /fpe/decrypt`, `POST /fpe/decrypt/batch` |
-| `token-encode` | `POST /token/encode/{kid}`, `POST /token/encode/batch/{kid}` |
+| `token-encode` | `POST /token/encode/{kid}`, `POST /token/encode/batch/{kid}`, and their `/subject/{subject}` variants |
 | `token-decode` | `POST /token/decode`, `POST /token/decode/batch` |
 | `token-delete` | `POST /token/delete` |
+| `subject-create` | `POST /subject/{kid}` |
+| `subject-delete` | `DELETE /subject/{kid}/{subject}` |
 | `mac-create` | `POST /mac/{kid}`, `POST /mac/batch/{kid}` |
 | `mac-verify` | `POST /mac/verify`, `POST /mac/verify/batch` |
 | `commit-create` | `POST /commit/{kid}`, `POST /commit/batch/{kid}` |
@@ -1259,9 +1263,96 @@ Response:
 
 ## Tokenization
 
-Tokenization is a local reversible random-token operation. It returns a visible random token and stores the original plaintext plus optional metadata encrypted in storage. The database only sees `kid`, `hashid`, and encrypted `data`; it never sees plaintext, metadata, profile name as a column, or the visible token.
+Tokenization is a local reversible random-token operation. It returns a visible random token and stores the original plaintext plus optional metadata encrypted in storage. The database only sees `kid`, `hashid`, encrypted `data` and an optional opaque `subject` association; it never sees plaintext, metadata, profile name as a column, or the visible token.
 
-Tokenization profiles live in `config.json` under `tokenization_profiles`. Requests cannot provide `token_prefix`, `token_len`, `max_plaintext_len`, or `one_time`; those values come only from signed config. Vectis uses the fixed internal tokenization scheme `token-random-v1`.
+Tokenization profiles live in `config.json` under `tokenization_profiles`. Requests cannot provide `token_prefix`, `token_len`, `max_plaintext_len`, `one_time`, or `subject_mode`; those values come only from signed config. Vectis uses the fixed internal tokenization scheme `token-random-v1`.
+
+### Subject Keys
+
+`subject_mode` is `none` (the default) or `stored`. Adopt `stored` through a new
+signed profile; existing tokens are not migrated or re-encrypted. The existing
+encode endpoints accept only `none` profiles.
+The local profile editor accepts `--subject-mode none|stored`; there are no
+dedicated subject CLI operation commands.
+
+| Method / path | Permission | Result |
+| --- | --- | --- |
+| `POST /subject/{kid}` | `subject-create` | `201` with `{kid, profile, subject}` |
+| `DELETE /subject/{kid}/{subject}` | `subject-delete` | `204`, or `404` if absent |
+| `POST /token/encode/{kid}/subject/{subject}` | `token-encode` | Existing encode response plus `subject` |
+| `POST /token/encode/batch/{kid}/subject/{subject}` | `token-encode` | Existing batch response plus one shared `subject` |
+
+Create body: `{"profile":"patient-subject-v1","subject_name":"synthetic-user"}`.
+The profile must use `stored`, match the path KID, and its key must be active.
+The name is not stored. Vectis returns its profile-scoped HMAC identifier;
+creating the same subject again returns `409 subject already exists`, never
+replacing its seed. Keep the returned identifier in the application.
+
+For `/token/decode`, `/token/decode/batch` and `/token/delete`, add `subject` to
+the existing body. It is required for `stored` and rejected for `none`. A batch
+uses one subject for all items. Authorization and lifecycle rules otherwise
+remain unchanged. Subject deletion needs its independent grant but neither a
+usable operational key nor a readable seed.
+
+Names and profiles accept at most 128 Unicode characters, reject controls and
+`;` / `=`, and cannot be whitespace-only. Names are neither trimmed nor Unicode
+normalized. Identifiers are exactly 64 lowercase ASCII hex characters. Unknown
+fields and client-supplied seeds, modes or algorithms are rejected. Seed
+envelopes are capped at 2,048 ASCII characters; seeds contain 32 random bytes.
+Existing plaintext, metadata, ref, token and 128-item batch limits remain.
+
+Each subject stores an authenticated envelope, not a plaintext seed. Its random
+seed is opened and used as HKDF salt to derive distinct token lookup and data
+keys, then released at the end of the operation. Token data inherits the profile
+cipher and binds the subject in its v2 AAD and token HMAC. Legacy derivation and
+v1 envelopes are unchanged. There is no secret cache or legacy fallback.
+
+All contexts use validated, ordered `key=value` fields separated by `;`:
+
+| Use | Parent / salt | Context order |
+| --- | --- | --- |
+| Subject identifier HMAC-BLAKE2b-256 | `profile.hash_key` | `purpose=subject-lookup;kid;profile;subject_name;version=v1` |
+| Seed wrapping HKDF-BLAKE2b-256 | `profile.data_key` / `vectis/subjects/v1` | `purpose=subject-wrap;kid;profile;version=v1` |
+| Subject token hash HKDF | `profile.hash_key` / decrypted seed | `purpose=subject-token-hash;kid;profile;version=v1` |
+| Subject token data HKDF | `profile.data_key` / decrypted seed | `purpose=subject-token-data;kid;profile;version=v1` |
+
+Hash keys are 32 bytes; data/wrapping keys use the profile cipher's key size.
+The seed AAD order is `version=v1;type=subject-seed;kid;profile;subject;cipher`.
+Its compact plaintext is `{"seed":"<64 hex characters>"}`, and its storage
+format is `base64(ciphertext+tag).base64(nonce).base64(AAD)`. AEAD tags never enter
+HKDF. Subject token HMAC input is `version=v2;profile;subject;token`; its data AAD
+is `version=v2;type=token-data;kid;profile;tokenization_version=token-random-v1;hashid;subject;cipher`.
+Bare names in this table denote the corresponding `name=value` field.
+
+Using the decrypted subject seed as HKDF salt is deliberate: it changes the
+extraction result for each independently generated seed, while `info` binds the
+purpose, KID, profile and derivation version. Legacy profile derivation instead
+uses a fixed namespace salt and context in `info`. HKDF permits secret salts
+([RFC 5869, Section 3.1](https://www.rfc-editor.org/rfc/rfc5869.html#section-3.1)).
+Moving the seed from salt to `info` would change the derived keys and require a
+new derivation version with explicit compatibility handling for existing tokens.
+
+Version fields identify different layers. `tokenization_version=token-random-v1`
+identifies the tokenization scheme; `version=v2` in subject token AAD and HMAC
+input identifies their subject-aware context format. `version=v1` in subject
+lookup and key-derivation contexts identifies those contexts, and in seed AAD
+identifies the seed envelope format. These versions evolve independently and
+need not match. Renaming or changing fields in HKDF, HMAC or AAD changes the
+cryptographic contract, not merely its presentation.
+
+Missing subjects return `404`; incompatible or invalid input returns `400`;
+corrupt stored seed material returns a sanitized internal error. Deleting a
+subject does not delete its token rows or clear their `subject` column. Those
+tokens cannot be recovered through the legacy path; recreating the name produces
+a fresh seed and does not unlock them. Requests that already opened the seed
+may finish. Backups can restore a deleted seed: this is not instant revocation
+or erasure resistant to rollback. End-user authorization remains the application's
+responsibility; presenting a subject is not proof of user identity.
+
+Before upgrading, apply the matching migration in
+[`src/db/migrations`](../src/db/migrations). PostgreSQL runtime roles need
+`SELECT, INSERT, DELETE` on `public.subjects`. Upgrade every node before enabling
+`stored` profiles. Vectis checks schemas at startup and never applies migrations.
 
 All tokenization requests include a client-defined `ref`. It is required, non-empty, at most 128 characters, and echoed in the response. Batch requests require every item `ref` to be unique within the request. For `POST /token/decode/batch`, profiles with `one_time: true` also require each token to be unique; a duplicate fails before lookup or consumption with `batch item N failed: token batch contains duplicated token`. Profiles with `one_time: false` may decode the same token more than once in a batch when every item has a distinct `ref`.
 
@@ -2091,7 +2182,7 @@ Top level:
 | `client` | yes | text, unique | Client label. |
 | `apikey_hash` | yes | 64 hex (32 bytes) | Server-side verifier for this client's `X-API-Key`. |
 | `status` | yes | `active` \| `disabled` \| `revoked` | Only `active` clients are authorized. |
-| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `fpe-encrypt`, `fpe-decrypt`, `token-encode`, `token-decode`, `token-delete`, `mac-create`, `mac-verify`, `commit-create`, `commit-verify`, `share-split`, `share-combine`, `index-create`, `index-verify`, `mask`, `metrics`, `time-attest`. `kid: "*"` is required for global actions `admin`, `metrics`, and `time-attest`; crypto profile actions require explicit KIDs. An `admin` action grants all endpoints and ignores kid-scoped grants. |
+| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `fpe-encrypt`, `fpe-decrypt`, `token-encode`, `token-decode`, `token-delete`, `subject-create`, `subject-delete`, `mac-create`, `mac-verify`, `commit-create`, `commit-verify`, `share-split`, `share-combine`, `index-create`, `index-verify`, `mask`, `metrics`, `time-attest`. `kid: "*"` is required for global actions `admin`, `metrics`, and `time-attest`; crypto profile actions require explicit KIDs. An `admin` action grants all endpoints and ignores kid-scoped grants. |
 
 `fpe_profiles[]` entries:
 
@@ -2115,6 +2206,7 @@ Top level:
 | `token_len` | yes | integer >= 32 | Random bytes generated before base64url-no-pad encoding; decode requires this exact decoded byte length. |
 | `max_plaintext_len` | yes | integer 1..16384 | Maximum Unicode character count accepted by encode (single and batch). |
 | `one_time` | yes | boolean | When true, a successful decode consumes the token. The signed profile currently loaded by Vectis controls this policy. |
+| `subject_mode` | no | `none` (default) or `stored` | Optional per-subject seed-backed tokenization. Use a new profile to adopt `stored`; existing tokens are not migrated. |
 
 `mac_profiles[]` entries:
 

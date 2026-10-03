@@ -125,6 +125,22 @@ artifact remains below the 2 MiB request limit when submitted to
 
 ## Storage
 
+### Subject Keys
+
+| Area | Aspect | Current limit | Unit | Kind | Enforcement | Source |
+| --- | --- | --- | --- | --- | --- | --- |
+| Subjects | Name | `1..=128`, not whitespace-only | Unicode characters | Explicit | Reject controls, `;` and `=`; no trimming or normalization | [`SUBJECT_NAME_MAX_CHARS`](../src/core/subjects.rs#L8), [`validate_subject_name`](../src/core/subjects.rs#L26) |
+| Subjects | Identifier | Exactly `64` lowercase ASCII hex | characters | Explicit | HTTP, operations and storage validation | [`SUBJECT_ID_HEX_CHARS`](../src/core/subjects.rs#L9), [`validate_subject`](../src/core/subjects.rs#L36) |
+| Subjects | Seed | Exactly `32` | bytes | Explicit | CSPRNG and authenticated payload validation; 64 hex characters in internal JSON | [`SUBJECT_SEED_BYTES`](../src/core/subjects.rs#L10), [`open_seed`](../src/core/subjects.rs#L137) |
+| Subjects | Seed envelope | `2,048` ASCII characters, three standard Base64 segments | characters | Explicit | Bound before decoding; cipher-specific nonce, complete tag and exact AAD | [`SUBJECT_SEED_ENVELOPE_MAX_CHARS`](../src/core/subjects.rs#L11), [`validate_seed_envelope`](../src/core/subjects.rs#L50) |
+| Tokenization | Subject mode | `none` or `stored` | enum | Profile-controlled | Signed policy; incompatible paths/bodies rejected, no fallback | [`SubjectMode`](../src/core/tokenization.rs#L24), [`validate_subject_mode`](../src/core/tokenization.rs#L177) |
+| Storage | Subjects | No row-count maximum | rows | No dedicated limit | Database resources bound storage; no seed cache | [`StorageState`](../src/core/storage/mod.rs#L122) |
+
+Profiles keep their existing 128-character AAD-safe bound. Token `subject` is
+nullable only for legacy rows. Subject-aware requests retain all existing token
+limits and the shared HTTP/batch limits. Subject deletion leaves token rows;
+their non-null association is never treated as a legacy row.
+
 | Area | Aspect | Current limit | Unit | Kind | Enforcement | Source |
 |---|---|---:|---|---|---|---|
 | Storage | Encrypted key and properties envelopes | `32,768` | base64-envelope characters | Explicit | Every value is validated before write and after read | [`STORAGE_ENVELOPE_MAX_CHARS`](../src/core/config.rs#L40), [`validate_storage_envelope`](../src/core/storage/mod.rs#L333) |
