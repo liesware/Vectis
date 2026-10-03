@@ -38,7 +38,8 @@ def run_subjects(ctx):
             lambda: StatusClient(ctx.base_url, ctx.apikey).post(f"/subject/{kid}", create_body, auth=True)
             for _ in range(8)
         ])
-        require(sorted(status for status, _ in concurrent) == [201] + [409] * 7, "subject creation has one winner")
+        statuses = sorted(status for status, _ in concurrent)
+        require(statuses == [201] + [409] * 7, f"subject creation has one winner; received statuses: {statuses}")
         subject = next(output["subject"] for status, output in concurrent if status == 201)
         for status, output in concurrent:
             if status == 409:

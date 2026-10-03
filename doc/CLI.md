@@ -666,6 +666,9 @@ defined in the request; they are loaded from signed `config.json`.
 ```sh
 vectis token encode <kid> --json '{"ref":"reg1","profile":"patient-id-token-v1","plaintext":"123456","metadata":{}}'
 vectis token decode --json '{"ref":"reg1","kid":"<kid>","profile":"patient-id-token-v1","token":"tok_patient_..."}'
+vectis token delete --file token-delete.json
+vectis token encode-batch <kid> --file token-encode-batch.json
+vectis token decode-batch --file token-decode-batch.json
 ```
 
 `encode` requires `token-encode` permission for the KID and an `active` key.
@@ -673,6 +676,39 @@ vectis token decode --json '{"ref":"reg1","kid":"<kid>","profile":"patient-id-to
 keys. Metadata is optional, must be a JSON object when present, and its compact
 serialized JSON representation must be at most 128 characters. `ref` is a
 required client correlation value and is echoed in the response.
+
+`delete` requires its independent `token-delete` permission and allows `active`,
+`retired` and `compromised`; it returns `{ref, deleted: true}` only after commit.
+An absent, consumed or already deleted token returns `404`. It does not decrypt
+the token payload. There is no batch delete command.
+
+For `subject_mode=stored`, use `--subject <subject>` on `encode` or
+`encode-batch` to select the subject endpoint. Include `subject` in the JSON
+body for `decode`, `decode-batch` and `delete`. The flag is not accepted for
+those body-based commands. No subject is inferred from the signed profile.
+All JSON commands accept exactly one of `--json` or `--file` and support
+`--output json|yaml` without changing request bodies.
+
+### `vectis subject`
+
+Calls the stored subject-key endpoints using `VECTIS_APIKEY`:
+
+```sh
+vectis subject create <kid> --json '{"profile":"patient-subject-v1","subject_name":"synthetic-user"}' --output json
+vectis token encode <kid> --subject <subject> --file token-encode.json
+vectis token encode-batch <kid> --subject <subject> --file token-encode-batch.json
+vectis subject delete <kid> <subject>
+```
+
+`create` requires `subject-create`, an active KID and a signed `stored` profile;
+it displays the API's `201` response containing `kid`, `profile` and `subject`.
+Creating the same subject again returns `409`, without replacing its seed.
+`delete` requires `subject-delete` and follows the API's independent cleanup
+policy, not token delete lifecycle restrictions. Success is `204`, exit code
+zero and empty stdout, including with `--output json|yaml`; a second deletion
+returns `404` and a nonzero exit code. Subject identifiers must be exactly 64
+lowercase ASCII hexadecimal characters. Deleting a subject prevents subsequent
+recovery of its tokens but does not physically delete their rows.
 
 ### `vectis mac`
 

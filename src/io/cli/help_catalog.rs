@@ -22,6 +22,7 @@ pub(crate) const EXECUTABLE_COMMANDS: &[&str] = &[
     "sign",
     "fpe",
     "token",
+    "subject",
     "mac",
     "index",
     "mask",
@@ -44,6 +45,7 @@ pub(crate) const HTTP_COMMANDS: &[&str] = &[
     "sign",
     "fpe",
     "token",
+    "subject",
     "mac",
     "index",
     "mask",
@@ -251,7 +253,8 @@ const ROOT_HELP: CommandHelp = CommandHelp {
                 "  pub                   Fetch public keys through HTTP",
                 "  sign                  Create or verify timestamp signatures through HTTP",
                 "  fpe                   Encrypt or decrypt field values through HTTP",
-                "  token                 Encode or decode reversible random tokens through HTTP",
+                "  token                 Encode, decode or delete reversible tokens through HTTP",
+                "  subject               Create or delete stored subject keys through HTTP",
                 "  mac                   Create or verify MAC digests through HTTP",
                 "  index                 Create or verify blind indexes through HTTP",
                 "  mask                  Mask field values for controlled display through HTTP",
@@ -1246,9 +1249,14 @@ const TOKEN_HELP: CommandHelp = CommandHelp {
         "vectis token encode <kid> --file token-encode.json",
         "vectis token decode --json '<json>'",
         "vectis token decode --file token-decode.json",
+        "vectis token delete --json '<json>'",
+        "vectis token delete --file token-delete.json",
+        "vectis token encode <kid> --subject <subject> --json '<json>'",
+        "vectis token encode-batch <kid> [--subject <subject>] --json '<json>'",
+        "vectis token decode-batch --json '<json>'",
     ],
     summary: Some(
-        "Encodes or decodes reversible random tokens with signed-config tokenization profiles.",
+        "Encodes, decodes or deletes reversible tokens with signed-config profiles; all commands accept --json or --file.",
     ),
     sections: &[
         HelpSection {
@@ -1268,6 +1276,11 @@ const TOKEN_HELP: CommandHelp = CommandHelp {
             lines: &[
                 "  encode <kid>          POST /token/encode/{kid}, requires VECTIS_APIKEY",
                 "  decode                POST /token/decode, requires VECTIS_APIKEY",
+                "  delete                POST /token/delete, requires VECTIS_APIKEY",
+                "  encode-batch <kid>    POST /token/encode/batch/{kid}, requires VECTIS_APIKEY",
+                "  decode-batch          POST /token/decode/batch, requires VECTIS_APIKEY",
+                "  --subject <subject>   Select subject route for encode or encode-batch only",
+                "  stored decode/delete  Include subject in the JSON body",
             ],
         },
         HelpSection {
@@ -1275,6 +1288,35 @@ const TOKEN_HELP: CommandHelp = CommandHelp {
             lines: &[
                 "  --json <json>         JSON object as a shell argument",
                 "  --file <path>         Path to a JSON file",
+            ],
+        },
+    ],
+    output: true,
+};
+
+const SUBJECT_HELP: CommandHelp = CommandHelp {
+    key: "subject",
+    heading: "Usage:",
+    usage: &[
+        "vectis subject create <kid> --json '<json>'",
+        "vectis subject create <kid> --file subject-create.json",
+        "vectis subject delete <kid> <subject>",
+    ],
+    summary: Some(
+        "Manages stored subject keys through HTTP using independent subject-create and subject-delete permissions.",
+    ),
+    sections: &[
+        HelpSection {
+            title: "Create request JSON:",
+            lines: &[r#"  {"profile":"patient-subject-v1","subject_name":"synthetic-user"}"#],
+        },
+        HelpSection {
+            title: "Results:",
+            lines: &[
+                "  create                POST /subject/{kid}; 201 JSON response",
+                "  delete                DELETE /subject/{kid}/{subject}; 204 with no stdout",
+                "  subject               Exactly 64 lowercase ASCII hex characters",
+                "  authentication        Requires VECTIS_APIKEY",
             ],
         },
     ],
@@ -1564,6 +1606,7 @@ const COMMAND_HELPS: &[CommandHelp] = &[
     SIGN_HELP,
     FPE_HELP,
     TOKEN_HELP,
+    SUBJECT_HELP,
     MAC_HELP,
     INDEX_HELP,
     MASK_HELP,
@@ -1630,8 +1673,13 @@ mod tests {
             help.contains("  fpe                   Encrypt or decrypt field values through HTTP")
         );
         assert!(help.contains(
-            "  token                 Encode or decode reversible random tokens through HTTP"
+            "  token                 Encode, decode or delete reversible tokens through HTTP"
         ));
+        assert!(
+            help.contains(
+                "  subject               Create or delete stored subject keys through HTTP"
+            )
+        );
         assert!(
             help.contains("  index                 Create or verify blind indexes through HTTP")
         );

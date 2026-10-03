@@ -145,6 +145,12 @@ runtime.
 
 ## Python HTTP Tests
 
+The positive suite races eight subject creations and expects one `201` and
+seven `409` responses. Run its isolated server with
+`VECTIS_MAX_CONCURRENT_CRYPTO=8` (or greater) so crypto admission does not turn
+this storage-uniqueness check into an overload test. The CI integration runner
+sets eight slots explicitly; the production default remains unchanged.
+
 Install/sync the base Python environment:
 
 ```sh

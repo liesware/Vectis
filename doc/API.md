@@ -1272,8 +1272,11 @@ Tokenization profiles live in `config.json` under `tokenization_profiles`. Reque
 `subject_mode` is `none` (the default) or `stored`. Adopt `stored` through a new
 signed profile; existing tokens are not migrated or re-encrypted. The existing
 encode endpoints accept only `none` profiles.
-The local profile editor accepts `--subject-mode none|stored`; there are no
-dedicated subject CLI operation commands.
+The local profile editor accepts `--subject-mode none|stored`. Runtime CLI
+commands are `vectis subject create <kid> --json '<json>'` and
+`vectis subject delete <kid> <subject>`. Token encode and encode-batch select
+subject routes with `--subject <subject>`; decode, decode-batch and delete
+include `subject` in their JSON body. JSON input may also come from `--file`.
 
 | Method / path | Permission | Result |
 | --- | --- | --- |
