@@ -677,10 +677,13 @@ keys. Metadata is optional, must be a JSON object when present, and its compact
 serialized JSON representation must be at most 128 characters. `ref` is a
 required client correlation value and is echoed in the response.
 
-`delete` requires its independent `token-delete` permission and allows `active`,
-`retired` and `compromised`; it returns `{ref, deleted: true}` only after commit.
-An absent, consumed or already deleted token returns `404`. It does not decrypt
-the token payload. There is no batch delete command.
+`delete` requires its independent `token-delete` permission and is not restricted
+by lifecycle. The operational key must still be loadable and the signed profile
+available and authorized for that KID. It returns `{ref, deleted: true}` only
+after commit. An absent, consumed or already deleted token returns `404`.
+It does not decrypt the token payload, but `subject_mode=stored` requires opening
+a valid subject seed to derive the token lookup key. There is no batch delete
+command.
 
 For `subject_mode=stored`, use `--subject <subject>` on `encode` or
 `encode-batch` to select the subject endpoint. Include `subject` in the JSON
@@ -704,11 +707,12 @@ vectis subject delete <kid> <subject>
 it displays the API's `201` response containing `kid`, `profile` and `subject`.
 Creating the same subject again returns `200` with the same identifiers, without
 replacing its seed. This allows recovery after a lost create response.
-`delete` requires `subject-delete` and follows the API's independent cleanup
-policy, not token delete lifecycle restrictions. Success is `204`, exit code
-zero and empty stdout, including with `--output json|yaml`; a second deletion
-returns `404` and a nonzero exit code. Subject identifiers must be exactly 64
-lowercase ASCII hexadecimal characters. Deleting a subject prevents subsequent
+`delete` requires `subject-delete` but does not load the operational key, resolve
+a profile or decrypt the seed, unlike subject-bound token delete. Success is
+`204`, exit code zero and empty stdout, including with `--output json|yaml`;
+a second deletion returns `404` and a nonzero exit code. Subject identifiers
+must be exactly 64 lowercase ASCII hexadecimal characters. Deleting a subject
+prevents subsequent
 recovery of its tokens and physically deletes their rows in the same transaction.
 It does not require an additional `token-delete` grant. Subject-bound encode
 fails with `404` if deletion wins before storage insert, or `409` if the seed

@@ -99,6 +99,46 @@ def self_check():
     expect(token_delete_semantic(delete, delete, 200, '{"ref":"delete-1","deleted":false}'), "delete rejects false success")
     expect(token_delete_semantic(delete, delete, 400, '{"error":"tok_synthetic"}'), "delete detects token reflection")
     expect(not token_delete_semantic({"token": []}, delete, 400, '{"error":"invalid"}'), "delete oracle handles malformed token type")
+    short_delete = {"ref": "token-delete-fuzz-", "token": "t"}
+    expect(not token_delete_semantic(short_delete, delete, 400,
+           '{"error":"token prefix does not match tokenization profile"}'),
+           "delete short mutation is not a substring canary")
+    for label, response in (
+        ("direct", '{"error":"tok_synthetic"}'),
+        ("message", '{"error":"unexpected tok_synthetic value"}'),
+        ("nested", '{"error":{"values":["tok_synthetic"]}}'),
+        ("escaped", '{"error":"\\u0074ok_synthetic"}'),
+        ("key", '{"tok_synthetic":"invalid"}'),
+        ("non-json", 'invalid tok_synthetic response'),
+    ):
+        expect(token_delete_semantic(short_delete, delete, 400, response),
+               f"delete detects seed token reflection: {label}")
+    expect(token_delete_semantic(short_delete, delete, 400, '{"error":"t"}'),
+           "delete detects complete mutated token value")
+    echo_ref = {"ref": "tok_synthetic", "token": "t"}
+    expect(not token_delete_semantic(echo_ref, delete, 200,
+           '{"ref":"tok_synthetic","deleted":true}'), "delete permits the exact ref echo")
+    expect(not token_delete_semantic({"ref": "t", "token": "t"}, delete, 200,
+           '{"ref":"t","deleted":true}'), "delete permits a ref equal to the short mutation")
+    expect("SEMANTIC: token delete response reflects the token" in token_delete_semantic(
+           delete, delete, 200, '{"ref":"tok_synthetic","deleted":true}'),
+           "delete does not exempt an incorrect ref containing the canary")
+    for label, response in (
+        ("wrong-ref", '{"ref":"other","deleted":true}'),
+        ("extra", '{"ref":"delete-1","deleted":true,"extra":true}'),
+        ("numeric-deleted", '{"ref":"delete-1","deleted":1}'),
+        ("string-deleted", '{"ref":"delete-1","deleted":"true"}'),
+    ):
+        expect(token_delete_semantic(delete, delete, 200, response),
+               f"delete retains success contract: {label}")
+    expect(token_delete_semantic(echo_ref, delete, 400, '{"ref":"tok_synthetic"}'),
+           "delete does not permit a ref echo in errors")
+    expect(token_delete_semantic(echo_ref, delete, 200,
+           '{"ref":"tok_synthetic","deleted":true,"error":"tok_synthetic"}'),
+           "delete ref exemption does not hide reflection elsewhere")
+    for malformed in ({}, {"token": ""}, {"token": []}, None):
+        expect(not token_delete_semantic(malformed, malformed, 400, '{"error":"invalid"}'),
+               "delete oracle tolerates absent or malformed tokens and seeds")
 
     token = {
         "kid": "a" * 64,

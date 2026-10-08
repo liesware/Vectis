@@ -153,7 +153,7 @@ class ReportingTests(unittest.TestCase):
             self.assertEqual(metadata["stored_sha256"], metadata["original_sha256"])
             self.assertTrue(result["request"]["preview_truncated"])
             self.assertLessEqual(len(result["request"]["body"]), 2000)
-            self.assertEqual(result["format"], "http-fuzz-finding-v2")
+            self.assertEqual(result["format"], "http-fuzz-finding-v3")
 
     def test_raw_and_config_bytes_redact_before_preview(self):
         original = b"\xff" + b"a" * 1990 + b"SECRET-API" + b"SECRET-UNSEAL" + b"\x00" * 3000
@@ -183,17 +183,75 @@ class ReportingTests(unittest.TestCase):
             self.assertEqual(evidence["status"], 0)
             self.assertEqual(evidence["error_type"], "ConnectionResetError")
             self.assertEqual(evidence["request_body_bytes"], 4)
-            self.assertEqual(evidence["payload"], result["request"]["payload"])
+            self.assertEqual(evidence["request_payload"], result["request"]["payload"])
+            self.assertEqual(evidence["request_body_preview"], "null")
+            self.assertEqual(evidence["response_body_preview"], "")
+            self.assertFalse(evidence["response_preview_truncated"])
+            self.assertFalse({"payload", "body_preview", "preview_truncated"} & evidence.keys())
             self.assertNotIn("SECRET", artifact.read_text())
 
-    def test_existing_historical_artifact_is_not_overwritten(self):
+    def test_request_and_response_previews_are_distinct_including_get(self):
+        responses = [
+            FuzzResponse(400, '{"error":"invalid token"}', 1, method="POST",
+                         path="/token/delete", request_body=b'{"token":"t"}'),
+            FuzzResponse(200, '{"status":"live"}', 1, method="GET", path="/healthz/live"),
+            FuzzResponse(204, "", 1, method="DELETE", path="/subject/test"),
+        ]
         with tempfile.TemporaryDirectory() as directory:
-            historical = Path(directory) / "crash_self_1337_13.json"
-            historical.write_text("unfinished")
-            artifact = self.save(directory, describe("POST", "/test", True, b"body"))
-            self.assertNotEqual(artifact, historical)
-            self.assertEqual(historical.read_text(), "unfinished")
-            json.loads(artifact.read_text())
+            artifact = self.save(directory, describe("POST", "/token/delete", True,
+                                responses[0].request_body), responses=responses)
+            result = json.loads(artifact.read_text())
+            post, get, delete = result["responses"]
+            self.assertEqual(post["request_body_preview"], '{"token":"t"}')
+            self.assertEqual(post["response_body_preview"], '{"error":"invalid token"}')
+            self.assertEqual(get["response_body_preview"], '{"status":"live"}')
+            self.assertEqual(delete["response_body_preview"], "")
+            for evidence in result["responses"]:
+                self.assertFalse(evidence["response_preview_truncated"])
+                self.assertFalse({"payload", "body_preview", "preview_truncated"} & evidence.keys())
+            for evidence in (get, delete):
+                self.assertFalse({"request_payload", "request_body_preview",
+                                  "request_preview_truncated"} & evidence.keys())
+            self.assertEqual(len(list(artifact.parent.glob("*.gz"))), 1)
+
+    def test_response_secrets_are_redacted_before_truncation(self):
+        secret = "SECRET-API"
+        request = b"b" * 1998 + secret.encode() + b"c" * 100
+        response = FuzzResponse(400, "a" * 1998 + secret + "b" * 100, 1,
+                                method="POST", path="/test", request_body=request)
+        with tempfile.TemporaryDirectory() as directory:
+            artifact = self.save(directory, {}, responses=[response], secrets=(secret,))
+            evidence = json.loads(artifact.read_text())["responses"][0]
+            self.assertEqual(evidence["response_body_preview"], "a" * 1998 + "[R")
+            self.assertTrue(evidence["response_preview_truncated"])
+            self.assertEqual(evidence["request_body_preview"], "b" * 1998 + "[R")
+            self.assertTrue(evidence["request_preview_truncated"])
+            self.assertNotIn(secret, artifact.read_text())
+            metadata = evidence["request_payload"]
+            stored = gzip.decompress((artifact.parent / metadata["file"]).read_bytes())
+            self.assertEqual(stored, request.replace(secret.encode(), b"[REDACTED]"))
+            self.assertTrue(metadata["redacted"])
+            self.assertEqual(metadata["original_sha256"], hashlib.sha256(request).hexdigest())
+            self.assertEqual(metadata["stored_sha256"], hashlib.sha256(stored).hexdigest())
+
+    def test_escaped_response_secrets_are_redacted(self):
+        secret = "sensitive-\u754c"
+        response = FuzzResponse(400, json.dumps({"error": secret}), 1)
+        with tempfile.TemporaryDirectory() as directory:
+            artifact = self.save(directory, {}, responses=[response], secrets=(secret,))
+            evidence = json.loads(artifact.read_text())["responses"][0]
+            self.assertEqual(evidence["response_body_preview"], '{"error": "[REDACTED]"}')
+            self.assertFalse(evidence["response_preview_truncated"])
+
+    def test_existing_historical_artifact_is_not_overwritten(self):
+        for original in ("unfinished", json.dumps({"format": "http-fuzz-finding-v2"})):
+            with self.subTest(original=original), tempfile.TemporaryDirectory() as directory:
+                historical = Path(directory) / "crash_self_1337_13.json"
+                historical.write_text(original)
+                artifact = self.save(directory, describe("POST", "/test", True, b"body"))
+                self.assertNotEqual(artifact, historical)
+                self.assertEqual(historical.read_text(), original)
+                json.loads(artifact.read_text())
 
     def test_publication_failure_propagates_and_removes_temporary_file(self):
         with tempfile.TemporaryDirectory() as directory, \
@@ -226,10 +284,11 @@ class ReportingTests(unittest.TestCase):
                                  responses=responses, secrets=("SECRET",))
             result = json.loads(artifact.read_text())
             self.assertEqual(len(list(artifact.parent.glob("*.gz"))), 2)
-            self.assertEqual(result["responses"][0]["payload"], result["responses"][2]["payload"])
+            self.assertEqual(result["responses"][0]["request_payload"],
+                             result["responses"][2]["request_payload"])
             self.assertNotIn("SECRET", artifact.read_text())
             for evidence in result["responses"]:
-                stored = gzip.decompress((artifact.parent / evidence["payload"]["file"]).read_bytes())
+                stored = gzip.decompress((artifact.parent / evidence["request_payload"]["file"]).read_bytes())
                 self.assertNotIn(b"SECRET", stored)
 
     def test_reset_with_healthy_server_remains_failed(self):
