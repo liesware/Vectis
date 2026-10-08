@@ -60,7 +60,7 @@ jobs:
           bash -n tests/performance/local/*.sh
 
       - name: Install cargo-audit
-        uses: taiki-e/install-action@742a3317eac7bd62f91cd888b4eead5e784ba833 # v2
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
         with:
           tool: cargo-audit
 
@@ -96,7 +96,7 @@ jobs:
         run: chmod +x vectis
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
           # .python-version pins 3.14, which the runner does not preinstall, so
