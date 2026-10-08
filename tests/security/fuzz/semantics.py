@@ -1,6 +1,25 @@
 import json
-
 from oracle import _parse
+
+
+def token_batch_budget_semantic(case, context):
+    findings = []
+    for label, status, body in case["checks"]:
+        parsed = _parse(body)
+        if label == "over-budget":
+            if status != 413 or parsed != {"error": "token decode batch exceeds maximum allowed envelope size"}:
+                findings.append("token batch budget must reject without partial output")
+        else:
+            expected_refs = case["refs"]
+            items = parsed.get("items") if isinstance(parsed, dict) else None
+            if status != 200 or not isinstance(items, list) or len(items) != len(expected_refs):
+                findings.append("token batch under budget must return every item")
+                continue
+            if any(not isinstance(item, dict) or item.get("ref") != ref or item.get("plaintext") != context["plaintext"]
+                   for item, ref in zip(items, expected_refs)):
+                findings.append("token batch budget response must preserve order and plaintext")
+    return findings
+
 
 
 KID_HEX = "a" * 64
@@ -292,6 +311,43 @@ def _response_items(response):
     parsed = _parse(response[1])
     items = parsed.get("items") if isinstance(parsed, dict) else None
     return items if isinstance(items, list) else []
+
+
+def token_delete_semantic(sent_value, seed, status, response):
+    findings = reject_malformed_body_semantic(sent_value, seed, status, response)
+    parsed = _parse(response)
+    if status == 200:
+        expected = {"ref": sent_value.get("ref"), "deleted": True} if isinstance(sent_value, dict) else None
+        if parsed != expected or not isinstance(parsed, dict) or parsed.get("deleted") is not True:
+            findings.append("SEMANTIC: token delete success must echo ref and deleted true only")
+    token = sent_value.get("token") if isinstance(sent_value, dict) else None
+    canary = seed.get("token") if isinstance(seed, dict) else None
+    canary = canary if isinstance(canary, str) and canary else None
+    token = token if isinstance(token, str) and token else None
+    reflected = bool(canary and canary in response) if parsed is None else False
+    pending = [parsed] if parsed is not None else []
+    # Only fixture-issued tokens are substring canaries; short mutations such as
+    # "t" must match a complete JSON value, not ordinary error-message text.
+    while pending and not reflected:
+        value = pending.pop()
+        if isinstance(value, str):
+            reflected = bool((canary and canary in value) or (token and token == value))
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                if canary and canary in key:
+                    reflected = True
+                    break
+                if (
+                    value is parsed and key == "ref" and status == 200
+                    and isinstance(sent_value, dict) and item == sent_value.get("ref")
+                ):
+                    continue
+                pending.append(item)
+        elif isinstance(value, list):
+            pending.extend(value)
+    if reflected:
+        findings.append("SEMANTIC: token delete response reflects the token")
+    return findings
 
 
 def reject_malformed_body_semantic(sent_value, _seed_obj, status, _response):
@@ -774,3 +830,18 @@ def time_attest_source_unavailable_semantic(case):
     if case["ready_before"] != 200 or case["ready_after"] != 200:
         findings.append("SEMANTIC: time attestation source failure changed readiness")
     return findings
+def subject_contract_semantic(responses):
+    expected = [201, 200, 200, 200, 200, 204, 201, 404, 204]
+    if [status for status, _ in responses] != expected:
+        return ["subject idempotency/deletion status contract violated"]
+    outputs = [_parse(body) for _, body in responses]
+    created = outputs[0]
+    if not isinstance(created, dict) or set(created) != {"kid", "profile", "subject"}:
+        return ["subject create response shape invalid"]
+    if any(outputs[index] != created for index in [1, 3, 6]):
+        return ["subject retry/recreation identifier changed"]
+    if outputs[4] != {"ref": "subject-token", "plaintext": "synthetic subject contract"}:
+        return ["subject retry replaced the seed or failed recovery"]
+    if outputs[7] != {"error": "token not found"}:
+        return ["subject deletion did not invalidate the stored token"]
+    return []

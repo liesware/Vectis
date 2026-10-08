@@ -3063,6 +3063,7 @@ dependencies = [
  "base64",
  "botan",
  "fpe",
+ "futures-util",
  "hex",
  "metrics",
  "metrics-exporter-prometheus",

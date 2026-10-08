@@ -3,9 +3,107 @@ use crate::error::DynError;
 use crate::ops::keys::{self, KeysDbState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::Arc;
 use tracing::info;
 use zeroize::Zeroizing;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TokenDeleteInput {
+    #[serde(rename = "ref")]
+    ref_id: String,
+    kid: String,
+    profile: String,
+    token: String,
+    #[serde(default)]
+    subject: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct TokenDeleteOutput {
+    #[serde(rename = "ref")]
+    ref_id: String,
+    deleted: bool,
+}
+
+impl TokenDeleteOutput {
+    pub fn committed(ref_id: String) -> Self {
+        Self {
+            ref_id,
+            deleted: true,
+        }
+    }
+}
+
+pub struct ValidatedTokenDeleteInput {
+    ref_id: String,
+    kid: String,
+    profile: String,
+    token: Zeroizing<String>,
+    subject: Option<String>,
+}
+
+impl ValidatedTokenDeleteInput {
+    pub fn subject(&self) -> Option<&str> {
+        self.subject.as_deref()
+    }
+
+    pub fn kid(&self) -> &str {
+        &self.kid
+    }
+    pub fn profile(&self) -> &str {
+        &self.profile
+    }
+}
+
+pub struct PreparedTokenDelete {
+    profile: tokenization::TokenContext,
+    input: ValidatedTokenDeleteInput,
+}
+
+pub fn parse_delete_input(request: Value) -> Result<TokenDeleteInput, DynError> {
+    crate::ops::json::parse_json_request(request, "token delete request")
+}
+
+pub fn validate_delete_input(
+    input: TokenDeleteInput,
+) -> Result<ValidatedTokenDeleteInput, DynError> {
+    if let Some(subject) = input.subject.as_deref() {
+        crate::core::subjects::validate_subject(subject)?;
+    }
+    let ref_id = validation::validate_ref(&input.ref_id)?;
+    keys::validate_key_id(&input.kid)?;
+    validation::validate_aad_config_name("profile", &input.profile)?;
+    validation::validate_text_field("token", &input.token)?;
+    Ok(ValidatedTokenDeleteInput {
+        subject: input.subject,
+        ref_id,
+        kid: input.kid,
+        profile: input.profile,
+        token: Zeroizing::new(input.token),
+    })
+}
+
+pub fn prepare_delete(
+    keys_db_state: &KeysDbState,
+    profile: impl Into<tokenization::TokenContext>,
+    input: ValidatedTokenDeleteInput,
+) -> Result<PreparedTokenDelete, DynError> {
+    let profile = profile.into();
+    profile.validate_mode(input.subject())?;
+    keys::prepare_profile_use(
+        keys_db_state,
+        &input.kid,
+        profile.kid(),
+        "tokenization",
+        keys::ProfileUse::TokenDelete,
+    )?;
+    Ok(PreparedTokenDelete { profile, input })
+}
+
+pub fn delete_hashid(prepared: PreparedTokenDelete) -> Result<(String, String), DynError> {
+    let hashid = prepared.profile.hash(&prepared.input.token)?;
+    Ok((prepared.input.ref_id, hashid))
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -26,6 +124,8 @@ pub struct TokenDecodeInput {
     kid: String,
     profile: String,
     token: String,
+    #[serde(default)]
+    subject: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -59,6 +159,8 @@ pub struct TokenDecodeBatchInput {
     kid: String,
     profile: String,
     items: Vec<TokenDecodeBatchItemInput>,
+    #[serde(default)]
+    subject: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -68,6 +170,8 @@ pub struct TokenEncodeOutput {
     kid: String,
     profile: String,
     token: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subject: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -91,6 +195,8 @@ pub struct TokenEncodeBatchOutput {
     kid: String,
     profile: String,
     items: Vec<TokenEncodeBatchOutputItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subject: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -121,6 +227,7 @@ pub struct ValidatedTokenDecodeInput {
     kid: String,
     profile: String,
     token: Zeroizing<String>,
+    subject: Option<String>,
 }
 
 pub struct ValidatedTokenEncodeBatchItem {
@@ -143,24 +250,25 @@ pub struct ValidatedTokenDecodeBatchInput {
     kid: String,
     profile: String,
     items: Vec<ValidatedTokenDecodeBatchItem>,
+    subject: Option<String>,
 }
 
 pub struct PreparedTokenEncode {
     kid: String,
-    profile: Arc<tokenization::TokenizationProfile>,
+    profile: tokenization::TokenContext,
     input: ValidatedTokenEncodeInput,
 }
 
 pub struct PreparedTokenDecode {
     kid: String,
-    profile: Arc<tokenization::TokenizationProfile>,
+    profile: tokenization::TokenContext,
     input: ValidatedTokenDecodeInput,
     data: String,
 }
 
 pub struct PreparedTokenEncodeBatch {
     kid: String,
-    profile: Arc<tokenization::TokenizationProfile>,
+    profile: tokenization::TokenContext,
     input: ValidatedTokenEncodeBatchInput,
 }
 
@@ -172,7 +280,7 @@ pub struct PreparedTokenDecodeBatchItem {
 
 pub struct PreparedTokenDecodeBatch {
     kid: String,
-    profile: Arc<tokenization::TokenizationProfile>,
+    profile: tokenization::TokenContext,
     items: Vec<PreparedTokenDecodeBatchItem>,
 }
 
@@ -181,12 +289,14 @@ pub struct EncodedTokenRecord {
     pub hashid: String,
     pub data: String,
     pub output: TokenEncodeOutput,
+    pub subject: Option<String>,
 }
 
 pub struct EncodedTokenBatchRecord {
     pub kid: String,
     pub hashid: String,
     pub data: String,
+    pub subject: Option<String>,
 }
 
 pub struct EncodedTokenBatch {
@@ -201,6 +311,10 @@ impl ValidatedTokenEncodeInput {
 }
 
 impl ValidatedTokenDecodeInput {
+    pub fn subject(&self) -> Option<&str> {
+        self.subject.as_deref()
+    }
+
     pub fn kid(&self) -> &str {
         &self.kid
     }
@@ -221,6 +335,10 @@ impl ValidatedTokenEncodeBatchInput {
 }
 
 impl ValidatedTokenDecodeBatchInput {
+    pub fn subject(&self) -> Option<&str> {
+        self.subject.as_deref()
+    }
+
     pub fn kid(&self) -> &str {
         &self.kid
     }
@@ -305,12 +423,16 @@ pub fn validate_encode_input(
 pub fn validate_decode_input(
     input: TokenDecodeInput,
 ) -> Result<ValidatedTokenDecodeInput, DynError> {
+    if let Some(subject) = input.subject.as_deref() {
+        crate::core::subjects::validate_subject(subject)?;
+    }
     let ref_id = validation::validate_ref(&input.ref_id)?;
     keys::validate_key_id(&input.kid)?;
     validation::validate_aad_config_name("profile", &input.profile)?;
     validation::validate_text_field("token", &input.token)?;
 
     Ok(ValidatedTokenDecodeInput {
+        subject: input.subject,
         ref_id,
         kid: input.kid,
         profile: input.profile,
@@ -358,6 +480,9 @@ pub fn validate_encode_batch_input(
 pub fn validate_decode_batch_input(
     input: TokenDecodeBatchInput,
 ) -> Result<ValidatedTokenDecodeBatchInput, DynError> {
+    if let Some(subject) = input.subject.as_deref() {
+        crate::core::subjects::validate_subject(subject)?;
+    }
     keys::validate_key_id(&input.kid)?;
     validation::validate_aad_config_name("profile", &input.profile)?;
     crate::ops::batch::validate_len(
@@ -382,6 +507,7 @@ pub fn validate_decode_batch_input(
     )?;
 
     Ok(ValidatedTokenDecodeBatchInput {
+        subject: input.subject,
         kid: input.kid,
         profile: input.profile,
         items,
@@ -391,9 +517,11 @@ pub fn validate_decode_batch_input(
 pub fn prepare_encode(
     keys_db_state: &KeysDbState,
     kid: &str,
-    profile: Arc<tokenization::TokenizationProfile>,
+    profile: impl Into<tokenization::TokenContext>,
     input: ValidatedTokenEncodeInput,
 ) -> Result<PreparedTokenEncode, DynError> {
+    let profile = profile.into();
+    profile.validate_mode(profile.subject())?;
     keys::prepare_profile_use(
         keys_db_state,
         kid,
@@ -417,9 +545,11 @@ pub fn prepare_encode(
 pub fn prepare_encode_batch(
     keys_db_state: &KeysDbState,
     kid: &str,
-    profile: Arc<tokenization::TokenizationProfile>,
+    profile: impl Into<tokenization::TokenContext>,
     input: ValidatedTokenEncodeBatchInput,
 ) -> Result<PreparedTokenEncodeBatch, DynError> {
+    let profile = profile.into();
+    profile.validate_mode(profile.subject())?;
     keys::prepare_profile_use(
         keys_db_state,
         kid,
@@ -444,10 +574,12 @@ pub fn prepare_encode_batch(
 
 pub fn prepare_decode(
     keys_db_state: &KeysDbState,
-    profile: Arc<tokenization::TokenizationProfile>,
+    profile: impl Into<tokenization::TokenContext>,
     input: ValidatedTokenDecodeInput,
     data: String,
 ) -> Result<PreparedTokenDecode, DynError> {
+    let profile = profile.into();
+    profile.validate_mode(input.subject())?;
     keys::prepare_profile_use(
         keys_db_state,
         &input.kid,
@@ -481,12 +613,14 @@ pub fn authorize_decode_batch(
 }
 
 pub fn prepare_decode_batch(
-    profile: Arc<tokenization::TokenizationProfile>,
+    profile: impl Into<tokenization::TokenContext>,
     kid: String,
     refs: Vec<String>,
     hashids: Vec<String>,
     rows: Vec<String>,
 ) -> Result<PreparedTokenDecodeBatch, DynError> {
+    let profile = profile.into();
+    profile.validate_mode(profile.subject())?;
     if rows.len() != hashids.len() {
         return Err(crate::error::internal(
             "token decode batch row count does not match hashid count",
@@ -517,14 +651,14 @@ pub fn prepare_decode_batch(
 
 pub fn encode(prepared: PreparedTokenEncode) -> Result<EncodedTokenRecord, DynError> {
     let token = Zeroizing::new(tokenization::generate_token(&prepared.profile)?);
-    let hashid = tokenization::hash_token(&prepared.profile, &token)?;
+    let hashid = prepared.profile.hash(&token)?;
     let payload = tokenization::TokenDataPayload {
         profile: prepared.profile.name().to_string(),
         plaintext: (*prepared.input.plaintext).clone(),
         metadata: prepared.input.metadata,
         created_at: validation::current_timestamp()?,
     };
-    let data = tokenization::encrypt_token_data(&prepared.profile, &hashid, &payload)?;
+    let data = prepared.profile.encrypt(&hashid, &payload)?;
     info!(
         kid = %prepared.kid,
         profile = %prepared.profile.name(),
@@ -533,10 +667,12 @@ pub fn encode(prepared: PreparedTokenEncode) -> Result<EncodedTokenRecord, DynEr
     );
 
     Ok(EncodedTokenRecord {
+        subject: prepared.profile.subject().map(str::to_owned),
         kid: prepared.kid.clone(),
         hashid,
         data,
         output: TokenEncodeOutput {
+            subject: prepared.profile.subject().map(str::to_owned),
             ref_id: prepared.input.ref_id,
             kid: prepared.kid,
             profile: prepared.profile.name().to_string(),
@@ -552,7 +688,9 @@ pub fn encode_batch(prepared: PreparedTokenEncodeBatch) -> Result<EncodedTokenBa
         let token = Zeroizing::new(tokenization::generate_token(&prepared.profile).map_err(
             |err| crate::error::with_prefix(&format!("batch item {index} failed"), err),
         )?);
-        let hashid = tokenization::hash_token(&prepared.profile, &token)
+        let hashid = prepared
+            .profile
+            .hash(&token)
             .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
         let payload = tokenization::TokenDataPayload {
             profile: prepared.profile.name().to_string(),
@@ -562,9 +700,12 @@ pub fn encode_batch(prepared: PreparedTokenEncodeBatch) -> Result<EncodedTokenBa
                 crate::error::with_prefix(&format!("batch item {index} failed"), err)
             })?,
         };
-        let data = tokenization::encrypt_token_data(&prepared.profile, &hashid, &payload)
+        let data = prepared
+            .profile
+            .encrypt(&hashid, &payload)
             .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
         records.push(EncodedTokenBatchRecord {
+            subject: prepared.profile.subject().map(str::to_owned),
             kid: prepared.kid.clone(),
             hashid,
             data,
@@ -584,6 +725,7 @@ pub fn encode_batch(prepared: PreparedTokenEncodeBatch) -> Result<EncodedTokenBa
     Ok(EncodedTokenBatch {
         records,
         output: TokenEncodeBatchOutput {
+            subject: prepared.profile.subject().map(str::to_owned),
             kid: prepared.kid,
             profile: prepared.profile.name().to_string(),
             items,
@@ -592,8 +734,8 @@ pub fn encode_batch(prepared: PreparedTokenEncodeBatch) -> Result<EncodedTokenBa
 }
 
 pub fn decode(prepared: PreparedTokenDecode) -> Result<TokenDecodeOutput, DynError> {
-    let hashid = tokenization::hash_token(&prepared.profile, prepared.input.token())?;
-    let payload = tokenization::decrypt_token_data(&prepared.profile, &hashid, &prepared.data)?;
+    let hashid = prepared.profile.hash(prepared.input.token())?;
+    let payload = prepared.profile.decrypt(&hashid, &prepared.data)?;
     info!(
         kid = %prepared.kid,
         profile = %prepared.profile.name(),
@@ -613,7 +755,9 @@ pub fn decode_batch(
 ) -> Result<TokenDecodeBatchOutput, DynError> {
     let mut items = Vec::with_capacity(prepared.items.len());
     for (index, item) in prepared.items.into_iter().enumerate() {
-        let payload = tokenization::decrypt_token_data(&prepared.profile, &item.hashid, &item.data)
+        let payload = prepared
+            .profile
+            .decrypt(&item.hashid, &item.data)
             .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
         items.push(TokenDecodeBatchOutputItem {
             ref_id: item.ref_id,
@@ -670,6 +814,77 @@ fn validate_request_metadata(request: &Value) -> Result<(), DynError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn delete_validates_shape_profile_token_and_lifecycle() {
+        let kid = "a".repeat(64);
+        let profiles = tokenization::validate_tokenization_profiles(
+            serde_json::from_value(serde_json::json!([{
+                "name":"delete-v1", "kid":kid, "token_prefix":"tok_delete",
+                "token_len":32, "max_plaintext_len":128, "one_time":false
+            }]))
+            .unwrap(),
+            |_| true,
+            |_| {
+                Ok(tokenization::DerivedTokenizationKeys {
+                    hash_key: Zeroizing::new(vec![7; 32]),
+                    data_key: Zeroizing::new(vec![9; 32]),
+                    cipher_algorithm: "AES-256/GCM".to_string(),
+                })
+            },
+        )
+        .unwrap();
+        let profile = profiles.get("delete-v1").unwrap();
+        let token = tokenization::generate_token(&profile).unwrap();
+        let request =
+            serde_json::json!({"ref":"delete-1", "kid":kid, "profile":"delete-v1", "token":token});
+        for status in ["active", "retired", "compromised", "disabled", "destroyed"] {
+            let state = keys::test_keys_state_with_lifecycle(&kid, status);
+            let input =
+                validate_delete_input(parse_delete_input(request.clone()).unwrap()).unwrap();
+            let prepared = prepare_delete(&state, profile.clone(), input);
+            assert!(prepared.is_ok());
+            let (ref_id, hashid) = delete_hashid(prepared.unwrap()).unwrap();
+            assert_eq!(ref_id, "delete-1");
+            assert_eq!(hashid, tokenization::hash_token(&profile, &token).unwrap());
+        }
+        let mut unknown = request.clone();
+        unknown["extra"] = serde_json::json!(true);
+        assert!(parse_delete_input(unknown).is_err());
+        for field in ["ref", "kid", "profile", "token"] {
+            let mut missing = request.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(parse_delete_input(missing).is_err());
+            let mut empty = request.clone();
+            empty[field] = serde_json::json!("");
+            assert!(
+                parse_delete_input(empty)
+                    .and_then(validate_delete_input)
+                    .is_err()
+            );
+        }
+        let mut wrong_kid = request.clone();
+        wrong_kid["kid"] = serde_json::json!("b".repeat(64));
+        let input = parse_delete_input(wrong_kid)
+            .and_then(validate_delete_input)
+            .unwrap();
+        let state = keys::test_keys_state_with_lifecycle(&"b".repeat(64), "active");
+        assert!(prepare_delete(&state, profile.clone(), input).is_err());
+        let state = keys::test_keys_state_with_lifecycle(&kid, "active");
+        for invalid in ["wrong_prefix", "tok_delete_AAAA", "tok_delete_!!!!"] {
+            let mut bad = request.clone();
+            bad["token"] = serde_json::json!(invalid);
+            let input = parse_delete_input(bad)
+                .and_then(validate_delete_input)
+                .unwrap();
+            assert!(
+                delete_hashid(prepare_delete(&state, profile.clone(), input).unwrap()).is_err()
+            );
+        }
+        assert_eq!(
+            serde_json::to_value(TokenDeleteOutput::committed("delete-1".to_string())).unwrap(),
+            serde_json::json!({"ref":"delete-1", "deleted":true})
+        );
+    }
     use serde_json::json;
 
     fn encode_input(metadata: Option<Value>) -> TokenEncodeInput {

@@ -12,6 +12,7 @@ from config import (
     configure_masking_profile,
     configure_one_time_tokenization_profiles,
     configure_sharing_profile,
+    configure_subject_profile,
     configure_tokenization_profile,
 )
 from semantics import (
@@ -94,6 +95,8 @@ _BATCH_CONTRACTS = {
     ),
 }
 
+TOKEN_DELETE_SEED_POOL = 64
+
 ONE_TIME_TOKEN_PLAINTEXT = "fuzz one-time token plaintext"
 ONE_TIME_BATCH_PLAINTEXTS = ["fuzz one-time batch first", "fuzz one-time batch second"]
 COMPACT_SIGNATURE_MESSAGE_HASH = {"alg": "BLAKE2b(256)", "hex": "cd" * 32}
@@ -147,6 +150,12 @@ def compact_signature_context(client):
             client, {"tag": "fuzz-compact-signature", "profile": "hybrid-standard-v1"}
         )
     }
+
+
+def subject_contract_context(client):
+    kid = _create_key(client, {"tag": "fuzz-subject", "profile": "hybrid-performance-v1"})
+    configure_subject_profile(client, kid)
+    return {"kid": kid, "profile": "fuzz-subject-v1"}
 
 
 def mutate_share_tag(encoded):
@@ -370,6 +379,29 @@ def tokenization_seeds(client):
     ]
 
 
+def token_delete_seeds(client):
+    kid = _create_key(client, {"tag": "fuzz-token-delete", "profile": "hybrid-performance-v1"})
+    configure_tokenization_profile(client, kid)
+    seeds = []
+    tokens = []
+    for index in range(TOKEN_DELETE_SEED_POOL):
+        ref = f"token-delete-fuzz-{index}"
+        status, body = client.post_json(
+            f"/token/encode/{kid}",
+            {"ref": ref, "profile": TOKENIZATION_PROFILE, "plaintext": TOKEN_PLAINTEXT},
+            auth=True,
+        )
+        if status != 200:
+            raise RuntimeError(f"could not encode token delete seed: HTTP {status}: {body}")
+        token = json.loads(body)["token"]
+        tokens.append(token)
+        seeds.append(
+            ("/token/delete", {"ref": ref, "kid": kid, "profile": TOKENIZATION_PROFILE, "token": token})
+        )
+    client.declared_secrets = (*client.declared_secrets, *tokens, TOKEN_PLAINTEXT)
+    return seeds
+
+
 def tokenization_batch_seeds(client):
     kid = _create_key(client, {"tag": "fuzz-token-batch", "profile": "hybrid-performance-v1"})
     configure_tokenization_profile(client, kid)
@@ -410,6 +442,14 @@ def one_time_token_context(client):
     )
     configure_one_time_tokenization_profiles(client, kid)
     return {"kid": kid}
+
+
+def token_batch_budget_context(client):
+    kid = _create_key(client, {"tag": "fuzz-token-budget", "profile": "hybrid-performance-v1"})
+    configure_tokenization_profile(client, kid, max_plaintext_len=16384)
+    plaintext = "\U0001f642" * 16384
+    client.declared_secrets += (plaintext,)
+    return {"kid": kid, "profile": TOKENIZATION_PROFILE, "plaintext": plaintext}
 
 
 def issue_token(client, context, profile, ref, plaintext):

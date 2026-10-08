@@ -19,7 +19,7 @@ one machine, so a second node cannot safely read and write it at the same time.
 PostgreSQL is a shared database *server* that many nodes connect to at once, with
 real concurrency and transactions. That is why every multi-node and production
 Vectis deployment uses it. Nothing about *what* Vectis stores changes — the same
-three kinds of state, still encrypted the same way — only *where* it lives and
+four kinds of state, still encrypted the same way — only *where* it lives and
 who can reach it. This tutorial makes that single change on one node first, so
 the moving part is isolated before you add a second node in the next tutorial.
 
@@ -45,10 +45,11 @@ Every section below is one of these four ideas made concrete.
 
 ## Purpose And Boundaries
 
-PostgreSQL stores three kinds of durable Vectis state:
+PostgreSQL stores four kinds of durable Vectis state:
 
 - `opskeys`: encrypted operational keys and encrypted lifecycle properties;
 - `tokens`: encrypted plaintext and metadata behind reversible tokens;
+- `subjects`: authenticated random seed envelopes for optional subject-bound tokens;
 - `indexes`: deterministic keyed digests used for blind-index membership.
 
 Vectis connects to the database, validates the expected schema, encrypts
@@ -155,7 +156,7 @@ reads and writes rows. So it runs as a second, weaker role. This is defense in
 depth: if the runtime credential ever leaks, it cannot alter or destroy the
 schema, only touch the rows it was explicitly granted.
 
-The three `CREATE TABLE` statements below are exactly the reference schema in
+The four `CREATE TABLE` statements below are exactly the reference schema in
 `src/db/postgres_schema.sql`:
 
 ```sh
@@ -173,7 +174,15 @@ CREATE TABLE tokens (
     kid VARCHAR(128) NOT NULL,
     hashid VARCHAR(128) NOT NULL,
     data TEXT NOT NULL,
+    subject VARCHAR(128),
     PRIMARY KEY (kid, hashid)
+);
+
+CREATE TABLE subjects (
+    kid VARCHAR(128) NOT NULL,
+    subject VARCHAR(128) NOT NULL,
+    seed TEXT NOT NULL,
+    PRIMARY KEY (kid, subject)
 );
 
 CREATE TABLE indexes (
@@ -187,6 +196,7 @@ GRANT CONNECT ON DATABASE vectis TO vectis_usr;
 GRANT USAGE ON SCHEMA public TO vectis_usr;
 GRANT SELECT, INSERT, UPDATE ON TABLE public.opskeys TO vectis_usr;
 GRANT SELECT, INSERT, DELETE ON TABLE public.tokens TO vectis_usr;
+GRANT SELECT, INSERT, DELETE, UPDATE(seed) ON TABLE public.subjects TO vectis_usr;
 GRANT SELECT, INSERT ON TABLE public.indexes TO vectis_usr;
 SQL
 ```
@@ -207,7 +217,7 @@ PGPASSWORD=vectis-runtime-lab-only \
   psql -h 127.0.0.1 -U vectis_usr -d vectis -c '\dt public.*'
 ```
 
-The first command should report `f`. The second should show the three tables.
+The first command should report `f`. The second should show the four tables.
 
 ## Using An Existing PostgreSQL Server
 
@@ -269,7 +279,15 @@ CREATE TABLE tokens (
     kid VARCHAR(128) NOT NULL,
     hashid VARCHAR(128) NOT NULL,
     data TEXT NOT NULL,
+    subject VARCHAR(128),
     PRIMARY KEY (kid, hashid)
+);
+
+CREATE TABLE subjects (
+    kid VARCHAR(128) NOT NULL,
+    subject VARCHAR(128) NOT NULL,
+    seed TEXT NOT NULL,
+    PRIMARY KEY (kid, subject)
 );
 
 CREATE TABLE indexes (
@@ -284,6 +302,7 @@ GRANT CONNECT ON DATABASE vectis TO vectis_usr;
 GRANT USAGE ON SCHEMA public TO vectis_usr;
 GRANT SELECT, INSERT, UPDATE ON TABLE public.opskeys TO vectis_usr;
 GRANT SELECT, INSERT, DELETE ON TABLE public.tokens TO vectis_usr;
+GRANT SELECT, INSERT, DELETE, UPDATE(seed) ON TABLE public.subjects TO vectis_usr;
 GRANT SELECT, INSERT ON TABLE public.indexes TO vectis_usr;
 SQL
 ```
@@ -307,6 +326,10 @@ SELECT has_table_privilege(current_user, 'public.tokens', 'SELECT')
        AND has_table_privilege(current_user, 'public.tokens', 'INSERT')
        AND has_table_privilege(current_user, 'public.tokens', 'DELETE')
        AS tokens_access;
+SELECT has_table_privilege(current_user, 'public.subjects', 'SELECT')
+       AND has_table_privilege(current_user, 'public.subjects', 'INSERT')
+       AND has_table_privilege(current_user, 'public.subjects', 'DELETE')
+       AS subjects_access;
 SELECT has_table_privilege(current_user, 'public.indexes', 'SELECT')
        AND has_table_privilege(current_user, 'public.indexes', 'INSERT')
        AS indexes_access;
@@ -314,7 +337,7 @@ SQL
 ```
 
 The result must identify `vectis_usr`, report `f` for schema creation, and
-report `t` for all three table checks.
+report `t` for all four table checks.
 
 The current Vectis PostgreSQL client is built without direct PostgreSQL TLS
 support. The runtime endpoint must therefore be reachable through a protected
@@ -422,7 +445,7 @@ done
 ./vectis health ready
 ```
 
-At startup, Vectis checks all three tables, their columns, nullability, lengths,
+At startup, Vectis checks all four tables, their columns, nullability, lengths,
 and primary keys. If the DSN is unreachable or the schema is absent or
 incompatible, startup fails instead of operating against an unknown layout.
 Inspect `logs/server-postgres.log` if readiness does not become healthy.
@@ -565,7 +588,7 @@ run_as_app index verify \
 
 The token response should contain `account-000042`; the index response should
 report `matched: true`. Together with `keys list`, these checks exercise all
-three PostgreSQL tables after process memory has been discarded and rebuilt.
+key, token and index tables after process memory has been discarded and rebuilt.
 
 ## Inspect Stored State
 

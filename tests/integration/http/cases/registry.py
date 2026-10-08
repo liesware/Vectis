@@ -14,6 +14,7 @@ from . import (
     negative_sharing,
     negative_signatures,
     negative_tokenization,
+    negative_subjects,
     positive_commitments,
     positive_fpe,
     positive_health,
@@ -26,6 +27,9 @@ from . import (
     positive_sharing,
     positive_signatures,
     positive_tokenization,
+    positive_token_delete,
+    positive_subjects,
+    positive_token_budget,
 )
 
 
@@ -38,6 +42,9 @@ POSITIVE_CASES = (
     *positive_keys.CASES,  # keys.create, inventory, lifecycle, routes, remote-public-keys
     *positive_fpe.CASES,  # fpe (profile load + stale-config warning + round-trips)
     *positive_tokenization.CASES,  # tokenization, tokenization.one-time
+    *positive_token_delete.CASES,
+    *positive_subjects.CASES,
+    *positive_token_budget.CASES,
     *positive_mac_index.CASES,  # mac, index
     *positive_commitments.CASES,  # commit
     *positive_sharing.CASES,  # shares
@@ -63,6 +70,7 @@ NEGATIVE_CASES = (
     *negative_internal_messages.CASES,
     *negative_fpe.CASES,
     *negative_tokenization.CASES,
+    *negative_subjects.CASES,
     *negative_mac_index.CASES,
     *negative_masking.CASES,
     *negative_sharing.CASES,

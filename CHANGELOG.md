@@ -4,7 +4,26 @@ This changelog records notable public changes to Vectis. It is maintained
 manually for releases; the Git history remains the detailed engineering record.
 
 ## Unreleased
+
 Changes staged for v0.9.0, the first official release.
+
+### Added
+- Add optional stored subject keys for single and batch tokenization, with
+  authenticated per-subject seeds, independent create/delete permissions and
+  request-scoped key derivation. Existing profiles default to legacy `none` mode.
+  Existing databases require the explicit subject keys SQL migration before
+  upgrading; deleting a subject leaves its token rows but removes their seed.
+- `POST /token/delete`: explicit, single-use deletion of a stored token by its
+  HMAC hashid without decrypting the envelope, gated by a new independent
+  `token-delete` permission and allowed in any key lifecycle state.
+
+### Changed
+- Tokenization plaintext maximum raised to 16,384 characters, with a dedicated
+  token envelope limit (131,072) independent from the operational-key envelope
+  limit (32,768).
+- `POST /token/decode/batch` now enforces a 5 MiB incremental read budget
+  (counting duplicate occurrences) that returns `413` before any decrypt or
+  one-time consumption, bounding decode-batch amplification.
 
 ### Testing
 - HTTP fuzz suite: each target now derives its own RNG stream from the root seed

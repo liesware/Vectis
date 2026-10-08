@@ -1,5 +1,7 @@
-use crate::core::storage::{IndexRow, OpsKeyRow, TokenBatchConsumeError, TokenRow};
+use super::TokenBatchReadBudget;
+use crate::core::storage::{IndexRow, OpsKeyRow, SubjectRow, TokenBatchConsumeError, TokenRow};
 use crate::error::DynError;
+use futures_util::TryStreamExt;
 use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use std::collections::{HashMap, HashSet};
@@ -27,6 +29,7 @@ impl SqliteStorage {
         validate_opskeys_schema(&pool, &context).await?;
         info!("validated opskeys sqlite schema");
         validate_tokens_schema(&pool, &context).await?;
+        validate_subjects_schema(&pool, &context).await?;
         info!("validated tokens sqlite schema");
         validate_indexes_schema(&pool, &context).await?;
         info!("validated indexes sqlite schema");
@@ -109,21 +112,54 @@ impl SqliteStorage {
         Ok(keys)
     }
 
+    #[cfg(test)]
     pub async fn save_token(
         &self,
         kid: &str,
         hashid: &str,
         data: &str,
     ) -> Result<TokenRow, DynError> {
+        self.save_token_for_subject(kid, hashid, data, None, None)
+            .await
+    }
+
+    pub async fn save_token_for_subject(
+        &self,
+        kid: &str,
+        hashid: &str,
+        data: &str,
+        subject: Option<&str>,
+        expected_seed: Option<&str>,
+    ) -> Result<TokenRow, DynError> {
+        if let Some(subject) = subject {
+            let seed = expected_seed.ok_or_else(|| {
+                crate::error::invalid_input("subject write requires a generation guard")
+            })?;
+            let row = TokenRow {
+                kid: kid.to_owned(),
+                hashid: hashid.to_owned(),
+                data: data.to_owned(),
+                subject: Some(subject.to_owned()),
+            };
+            let guard = super::SubjectWriteGuard {
+                kid: kid.to_owned(),
+                subject: subject.to_owned(),
+                seed: zeroize::Zeroizing::new(seed.to_owned()),
+            };
+            self.save_tokens_batch_guarded(std::slice::from_ref(&row), &[guard])
+                .await?;
+            return Ok(row);
+        }
         sqlx::query(
             "
-            INSERT INTO tokens (kid, hashid, data)
-            VALUES (?, ?, ?)
+            INSERT INTO tokens (kid, hashid, data, subject)
+            VALUES (?, ?, ?, ?)
             ",
         )
         .bind(kid)
         .bind(hashid)
         .bind(data)
+        .bind(subject)
         .execute(&self.pool)
         .await?;
         info!(kid, hashid, "inserted token");
@@ -132,21 +168,41 @@ impl SqliteStorage {
             kid: kid.to_string(),
             hashid: hashid.to_string(),
             data: data.to_string(),
+            subject: subject.map(str::to_owned),
         })
     }
 
     pub async fn save_tokens_batch(&self, records: &[TokenRow]) -> Result<(), DynError> {
-        let mut tx = self.pool.begin().await?;
+        self.save_tokens_batch_guarded(records, &[]).await
+    }
+
+    pub async fn save_tokens_batch_guarded(
+        &self,
+        records: &[TokenRow],
+        guards: &[super::SubjectWriteGuard],
+    ) -> Result<(), DynError> {
+        let ordered = super::subject_write_guards(records, guards)?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        for guard in ordered {
+            let seed: Option<String> =
+                sqlx::query_scalar("SELECT seed FROM subjects WHERE kid = ? AND subject = ?")
+                    .bind(&guard.kid)
+                    .bind(&guard.subject)
+                    .fetch_optional(&mut *tx)
+                    .await?;
+            super::check_subject_generation(seed, &guard.seed)?;
+        }
         for record in records {
             sqlx::query(
                 "
-                INSERT INTO tokens (kid, hashid, data)
-                VALUES (?, ?, ?)
+                INSERT INTO tokens (kid, hashid, data, subject)
+                VALUES (?, ?, ?, ?)
                 ",
             )
             .bind(&record.kid)
             .bind(&record.hashid)
             .bind(&record.data)
+            .bind(&record.subject)
             .execute(&mut *tx)
             .await?;
         }
@@ -160,24 +216,39 @@ impl SqliteStorage {
         &self,
         kid: &str,
         hashids: &[String],
-    ) -> Result<HashMap<String, String>, DynError> {
+        max_envelope_bytes: usize,
+    ) -> Result<HashMap<String, TokenRow>, DynError> {
         if hashids.is_empty() {
             return Ok(HashMap::new());
         }
         let placeholders = std::iter::repeat_n("?", hashids.len())
             .collect::<Vec<_>>()
             .join(", ");
-        let sql =
-            format!("SELECT hashid, data FROM tokens WHERE kid = ? AND hashid IN ({placeholders})");
+        let sql = format!(
+            "SELECT hashid, data, subject FROM tokens WHERE kid = ? AND hashid IN ({placeholders})"
+        );
         let mut query = sqlx::query(&sql).bind(kid);
         for hashid in hashids {
             query = query.bind(hashid);
         }
-        let rows = query.fetch_all(&self.pool).await?;
-
-        let mut found = HashMap::with_capacity(rows.len());
-        for row in rows {
-            found.insert(row.get("hashid"), row.get("data"));
+        let mut rows = query.fetch(&self.pool);
+        let mut budget = TokenBatchReadBudget::new(hashids, max_envelope_bytes);
+        let mut found = HashMap::with_capacity(hashids.len());
+        while let Some(row) = rows.try_next().await? {
+            let hashid: String = row.try_get("hashid")?;
+            let data: String = row.try_get("data")?;
+            budget.retain(&hashid, &data)?;
+            let subject: Option<String> = row.try_get("subject")?;
+            super::validate_optional_subject(subject.as_deref())?;
+            found.insert(
+                hashid.clone(),
+                TokenRow {
+                    kid: kid.to_owned(),
+                    hashid,
+                    data,
+                    subject,
+                },
+            );
         }
         Ok(found)
     }
@@ -185,7 +256,7 @@ impl SqliteStorage {
     pub async fn get_token(&self, kid: &str, hashid: &str) -> Result<TokenRow, DynError> {
         let row = sqlx::query(
             "
-            SELECT kid, hashid, data
+            SELECT kid, hashid, data, subject
             FROM tokens
             WHERE kid = ?
               AND hashid = ?
@@ -204,34 +275,58 @@ impl SqliteStorage {
             kid: row.get("kid"),
             hashid: row.get("hashid"),
             data: row.get("data"),
+            subject: row.get("subject"),
         })
     }
 
-    pub async fn consume_token(&self, kid: &str, hashid: &str) -> Result<(), DynError> {
+    #[cfg(test)]
+    pub async fn delete_token(&self, kid: &str, hashid: &str) -> Result<(), DynError> {
+        self.delete_token_for_subject(kid, hashid, None).await
+    }
+
+    pub async fn delete_token_for_subject(
+        &self,
+        kid: &str,
+        hashid: &str,
+        subject: Option<&str>,
+    ) -> Result<(), DynError> {
         let mut tx = self.pool.begin().await?;
         let result = sqlx::query(
             "
             DELETE FROM tokens
             WHERE kid = ?
               AND hashid = ?
+              AND subject IS ?
             ",
         )
         .bind(kid)
         .bind(hashid)
+        .bind(subject)
         .execute(&mut *tx)
         .await?;
         if result.rows_affected() != 1 {
             return Err(crate::error::not_found("token not found"));
         }
         tx.commit().await?;
-        info!(kid, hashid, "consumed token");
+        info!(kid, "deleted token row");
         Ok(())
     }
 
+    #[cfg(test)]
     pub async fn consume_tokens_batch(
         &self,
         kid: &str,
         hashids: &[String],
+    ) -> Result<(), TokenBatchConsumeError> {
+        self.consume_tokens_batch_for_subject(kid, hashids, None)
+            .await
+    }
+
+    pub async fn consume_tokens_batch_for_subject(
+        &self,
+        kid: &str,
+        hashids: &[String],
+        subject: Option<&str>,
     ) -> Result<(), TokenBatchConsumeError> {
         let mut ordered = hashids.to_vec();
         ordered.sort_unstable();
@@ -247,10 +342,12 @@ impl SqliteStorage {
                 DELETE FROM tokens
                 WHERE kid = ?
                   AND hashid = ?
+                  AND subject IS ?
                 ",
             )
             .bind(kid)
             .bind(hashid)
+            .bind(subject)
             .execute(&mut *tx)
             .await
             .map_err(|err| TokenBatchConsumeError::Other(Box::new(err)))?;
@@ -284,6 +381,55 @@ impl SqliteStorage {
             kid: kid.to_string(),
             digest: digest.to_string(),
         })
+    }
+
+    pub async fn save_subject(&self, row: &SubjectRow) -> Result<bool, DynError> {
+        let result = sqlx::query("INSERT INTO subjects (kid, subject, seed) VALUES (?, ?, ?) ON CONFLICT (kid, subject) DO NOTHING")
+            .bind(&row.kid).bind(&row.subject).bind(&row.seed).execute(&self.pool).await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn subject_exists(&self, kid: &str, subject: &str) -> Result<bool, DynError> {
+        let row = sqlx::query("SELECT 1 FROM subjects WHERE kid = ? AND subject = ?")
+            .bind(kid)
+            .bind(subject)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.is_some())
+    }
+
+    pub async fn get_subject(&self, kid: &str, subject: &str) -> Result<SubjectRow, DynError> {
+        let row =
+            sqlx::query("SELECT kid, subject, seed FROM subjects WHERE kid = ? AND subject = ?")
+                .bind(kid)
+                .bind(subject)
+                .fetch_optional(&self.pool)
+                .await?
+                .ok_or_else(|| crate::error::not_found("subject not found"))?;
+        Ok(SubjectRow {
+            kid: row.try_get("kid")?,
+            subject: row.try_get("subject")?,
+            seed: row.try_get("seed")?,
+        })
+    }
+
+    pub async fn delete_subject(&self, kid: &str, subject: &str) -> Result<(), DynError> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        sqlx::query("DELETE FROM tokens WHERE kid = ? AND subject = ?")
+            .bind(kid)
+            .bind(subject)
+            .execute(&mut *tx)
+            .await?;
+        let result = sqlx::query("DELETE FROM subjects WHERE kid = ? AND subject = ?")
+            .bind(kid)
+            .bind(subject)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        if result.rows_affected() == 0 {
+            return Err(crate::error::not_found("subject not found"));
+        }
+        Ok(())
     }
 
     pub async fn save_indexes_batch(&self, records: &[IndexRow]) -> Result<(), DynError> {
@@ -499,6 +645,21 @@ async fn validate_tokens_schema(db: &SqlitePool, context: &str) -> Result<(), Dy
         ))
     })?;
 
+    let subject = find_column(&rows, "subject").ok_or_else(|| {
+        crate::error::storage(
+            "sqlite schema is missing tokens.subject column; apply subject keys migration",
+        )
+    })?;
+    validate_column(
+        &subject,
+        "tokens",
+        "subject",
+        "VARCHAR(128)",
+        false,
+        None,
+        context,
+    )?;
+
     validate_column(
         &kid,
         "tokens",
@@ -527,6 +688,25 @@ async fn validate_tokens_schema(db: &SqlitePool, context: &str) -> Result<(), Dy
         context,
     )?;
 
+    Ok(())
+}
+
+async fn validate_subjects_schema(db: &SqlitePool, context: &str) -> Result<(), DynError> {
+    let rows = sqlx::query("PRAGMA table_info(subjects)")
+        .fetch_all(db)
+        .await?;
+    for (name, ty, position) in [
+        ("kid", "VARCHAR(128)", Some(1)),
+        ("subject", "VARCHAR(128)", Some(2)),
+        ("seed", "TEXT", None),
+    ] {
+        let column = find_column(&rows, name).ok_or_else(|| {
+            crate::error::storage(
+                "sqlite schema is missing subjects table or column; apply subject keys migration",
+            )
+        })?;
+        validate_column(&column, "subjects", name, ty, true, position, context)?;
+    }
     Ok(())
 }
 
@@ -665,6 +845,7 @@ mod tests {
                 kid VARCHAR(128) NOT NULL,
                 hashid VARCHAR(128) NOT NULL,
                 data VARCHAR(10240) NOT NULL,
+                subject VARCHAR(128),
                 PRIMARY KEY (kid, hashid)
             )
             ",
@@ -684,6 +865,7 @@ mod tests {
         .execute(&pool)
         .await
         .expect("test index schema must be created");
+        sqlx::raw_sql("CREATE TABLE subjects (kid VARCHAR(128) NOT NULL, subject VARCHAR(128) NOT NULL, seed TEXT NOT NULL, PRIMARY KEY(kid, subject));").execute(&pool).await.unwrap();
         pool.close().await;
 
         let storage = SqliteStorage::new(&path)
@@ -695,6 +877,164 @@ mod tests {
 
     async fn cleanup(path: PathBuf) {
         let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn subject_purge_rolls_back_when_token_delete_fails() {
+        let (storage, path) = test_storage("subject-purge-rollback").await;
+        let kid = "a".repeat(64);
+        let subject = "b".repeat(64);
+        let hashid = "c".repeat(64);
+        let seed = "AAAAAAAAAAAAAAAAAAAAAA==.AAAAAAAAAAAAAAAA.AA==";
+        storage
+            .save_subject(&SubjectRow {
+                kid: kid.clone(),
+                subject: subject.clone(),
+                seed: seed.to_owned(),
+            })
+            .await
+            .unwrap();
+        storage
+            .save_token_for_subject(&kid, &hashid, seed, Some(&subject), Some(seed))
+            .await
+            .unwrap();
+        sqlx::raw_sql("CREATE TRIGGER fail_subject_purge BEFORE DELETE ON tokens BEGIN SELECT RAISE(ABORT, 'injected failure'); END;")
+            .execute(&storage.pool).await.unwrap();
+        assert!(storage.delete_subject(&kid, &subject).await.is_err());
+        assert_eq!(
+            storage.get_subject(&kid, &subject).await.unwrap().seed,
+            seed
+        );
+        assert!(storage.get_token(&kid, &hashid).await.is_ok());
+        sqlx::raw_sql("DROP TRIGGER fail_subject_purge;")
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        storage.delete_subject(&kid, &subject).await.unwrap();
+        assert!(storage.get_token(&kid, &hashid).await.is_err());
+        storage.pool.close().await;
+        cleanup(path).await;
+    }
+
+    #[tokio::test]
+    async fn subject_purge_rolls_back_when_commit_fails() {
+        let (storage, path) = test_storage("subject-purge-commit").await;
+        let kid = "a".repeat(64);
+        let subject = "b".repeat(64);
+        let hashid = "c".repeat(64);
+        let seed = "AAAAAAAAAAAAAAAAAAAAAA==.AAAAAAAAAAAAAAAA.AA==";
+        storage
+            .save_subject(&SubjectRow {
+                kid: kid.clone(),
+                subject: subject.clone(),
+                seed: seed.to_owned(),
+            })
+            .await
+            .unwrap();
+        storage
+            .save_token_for_subject(&kid, &hashid, seed, Some(&subject), Some(seed))
+            .await
+            .unwrap();
+        // Deferred constraint lets both deletes execute, but rejects COMMIT.
+        sqlx::raw_sql("CREATE TABLE purge_parent (id INTEGER PRIMARY KEY); CREATE TABLE purge_child (id INTEGER REFERENCES purge_parent(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER fail_purge_commit AFTER DELETE ON tokens BEGIN INSERT INTO purge_child VALUES (1); END;")
+            .execute(&storage.pool).await.unwrap();
+        assert!(storage.delete_subject(&kid, &subject).await.is_err());
+        assert_eq!(
+            storage.get_subject(&kid, &subject).await.unwrap().seed,
+            seed
+        );
+        assert!(storage.get_token(&kid, &hashid).await.is_ok());
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM purge_child")
+            .fetch_one(&storage.pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        storage.pool.close().await;
+        cleanup(path).await;
+    }
+
+    #[tokio::test]
+    async fn token_envelope_limits_apply_to_single_and_batch_storage() {
+        use crate::core::{
+            config,
+            storage::{StorageBackend, StorageState, TokenRow},
+        };
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let (backend, path) = test_storage("token-envelope-limits").await;
+        let pool = backend.pool.clone();
+        let storage = StorageState {
+            backend: StorageBackend::Sqlite(backend),
+        };
+        let kid = "a".repeat(64);
+        let first = "b".repeat(64);
+        let second = "c".repeat(64);
+        let data = format!(
+            "{}.{}.{}",
+            STANDARD.encode(vec![0; 80_000]),
+            STANDARD.encode([0; 12]),
+            STANDARD.encode(b"test")
+        );
+        assert!(data.len() > config::STORAGE_ENVELOPE_MAX_CHARS);
+        storage.save_token(&kid, &first, &data).await.unwrap();
+        assert_eq!(storage.get_token(&kid, &first).await.unwrap().data, data);
+        storage
+            .save_tokens_batch(&[TokenRow {
+                subject: None,
+                kid: kid.clone(),
+                hashid: second.clone(),
+                data: data.clone(),
+            }])
+            .await
+            .unwrap();
+        let found = storage
+            .get_tokens_batch(
+                &kid,
+                &[first.clone(), second.clone()],
+                config::TOKEN_DECODE_BATCH_MAX_ENVELOPE_BYTES,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            found[1].as_ref().map(|row| row.data.as_str()),
+            Some(data.as_str())
+        );
+        let oversized = format!(
+            "{}.{}.{}",
+            STANDARD.encode(vec![0; 100_000]),
+            STANDARD.encode([0; 12]),
+            STANDARD.encode(b"test")
+        );
+        assert!(storage.save_token(&kid, &first, &oversized).await.is_err());
+        assert!(
+            storage
+                .save_tokens_batch(&[TokenRow {
+                    subject: None,
+                    kid: kid.clone(),
+                    hashid: second.clone(),
+                    data: oversized.clone()
+                }])
+                .await
+                .is_err()
+        );
+        sqlx::query("UPDATE tokens SET data = ? WHERE kid = ?")
+            .bind(&oversized)
+            .bind(&kid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(storage.get_token(&kid, &first).await.is_err());
+        assert!(
+            storage
+                .get_tokens_batch(
+                    &kid,
+                    &[first, second],
+                    config::TOKEN_DECODE_BATCH_MAX_ENVELOPE_BYTES
+                )
+                .await
+                .is_err()
+        );
+        pool.close().await;
+        cleanup(path).await;
     }
 
     #[tokio::test]
@@ -822,11 +1162,13 @@ mod tests {
         let (storage, path) = test_storage("token-batch-rollback").await;
         let records = vec![
             TokenRow {
+                subject: None,
                 kid: String::from("kid-1"),
                 hashid: String::from("hash-1"),
                 data: String::from("ciphertext-1.nonce.aad"),
             },
             TokenRow {
+                subject: None,
                 kid: String::from("kid-1"),
                 hashid: String::from("hash-1"),
                 data: String::from("ciphertext-2.nonce.aad"),
@@ -850,32 +1192,148 @@ mod tests {
     #[tokio::test]
     async fn get_tokens_batch_returns_found_rows_only() {
         let (storage, path) = test_storage("token-batch-get").await;
+        let first = "b".repeat(64);
+        let second = "c".repeat(64);
+        let missing = "d".repeat(64);
+        let data = "AAAAAAAAAAAAAAAAAAAAAA==.AAAAAAAAAAAAAAAA.AA==";
         storage
-            .save_token("kid-1", "hash-1", "data-1")
+            .save_token("kid-1", &first, data)
             .await
             .expect("token must save");
         storage
-            .save_token("kid-1", "hash-2", "data-2")
+            .save_token("kid-1", &second, data)
             .await
             .expect("token must save");
 
         let found = storage
             .get_tokens_batch(
                 "kid-1",
-                &[
-                    String::from("hash-1"),
-                    String::from("hash-2"),
-                    String::from("hash-missing"),
-                ],
+                &[first.clone(), second.clone(), missing.clone()],
+                1024,
             )
             .await
             .expect("batch lookup must succeed");
 
         assert_eq!(found.len(), 2);
-        assert_eq!(found.get("hash-1").map(String::as_str), Some("data-1"));
-        assert_eq!(found.get("hash-2").map(String::as_str), Some("data-2"));
-        assert!(!found.contains_key("hash-missing"));
+        assert_eq!(found.get(&first).map(|row| row.data.as_str()), Some(data));
+        assert_eq!(found.get(&second).map(|row| row.data.as_str()), Some(data));
+        assert!(!found.contains_key(&missing));
 
+        cleanup(path).await;
+    }
+
+    #[tokio::test]
+    async fn token_batch_read_budget_accepts_exact_limit_and_rejects_one_less() {
+        use crate::core::config;
+        let (storage, path) = test_storage("token-read-budget").await;
+        let lengths = std::iter::repeat_n(131_070, 38).chain([65_554, 65_554, 65_554, 65_558]);
+        let mut ids = Vec::new();
+        for (index, len) in lengths.enumerate() {
+            let id = format!("{index:064x}");
+            let data = format!("{}.AAAAAAAAAAAAAAAA.dHlwZT10ZXN0", "A".repeat(len - 30));
+            assert_eq!(data.len(), len);
+            storage.save_token("kid-budget", &id, &data).await.unwrap();
+            ids.push(id);
+        }
+        let limit = config::TOKEN_DECODE_BATCH_MAX_ENVELOPE_BYTES;
+        let found = storage
+            .get_tokens_batch("kid-budget", &ids, limit)
+            .await
+            .unwrap();
+        assert_eq!(
+            found.values().map(|row| row.data.len()).sum::<usize>(),
+            limit
+        );
+        let err = storage
+            .get_tokens_batch("kid-budget", &ids, limit - 1)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err.downcast_ref(),
+            Some(crate::error::VectisError::TokenDecodeBatchTooLarge)
+        ));
+        let duplicate = vec![ids[0].clone(), ids[0].clone()];
+        assert!(
+            storage
+                .get_tokens_batch("kid-budget", &duplicate, 131_070)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            storage
+                .get_tokens_batch("kid-budget", &duplicate, 262_140)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        cleanup(path).await;
+    }
+
+    #[tokio::test]
+    async fn explicit_delete_ignores_envelope_and_fails_closed_on_storage_error() {
+        use crate::core::storage::{StorageBackend, StorageState};
+        let (backend, path) = test_storage("explicit-delete").await;
+        let pool = backend.pool.clone();
+        let kid = "a".repeat(64);
+        let hashid = "b".repeat(64);
+        backend
+            .save_token(&kid, &hashid, &"!".repeat(140_000))
+            .await
+            .unwrap();
+        let storage = StorageState {
+            backend: StorageBackend::Sqlite(backend),
+        };
+        assert!(storage.get_token(&kid, &hashid).await.is_err());
+        storage.delete_token(&kid, &hashid).await.unwrap();
+        assert!(is_not_found(
+            storage
+                .delete_token(&kid, &hashid)
+                .await
+                .unwrap_err()
+                .as_ref()
+        ));
+        sqlx::query("INSERT INTO tokens (kid, hashid, data) VALUES (?, ?, 'corrupt')")
+            .bind(&kid)
+            .bind(&hashid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TRIGGER reject_delete BEFORE DELETE ON tokens BEGIN SELECT RAISE(ABORT, 'test failure'); END").execute(&pool).await.unwrap();
+        assert!(storage.delete_token(&kid, &hashid).await.is_err());
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tokens")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+        sqlx::query("DROP TRIGGER reject_delete")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE token_reference (kid TEXT, hashid TEXT, FOREIGN KEY(kid, hashid) REFERENCES tokens(kid, hashid) DEFERRABLE INITIALLY DEFERRED)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO token_reference VALUES (?, ?)")
+            .bind(&kid)
+            .bind(&hashid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(storage.delete_token(&kid, &hashid).await.is_err());
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tokens")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1, "failed commit must roll back the deletion");
+        sqlx::query("DELETE FROM token_reference")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (first, second) = tokio::join!(
+            storage.delete_token(&kid, &hashid),
+            storage.consume_token(&kid, &hashid)
+        );
+        assert_ne!(first.is_ok(), second.is_ok());
+        pool.close().await;
         cleanup(path).await;
     }
 
@@ -888,11 +1346,11 @@ mod tests {
             .expect("token must save");
 
         storage
-            .consume_token("kid-1", "hash-1")
+            .delete_token("kid-1", "hash-1")
             .await
             .expect("first consume must succeed");
         let err = storage
-            .consume_token("kid-1", "hash-1")
+            .delete_token("kid-1", "hash-1")
             .await
             .expect_err("second consume must fail");
         assert!(is_not_found(err.as_ref()));
@@ -909,8 +1367,8 @@ mod tests {
             .expect("token must save");
 
         let (first, second) = tokio::join!(
-            storage.consume_token("kid-1", "hash-1"),
-            storage.consume_token("kid-1", "hash-1"),
+            storage.delete_token("kid-1", "hash-1"),
+            storage.delete_token("kid-1", "hash-1"),
         );
         assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
         let loser = first.err().or(second.err()).expect("one consume must lose");

@@ -88,20 +88,23 @@ def save_crash(target, seed, index, description, findings, *, target_seed, respo
         request["payload"] = metadata
     response_evidence = []
     for response in responses:
+        response_preview = _redact_bytes(response.body.encode("utf-8"), secrets).decode("utf-8")
         evidence = {
             "method": response.method, "path": response.path,
             "status": response.status, "duration_ms": round(response.duration_ms, 2),
             "transport_phase": response.transport_phase, "error_type": response.error_type,
             "errno": response.error_errno, "request_body_bytes": response.request_body_bytes,
+            "response_body_preview": response_preview[:2000],
+            "response_preview_truncated": len(response_preview) > 2000,
         }
         if response.request_body is not None:
-            evidence["payload"] = store(response.request_body)
+            evidence["request_payload"] = store(response.request_body)
             preview = _redact_bytes(response.request_body, secrets).decode("utf-8", "replace")
-            evidence["body_preview"] = preview[:2000]
-            evidence["preview_truncated"] = len(preview) > 2000
+            evidence["request_body_preview"] = preview[:2000]
+            evidence["request_preview_truncated"] = len(preview) > 2000
         response_evidence.append(evidence)
     payload = {
-        "format": "http-fuzz-finding-v2",
+        "format": "http-fuzz-finding-v3",
         "target": target,
         "seed": seed,
         "target_seed": target_seed,

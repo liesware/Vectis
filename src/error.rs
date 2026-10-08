@@ -8,10 +8,14 @@ const SANITIZED_SERDE_FALLBACK: &str = "invalid JSON";
 
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum VectisError {
+    #[error("token decode batch exceeds maximum allowed envelope size")]
+    TokenDecodeBatchTooLarge,
     #[error("{0}")]
     InvalidInput(String),
     #[error("{0}")]
     NotFound(String),
+    #[error("{0}")]
+    Conflict(String),
     #[error("{0}")]
     Forbidden(String),
     #[error("{0}")]
@@ -34,6 +38,10 @@ pub fn invalid_input(message: impl Into<String>) -> DynError {
 
 pub fn not_found(message: impl Into<String>) -> DynError {
     Box::new(VectisError::NotFound(message.into()))
+}
+
+pub fn conflict(message: impl Into<String>) -> DynError {
+    Box::new(VectisError::Conflict(message.into()))
 }
 
 pub fn forbidden(message: impl Into<String>) -> DynError {
@@ -128,8 +136,10 @@ fn redact_serde_value(message: &str) -> String {
 
 pub fn with_prefix(prefix: &str, err: DynError) -> DynError {
     match err.downcast_ref::<VectisError>() {
+        Some(VectisError::TokenDecodeBatchTooLarge) => err,
         Some(VectisError::InvalidInput(message)) => invalid_input(format!("{prefix}: {message}")),
         Some(VectisError::NotFound(message)) => not_found(format!("{prefix}: {message}")),
+        Some(VectisError::Conflict(message)) => conflict(format!("{prefix}: {message}")),
         Some(VectisError::Forbidden(message)) => forbidden(format!("{prefix}: {message}")),
         Some(VectisError::InvalidSignature(message)) => {
             invalid_signature(format!("{prefix}: {message}"))

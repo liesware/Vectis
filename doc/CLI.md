@@ -399,6 +399,8 @@ vectis config token delete patient-id-token-v1
 ```
 
 Vectis uses the fixed internal tokenization scheme `token-random-v1`.
+`max_plaintext_len` accepts 1 through 16,384 Unicode characters. Existing
+profiles retain their maximum; sign and reload config after increasing it.
 `token_len` is the number of random bytes before base64url encoding and must be
 at least `32`. `token_prefix` is a visible prefix, is limited to 16 characters,
 and cannot contain whitespace, control characters, `;`, or `=`. The CLI
@@ -664,6 +666,9 @@ defined in the request; they are loaded from signed `config.json`.
 ```sh
 vectis token encode <kid> --json '{"ref":"reg1","profile":"patient-id-token-v1","plaintext":"123456","metadata":{}}'
 vectis token decode --json '{"ref":"reg1","kid":"<kid>","profile":"patient-id-token-v1","token":"tok_patient_..."}'
+vectis token delete --file token-delete.json
+vectis token encode-batch <kid> --file token-encode-batch.json
+vectis token decode-batch --file token-decode-batch.json
 ```
 
 `encode` requires `token-encode` permission for the KID and an `active` key.
@@ -671,6 +676,47 @@ vectis token decode --json '{"ref":"reg1","kid":"<kid>","profile":"patient-id-to
 keys. Metadata is optional, must be a JSON object when present, and its compact
 serialized JSON representation must be at most 128 characters. `ref` is a
 required client correlation value and is echoed in the response.
+
+`delete` requires its independent `token-delete` permission and is not restricted
+by lifecycle. The operational key must still be loadable and the signed profile
+available and authorized for that KID. It returns `{ref, deleted: true}` only
+after commit. An absent, consumed or already deleted token returns `404`.
+It does not decrypt the token payload, but `subject_mode=stored` requires opening
+a valid subject seed to derive the token lookup key. There is no batch delete
+command.
+
+For `subject_mode=stored`, use `--subject <subject>` on `encode` or
+`encode-batch` to select the subject endpoint. Include `subject` in the JSON
+body for `decode`, `decode-batch` and `delete`. The flag is not accepted for
+those body-based commands. No subject is inferred from the signed profile.
+All JSON commands accept exactly one of `--json` or `--file` and support
+`--output json|yaml` without changing request bodies.
+
+### `vectis subject`
+
+Calls the stored subject-key endpoints using `VECTIS_APIKEY`:
+
+```sh
+vectis subject create <kid> --json '{"profile":"patient-subject-v1","subject_name":"synthetic-user"}' --output json
+vectis token encode <kid> --subject <subject> --file token-encode.json
+vectis token encode-batch <kid> --subject <subject> --file token-encode-batch.json
+vectis subject delete <kid> <subject>
+```
+
+`create` requires `subject-create`, an active KID and a signed `stored` profile;
+it displays the API's `201` response containing `kid`, `profile` and `subject`.
+Creating the same subject again returns `200` with the same identifiers, without
+replacing its seed. This allows recovery after a lost create response.
+`delete` requires `subject-delete` but does not load the operational key, resolve
+a profile or decrypt the seed, unlike subject-bound token delete. Success is
+`204`, exit code zero and empty stdout, including with `--output json|yaml`;
+a second deletion returns `404` and a nonzero exit code. Subject identifiers
+must be exactly 64 lowercase ASCII hexadecimal characters. Deleting a subject
+prevents subsequent
+recovery of its tokens and physically deletes their rows in the same transaction.
+It does not require an additional `token-delete` grant. Subject-bound encode
+fails with `404` if deletion wins before storage insert, or `409` if the seed
+generation changed during the operation; no tokens are inserted on failure.
 
 ### `vectis mac`
 

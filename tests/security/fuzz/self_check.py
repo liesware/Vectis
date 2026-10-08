@@ -21,6 +21,8 @@ from client import FuzzResponse
 from mutations import mutate_raw, mutate_structured
 from oracle import MAX_RESPONSE_DURATION_MS, slow_response_findings
 from semantics import (
+    subject_contract_semantic,
+    token_batch_budget_semantic,
     FPE_BATCH_PLAINTEXTS,
     FPE_PLAINTEXT,
     FPE_PROFILE,
@@ -55,6 +57,7 @@ from semantics import (
     token_semantic,
     tokenization_batch_semantic,
     tokenization_semantic,
+    token_delete_semantic,
     sharing_integrity_semantic,
     time_attest_source_unavailable_semantic,
 )
@@ -69,6 +72,73 @@ def self_check():
         total += 1
         if not condition:
             failures.append(label)
+
+    subject_output = json.dumps({"kid": "a" * 64, "profile": "stored", "subject": "b" * 64})
+    subject_responses = [(201, subject_output), (200, subject_output), (200, '{}'),
+                         (200, subject_output), (200, '{"ref":"subject-token","plaintext":"synthetic subject contract"}'),
+                         (204, ''), (201, subject_output), (404, '{"error":"token not found"}'), (204, '')]
+    expect(not subject_contract_semantic(subject_responses), "subject retry and deletion contract")
+    altered_subject = list(subject_responses)
+    altered_subject[1] = (409, '{"error":"subject already exists"}')
+    expect(subject_contract_semantic(altered_subject), "subject lost-response retry must recover ID")
+    altered_subject = list(subject_responses)
+    altered_subject[4] = (200, '{"ref":"subject-token","plaintext":"wrong"}')
+    expect(subject_contract_semantic(altered_subject), "subject retry cannot replace seed")
+    delete = {"ref":"delete-1", "token":"tok_synthetic"}
+    budget_context = {"plaintext": "synthetic"}
+    budget_case = {"refs": ["r"], "checks": [
+        ("over-budget", 413, '{"error":"token decode batch exceeds maximum allowed envelope size"}'),
+        ("under-budget", 200, '{"items":[{"ref":"r","plaintext":"synthetic"}]}'),
+    ]}
+    expect(not token_batch_budget_semantic(budget_case, budget_context), "token budget valid contract")
+    budget_case["checks"][0] = ("over-budget", 413, '{"error":"invalid","items":[]}')
+    expect(token_batch_budget_semantic(budget_case, budget_context), "token budget rejects partial output")
+    budget_case["checks"] = [("under-budget", 200, '{"items":[]}')]
+    expect(token_batch_budget_semantic(budget_case, budget_context), "token budget rejects truncated success")
+    expect(not token_delete_semantic(delete, delete, 200, '{"ref":"delete-1","deleted":true}'), "delete valid output")
+    expect(token_delete_semantic(delete, delete, 200, '{"ref":"delete-1","deleted":false}'), "delete rejects false success")
+    expect(token_delete_semantic(delete, delete, 400, '{"error":"tok_synthetic"}'), "delete detects token reflection")
+    expect(not token_delete_semantic({"token": []}, delete, 400, '{"error":"invalid"}'), "delete oracle handles malformed token type")
+    short_delete = {"ref": "token-delete-fuzz-", "token": "t"}
+    expect(not token_delete_semantic(short_delete, delete, 400,
+           '{"error":"token prefix does not match tokenization profile"}'),
+           "delete short mutation is not a substring canary")
+    for label, response in (
+        ("direct", '{"error":"tok_synthetic"}'),
+        ("message", '{"error":"unexpected tok_synthetic value"}'),
+        ("nested", '{"error":{"values":["tok_synthetic"]}}'),
+        ("escaped", '{"error":"\\u0074ok_synthetic"}'),
+        ("key", '{"tok_synthetic":"invalid"}'),
+        ("non-json", 'invalid tok_synthetic response'),
+    ):
+        expect(token_delete_semantic(short_delete, delete, 400, response),
+               f"delete detects seed token reflection: {label}")
+    expect(token_delete_semantic(short_delete, delete, 400, '{"error":"t"}'),
+           "delete detects complete mutated token value")
+    echo_ref = {"ref": "tok_synthetic", "token": "t"}
+    expect(not token_delete_semantic(echo_ref, delete, 200,
+           '{"ref":"tok_synthetic","deleted":true}'), "delete permits the exact ref echo")
+    expect(not token_delete_semantic({"ref": "t", "token": "t"}, delete, 200,
+           '{"ref":"t","deleted":true}'), "delete permits a ref equal to the short mutation")
+    expect("SEMANTIC: token delete response reflects the token" in token_delete_semantic(
+           delete, delete, 200, '{"ref":"tok_synthetic","deleted":true}'),
+           "delete does not exempt an incorrect ref containing the canary")
+    for label, response in (
+        ("wrong-ref", '{"ref":"other","deleted":true}'),
+        ("extra", '{"ref":"delete-1","deleted":true,"extra":true}'),
+        ("numeric-deleted", '{"ref":"delete-1","deleted":1}'),
+        ("string-deleted", '{"ref":"delete-1","deleted":"true"}'),
+    ):
+        expect(token_delete_semantic(delete, delete, 200, response),
+               f"delete retains success contract: {label}")
+    expect(token_delete_semantic(echo_ref, delete, 400, '{"ref":"tok_synthetic"}'),
+           "delete does not permit a ref echo in errors")
+    expect(token_delete_semantic(echo_ref, delete, 200,
+           '{"ref":"tok_synthetic","deleted":true,"error":"tok_synthetic"}'),
+           "delete ref exemption does not hide reflection elsewhere")
+    for malformed in ({}, {"token": ""}, {"token": []}, None):
+        expect(not token_delete_semantic(malformed, malformed, 400, '{"error":"invalid"}'),
+               "delete oracle tolerates absent or malformed tokens and seeds")
 
     token = {
         "kid": "a" * 64,

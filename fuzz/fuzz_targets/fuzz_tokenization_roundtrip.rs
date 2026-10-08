@@ -26,7 +26,7 @@ const CONFIG: &str = r#"{
       "kid": "e04daae3fa0ab03ab91e8c80608f176a0010dc4514263c6f02ce78288153bde1",
       "token_prefix": "tok_fuzz",
       "token_len": 32,
-      "max_plaintext_len": 128,
+      "max_plaintext_len": 16384,
       "one_time": false
     }
   ],
@@ -42,6 +42,13 @@ const HASHID: &str = "fuzz-token-roundtrip-hashid";
 
 static STATE: LazyLock<ConfigState> = LazyLock::new(|| {
     common::validate_fuzz_config_content(CONFIG).expect("fuzz tokenization config must validate")
+});
+
+static SUBJECT_STATE: LazyLock<ConfigState> = LazyLock::new(|| {
+    let mut config: serde_json::Value = serde_json::from_str(CONFIG).unwrap();
+    config["tokenization_profiles"][0]["subject_mode"] = json!("stored");
+    common::validate_fuzz_config_content(&config.to_string())
+        .expect("stored fuzz profile must validate")
 });
 
 fuzz_target!(|data: &[u8]| {
@@ -70,11 +77,36 @@ fuzz_target!(|data: &[u8]| {
         created_at: String::from("2026-01-01T00:00:00Z"),
     };
 
-    let Ok(encoded) = tokenization::encrypt_token_data(&profile, HASHID, &payload) else {
-        return;
+    let recovered = if head & 2 == 2 {
+        let profile = SUBJECT_STATE
+            .tokenization_profiles
+            .get(PROFILE_NAME)
+            .unwrap();
+        let subject = vectis::core::subjects::subject_id(&profile, "synthetic-fuzz-user").unwrap();
+        let envelope = vectis::core::subjects::create_seed(&profile, &subject).unwrap();
+        let keys = vectis::core::subjects::open_seed(&profile, &subject, &envelope).unwrap();
+        let context = tokenization::TokenContext::with_subject(profile.clone(), keys);
+        let token = tokenization::generate_token(&profile).unwrap();
+        let hashid = context.hash(&token).unwrap();
+        let encoded = context.encrypt(&hashid, &payload).unwrap();
+        let other = vectis::core::subjects::subject_id(&profile, "another-fuzz-user").unwrap();
+        assert!(vectis::core::subjects::open_seed(&profile, &other, &envelope).is_err());
+        let fresh = vectis::core::subjects::create_seed(&profile, &subject).unwrap();
+        let fresh_keys = vectis::core::subjects::open_seed(&profile, &subject, &fresh).unwrap();
+        let fresh_context = tokenization::TokenContext::with_subject(profile, fresh_keys);
+        assert_ne!(
+            context.hash(&token).unwrap(),
+            fresh_context.hash(&token).unwrap()
+        );
+        assert!(fresh_context.decrypt(&hashid, &encoded).is_err());
+        context
+            .decrypt(&hashid, &encoded)
+            .expect("subject round trip must succeed")
+    } else {
+        let encoded = tokenization::encrypt_token_data(&profile, HASHID, &payload).unwrap();
+        tokenization::decrypt_token_data(&profile, HASHID, &encoded)
+            .expect("legacy round trip must succeed")
     };
-    let recovered = tokenization::decrypt_token_data(&profile, HASHID, &encoded)
-        .expect("decrypt of our own token data must succeed");
 
     assert_eq!(
         recovered.plaintext, plaintext,
