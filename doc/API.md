@@ -270,7 +270,7 @@ Exposed metrics:
 - `vectis_key_load_failures_total{reason}` (`decrypt_or_validate`, `task_panic`, `task_cancelled`, or `task_join`)
 - `vectis_keys_load_skipped` (keys omitted by the most recently completed key-set load attempt)
 - `vectis_message_total{operation,result}` (`send`, `receive`, or `decrypt`; `success`, `denied`, or `failed`)
-- `vectis_crypto_operation_total{operation,result}` (`sign`, `verify`, `encrypt`, `decrypt`, `fpe_encrypt`, `fpe_decrypt`, `fpe_encrypt_batch`, `fpe_decrypt_batch`, `token_encode`, `token_decode`, `token_encode_batch`, `token_decode_batch`, `mac_create`, `mac_verify`, `mac_create_batch`, `mac_verify_batch`, `commit_create`, `commit_verify`, `commit_create_batch`, `commit_verify_batch`, `share_split`, `share_combine`, `index_create`, `index_verify`, `index_create_batch`, `index_verify_batch`, `mask`, or `mask_batch`; `success` or `failed`)
+- `vectis_crypto_operation_total{operation,result}` (`sign`, `verify`, `encrypt`, `decrypt`, `fpe_encrypt`, `fpe_decrypt`, `fpe_encrypt_batch`, `fpe_decrypt_batch`, `token_encode`, `token_decode`, `token_encode_batch`, `token_decode_batch`, `subject_create`, `subject_delete`, `mac_create`, `mac_verify`, `mac_create_batch`, `mac_verify_batch`, `commit_create`, `commit_verify`, `commit_create_batch`, `commit_verify_batch`, `share_split`, `share_combine`, `index_create`, `index_verify`, `index_create_batch`, `index_verify_batch`, `mask`, or `mask_batch`; `success` or `failed`)
 
 ### GET /self-test/init
 
@@ -551,9 +551,10 @@ Lifecycle behavior:
 
 - `active`: normal use.
 - `disabled`: blocked for all cryptographic operations.
-- `retired`: allowed only for decrypt and verification; blocked for new
+- `retired`: allowed for decrypt, verification, and explicit token deletion; blocked for new
   encryption/signing/sending operations and `/pub`.
-- `compromised`: blocked for all cryptographic operations.
+- `compromised`: blocked for cryptographic production and recovery; explicit
+  `token-delete` is permitted with its independent grant.
 - `destroyed`: logically destroyed; administrative metadata is retained, but
   cryptographic operations are blocked.
 
@@ -689,6 +690,9 @@ Allowed actions:
 - `fpe-decrypt`
 - `token-encode`
 - `token-decode`
+- `token-delete`
+- `subject-create`
+- `subject-delete`
 - `mac-create`
 - `mac-verify`
 - `index-create`
@@ -709,8 +713,11 @@ Permission mapping:
 | `message` | `POST /message/{sender_kid}`, `POST /message/decrypt`, `POST /message/internal/encrypt/{kid}`, `POST /message/internal/decrypt` |
 | `fpe-encrypt` | `POST /fpe/encrypt/{kid}`, `POST /fpe/encrypt/batch/{kid}` |
 | `fpe-decrypt` | `POST /fpe/decrypt`, `POST /fpe/decrypt/batch` |
-| `token-encode` | `POST /token/encode/{kid}`, `POST /token/encode/batch/{kid}` |
+| `token-encode` | `POST /token/encode/{kid}`, `POST /token/encode/batch/{kid}`, and their `/subject/{subject}` variants |
 | `token-decode` | `POST /token/decode`, `POST /token/decode/batch` |
+| `token-delete` | `POST /token/delete` |
+| `subject-create` | `POST /subject/{kid}` |
+| `subject-delete` | `DELETE /subject/{kid}/{subject}` |
 | `mac-create` | `POST /mac/{kid}`, `POST /mac/batch/{kid}` |
 | `mac-verify` | `POST /mac/verify`, `POST /mac/verify/batch` |
 | `commit-create` | `POST /commit/{kid}`, `POST /commit/batch/{kid}` |
@@ -1256,11 +1263,242 @@ Response:
 
 ## Tokenization
 
-Tokenization is a local reversible random-token operation. It returns a visible random token and stores the original plaintext plus optional metadata encrypted in storage. The database only sees `kid`, `hashid`, and encrypted `data`; it never sees plaintext, metadata, profile name as a column, or the visible token.
+Tokenization is a local reversible random-token operation. It returns a visible random token and stores the original plaintext plus optional metadata encrypted in storage. The database only sees `kid`, `hashid`, encrypted `data` and an optional opaque `subject` association; it never sees plaintext, metadata, profile name as a column, or the visible token.
 
-Tokenization profiles live in `config.json` under `tokenization_profiles`. Requests cannot provide `token_prefix`, `token_len`, `max_plaintext_len`, or `one_time`; those values come only from signed config. Vectis uses the fixed internal tokenization scheme `token-random-v1`.
+Tokenization profiles live in `config.json` under `tokenization_profiles`. Requests cannot provide `token_prefix`, `token_len`, `max_plaintext_len`, `one_time`, or `subject_mode`; those values come only from signed config. Vectis uses the fixed internal tokenization scheme `token-random-v1`.
 
-All tokenization requests include a client-defined `ref`. It is required, non-empty, at most 128 characters, and echoed in the response. Batch requests require every item `ref` to be unique within the request. For `POST /token/decode/batch`, profiles with `one_time: true` also require each token to be unique; a duplicate fails before lookup or consumption with `batch item N failed: token batch contains duplicated token`. Profiles with `one_time: false` may decode the same token more than once in a batch when every item has a distinct `ref`.
+### Subject Keys
+
+`subject_mode` is `none` (the default) or `stored`. Adopt `stored` through a new
+signed profile; existing tokens are not migrated or re-encrypted. The existing
+encode endpoints accept only `none` profiles.
+The local profile editor accepts `--subject-mode none|stored`. Runtime CLI
+commands are `vectis subject create <kid> --json '<json>'` and
+`vectis subject delete <kid> <subject>`. Token encode and encode-batch select
+subject routes with `--subject <subject>`; decode, decode-batch and delete
+include `subject` in their JSON body. JSON input may also come from `--file`.
+
+| Method / path | Permission | Result |
+| --- | --- | --- |
+| `POST /subject/{kid}` | `subject-create` | `201` if created, `200` if already present, with `{kid, profile, subject}` |
+| `DELETE /subject/{kid}/{subject}` | `subject-delete` | `204`, or `404` if absent |
+| `POST /token/encode/{kid}/subject/{subject}` | `token-encode` | Existing encode response plus `subject` |
+| `POST /token/encode/batch/{kid}/subject/{subject}` | `token-encode` | Existing batch response plus one shared `subject` |
+
+Subject keys are server-held random seeds for subject-scoped tokenization, not
+public/private key pairs and not user credentials. The client supplies a name
+only when creating a subject and retains the returned opaque `subject` identifier
+for subsequent token operations. Seed and derived key material are never returned.
+
+#### POST /subject/{kid}
+
+Creates a new seed for a subject under a signed tokenization profile. Requires
+`X-API-Key` and the independent per-KID `subject-create` grant (root/admin retain
+their normal authorization). The operational KID must exist and be `active`.
+
+First configure and sign a new profile, for example this `tokenization_profiles[]`
+entry; `<kid>` denotes an actual operational key identifier:
+
+```json
+{
+  "name": "patient-subject-v1",
+  "kid": "<kid>",
+  "token_prefix": "tok_patient",
+  "token_len": 32,
+  "max_plaintext_len": 128,
+  "one_time": false,
+  "subject_mode": "stored"
+}
+```
+
+Request (the only accepted body fields are `profile` and `subject_name`):
+
+```http
+POST /subject/<kid>
+X-API-Key: <apikey>
+Content-Type: application/json
+```
+
+```json
+{
+  "profile": "patient-subject-v1",
+  "subject_name": "synthetic-user"
+}
+```
+
+Response `201 Created` after a new seed is persisted, or `200 OK` if the subject already exists:
+
+```json
+{
+  "kid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "profile": "patient-subject-v1",
+  "subject": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}
+```
+
+These identifiers are illustrative; use the actual returned values. The subject
+ID is deterministic for the same KID, profile and exact name, but the stored seed
+is random. The name is not stored. Names are not trimmed or Unicode normalized.
+Creation is idempotent: retrying returns the same ID and never replaces the
+existing seed, including concurrent requests. A lost response can therefore be
+recovered by submitting the same KID, profile and exact name again. Reuse does
+not validate or repair an existing seed envelope.
+Do not submit the name in place of the returned ID to token or deletion endpoints.
+
+| Status | Meaning |
+| --- | --- |
+| `400` | Invalid KID/input, unknown profile, or profile not configured as `stored` |
+| `401` | Missing or invalid API key |
+| `403` | Missing `subject-create`, profile belongs to another KID, or key is not active |
+| `404` | Operational key not found; existing key-loading error contract applies |
+| `413` / `415` | Request-body limit or JSON content-type requirement violated |
+| `500` | Internal cryptographic or storage failure; creation is not reported as successful |
+
+#### DELETE /subject/{kid}/{subject}
+
+Deletes the stored seed and all its associated token rows in one transaction. Requires `X-API-Key` and the
+independent per-KID `subject-delete` grant. `subject-create`, `token-encode`,
+`token-decode` and `token-delete` do not grant this operation.
+
+Request: use the identifier returned by create; **no request body or profile** is
+required, and there is no JSON content-type requirement for this endpoint.
+
+```http
+DELETE /subject/<kid>/<subject>
+X-API-Key: <apikey>
+```
+
+Response: `204 No Content`, with an empty body. There is no `deleted` JSON object.
+The CLI correspondingly returns exit code zero with empty stdout.
+
+| Status | Meaning |
+| --- | --- |
+| `400` | Invalid KID or subject identifier; subject must be 64 lowercase ASCII hex characters |
+| `401` | Missing or invalid API key |
+| `403` | Missing `subject-delete` permission |
+| `404` | `{"error":"subject not found"}`; includes repeated deletion |
+| `500` | Internal storage failure; deletion is not reported as successful |
+
+Unlike token delete, subject delete does not resolve a profile, load an operational
+key, enforce its lifecycle or decrypt the seed. Thus a stored seed can be deleted
+even for a disabled, compromised, retired, destroyed or no-longer-loaded key, or
+when the seed envelope is unreadable. Authorization and valid path identifiers
+remain mandatory. There is no subject list/get endpoint.
+
+#### Using the Subject with Tokens
+
+Encode uses the subject in the URL and the existing encode body:
+
+```http
+POST /token/encode/<kid>/subject/<subject>
+X-API-Key: <apikey>
+Content-Type: application/json
+```
+
+```json
+{"ref":"reg1","profile":"patient-subject-v1","plaintext":"123456"}
+```
+
+The `200` response contains the normal `ref`, `kid`, `profile`, `token` fields
+plus `subject`. Batch encode uses `/token/encode/batch/{kid}/subject/{subject}`;
+its normal batch response contains a shared top-level `subject`.
+
+Decode and token delete use their normal URLs and include the ID in the body:
+
+```json
+{
+  "ref": "reg1",
+  "kid": "<kid>",
+  "profile": "patient-subject-v1",
+  "subject": "<subject>",
+  "token": "<token returned by encode>"
+}
+```
+
+For `/token/decode`, `/token/decode/batch` and `/token/delete`, add `subject` to
+the existing body. It is required for `stored` and rejected for `none`. A batch
+uses one subject for all items. Authorization and lifecycle rules otherwise
+remain unchanged. Subject deletion needs its independent grant but neither a
+usable operational key nor a readable seed.
+
+In decode batch, `subject` belongs at the top level beside `kid`, `profile` and
+`items`, not inside each item. `/token/delete` deletes one token row;
+`DELETE /subject/{kid}/{subject}` removes the seed needed by all its tokens.
+It also physically deletes those tokens; it does not require an additional
+`token-delete` grant.
+
+#### Cryptographic Format and Operational Limits
+
+Names and profiles accept at most 128 Unicode characters, reject controls and
+`;` / `=`, and cannot be whitespace-only. Names are neither trimmed nor Unicode
+normalized. Identifiers are exactly 64 lowercase ASCII hex characters. Unknown
+fields and client-supplied seeds, modes or algorithms are rejected. Seed
+envelopes are capped at 2,048 ASCII characters; seeds contain 32 random bytes.
+Existing plaintext, metadata, ref, token and 128-item batch limits remain.
+
+Each subject stores an authenticated envelope, not a plaintext seed. Its random
+seed is opened and used as HKDF salt to derive distinct token lookup and data
+keys, then released at the end of the operation. Token data inherits the profile
+cipher and binds the subject in its v2 AAD and token HMAC. Legacy derivation and
+v1 envelopes are unchanged. There is no secret cache or legacy fallback.
+
+All contexts use validated, ordered `key=value` fields separated by `;`:
+
+| Use | Parent / salt | Context order |
+| --- | --- | --- |
+| Subject identifier HMAC-BLAKE2b-256 | `profile.hash_key` | `purpose=subject-lookup;kid;profile;subject_name;version=v1` |
+| Seed wrapping HKDF-BLAKE2b-256 | `profile.data_key` / `vectis/subjects/v1` | `purpose=subject-wrap;kid;profile;version=v1` |
+| Subject token hash HKDF | `profile.hash_key` / decrypted seed | `purpose=subject-token-hash;kid;profile;version=v1` |
+| Subject token data HKDF | `profile.data_key` / decrypted seed | `purpose=subject-token-data;kid;profile;version=v1` |
+
+Hash keys are 32 bytes; data/wrapping keys use the profile cipher's key size.
+The seed AAD order is `version=v1;type=subject-seed;kid;profile;subject;cipher`.
+Its compact plaintext is `{"seed":"<64 hex characters>"}`, and its storage
+format is `base64(ciphertext+tag).base64(nonce).base64(AAD)`. AEAD tags never enter
+HKDF. Subject token HMAC input is `version=v2;profile;subject;token`; its data AAD
+is `version=v2;type=token-data;kid;profile;tokenization_version=token-random-v1;hashid;subject;cipher`.
+Bare names in this table denote the corresponding `name=value` field.
+
+Using the decrypted subject seed as HKDF salt is deliberate: it changes the
+extraction result for each independently generated seed, while `info` binds the
+purpose, KID, profile and derivation version. Legacy profile derivation instead
+uses a fixed namespace salt and context in `info`. HKDF permits secret salts
+([RFC 5869, Section 3.1](https://www.rfc-editor.org/rfc/rfc5869.html#section-3.1)).
+Moving the seed from salt to `info` would change the derived keys and require a
+new derivation version with explicit compatibility handling for existing tokens.
+
+Version fields identify different layers. `tokenization_version=token-random-v1`
+identifies the tokenization scheme; `version=v2` in subject token AAD and HMAC
+input identifies their subject-aware context format. `version=v1` in subject
+lookup and key-derivation contexts identifies those contexts, and in seed AAD
+identifies the seed envelope format. These versions evolve independently and
+need not match. Renaming or changing fields in HKDF, HMAC or AAD changes the
+cryptographic contract, not merely its presentation.
+
+Missing subjects return `404`; incompatible or invalid input returns `400`;
+corrupt stored seed material returns a sanitized internal error. Deleting a
+subject atomically deletes its seed and associated token rows. Recreating the name produces
+a fresh seed and does not unlock them. Requests that already opened the seed
+may finish. Backups can restore a deleted seed: this is not instant revocation
+or erasure resistant to rollback. End-user authorization remains the application's
+responsibility; presenting a subject is not proof of user identity.
+
+Subject-bound encode single/batch checks the same seed generation inside its
+storage transaction before inserting. If deletion wins, encode returns `404`
+with `subject not found`; if the ID was recreated with a different seed, it
+returns `409` with `subject changed during token operation`. Neither failure
+inserts or returns tokens. If encode commits first, subsequent subject deletion
+purges those tokens. Existing orphan rows from older versions are not cleaned up
+automatically.
+
+Before upgrading, apply the matching migration in
+[`src/db/migrations`](../src/db/migrations). PostgreSQL runtime roles need
+`SELECT, INSERT, DELETE` and `UPDATE(seed)` on `public.subjects`. The column-level
+UPDATE privilege is required by PostgreSQL row locks, not seed replacement.
+Upgrade every node before enabling
+`stored` profiles. Vectis checks schemas at startup and never applies migrations.
+
+Token encode, decode and token-delete requests include a client-defined `ref`; subject create/delete do not. It is required, non-empty, at most 128 characters, and echoed in the response. Batch requests require every item `ref` to be unique within the request. For `POST /token/decode/batch`, profiles with `one_time: true` also require each token to be unique; a duplicate fails before lookup or consumption with `batch item N failed: token batch contains duplicated token`. Profiles with `one_time: false` may decode the same token more than once in a batch when every item has a distinct `ref`.
 
 `hash_key` and `data_key` are derived from the operational key's symmetric key with `INTERNAL_KEYS_HKDF` and are prepared when config is loaded. The derivation binds the profile name, KID, and fixed internal tokenization scheme `token-random-v1`. `tokens.data` AAD also binds that internal scheme. Tokens are random and are not deterministic for the same plaintext.
 
@@ -1321,6 +1559,36 @@ Response:
 }
 ```
 
+### POST /token/delete
+
+Requires authentication and the independent `token-delete` permission for the
+request KID. Root and admin remain authorized. The signed profile must belong
+to that KID. Deletion is permitted in any lifecycle state, so token rows can be
+purged even after the key is `disabled` or `destroyed`; allowing deletion does
+not permit encode or decode with that key.
+
+```json
+{"ref":"delete-001","kid":"<operational-kid>","profile":"patient-id-token-v1","token":"<token>"}
+```
+
+After the storage transaction commits, the response is HTTP 200:
+
+```json
+{"ref":"delete-001","deleted":true}
+```
+
+Deletion computes the token hash and deletes the row without reading or
+decrypting its envelope, including corrupt or oversized stored envelopes.
+It works for reusable and one-time tokens. An absent, already deleted, or
+consumed token returns HTTP 404 with `{"error":"token not found"}`.
+Invalid input or token encoding returns 400; an invalid credential returns
+401; insufficient permissions or a profile/KID mismatch returns 403. Storage
+failures never return a successful deletion.
+
+A reusable decode that already read the row may still complete. Deletion
+does not erase older backups; restoring a backup can restore the token.
+There is no batch delete or dedicated CLI delete command in this version.
+
 ### POST /token/encode/batch/{kid}
 
 Requires auth and `token-encode` permission for the path `kid`. The key must be `active`.
@@ -1353,6 +1621,8 @@ Response:
 ### POST /token/decode/batch
 
 Requires auth and `token-decode` permission for the request `kid`. The key may be `active` or `retired`.
+
+Stored envelopes are read incrementally under a fixed 5 MiB (`5,242,880` bytes) budget. Each requested occurrence counts, including repeated reusable tokens. Exactly the budget is accepted; exceeding it returns `413` with `{"error":"token decode batch exceeds maximum allowed envelope size"}`, without plaintext, partial items or one-time consumption. Accepted batches return their complete results without an additional response-size cap. This budget bounds retained encrypted material, not total process memory or serialized response bytes.
 
 Request:
 
@@ -2056,7 +2326,7 @@ Top level:
 | `client` | yes | text, unique | Client label. |
 | `apikey_hash` | yes | 64 hex (32 bytes) | Server-side verifier for this client's `X-API-Key`. |
 | `status` | yes | `active` \| `disabled` \| `revoked` | Only `active` clients are authorized. |
-| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `fpe-encrypt`, `fpe-decrypt`, `token-encode`, `token-decode`, `mac-create`, `mac-verify`, `commit-create`, `commit-verify`, `share-split`, `share-combine`, `index-create`, `index-verify`, `mask`, `metrics`, `time-attest`. `kid: "*"` is required for global actions `admin`, `metrics`, and `time-attest`; crypto profile actions require explicit KIDs. An `admin` action grants all endpoints and ignores kid-scoped grants. |
+| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `fpe-encrypt`, `fpe-decrypt`, `token-encode`, `token-decode`, `token-delete`, `subject-create`, `subject-delete`, `mac-create`, `mac-verify`, `commit-create`, `commit-verify`, `share-split`, `share-combine`, `index-create`, `index-verify`, `mask`, `metrics`, `time-attest`. `kid: "*"` is required for global actions `admin`, `metrics`, and `time-attest`; crypto profile actions require explicit KIDs. An `admin` action grants all endpoints and ignores kid-scoped grants. |
 
 `fpe_profiles[]` entries:
 
@@ -2078,8 +2348,9 @@ Top level:
 | `kid` | yes | loaded local KID | Operational key whose symmetric key derives tokenization keys. |
 | `token_prefix` | yes | non-empty visible token prefix, max 16 chars, no whitespace/control chars, no `;` or `=` | Prefix used in returned tokens. |
 | `token_len` | yes | integer >= 32 | Random bytes generated before base64url-no-pad encoding; decode requires this exact decoded byte length. |
-| `max_plaintext_len` | yes | integer 1..1024 | Maximum plaintext length accepted by encode. |
+| `max_plaintext_len` | yes | integer 1..16384 | Maximum Unicode character count accepted by encode (single and batch). |
 | `one_time` | yes | boolean | When true, a successful decode consumes the token. The signed profile currently loaded by Vectis controls this policy. |
+| `subject_mode` | no | `none` (default) or `stored` | Optional per-subject seed-backed tokenization. Use a new profile to adopt `stored`; existing tokens are not migrated. |
 
 `mac_profiles[]` entries:
 

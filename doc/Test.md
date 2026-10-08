@@ -30,7 +30,37 @@ measures how a known valid flow behaves under load.
 
 ## Prerequisites
 
+Token deletion coverage includes independent permissions, lifecycle, repeated
+deletion, and races with one-time consumption in the positive HTTP suite.
+The `token_delete` HTTP fuzz target mutates delete input. SQLite tests also
+cover corrupt envelopes and rollback on DELETE or COMMIT failure.
+The optional PostgreSQL deletion test requires a dedicated test database with
+the Vectis schema:
+
+```sh
+VECTIS_TEST_POSTGRES_DSN='<test-dsn>' cargo test explicit_delete_is_atomic_and_single_use -- --ignored
+```
+
 Rust checks require the normal Rust toolchain used by the project.
+
+The `token_batch_budget` HTTP fuzz target checks rejection of repeated reusable
+tokens whose envelopes exceed 5 MiB, then verifies a smaller batch returns its
+complete plaintexts. The positive HTTP suite additionally checks one-time tokens
+remain available after budget rejection and that accepted responses may exceed
+2 MiB. Storage tests cover exact limits, duplicate accounting and overflow;
+PostgreSQL budget tests require `VECTIS_TEST_POSTGRES_DSN` and `--ignored`.
+
+Subject-key HTTP cases cover independent grants, concurrent creation, subject
+isolation, one-time batch races and deletion/recreation without legacy fallback.
+Storage contracts run on SQLite and optionally on disposable PostgreSQL:
+
+```sh
+VECTIS_TEST_POSTGRES_DSN='<migrated-test-dsn>' cargo test postgres_subject_contract -- --ignored
+```
+
+The tokenization input and config fuzz targets accept `subject` and
+`subject_mode`; the separate `fuzz_tokenization_roundtrip` crypto target also
+checks authenticated seed opening, subject-key round trips and seed replacement.
 
 Python tests are executed with [uv](https://docs.astral.sh/uv). Do not run the
 Python scripts directly with `python3` for the standard workflow; use `uv run`
@@ -114,6 +144,14 @@ API. Vectis does not apply migrations and does not create PostgreSQL tables at
 runtime.
 
 ## Python HTTP Tests
+
+The positive suite races eight subject creations and expects one `201` and
+seven `200` responses with the same ID and unchanged seed. Storage tests cover
+transactional token purging, stale-generation writes and encode/delete races.
+Run its isolated server with
+`VECTIS_MAX_CONCURRENT_CRYPTO=8` (or greater) so crypto admission does not turn
+this storage-uniqueness check into an overload test. The CI integration runner
+sets eight slots explicitly; the production default remains unchanged.
 
 Install/sync the base Python environment:
 
@@ -258,6 +296,9 @@ reusable and one-time token behavior, batch ordering and atomicity
 (`*_batch_contract` and `index_batch_transaction`), and the single-item
 cryptographic capabilities. `compact_signature_integrity` creates fresh tokens
 and verifies the ML-DSA-before-EdDSA failure order for every compact segment.
+`subject_contract` verifies `201/200` idempotent creation, preservation of the
+seed on retry, and token unavailability after deletion and recreation. It uses
+fresh names per iteration and redacts names, plaintexts and tokens in artifacts.
 `time_attest_offline` temporarily configures loopback-only unavailable sources
 and verifies the fail-closed `502` contract without using the Internet or
 affecting readiness. `http_protocol` checks the 2 MiB request boundary,

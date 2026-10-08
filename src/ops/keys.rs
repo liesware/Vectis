@@ -351,6 +351,7 @@ pub(crate) fn get_loaded_key(
 pub(crate) enum ProfileUse {
     NewUse,
     Verify,
+    TokenDelete,
 }
 
 pub(crate) fn prepare_profile_use(
@@ -369,6 +370,7 @@ pub(crate) fn prepare_profile_use(
     match use_kind {
         ProfileUse::NewUse => require_lifecycle_for_new_use(&loaded_key),
         ProfileUse::Verify => require_lifecycle_for_decrypt_or_verify(&loaded_key),
+        ProfileUse::TokenDelete => Ok(()),
     }
 }
 

@@ -52,6 +52,7 @@ const HTTP_COMMANDS: &[HttpCommand] = &[
     HttpCommand::new("sign", command_sign),
     HttpCommand::new("fpe", command_fpe),
     HttpCommand::new("token", command_token),
+    HttpCommand::new("subject", command_subject),
     HttpCommand::new("mac", command_mac),
     HttpCommand::new("index", command_index),
     HttpCommand::new("mask", command_mask),
@@ -160,6 +161,7 @@ boxed_command!(command_pub, run_pub);
 boxed_command!(command_sign, run_sign);
 boxed_command!(command_fpe, run_fpe);
 boxed_command!(command_token, run_token);
+boxed_command!(command_subject, run_subject);
 boxed_command!(command_mac, run_mac);
 boxed_command!(command_index, run_index);
 boxed_command!(command_mask, run_mask);
@@ -647,33 +649,105 @@ async fn run_fpe(args: Vec<String>, output: OutputFormat) -> Result<(), DynError
 }
 
 async fn run_token(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
-    let (subcommand, rest) = split_subcommand(args, "token command")?;
-    let client = CliHttpClient::from_env()?;
+    let (method, path, body) = token_request(args)?;
+    CliHttpClient::from_env()?
+        .send(method, &path, true, body, output)
+        .await
+}
 
+fn token_request(args: Vec<String>) -> Result<(Method, String, Option<Value>), DynError> {
+    let (subcommand, rest) = split_subcommand(args, "token command")?;
     match subcommand.as_str() {
-        "encode" => {
-            let (kid, rest) = split_positional_arg(rest, "kid", "token encode")?;
+        "encode" | "encode-batch" => {
+            let command = format!("token {subcommand}");
+            let (kid, rest) = split_positional_arg(rest, "kid", &command)?;
             validate_kid("kid", &kid)?;
+            let (subject, rest) = parse_subject_option(rest, &command)?;
             let body = parse_json_source(rest)?;
-            client
-                .send(
-                    Method::POST,
-                    &format!("/token/encode/{kid}"),
-                    true,
-                    Some(body),
-                    output,
-                )
-                .await
+            let batch = if subcommand == "encode-batch" {
+                "/batch"
+            } else {
+                ""
+            };
+            let mut path = format!("/token/encode{batch}/{kid}");
+            if let Some(subject) = subject {
+                path.push_str(&format!("/subject/{subject}"));
+            }
+            Ok((Method::POST, path, Some(body)))
         }
-        "decode" => {
+        "decode" | "decode-batch" | "delete" => {
+            if rest.iter().any(|arg| arg == "--subject") {
+                return Err(invalid_input(format!(
+                    "--subject is not accepted for token {subcommand}"
+                )));
+            }
             let body = parse_json_source(rest)?;
-            client
-                .send(Method::POST, "/token/decode", true, Some(body), output)
-                .await
+            let path = match subcommand.as_str() {
+                "decode-batch" => "/token/decode/batch",
+                "delete" => "/token/delete",
+                _ => "/token/decode",
+            };
+            Ok((Method::POST, path.to_owned(), Some(body)))
         }
         _ => Err(invalid_input(format!(
             "unknown token command: {subcommand}"
         ))),
+    }
+}
+
+fn parse_subject_option(
+    args: Vec<String>,
+    command: &str,
+) -> Result<(Option<String>, Vec<String>), DynError> {
+    let mut subject = None;
+    let mut rest = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] == "--subject" {
+            if subject.is_some() {
+                return Err(invalid_input("--subject may only be specified once"));
+            }
+            let value = next_flag_value(&args, index, "--subject")?;
+            crate::core::subjects::validate_subject(value)?;
+            subject = Some(value.to_owned());
+            index += 2;
+        } else if matches!(args[index].as_str(), "--json" | "--file") {
+            let value = next_flag_value(&args, index, &args[index])?;
+            rest.extend([args[index].clone(), value.to_owned()]);
+            index += 2;
+        } else {
+            return Err(invalid_input(format!("unknown {command} option")));
+        }
+    }
+    Ok((subject, rest))
+}
+
+async fn run_subject(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+    let (method, path, body) = subject_request(args)?;
+    CliHttpClient::from_env()?
+        .send(method, &path, true, body, output)
+        .await
+}
+
+fn subject_request(args: Vec<String>) -> Result<(Method, String, Option<Value>), DynError> {
+    let (command, args) = split_subcommand(args, "subject command")?;
+    let (kid, args) = split_positional_arg(args, "kid", "subject")?;
+    validate_kid("kid", &kid)?;
+    match command.as_str() {
+        "create" => Ok((
+            Method::POST,
+            format!("/subject/{kid}"),
+            Some(parse_json_source(args)?),
+        )),
+        "delete" => {
+            let (subject, args) = split_positional_arg(args, "subject", "subject delete")?;
+            crate::core::subjects::validate_subject(&subject)?;
+            if !args.is_empty() {
+                return Err(invalid_input("subject delete accepts only kid and subject"));
+            }
+            Ok((Method::DELETE, format!("/subject/{kid}/{subject}"), None))
+        }
+        _ => Err(invalid_input("unknown subject command")),
     }
 }
 
@@ -1401,6 +1475,82 @@ mod tests {
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn token_and_subject_requests_preserve_method_path_and_body() {
+        let kid = "a".repeat(64);
+        let subject = "b".repeat(64);
+        let raw = r#"{"subject":"body-subject","ref":"r","items":[]}"#;
+        for (command, expected) in [
+            ("decode", "/token/decode"),
+            ("decode-batch", "/token/decode/batch"),
+            ("delete", "/token/delete"),
+        ] {
+            let (method, path, body) = token_request(strings(&[command, "--json", raw])).unwrap();
+            assert_eq!(method, Method::POST);
+            assert_eq!(path, expected);
+            assert_eq!(body, Some(serde_json::from_str(raw).unwrap()));
+        }
+        for command in ["encode", "encode-batch"] {
+            let suffix = if command == "encode-batch" {
+                "/batch"
+            } else {
+                ""
+            };
+            let (_, path, _) = token_request(strings(&[command, &kid, "--json", raw])).unwrap();
+            assert_eq!(path, format!("/token/encode{suffix}/{kid}"));
+            for args in [
+                strings(&[command, &kid, "--subject", &subject, "--json", raw]),
+                strings(&[command, &kid, "--json", raw, "--subject", &subject]),
+            ] {
+                let (_, path, body) = token_request(args).unwrap();
+                assert_eq!(
+                    path,
+                    format!("/token/encode{suffix}/{kid}/subject/{subject}")
+                );
+                assert_eq!(body, Some(serde_json::from_str(raw).unwrap()));
+            }
+        }
+        let (method, path, body) = subject_request(strings(&["delete", &kid, &subject])).unwrap();
+        assert_eq!(
+            (method, path, body),
+            (Method::DELETE, format!("/subject/{kid}/{subject}"), None)
+        );
+        let (method, path, body) =
+            subject_request(strings(&["create", &kid, "--json", raw])).unwrap();
+        assert_eq!(
+            (method, path, body),
+            (
+                Method::POST,
+                format!("/subject/{kid}"),
+                Some(serde_json::from_str(raw).unwrap())
+            )
+        );
+        for format in [OutputFormat::Json, OutputFormat::Yaml] {
+            print_response("", format).unwrap();
+        }
+    }
+
+    #[test]
+    fn subject_options_reject_duplicates_missing_invalid_and_extra_input() {
+        let kid = "a".repeat(64);
+        let subject = "b".repeat(64);
+        for tail in [
+            strings(&["--subject"]),
+            strings(&["--subject", &subject, "--subject", &subject, "--json", "{}"]),
+            strings(&["--subject", &"B".repeat(64), "--json", "{}"]),
+            strings(&["--subject", "../bad", "--json", "{}"]),
+            strings(&["--bogus", "--json", "{}"]),
+            strings(&["--json", "{}", "--file", "file.json"]),
+        ] {
+            let mut args = strings(&["encode", &kid]);
+            args.extend(tail);
+            assert!(token_request(args).is_err());
+        }
+        assert!(subject_request(strings(&["delete", &kid, &subject, "extra"])).is_err());
+        assert!(subject_request(strings(&["delete", "bad", &subject])).is_err());
+        assert!(subject_request(strings(&["delete", &kid, "bad"])).is_err());
     }
 
     #[test]

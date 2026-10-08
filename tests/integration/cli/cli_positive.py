@@ -22,6 +22,7 @@ from lib.cli_support import (
     run_case,
     run_cli_json,
 )
+from lib.token_subject_cases import token_subject_runtime_case
 
 
 def config_init_case(env):
@@ -622,6 +623,7 @@ def main():
             lambda: masking_profile_cases(env),
         )
         run_case(counters, "config list reads edited config", lambda: config_list_case(env))
+        run_case(counters, "token and subject runtime contracts", token_subject_runtime_case)
 
         if args.base_url and args.apikey:
             added = remote_route_dynamic_import(env, args.base_url, args.apikey)

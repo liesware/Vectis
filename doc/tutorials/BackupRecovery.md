@@ -39,7 +39,7 @@ The exact recovery set depends on the deployment:
 
 | Item | Purpose | This lab |
 |---|---|---|
-| SQLite snapshot or PostgreSQL dump | durable `opskeys`, `tokens`, and `indexes` state | backed up |
+| SQLite snapshot or PostgreSQL dump | durable `opskeys`, `tokens`, `indexes`, and `subjects` state | backed up |
 | `init.json` | encrypted Vectis identity and internal key material | backed up |
 | unseal key or provider state | unlocks `init.json` | encrypted under separate custody |
 | `config.json` and `config_sign.json` | signed policy | backed up as one pair |
@@ -143,7 +143,15 @@ CREATE TABLE IF NOT EXISTS tokens (
     kid VARCHAR(128) NOT NULL,
     hashid VARCHAR(128) NOT NULL,
     data VARCHAR(10240) NOT NULL,
+    subject VARCHAR(128),
     PRIMARY KEY (kid, hashid)
+);
+
+CREATE TABLE IF NOT EXISTS subjects (
+    kid VARCHAR(128) NOT NULL,
+    subject VARCHAR(128) NOT NULL,
+    seed TEXT NOT NULL,
+    PRIMARY KEY (kid, subject)
 );
 
 CREATE TABLE IF NOT EXISTS indexes (
@@ -182,7 +190,15 @@ CREATE TABLE tokens (
     kid VARCHAR(128) NOT NULL,
     hashid VARCHAR(128) NOT NULL,
     data TEXT NOT NULL,
+    subject VARCHAR(128),
     PRIMARY KEY (kid, hashid)
+);
+
+CREATE TABLE subjects (
+    kid VARCHAR(128) NOT NULL,
+    subject VARCHAR(128) NOT NULL,
+    seed TEXT NOT NULL,
+    PRIMARY KEY (kid, subject)
 );
 
 CREATE TABLE indexes (
@@ -197,6 +213,7 @@ GRANT CONNECT ON DATABASE vectis_backup_lab TO vectis_usr;
 GRANT USAGE ON SCHEMA public TO vectis_usr;
 GRANT SELECT, INSERT, UPDATE ON TABLE public.opskeys TO vectis_usr;
 GRANT SELECT, INSERT, DELETE ON TABLE public.tokens TO vectis_usr;
+GRANT SELECT, INSERT, DELETE, UPDATE(seed) ON TABLE public.subjects TO vectis_usr;
 GRANT SELECT, INSERT ON TABLE public.indexes TO vectis_usr;
 SQL
 fi
@@ -275,7 +292,12 @@ chmod 600 .env
 ## Seed State To Recover
 
 Start the node and create an operational key, a reversible token, and a blind
-index. Together they exercise all three storage tables.
+index. Together they exercise the key, token and index storage tables. The
+`subjects` table is also included in full database backups; restoring a deleted
+seed together with its token rows can make those tokens readable again. Subject
+deletion purges both transactionally in the live database, not in existing
+backups. Backup retention must be part
+of any subject-erasure policy.
 
 ```sh
 ./vectis serve >logs/vectis.log 2>&1 &
@@ -524,6 +546,7 @@ GRANT CONNECT ON DATABASE vectis_backup_lab TO vectis_usr;
 GRANT USAGE ON SCHEMA public TO vectis_usr;
 GRANT SELECT, INSERT, UPDATE ON TABLE public.opskeys TO vectis_usr;
 GRANT SELECT, INSERT, DELETE ON TABLE public.tokens TO vectis_usr;
+GRANT SELECT, INSERT, DELETE, UPDATE(seed) ON TABLE public.subjects TO vectis_usr;
 GRANT SELECT, INSERT ON TABLE public.indexes TO vectis_usr;
 SQL
 fi

@@ -297,7 +297,9 @@ Vectis reports PostgreSQL connection or schema errors.
 
 - Database is unreachable.
 - User lacks privileges.
-- `opskeys`, `tokens`, or `indexes` table does not exist.
+- `opskeys`, `tokens`, `indexes`, or `subjects` table does not exist, or the
+  `tokens.subject` column has not been added. Apply the explicit subject keys
+  migration before upgrading an existing installation.
 - Column types or nullability do not match the expected schema.
 - The DSN points to the wrong database.
 
@@ -323,7 +325,15 @@ CREATE TABLE tokens (
     kid VARCHAR(128) NOT NULL,
     hashid VARCHAR(128) NOT NULL,
     data TEXT NOT NULL,
+    subject VARCHAR(128),
     PRIMARY KEY (kid, hashid)
+);
+
+CREATE TABLE subjects (
+    kid VARCHAR(128) NOT NULL,
+    subject VARCHAR(128) NOT NULL,
+    seed TEXT NOT NULL,
+    PRIMARY KEY (kid, subject)
 );
 
 CREATE TABLE indexes (
@@ -339,6 +349,7 @@ CREATE TABLE indexes (
 - For one-time token profiles, grant the runtime role `DELETE` on `tokens`:
   ```sql
   GRANT SELECT, INSERT, DELETE ON TABLE public.tokens TO vectis_usr;
+GRANT SELECT, INSERT, DELETE, UPDATE(seed) ON TABLE public.subjects TO vectis_usr;
   ```
 - Ask the DBA to apply the schema if the table is missing.
 - Restart Vectis after the database is corrected.

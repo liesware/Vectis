@@ -286,6 +286,47 @@ def _profile(key_id, one_time):
     }
 
 
+def token_plaintext_limit_cases(ctx, key_id):
+    profile = _profile(key_id, False)
+    profile["max_plaintext_len"] = 16384
+    set_profiles(ctx, "tokenization_profiles", [profile])
+    reload_config(ctx)
+    plaintexts = ["a" * 16384, "\U0001f600" * 16384]
+    metadata = {"a": "x" * 120}
+    for index, plaintext in enumerate(plaintexts):
+        encoded = ctx.client.post(
+            f"/token/encode/{key_id}",
+            {"ref": f"limit-{index}", "profile": profile["name"],
+             "plaintext": plaintext, "metadata": metadata}, auth=True,
+        )
+        decoded = ctx.client.post(
+            "/token/decode", {"ref": f"limit-{index}", "kid": key_id,
+            "profile": profile["name"], "token": encoded["token"]}, auth=True,
+        )
+        require(decoded.get("plaintext") == plaintext, "maximum plaintext round-trip mismatch")
+        require(decoded.get("metadata") == metadata, "maximum plaintext metadata mismatch")
+    items = [{"ref": f"limit-batch-{index}", "plaintext": plaintext}
+             for index, plaintext in enumerate(plaintexts)]
+    encoded = ctx.client.post(f"/token/encode/batch/{key_id}",
+        {"profile": profile["name"], "items": items}, auth=True)
+    decoded = ctx.client.post("/token/decode/batch", {
+        "kid": key_id, "profile": profile["name"], "items": encoded["items"]}, auth=True)
+    require([item["plaintext"] for item in decoded["items"]] == plaintexts,
+            "maximum plaintext batch round-trip mismatch")
+    for path, body, message in [
+        (f"/token/encode/{key_id}", {"ref": "over-limit", "profile": profile["name"],
+         "plaintext": "a" * 16385}, "plaintext length exceeds tokenization profile maximum"),
+        (f"/token/encode/batch/{key_id}", {"profile": profile["name"], "items":
+         [items[0], {"ref": "over-limit", "plaintext": "a" * 16385}]},
+         "batch item 1 failed: plaintext length exceeds tokenization profile maximum"),
+    ]:
+        status, response = ctx.http.post(path, body, auth=True)
+        require(status == 400 and response.get("error") == message and "items" not in response,
+                "over-limit plaintext must fail before persistence")
+    set_profiles(ctx, "tokenization_profiles", [_profile(key_id, False)])
+    reload_config(ctx)
+
+
 @cases('positive.tokenization')
 def run_tokenization(ctx):
     client = ctx.client
@@ -297,6 +338,7 @@ def run_tokenization(ctx):
     ctx.artifacts["positive.tokenization"] = {"profile": row[1], "row": row, "batch_row": batch_row}
     print_token([row])
     print_token_batch([batch_row])
+    token_plaintext_limit_cases(ctx, key_id)
     return CaseResult(passed=2)
 
 

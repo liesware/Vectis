@@ -672,13 +672,198 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
+  /subject/{kid}:
+    post:
+      tags: [Tokenization]
+      summary: Create a stored subject seed
+      description: >
+        Requires subject-create for this KID, an active key and a matching stored
+        tokenization profile. The name is not stored. Idempotent retries return
+        200 with the same ID and never replace or repair the seed. Caller names are not normalized.
+        The subject identifier is deterministic for the same KID, profile and
+        exact name; the seed is random and is never returned. Retain the returned
+        identifier for subject-bound token operations. No ref is required.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSubjectInput"
+            example:
+              profile: patient-subject-v1
+              subject_name: synthetic-user
+      responses:
+        "200":
+          description: Existing subject; same identifiers returned, seed unchanged
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateSubjectOutput"
+        "201":
+          description: Created subject; seed material is never returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateSubjectOutput"
+              example:
+                kid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                profile: patient-subject-v1
+                subject: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        "400":
+          description: Invalid input, unknown profile or profile not configured as stored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Missing subject-create grant, profile/KID mismatch or key not active
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Operational key not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /subject/{kid}/{subject}:
+    delete:
+      tags: [Tokenization]
+      summary: Atomically delete a stored subject seed and its tokens
+      description: >
+        Requires subject-delete for this KID. Does not require a usable key or
+        decrypt the seed. No request body, profile or JSON content type is required.
+        Does not enforce key lifecycle or require the key to be loaded; authorization
+        and valid path identifiers remain mandatory. All token rows for this KID
+        and subject are purged in the same transaction; no additional token-delete
+        grant is required. Subject-bound writes check the opened seed generation
+        under a database lock and cannot insert after deletion or recreation.
+        Operations that already read data may finish; backups can restore deleted
+        material. No subject list/get endpoint is exposed.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+        - $ref: "#/components/parameters/Subject"
+      responses:
+        "204":
+          description: Subject seed and associated tokens deleted; empty response body
+        "400":
+          description: Invalid KID or subject identifier
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Missing subject-delete grant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Subject not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: subject not found
+        default:
+          $ref: "#/components/responses/Error"
+
+  /token/encode/{kid}/subject/{subject}:
+    post:
+      tags: [Tokenization]
+      summary: Create a subject-bound token
+      description: >
+        Requires token-encode, an active key, a matching stored profile and an
+        existing subject seed. The insert checks the opened seed generation under
+        a database lock. Concurrent deletion returns 404 subject not found;
+        deletion followed by recreation returns 409 subject changed during token
+        operation. Neither failure inserts or returns a token.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+        - $ref: "#/components/parameters/Subject"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenEncodeInput"
+      responses:
+        "200":
+          description: Subject-bound token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubjectTokenEncodeOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /token/encode/batch/{kid}/subject/{subject}:
+    post:
+      tags: [Tokenization]
+      summary: Create an atomic batch of subject-bound tokens
+      description: >
+        Requires token-encode, an active key and a matching stored profile; one
+        existing subject applies to all items. Maximum 128 items. Before inserting,
+        the transaction checks the opened seed generation under a database lock.
+        Concurrent deletion returns 404 subject not found; recreation with a
+        different seed returns 409 subject changed during token operation.
+        Failures insert no tokens and return no partial items.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+        - $ref: "#/components/parameters/Subject"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenEncodeBatchInput"
+      responses:
+        "200":
+          description: Complete subject-bound token batch
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubjectTokenEncodeBatchOutput"
+        default:
+          $ref: "#/components/responses/Error"
+
   /token/encode/{kid}:
     post:
       tags: [Tokenization]
       summary: Create a reversible random token
       description: >
         Creates a random visible token using a tokenization profile loaded from
-        signed config. The database stores only kid, hashid, and encrypted data.
+        signed config in none subject mode. The database stores kid, hashid,
+        encrypted data and a null subject association.
+        The profile allows up to 16,384 Unicode plaintext characters; the
+        encrypted storage envelope is limited to 131,072 Base64 characters.
         The key must be active. The client ref is echoed in the response.
       security:
         - ApiKeyAuth: []
@@ -708,7 +893,7 @@ paths:
       summary: Create reversible random tokens as an all-or-nothing batch
       description: >
         Creates random visible tokens using one tokenization profile loaded from
-        signed config. The database stores only kid, hashid, and encrypted data.
+        signed config in none subject mode. The subject column remains null.
         Each item must include a unique client ref, which is echoed in the
         corresponding response item. The key must be active. All token rows are
         inserted in one storage transaction; any item failure returns one error
@@ -763,6 +948,47 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
+  /token/delete:
+    post:
+      tags: [Tokenization]
+      summary: Delete a stored token without decrypting its payload
+      description: >
+        Requires the independent token-delete grant for the request KID.
+        Deletion is permitted in any key lifecycle state, so token rows can be
+        purged even after the key is disabled or destroyed. Deletes reusable or
+        one-time tokens after computing their HMAC hashid, without reading the
+        envelope. Success is
+        returned only after commit. Missing, deleted, or consumed tokens return
+        404 token not found. An already-running reusable decode may complete;
+        older backups can restore deleted tokens.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenDeleteInput"
+      responses:
+        "200":
+          description: The token row was deleted and committed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenDeleteOutput"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/RequestBodyTooLarge"
+        default:
+          $ref: "#/components/responses/Error"
+
   /token/decode/batch:
     post:
       tags: [Tokenization]
@@ -772,7 +998,10 @@ paths:
         Each item must include a unique client ref, which is echoed in the
         corresponding response item. Decode permits active and retired keys. If
         any item fails, the response is one error and no partial items are
-        returned.
+        returned. Incremental storage reads have a fixed 5 MiB envelope budget,
+        counting each requested occurrence, including repeated reusable tokens.
+        Exceeding it returns 413 before decrypt or one-time consumption. Accepted
+        batches return complete results without an additional response-size cap.
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -789,7 +1018,18 @@ paths:
               schema:
                 $ref: "#/components/schemas/TokenDecodeBatchOutput"
         "413":
-          $ref: "#/components/responses/RequestBodyTooLarge"
+          description: Request body exceeds 2 MiB or stored token envelopes exceed the 5 MiB batch budget
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                request:
+                  value:
+                    error: request body exceeds maximum allowed size
+                envelopes:
+                  value:
+                    error: token decode batch exceeds maximum allowed envelope size
         default:
           $ref: "#/components/responses/Error"
 
@@ -1259,6 +1499,12 @@ components:
       name: X-API-Key
 
   parameters:
+    Subject:
+      name: subject
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/Subject"
     Kid:
       name: kid
       in: path
@@ -2236,6 +2482,56 @@ components:
                 $ref: "#/components/schemas/TextField"
                 example: "123456"
 
+    Subject:
+      type: string
+      minLength: 64
+      maxLength: 64
+      pattern: "^[0-9a-f]{64}$"
+      description: Profile-scoped HMAC identifier returned by subject creation. Not a user authorization credential.
+
+    SubjectMode:
+      type: string
+      enum: [none, stored]
+      default: none
+      description: Signed tokenization profile policy; never supplied in an operation request.
+
+    CreateSubjectInput:
+      type: object
+      additionalProperties: false
+      required: [profile, subject_name]
+      properties:
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+          maxLength: 128
+        subject_name:
+          $ref: "#/components/schemas/AadSafeText"
+          maxLength: 128
+          description: Not whitespace-only; no controls, semicolon or equals. No trimming or Unicode normalization. Not stored or logged.
+
+    CreateSubjectOutput:
+      type: object
+      additionalProperties: false
+      required: [kid, profile, subject]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+        subject:
+          $ref: "#/components/schemas/Subject"
+
+    SubjectTokenEncodeOutput:
+      allOf:
+        - $ref: "#/components/schemas/TokenEncodeOutput"
+        - type: object
+          required: [subject]
+
+    SubjectTokenEncodeBatchOutput:
+      allOf:
+        - $ref: "#/components/schemas/TokenEncodeBatchOutput"
+        - type: object
+          required: [subject]
+
     TokenEncodeInput:
       type: object
       additionalProperties: false
@@ -2248,6 +2544,8 @@ components:
           example: patient-id-token-v1
         plaintext:
           $ref: "#/components/schemas/TextField"
+          maxLength: 16384
+          description: Unicode character count must also fit the selected signed profile maximum.
           example: "123456"
         metadata:
           type: object
@@ -2263,6 +2561,9 @@ components:
       type: object
       required: [ref, kid, profile, token]
       properties:
+        subject:
+          $ref: "#/components/schemas/Subject"
+          description: Required for stored profiles and absent for legacy none profiles.
         ref:
           $ref: "#/components/schemas/ClientRef"
         kid:
@@ -2284,6 +2585,8 @@ components:
           $ref: "#/components/schemas/ClientRef"
         plaintext:
           $ref: "#/components/schemas/TextField"
+          maxLength: 16384
+          description: Unicode character count must also fit the selected signed profile maximum.
           example: "123456"
         metadata:
           type: object
@@ -2325,6 +2628,9 @@ components:
       type: object
       required: [kid, profile, items]
       properties:
+        subject:
+          $ref: "#/components/schemas/Subject"
+          description: Required for stored profiles and absent for legacy none profiles.
         kid:
           $ref: "#/components/schemas/Kid"
         profile:
@@ -2340,6 +2646,9 @@ components:
       additionalProperties: false
       required: [ref, kid, profile, token]
       properties:
+        subject:
+          $ref: "#/components/schemas/Subject"
+          description: Required for stored profiles and absent for legacy none profiles.
         ref:
           $ref: "#/components/schemas/ClientRef"
         kid:
@@ -2351,6 +2660,34 @@ components:
           $ref: "#/components/schemas/TextField"
           description: Visible token in the form <token_prefix>_<base64url-no-pad random bytes>. Decode validates the configured prefix (capped at 16 characters) and decoded byte length before lookup.
           example: tok_patient_vGqyEeXKcKz5QK1jwBQTyQ
+
+    TokenDeleteInput:
+      type: object
+      additionalProperties: false
+      required: [ref, kid, profile, token]
+      properties:
+        subject:
+          $ref: "#/components/schemas/Subject"
+          description: Required for stored profiles and absent for legacy none profiles.
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          $ref: "#/components/schemas/AadSafeText"
+        token:
+          $ref: "#/components/schemas/TextField"
+
+    TokenDeleteOutput:
+      type: object
+      additionalProperties: false
+      required: [ref, deleted]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        deleted:
+          type: boolean
+          const: true
 
     TokenDecodeOutput:
       type: object
@@ -2384,6 +2721,9 @@ components:
       additionalProperties: false
       required: [kid, profile, items]
       properties:
+        subject:
+          $ref: "#/components/schemas/Subject"
+          description: Required for stored profiles and absent for legacy none profiles.
         kid:
           $ref: "#/components/schemas/Kid"
         profile:

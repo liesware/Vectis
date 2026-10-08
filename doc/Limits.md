@@ -26,31 +26,31 @@ byte. KiB and MiB are binary multiples.
 |---|---|---:|---|---|---|---|
 | HTTP | Request body | `2 * 1024 * 1024 = 2,097,152` (2 MiB) | bytes | Explicit | Axum rejects larger bodies before JSON parsing and application processing | [`INTERNAL_HTTP_MAX_SIZE`](../src/core/config.rs#L33), [`DefaultBodyLimit`](../src/io/http/mod.rs#L660) |
 | HTTP | Response body | No global maximum | bytes | No dedicated limit | Endpoint output and available resources are the only bounds | [`router`](../src/io/http/mod.rs#L595) |
-| Runtime | Graceful shutdown | `30` | seconds | Explicit | HTTP and HTTPS use the same bounded shutdown handle | [`INTERNAL_HTTP_GRACE_SEC`](../src/core/config.rs#L34), [`http_grace_period`](../src/io/http/app.rs#L265) |
-| Runtime | Remote peer and final-app request timeout | `30` | seconds | Explicit | The shared runtime `reqwest` client applies one deadline | [`INTERNAL_HTTP_TIMEOUT_SEC`](../src/core/config.rs#L35), [`runtime_http_timeout`](../src/core/http_client.rs#L68) |
+| Runtime | Graceful shutdown | `30` | seconds | Explicit | HTTP and HTTPS use the same bounded shutdown handle | [`INTERNAL_HTTP_GRACE_SEC`](../src/core/config.rs#L35), [`http_grace_period`](../src/io/http/app.rs#L265) |
+| Runtime | Remote peer and final-app request timeout | `30` | seconds | Explicit | The shared runtime `reqwest` client applies one deadline | [`INTERNAL_HTTP_TIMEOUT_SEC`](../src/core/config.rs#L36), [`runtime_http_timeout`](../src/core/http_client.rs#L68) |
 | Runtime | Concurrent cryptographic operations | One less than the number of CPU cores by default (minimum 1); any integer from `1` to the tokio semaphore maximum is accepted | operations | Configurable | A global semaphore bounds crypto blocking tasks and each permit is held for the whole blocking job; requests over the limit are rejected immediately with `429`. `VECTIS_MAX_CONCURRENT_CRYPTO` overrides the default; config reload runs unbounded and is not throttled; not installed for CLI/tests (unbounded) | [`max_concurrent_crypto`](../src/core/config.rs#L96), [`spawn_blocking_crypto`](../src/core/blocking.rs#L32) |
 | CLI | API request timeout | `30` by default; any integer greater than zero is accepted | seconds | Explicit | `VECTIS_TIMEOUT_SECONDS` overrides the default; there is no explicit upper bound | [`DEFAULT_TIMEOUT_SECONDS`](../src/io/cli/http.rs#L17), [`CliHttpClient::from_env`](../src/io/cli/http.rs#L911) |
 | CLI | JSON input file | `2,097,152` (2 MiB) | bytes | Explicit | `--file` uses the HTTP body limit before parsing JSON | [`parse_json_source`](../src/io/cli/http.rs#L1120) |
 | CLI | Config-editor public-key fetch timeout | `30` | seconds | Explicit | A separate fixed client timeout is used by the local editor | [`DEFAULT_TIMEOUT_SECONDS`](../src/io/cli/config_editor.rs#L15), [`fetch_public_keys`](../src/io/cli/config_editor.rs#L1638) |
-| Time | Complete time-attestation query | `5` | seconds | Explicit | One timeout encloses the concurrent NTS and Roughtime queries | [`INTERNAL_TIME_ATTEST_TIMEOUT_SEC`](../src/core/config.rs#L36), [`attest`](../src/io/http/time.rs#L73) |
-| Time | Time-attestation rate | At most `1` request per `1,000,000` microseconds | requests | Explicit | A process-local admission slot returns `429` inside the interval | [`INTERNAL_TIME_ATTEST_MIN_INTERVAL_US`](../src/core/config.rs#L37), [`admit`](../src/io/http/time.rs#L15) |
-| Time | Roughtime response buffer | `4,096` (4 KiB) | bytes | Explicit | UDP receive buffer is allocated at this size | [`INTERNAL_TIME_ATTEST_MAX_ROUGHTIME_RESPONSE_BYTES`](../src/core/config.rs#L38), [`query_roughtime`](../src/core/time_attestation.rs#L334) |
+| Time | Complete time-attestation query | `5` | seconds | Explicit | One timeout encloses the concurrent NTS and Roughtime queries | [`INTERNAL_TIME_ATTEST_TIMEOUT_SEC`](../src/core/config.rs#L37), [`attest`](../src/io/http/time.rs#L73) |
+| Time | Time-attestation rate | At most `1` request per `1,000,000` microseconds | requests | Explicit | A process-local admission slot returns `429` inside the interval | [`INTERNAL_TIME_ATTEST_MIN_INTERVAL_US`](../src/core/config.rs#L38), [`admit`](../src/io/http/time.rs#L15) |
+| Time | Roughtime response buffer | `4,096` (4 KiB) | bytes | Explicit | UDP receive buffer is allocated at this size | [`INTERNAL_TIME_ATTEST_MAX_ROUGHTIME_RESPONSE_BYTES`](../src/core/config.rs#L39), [`query_roughtime`](../src/core/time_attestation.rs#L334) |
 | Time | Clock skew, round trip, and Roughtime radius policy | `1..=60,000`; defaults are `1,000`, `2,000`, and `2,000` respectively | milliseconds | Explicit | Signed time configuration selects each threshold inside a directly validated range | [`DEFAULT_MAX_CLOCK_SKEW_MS`, `DEFAULT_MAX_ROUND_TRIP_MS`, `DEFAULT_MAX_ROUGHTIME_RADIUS_MS`](../src/core/time_attestation.rs#L13), [`validate_effective_config`](../src/core/time_attestation.rs#L109) |
 
 ## Configuration And Files
 
 | Area | Aspect | Current limit | Unit | Kind | Enforcement | Source |
 |---|---|---:|---|---|---|---|
-| Config | Signed config content | `8 * 1024 * 1024 = 8,388,608` (8 MiB) | bytes | Explicit | Bounded read occurs before config parsing and validation | [`CONFIG_FILE_MAX_SIZE_BYTES`](../src/core/config.rs#L54), [`read_config_file`](../src/core/config_file.rs#L132) |
-| Config | Config signature file | `1,048,576` (1 MiB) | bytes | Explicit | Bounded read occurs before signature parsing | [`CONFIG_SIGN_FILE_MAX_SIZE_BYTES`](../src/core/config.rs#L55), [`read_config_signature_file`](../src/core/config_file.rs#L136) |
-| Init | Encrypted init file | `65,536` (64 KiB) | bytes | Explicit | Generation and reads reject a larger artifact | [`INIT_KEYS_FILE_MAX_SIZE_BYTES`](../src/core/config.rs#L56), [`validate_init_encrypted_artifact_encoding`](../src/ops/init.rs#L191) |
-| Init | Init public-key file | `65,536` (64 KiB) | bytes | Explicit | Generation and reads reject a larger artifact | [`INIT_PUBLIC_KEYS_FILE_MAX_SIZE_BYTES`](../src/core/config.rs#L57), [`validate_init_public_artifact_encoding`](../src/ops/init.rs#L214) |
-| Init | Unseal-key file | `1,024` (1 KiB) file; key content must be exactly `64` hex characters | bytes / hex characters | Explicit | File read is bounded, then a 32-byte symmetric key is required | [`UNSEAL_KEY_FILE_MAX_SIZE_BYTES`](../src/core/config.rs#L58), [`read_file_unseal_key`](../src/core/unseal.rs#L43) |
-| Process config | `.env` file | `65,536` (64 KiB) | bytes | Explicit | Bounded read occurs before line parsing | [`ENV_FILE_MAX_SIZE_BYTES`](../src/core/config.rs#L59), [`load_env_file`](../src/core/config.rs#L482) |
-| SLH-DSA | Encrypted private-key file | `65,536` (64 KiB) | bytes | Explicit | File content is checked before decoding | [`SLH_DSA_PRIVATE_FILE_MAX_SIZE_BYTES`](../src/core/config.rs#L60), [`validate_private_key_file_encoding`](../src/ops/slh_dsa.rs#L264) |
-| SLH-DSA | Public-key file | `65,536` (64 KiB) | bytes | Explicit | File content is checked before decoding | [`SLH_DSA_PUBLIC_FILE_MAX_SIZE_BYTES`](../src/core/config.rs#L61), [`validate_public_key_file_encoding`](../src/ops/slh_dsa.rs#L286) |
-| SLH-DSA | Signature file | `131,072` (128 KiB) | bytes | Explicit | Signature text is bounded before parsing | [`SLH_DSA_SIGNATURE_FILE_MAX_SIZE_BYTES`](../src/core/config.rs#L62), [`split_compact_signature`](../src/ops/slh_dsa.rs#L503) |
-| Config | Routes, remote routes, permissions, and capability profiles | No element-count maximum; the 8 MiB config-file bound is the enclosing limit | items | Effective | The complete signed config is bounded, then each element is validated | [`CONFIG_FILE_MAX_SIZE_BYTES`](../src/core/config.rs#L54), [`validate_config_content`](../src/core/config_file.rs#L102) |
+| Config | Signed config content | `8 * 1024 * 1024 = 8,388,608` (8 MiB) | bytes | Explicit | Bounded read occurs before config parsing and validation | [`CONFIG_FILE_MAX_SIZE_BYTES`](../src/core/config.rs#L56), [`read_config_file`](../src/core/config_file.rs#L132) |
+| Config | Config signature file | `1,048,576` (1 MiB) | bytes | Explicit | Bounded read occurs before signature parsing | [`CONFIG_SIGN_FILE_MAX_SIZE_BYTES`](../src/core/config.rs#L57), [`read_config_signature_file`](../src/core/config_file.rs#L136) |
+| Init | Encrypted init file | `65,536` (64 KiB) | bytes | Explicit | Generation and reads reject a larger artifact | [`INIT_KEYS_FILE_MAX_SIZE_BYTES`](../src/core/config.rs#L58), [`validate_init_encrypted_artifact_encoding`](../src/ops/init.rs#L191) |
+| Init | Init public-key file | `65,536` (64 KiB) | bytes | Explicit | Generation and reads reject a larger artifact | [`INIT_PUBLIC_KEYS_FILE_MAX_SIZE_BYTES`](../src/core/config.rs#L59), [`validate_init_public_artifact_encoding`](../src/ops/init.rs#L214) |
+| Init | Unseal-key file | `1,024` (1 KiB) file; key content must be exactly `64` hex characters | bytes / hex characters | Explicit | File read is bounded, then a 32-byte symmetric key is required | [`UNSEAL_KEY_FILE_MAX_SIZE_BYTES`](../src/core/config.rs#L60), [`read_file_unseal_key`](../src/core/unseal.rs#L43) |
+| Process config | `.env` file | `65,536` (64 KiB) | bytes | Explicit | Bounded read occurs before line parsing | [`ENV_FILE_MAX_SIZE_BYTES`](../src/core/config.rs#L61), [`load_env_file`](../src/core/config.rs#L482) |
+| SLH-DSA | Encrypted private-key file | `65,536` (64 KiB) | bytes | Explicit | File content is checked before decoding | [`SLH_DSA_PRIVATE_FILE_MAX_SIZE_BYTES`](../src/core/config.rs#L62), [`validate_private_key_file_encoding`](../src/ops/slh_dsa.rs#L264) |
+| SLH-DSA | Public-key file | `65,536` (64 KiB) | bytes | Explicit | File content is checked before decoding | [`SLH_DSA_PUBLIC_FILE_MAX_SIZE_BYTES`](../src/core/config.rs#L63), [`validate_public_key_file_encoding`](../src/ops/slh_dsa.rs#L286) |
+| SLH-DSA | Signature file | `131,072` (128 KiB) | bytes | Explicit | Signature text is bounded before parsing | [`SLH_DSA_SIGNATURE_FILE_MAX_SIZE_BYTES`](../src/core/config.rs#L64), [`split_compact_signature`](../src/ops/slh_dsa.rs#L503) |
+| Config | Routes, remote routes, permissions, and capability profiles | No element-count maximum; the 8 MiB config-file bound is the enclosing limit | items | Effective | The complete signed config is bounded, then each element is validated | [`CONFIG_FILE_MAX_SIZE_BYTES`](../src/core/config.rs#L56), [`validate_config_content`](../src/core/config_file.rs#L102) |
 
 ## Common Fields
 
@@ -59,13 +59,13 @@ byte. KiB and MiB are binary multiples.
 | Identity | Operational KID | Exactly `64` | hex characters | Explicit | KIDs are `BLAKE2b(256)` outputs | [`INTERNAL_KEYS_HASH`](../src/core/config.rs#L12), [`KeyId::parse`](../src/ops/keys.rs#L279) |
 | Authentication | API key and stored API-key hash | Exactly `64` | hex characters | Explicit | Both use the internal 256-bit hash representation | [`validate_hash_hex_field`](../src/core/validation.rs#L488), [`authorize_api_key`](../src/io/http/auth.rs#L46), [`app_config`](../src/core/config.rs#L127) |
 | Correlation | `ref` | `1..=128` | characters | Explicit | Empty/control-character values are rejected before the character bound | [`INTERNAL_REF_MAX_CHARS`](../src/core/config.rs#L32), [`validate_ref`](../src/core/validation.rs#L393) |
-| Config | Config, client, route, and profile names | `1..=128` | characters | Explicit | Common config-name validation is reused; AAD-bound names also reject `;` and `=` | [`CONFIG_NAME_MAX_CHARS`](../src/core/config.rs#L41), [`validate_config_name`](../src/core/validation.rs#L328), [`validate_aad_config_name`](../src/core/validation.rs#L340) |
+| Config | Config, client, route, and profile names | `1..=128` | characters | Explicit | Common config-name validation is reused; AAD-bound names also reject `;` and `=` | [`CONFIG_NAME_MAX_CHARS`](../src/core/config.rs#L43), [`validate_config_name`](../src/core/validation.rs#L328), [`validate_aad_config_name`](../src/core/validation.rs#L340) |
 | Lifecycle | Update reason | `1..=128` | characters | Explicit | Lifecycle input reuses the common bounded-text policy | [`INTERNAL_REF_MAX_CHARS`](../src/core/config.rs#L32), [`parse_update_lifecycle_input`](../src/ops/keys.rs#L743) |
 | JSON | Canonical JSON traversal depth | `128` | nested traversal levels | Explicit | Values deeper than the bound are rejected before canonical serialization | [`MAX_JSON_DEPTH`](../src/core/validation.rs#L21), [`validate_canonical_json_value_at_depth`](../src/core/validation.rs#L27) |
 | Errors | Untrusted diagnostic detail | `256` | characters | Explicit | Control characters are removed and the remaining detail is truncated | [`UNTRUSTED_ERROR_DETAIL_MAX_CHARS`](../src/error.rs#L6), [`sanitize_untrusted_error_detail`](../src/error.rs#L76) |
 | HTTP errors | Public `error` value | `256` | characters | Explicit | HTTP error text is sanitized and truncated before serialization | [`MAX_ERROR_MESSAGE_CHARS`](../src/io/http/error.rs#L9), [`sanitize_error_message`](../src/io/http/error.rs#L24) |
 | HTTP | `X-Request-Id` | Exactly `32` | hex characters | Explicit | An 8-byte process nonce and an 8-byte counter are hex encoded per request | [`next_request_id`](../src/io/http/middleware.rs#L79) |
-| Labels | FPE tweak, MAC, commitment, and sharing context | `1..=128` | characters | Explicit | Structured `key=value` labels require unique keys | [`validate_labels`](../src/core/validation.rs#L345), [`FPE_TWEAK_AAD_MAX_CHARS`](../src/core/config.rs#L42), [`MAC_CONTEXT_MAX_CHARS`](../src/core/mac.rs#L12), [`COMMITMENT_CONTEXT_MAX_CHARS`](../src/core/commitments.rs#L14), [`SHARING_CONTEXT_MAX_CHARS`](../src/core/sharing.rs#L14) |
+| Labels | FPE tweak, MAC, commitment, and sharing context | `1..=128` | characters | Explicit | Structured `key=value` labels require unique keys | [`validate_labels`](../src/core/validation.rs#L345), [`FPE_TWEAK_AAD_MAX_CHARS`](../src/core/config.rs#L44), [`MAC_CONTEXT_MAX_CHARS`](../src/core/mac.rs#L12), [`COMMITMENT_CONTEXT_MAX_CHARS`](../src/core/commitments.rs#L14), [`SHARING_CONTEXT_MAX_CHARS`](../src/core/sharing.rs#L14) |
 | AAD | Generic AAD key/value | No dedicated length maximum; the enclosing request, file, profile, or storage limit applies | characters | No dedicated limit | Values must be non-empty, contain no controls, `;`, or `=`; keys also have a restricted ASCII grammar | [`validate_aad_key`](../src/core/validation.rs#L92), [`validate_aad_value`](../src/core/validation.rs#L87) |
 | Network config | TCP port | `1..=65,535` | integer | Explicit | Values parse as `u16` and zero is rejected | [`validate_host_port`](../src/core/validation.rs#L407) |
 
@@ -91,7 +91,7 @@ values must also be unique within the request.
 | FPE | Plaintext/ciphertext length | Profile range inside `6..=1,024` | characters | Profile-controlled | Input characters must belong to the selected alphabet and fit its signed bounds | [`FPE_VALUE_MIN_LEN`, `FPE_VALUE_MAX_LEN`](../src/core/fpe.rs#L13), [`parse_fpe_value_digits`](../src/core/fpe.rs#L229) |
 | FPE | Alphabet size | `2..=65,536`, with unique characters | characters | Explicit | Alphabet validation computes the radix | [`validate_fpe_alphabet`](../src/core/fpe.rs#L280) |
 | FPE | Minimum domain size | At least `1,000,000` possible values at the profile minimum length | values | Effective | The alphabet radix raised to `min_len` must reach the FF1 domain floor | [`validate_fpe_lengths`](../src/core/fpe.rs#L314), [`fpe_domain_is_large_enough`](../src/core/fpe.rs#L357) |
-| Tokenization | Plaintext length | Profile maximum inside `1..=1,024` | characters | Profile-controlled | Encode checks the selected profile before storage | [`TOKEN_PLAINTEXT_MAX_LEN`](../src/core/tokenization.rs#L17), [`prepare_encode`](../src/ops/tokenization.rs#L392) |
+| Tokenization | Plaintext length | Profile maximum inside `1..=16,384` | Unicode characters | Profile-controlled | Single and batch encode check the selected profile before storage | [`TOKEN_PLAINTEXT_MAX_LEN`](../src/core/tokenization.rs#L17), [`prepare_encode`](../src/ops/tokenization.rs#L392) |
 | Tokenization | Random token component | Minimum `32`; no explicit maximum | bytes | No dedicated limit | Signed profile validation enforces only the minimum | [`TOKEN_LEN_MIN_BYTES`](../src/core/tokenization.rs#L16), [`validate_token_lengths`](../src/core/tokenization.rs#L282) |
 | Tokenization | Token prefix | `1..=16` | characters | Explicit | Whitespace, `;`, and `=` are also rejected | [`TOKEN_PREFIX_MAX_CHARS`](../src/core/tokenization.rs#L19), [`validate_token_prefix`](../src/core/tokenization.rs#L261) |
 | Tokenization | Metadata | `128` | characters in compact serialized JSON | Explicit | Metadata is canonical-key validated, compact-serialized, then counted | [`TOKEN_METADATA_MAX_CHARS`](../src/core/tokenization.rs#L18), [`validate_metadata`](../src/ops/tokenization.rs#L639) |
@@ -125,14 +125,38 @@ artifact remains below the 2 MiB request limit when submitted to
 
 ## Storage
 
+### Subject Keys
+
+| Area | Aspect | Current limit | Unit | Kind | Enforcement | Source |
+| --- | --- | --- | --- | --- | --- | --- |
+| Subjects | Name | `1..=128`, not whitespace-only | Unicode characters | Explicit | Reject controls, `;` and `=`; no trimming or normalization | [`SUBJECT_NAME_MAX_CHARS`](../src/core/subjects.rs#L8), [`validate_subject_name`](../src/core/subjects.rs#L26) |
+| Subjects | Identifier | Exactly `64` lowercase ASCII hex | characters | Explicit | HTTP, operations and storage validation | [`SUBJECT_ID_HEX_CHARS`](../src/core/subjects.rs#L9), [`validate_subject`](../src/core/subjects.rs#L36) |
+| Subjects | Seed | Exactly `32` | bytes | Explicit | CSPRNG and authenticated payload validation; 64 hex characters in internal JSON | [`SUBJECT_SEED_BYTES`](../src/core/subjects.rs#L10), [`open_seed`](../src/core/subjects.rs#L137) |
+| Subjects | Seed envelope | `2,048` ASCII characters, three standard Base64 segments | characters | Explicit | Bound before decoding; cipher-specific nonce, complete tag and exact AAD | [`SUBJECT_SEED_ENVELOPE_MAX_CHARS`](../src/core/subjects.rs#L11), [`validate_seed_envelope`](../src/core/subjects.rs#L50) |
+| Tokenization | Subject mode | `none` or `stored` | enum | Profile-controlled | Signed policy; incompatible paths/bodies rejected, no fallback | [`SubjectMode`](../src/core/tokenization.rs#L24), [`validate_subject_mode`](../src/core/tokenization.rs#L177) |
+| Storage | Subjects | No row-count maximum | rows | No dedicated limit | Database resources bound storage; no seed cache | [`StorageState`](../src/core/storage/mod.rs#L122) |
+
+Profiles keep their existing 128-character AAD-safe bound. Token `subject` is
+nullable only for legacy rows. Subject-aware requests retain all existing token
+limits and the shared HTTP/batch limits. Subject deletion atomically purges the
+seed and associated token rows. Subject-bound inserts verify the opened seed
+generation under a database lock; stale writes are rejected, never downgraded
+to legacy rows. Older orphan rows are not automatically cleaned up.
+
 | Area | Aspect | Current limit | Unit | Kind | Enforcement | Source |
 |---|---|---:|---|---|---|---|
-| Storage | Encrypted key, properties, and token envelopes | `32,768` | base64-envelope characters | Explicit | Every value is validated before write and after read | [`STORAGE_ENVELOPE_MAX_CHARS`](../src/core/config.rs#L39), [`validate_storage_envelope`](../src/core/storage/mod.rs#L275) |
+| Storage | Encrypted key and properties envelopes | `32,768` | base64-envelope characters | Explicit | Every value is validated before write and after read | [`STORAGE_ENVELOPE_MAX_CHARS`](../src/core/config.rs#L40), [`validate_storage_envelope`](../src/core/storage/mod.rs#L333) |
+| Storage | Encrypted token envelopes | `131,072` | base64-envelope characters | Explicit | Single and batch storage and token decrypt validate the complete envelope | [`STORAGE_TOKEN_ENVELOPE_MAX_CHARS`](../src/core/config.rs#L41), [`validate_storage_envelope`](../src/core/storage/mod.rs#L333) |
+| Tokenization | Decode batch envelope budget | `5,242,880` (5 MiB) | stored UTF-8 bytes | Explicit | Incremental reads count every requested occurrence; excess returns `413` before decrypt or one-time consumption. Accepted results are complete; this is not a response-size or total-heap cap | [`TOKEN_DECODE_BATCH_MAX_ENVELOPE_BYTES`](../src/core/config.rs#L42), [`TokenBatchReadBudget`](../src/core/storage/mod.rs#L11) |
 | Storage | KID and token hash ID | Exactly `64` | hex characters | Explicit | Storage validation requires the internal 256-bit hash encoding | [`validate_storage_kid`](../src/core/storage/mod.rs#L271), [`validate_token_hashid`](../src/core/storage/mod.rs#L295) |
-| Storage | Index digest | At most `128` | hex characters | Explicit | Storage rejects non-hex or longer values | [`STORAGE_INDEX_DIGEST_MAX_CHARS`](../src/core/config.rs#L40), [`validate_index_digest`](../src/core/storage/mod.rs#L323) |
+| Storage | Index digest | At most `128` | hex characters | Explicit | Storage rejects non-hex or longer values | [`STORAGE_INDEX_DIGEST_MAX_CHARS`](../src/core/config.rs#L42), [`validate_index_digest`](../src/core/storage/mod.rs#L323) |
 | Storage | Operational keys, tokens, and indexes | No row-count maximum | rows | No dedicated limit | Database capacity and operational resources are the bounds | [`StorageState`](../src/core/storage/mod.rs#L39) |
 | Runtime | `keys reload` | No record-count or work-budget maximum; work is proportional to stored operational-key rows | rows / decryptions | No dedicated limit | Reload lists and validates/decrypts the complete key set | [`load_keys_db_state`](../src/ops/keys.rs#L769) |
 | HTTP | List responses and stored collections | No pagination or global response-size maximum | items / bytes | No dedicated limit | Handlers serialize the complete selected collection | [`list_keys_from_state`](../src/ops/keys.rs#L375), [`list_endpoint`](../src/io/http/keys.rs#L132) |
+
+Token profiles retain their configured maximum. To enable 16,384 characters,
+set `max_plaintext_len` to `16384`, sign the configuration, and reload it.
+The HTTP body limit of 2 MiB applies to the entire batch, not each item.
 
 SQLite declarations use `VARCHAR(128)` and `VARCHAR(10240)`, but SQLite does
 not enforce those declared lengths. Vectis' storage validators above are the
@@ -144,11 +168,11 @@ portable enforcement shared with PostgreSQL. See the
 
 | Area | Aspect | Current limit | Unit | Kind | Enforcement | Source |
 |---|---|---:|---|---|---|---|
-| Audit | JSONL record or checkpoint | `16 * 1024 = 16,384` (16 KiB) | bytes | Explicit | Serialized records and verifier input are bounded | [`AUDIT_CHAIN_RECORD_MAX_BYTES`](../src/core/config.rs#L63), [`write_event`](../src/core/audit_chain.rs#L725), [`verify_file_with_verifier`](../src/core/audit_chain.rs#L304) |
-| Audit | Event, outcome, actor, fingerprints, KIDs, action, reason, and request ID | `256` each | characters | Explicit | Audit fields are sanitized and truncated before canonicalization | [`AUDIT_CHAIN_REASON_MAX_CHARS`](../src/core/config.rs#L64), [`write_event`](../src/core/audit_chain.rs#L725) |
-| Audit | Writer channel | `1,024` | commands | Explicit | The channel is bounded; record submission fails closed when unavailable or full, while barriers await capacity | [`AUDIT_CHAIN_CHANNEL_CAPACITY`](../src/core/config.rs#L65), [`AuditRuntime::start`](../src/core/audit_chain.rs#L439), [`AuditRuntime::record`](../src/core/audit_chain.rs#L485) |
-| Audit | Normal group-commit drain | `256` | commands per group | Explicit | The writer stops non-shutdown draining at the bound | [`AUDIT_GROUP_COMMIT_MAX_COMMANDS`](../src/core/config.rs#L66), [`writer_loop_with_policy`](../src/core/audit_chain.rs#L624) |
-| Audit | Signed checkpoint interval | `10,000` | event records | Explicit | A checkpoint becomes due at the event threshold and on orderly shutdown | [`AUDIT_CHECKPOINT_EVENT_COUNT`](../src/core/config.rs#L67), [`CheckpointPolicy::default`](../src/core/audit_chain.rs#L189) |
+| Audit | JSONL record or checkpoint | `16 * 1024 = 16,384` (16 KiB) | bytes | Explicit | Serialized records and verifier input are bounded | [`AUDIT_CHAIN_RECORD_MAX_BYTES`](../src/core/config.rs#L65), [`write_event`](../src/core/audit_chain.rs#L725), [`verify_file_with_verifier`](../src/core/audit_chain.rs#L304) |
+| Audit | Event, outcome, actor, fingerprints, KIDs, action, reason, and request ID | `256` each | characters | Explicit | Audit fields are sanitized and truncated before canonicalization | [`AUDIT_CHAIN_REASON_MAX_CHARS`](../src/core/config.rs#L66), [`write_event`](../src/core/audit_chain.rs#L725) |
+| Audit | Writer channel | `1,024` | commands | Explicit | The channel is bounded; record submission fails closed when unavailable or full, while barriers await capacity | [`AUDIT_CHAIN_CHANNEL_CAPACITY`](../src/core/config.rs#L67), [`AuditRuntime::start`](../src/core/audit_chain.rs#L439), [`AuditRuntime::record`](../src/core/audit_chain.rs#L485) |
+| Audit | Normal group-commit drain | `256` | commands per group | Explicit | The writer stops non-shutdown draining at the bound | [`AUDIT_GROUP_COMMIT_MAX_COMMANDS`](../src/core/config.rs#L68), [`writer_loop_with_policy`](../src/core/audit_chain.rs#L624) |
+| Audit | Signed checkpoint interval | `10,000` | event records | Explicit | A checkpoint becomes due at the event threshold and on orderly shutdown | [`AUDIT_CHECKPOINT_EVENT_COUNT`](../src/core/config.rs#L69), [`CheckpointPolicy::default`](../src/core/audit_chain.rs#L189) |
 
 ## Cryptographic Encoding Contracts
 

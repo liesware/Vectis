@@ -15,6 +15,7 @@ axum-server = { version = "0.7.2", features = ["tls-rustls"] }
 base64 = "0.22.1"
 botan = { version = "0.13.0", features = ["vendored"] }
 hex = "0.4.3"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 rpassword = "7.5.4"
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
 rkik-nts = "1.2"

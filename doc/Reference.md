@@ -328,9 +328,10 @@ Operational keys have a lifecycle status:
 
 - `active`: normal use.
 - `disabled`: blocked for all cryptographic operations.
-- `retired`: allowed only for decrypt and verification; blocked for new
+- `retired`: allowed for decrypt, verification, and explicit token deletion; blocked for new
   encryption, signing, sending, and `/pub`.
-- `compromised`: blocked for all cryptographic operations.
+- `compromised`: blocked for production and recovery; explicit token deletion
+  remains permitted with `token-delete`.
 - `destroyed`: logically destroyed; administrative metadata is retained, but
   cryptographic operations are blocked.
 
@@ -486,6 +487,7 @@ Supported actions:
 - `fpe-decrypt`;
 - `token-encode`;
 - `token-decode`;
+- `token-delete` (explicit token deletion; permitted in any lifecycle state);
 - `mac-create`;
 - `mac-verify`;
 - `index-create`;
@@ -578,8 +580,36 @@ need stable-looking tokens while storing the original value encrypted:
 
 - `POST /token/encode/{kid}`;
 - `POST /token/decode`.
+- `POST /token/delete` (independent `token-delete` permission).
 
 Tokenization profiles live in signed config under `tokenization_profiles`.
+
+Profiles default to `subject_mode: none`; new `stored` profiles use authenticated
+32-byte random seeds in `subjects(kid, subject, seed)` and request-scoped derived
+keys. `POST /subject/{kid}` and `DELETE /subject/{kid}/{subject}` require independent
+`subject-create` / `subject-delete` grants. Subject encode paths include the ID;
+decode and token-delete bodies supply it. See [subject create](API.md#post-subjectkid)
+and [subject delete](API.md#delete-subjectkidsubject) for request/response examples,
+independent permissions and error statuses, and [Subject Keys](API.md#subject-keys)
+for limits and derivation. Create requires an active operational key; subject
+delete takes no body, does not enforce key lifecycle and returns an empty `204`.
+
+Create/delete emit `subject.create.success` / `subject.delete.success` audit
+events (and `.failed` / `.denied` events) and bounded
+`vectis_crypto_operation_total{operation,result}` counters. Operation is
+`subject_create` or `subject_delete`; result is `success` or `failed`.
+Neither subject identifiers nor names or seeds are metric labels.
+Creation returns `201` for a new subject or `200` with the same ID on retry,
+without replacing the seed. Deletion atomically removes the seed and its tokens,
+does not cancel operations that already read their data,
+and does not prevent a backup from restoring deleted material. Subject-bound
+inserts verify the opened seed generation under a database lock; deletion or
+recreation rejects stale writes with `404` or `409`, respectively. Preexisting
+orphan rows are not automatically purged. Database upgrades require
+the explicit [subject keys migrations](../src/db/migrations); startup never
+migrates schemas. Grant PostgreSQL runtime roles `SELECT, INSERT, DELETE` on
+`public.subjects`, plus `UPDATE(seed)` for row locking, and upgrade every node
+before activating `stored` profiles. Vectis never replaces a seed on retry.
 Requests select a profile by name; token prefix, token length, plaintext length
 limit, and bound KID come from signed config. Vectis uses the fixed internal
 tokenization scheme `token-random-v1`. Encode
@@ -588,6 +618,10 @@ returns only the token. Decode hashes the presented token, looks up the encrypte
 payload, decrypts it, and returns the original plaintext plus optional metadata.
 Tokenization hash/data keys are derived per profile, KID, and internal scheme;
 the encrypted token payload AAD also binds that scheme.
+
+Delete computes the hash and removes the stored row without decrypting it.
+It permits active, retired, and compromised keys, and rejects disabled and
+destroyed keys. An absent or consumed token returns `token not found`.
 
 ## MAC Profiles
 
@@ -735,7 +769,15 @@ CREATE TABLE IF NOT EXISTS tokens (
     kid VARCHAR(128) NOT NULL,
     hashid VARCHAR(128) NOT NULL,
     data VARCHAR(10240) NOT NULL,
+    subject VARCHAR(128),
     PRIMARY KEY (kid, hashid)
+);
+
+CREATE TABLE IF NOT EXISTS subjects (
+    kid VARCHAR(128) NOT NULL,
+    subject VARCHAR(128) NOT NULL,
+    seed TEXT NOT NULL,
+    PRIMARY KEY (kid, subject)
 );
 
 CREATE TABLE IF NOT EXISTS indexes (
@@ -758,7 +800,15 @@ CREATE TABLE tokens (
     kid VARCHAR(128) NOT NULL,
     hashid VARCHAR(128) NOT NULL,
     data TEXT NOT NULL,
+    subject VARCHAR(128),
     PRIMARY KEY (kid, hashid)
+);
+
+CREATE TABLE subjects (
+    kid VARCHAR(128) NOT NULL,
+    subject VARCHAR(128) NOT NULL,
+    seed TEXT NOT NULL,
+    PRIMARY KEY (kid, subject)
 );
 
 CREATE TABLE indexes (

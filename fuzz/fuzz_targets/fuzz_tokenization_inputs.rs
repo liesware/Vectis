@@ -26,7 +26,15 @@ fuzz_target!(|data: &[u8]| {
             .and_then(tokenization::validate_encode_batch_input),
     );
     assert_public_error_is_clean(
-        tokenization::parse_decode_batch_input(value)
+        tokenization::parse_decode_batch_input(value.clone())
             .and_then(tokenization::validate_decode_batch_input),
+    );
+    assert_public_error_is_clean(
+        tokenization::parse_delete_input(value.clone())
+            .and_then(tokenization::validate_delete_input),
+    );
+    assert_public_error_is_clean(
+        vectis::ops::subjects::parse_create_input(value)
+            .and_then(vectis::ops::subjects::validate_create_input),
     );
 });
