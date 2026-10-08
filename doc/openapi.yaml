@@ -737,6 +737,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          $ref: "#/components/responses/RequestBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
         default:
           $ref: "#/components/responses/Error"
 
@@ -819,6 +825,22 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SubjectTokenEncodeOutput"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/SubjectGenerationChanged"
+        "413":
+          $ref: "#/components/responses/RequestBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
         default:
           $ref: "#/components/responses/Error"
 
@@ -851,6 +873,22 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SubjectTokenEncodeBatchOutput"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/SubjectGenerationChanged"
+        "413":
+          $ref: "#/components/responses/RequestBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
         default:
           $ref: "#/components/responses/Error"
 
@@ -882,8 +920,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TokenEncodeOutput"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "413":
           $ref: "#/components/responses/RequestBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
         default:
           $ref: "#/components/responses/Error"
 
@@ -915,8 +965,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TokenEncodeBatchOutput"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "413":
           $ref: "#/components/responses/RequestBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
         default:
           $ref: "#/components/responses/Error"
 
@@ -943,8 +1005,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TokenDecodeOutput"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "413":
           $ref: "#/components/responses/RequestBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
         default:
           $ref: "#/components/responses/Error"
 
@@ -977,15 +1051,19 @@ paths:
               schema:
                 $ref: "#/components/schemas/TokenDeleteOutput"
         "400":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/BadRequest"
         "401":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/Unauthorized"
         "403":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/Forbidden"
         "404":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/NotFound"
         "413":
           $ref: "#/components/responses/RequestBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
         default:
           $ref: "#/components/responses/Error"
 
@@ -1017,6 +1095,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TokenDecodeBatchOutput"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "413":
           description: Request body exceeds 2 MiB or stored token envelopes exceed the 5 MiB batch budget
           content:
@@ -1030,6 +1116,10 @@ paths:
                 envelopes:
                   value:
                     error: token decode batch exceeds maximum allowed envelope size
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
         default:
           $ref: "#/components/responses/Error"
 
@@ -1513,6 +1603,54 @@ components:
         $ref: "#/components/schemas/Kid"
 
   responses:
+    BadRequest:
+      description: Invalid JSON, field encoding, profile or request parameters
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Unauthorized:
+      description: Missing or invalid API key
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Forbidden:
+      description: Required permission missing, profile/KID mismatch or key lifecycle disallows the operation
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Operational key, subject or token not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    UnsupportedMediaType:
+      description: Request body must use application/json
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: request content type must be application/json
+    TooManyRequests:
+      description: Cryptographic worker capacity exhausted
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: too many requests
+    SubjectGenerationChanged:
+      description: "Subject seed generation changed before token insertion; no tokens inserted"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: subject changed during token operation
     Error:
       description: Public error response
       content:

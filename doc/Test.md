@@ -365,16 +365,34 @@ a broken pipe or reset; it never resends the request. Only a complete HTTP respo
 is accepted. A disconnect without a response remains status `0` and a finding,
 even when a subsequent health probe succeeds.
 
-Findings use `http-fuzz-finding-v2`. The JSON records seeds, case index, transport
+The `token_delete` oracle checks the exact success shape and detects fixture-issued
+tokens in response JSON strings (including nested values and keys) or non-JSON
+text. Mutated tokens are checked as complete JSON values, not arbitrary
+substrings: a mutation to `"t"` must not flag an ordinary error mentioning
+`token`. Only the exact top-level `ref` echo in a successful response is exempt;
+reflection elsewhere remains a finding. This does not attempt to attribute
+arbitrary short fragments to a token leak.
+
+Findings use `http-fuzz-finding-v3`. The JSON records seeds, case index, transport
 phase, exception type/errno, request byte counts and timing, without arbitrary
 exception messages or authentication headers. Body previews are at most 2,000
-characters and explicitly marked when truncated. Complete request bodies and
+characters and explicitly marked when truncated. Each `responses` entry records
+`response_body_preview` from the client's decoded response text and
+`response_preview_truncated`, including for GET and empty responses. When that
+exchange has a request body, its evidence is separate: `request_payload`,
+`request_body_preview` and `request_preview_truncated`. Complete request bodies and
 mutated config files are saved only for findings, as sibling `.payload.gz` files;
 multi-request cases may include additional `.request-N.payload.gz` files. Payload
 references include original and stored uncompressed sizes and SHA-256 hashes.
 The declared API key and unseal key are redacted before previews and payloads are
 written. A payload marked `redacted` is not a byte-for-byte reproduction of the
 original. Summaries remain aggregate-only.
+
+Historical v2 artifacts are not rewritten. Their `responses[].body_preview`
+contains the submitted request body, not the actual HTTP response; those artifacts
+cannot reconstruct the original response text. The top-level request payload
+references retain their meaning in v3. Response previews are bounded decoded
+text, not complete original wire bytes; response files and headers are not saved.
 
 Payloads are published before their JSON metadata using atomic file replacement.
 Storage failures propagate; existing artifacts, including historical truncated
