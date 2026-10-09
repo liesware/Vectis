@@ -145,6 +145,14 @@ runtime.
 
 ## Python HTTP Tests
 
+FPE coverage includes signed ASCII presets and Unicode custom alphabets,
+preserved separator positions, effective-domain rejection and all-or-nothing
+batch errors. CLI tests cover selector replacement, case inheritance/removal and
+invalid edits without writes. Native `fuzz_fpe_roundtrip` exercises legacy,
+preset and Unicode profiles, including insufficient effective domains; curated
+input/config seeds cover incompatible selectors, nulls and overlap. Legacy
+serialization and a deterministic ciphertext vector are regression-tested.
+
 The positive suite races eight subject creations and expects one `201` and
 seven `200` responses with the same ID and unchanged seed. Storage tests cover
 transactional token purging, stale-generation writes and encode/delete races.

@@ -12,6 +12,31 @@ pub const FPE_KEY_SALT: &[u8] = b"vectis:fpe:ff1:v1";
 pub const FPE_KEY_SIZE_BYTES: usize = 32;
 pub const FPE_VALUE_MIN_LEN: usize = 6;
 pub const FPE_VALUE_MAX_LEN: usize = 1024;
+pub const FPE_PRESERVE_MAX_CHARS: usize = 32;
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AlphabetPreset {
+    Num,
+    Alpha,
+    Alphanum,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LetterCase {
+    Uppercase,
+    Lowercase,
+    Mixed,
+}
+
+fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
 
 type PreparedFpeCipher = Arc<vectis_fpe::ff1::FF1<aes::Aes256>>;
 type PreparedFpeAlphabet = Arc<Vec<char>>;
@@ -22,7 +47,30 @@ type PreparedFpeAlphabetIndex = Arc<HashMap<char, u16>>;
 pub(crate) struct FpeProfileInput {
     name: String,
     fpe_version: String,
-    alphabet: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    alphabet: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    alphabet_preset: Option<AlphabetPreset>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    letter_case: Option<LetterCase>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    preserve_characters: Option<String>,
     min_len: usize,
     max_len: usize,
     tweak_aad: String,
@@ -40,6 +88,8 @@ pub struct FpeProfile {
     alphabet_chars: PreparedFpeAlphabet,
     alphabet_index: PreparedFpeAlphabetIndex,
     cipher: PreparedFpeCipher,
+    preserve_characters: String,
+    preserved: HashSet<char>,
 }
 
 #[derive(Clone, Default)]
@@ -54,6 +104,7 @@ impl fmt::Debug for FpeProfile {
             .field("name", &self.name)
             .field("fpe_version", &self.fpe_version)
             .field("alphabet", &self.alphabet)
+            .field("preserve_characters", &self.preserve_characters)
             .field("min_len", &self.min_len)
             .field("max_len", &self.max_len)
             .field("tweak_aad", &self.tweak_aad)
@@ -82,6 +133,10 @@ impl FpeProfile {
 
     pub fn alphabet(&self) -> &str {
         &self.alphabet
+    }
+
+    pub fn preserve_characters(&self) -> &str {
+        &self.preserve_characters
     }
 
     pub fn min_len(&self) -> usize {
@@ -155,6 +210,8 @@ impl Zeroize for FpeProfile {
         self.name.zeroize();
         self.fpe_version.zeroize();
         self.alphabet.zeroize();
+        self.preserve_characters.zeroize();
+        self.preserved.clear();
         self.min_len = 0;
         self.max_len = 0;
         self.tweak_aad.zeroize();
@@ -177,10 +234,17 @@ pub(crate) fn validate_fpe_profiles(
     let mut profiles = Vec::new();
 
     for profile in profile_inputs {
+        let alphabet = resolve_fpe_alphabet(
+            profile.alphabet.as_deref(),
+            profile.alphabet_preset,
+            profile.letter_case,
+        )?;
+        let preserve_characters = profile.preserve_characters.unwrap_or_default();
+        let preserved = validate_preserved_characters(&alphabet, &preserve_characters)?;
         validate_fpe_profile_fields(
             &profile.name,
             &profile.fpe_version,
-            &profile.alphabet,
+            &alphabet,
             profile.min_len,
             profile.max_len,
             &profile.tweak_aad,
@@ -209,13 +273,13 @@ pub(crate) fn validate_fpe_profiles(
         if fpe_key.len() != FPE_KEY_SIZE_BYTES {
             return Err(crate::error::internal("derived fpe key has invalid length"));
         }
-        let (alphabet_chars, alphabet_index) = prepare_fpe_alphabet(&profile.alphabet)?;
+        let (alphabet_chars, alphabet_index) = prepare_fpe_alphabet(&alphabet)?;
         let cipher = build_fpe_cipher(&fpe_key, alphabet_chars.len())?;
 
         profiles.push(FpeProfile {
             name: profile.name,
             fpe_version: profile.fpe_version,
-            alphabet: profile.alphabet,
+            alphabet,
             min_len: profile.min_len,
             max_len: profile.max_len,
             tweak_aad: profile.tweak_aad,
@@ -223,6 +287,8 @@ pub(crate) fn validate_fpe_profiles(
             alphabet_chars,
             alphabet_index,
             cipher,
+            preserve_characters,
+            preserved,
         });
     }
 
@@ -235,31 +301,140 @@ pub struct FpeKeyDerivationRequest<'a> {
     pub fpe_version: &'a str,
 }
 
+struct PreparedFpeValue {
+    digits: Zeroizing<Vec<u16>>,
+    preserved: Zeroizing<Vec<(usize, char)>>,
+    total_len: usize,
+}
+
 fn parse_fpe_value_digits(
     field: &str,
     value: &str,
     profile: &FpeProfile,
-) -> Result<Zeroizing<Vec<u16>>, DynError> {
-    validation::validate_text_field(field, value)?;
-    let digits = Zeroizing::new(
-        value
-            .chars()
-            .map(|item| {
-                profile.alphabet_index().get(&item).copied().ok_or_else(|| {
-                    crate::error::invalid_input(format!(
-                        "{field} contains character outside fpe profile alphabet"
-                    ))
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?,
-    );
-    if digits.len() < profile.min_len() || digits.len() > profile.max_len() {
+) -> Result<PreparedFpeValue, DynError> {
+    let total_len = value.chars().count();
+    if total_len < profile.min_len() || total_len > profile.max_len() {
         return Err(crate::error::invalid_input(format!(
             "{field} length is outside fpe profile bounds"
         )));
     }
+    validation::validate_text_field(field, value)?;
+    let mut digits = Zeroizing::new(Vec::with_capacity(total_len));
+    let mut preserved = Zeroizing::new(Vec::with_capacity(total_len));
+    for (position, item) in value.chars().enumerate() {
+        if profile.preserved.contains(&item) {
+            preserved.push((position, item));
+        } else {
+            let digit = profile
+                .alphabet_index()
+                .get(&item)
+                .copied()
+                .ok_or_else(|| {
+                    crate::error::invalid_input(format!(
+                        "{field} contains character outside fpe profile alphabet"
+                    ))
+                })?;
+            digits.push(digit);
+        }
+    }
+    if digits.is_empty() || !fpe_domain_is_large_enough(profile.alphabet_chars.len(), digits.len())
+    {
+        return Err(crate::error::invalid_input(format!(
+            "{field} effective domain is too small for FF1 after excluding preserved characters"
+        )));
+    }
+    Ok(PreparedFpeValue {
+        digits,
+        preserved,
+        total_len,
+    })
+}
 
-    Ok(digits)
+pub fn resolve_fpe_alphabet(
+    alphabet: Option<&str>,
+    preset: Option<AlphabetPreset>,
+    case: Option<LetterCase>,
+) -> Result<String, DynError> {
+    const UPPER: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const LOWER: &str = "abcdefghijklmnopqrstuvwxyz";
+    let resolved = match (alphabet, preset, case) {
+        (Some(alphabet), None, None) => alphabet.to_owned(),
+        (None, Some(AlphabetPreset::Num), None) => "0123456789".to_owned(),
+        (None, Some(preset @ (AlphabetPreset::Alpha | AlphabetPreset::Alphanum)), Some(case)) => {
+            let letters = match case {
+                LetterCase::Uppercase => UPPER.to_owned(),
+                LetterCase::Lowercase => LOWER.to_owned(),
+                LetterCase::Mixed => format!("{UPPER}{LOWER}"),
+            };
+            match preset {
+                AlphabetPreset::Alphanum => format!("0123456789{letters}"),
+                _ => letters,
+            }
+        }
+        (Some(_), Some(_), _) | (None, None, _) => {
+            return Err(crate::error::invalid_input(
+                "fpe_profiles requires exactly one of alphabet or alphabet_preset",
+            ));
+        }
+        _ => {
+            return Err(crate::error::invalid_input(
+                "fpe_profiles.letter_case is required for alpha/alphanum and prohibited for num/custom",
+            ));
+        }
+    };
+    validate_fpe_alphabet(&resolved)?;
+    Ok(resolved)
+}
+
+pub fn validate_preserve_characters(value: &str) -> Result<(), DynError> {
+    let mut seen = HashSet::new();
+    for ch in value.chars() {
+        if ch.is_control() || !seen.insert(ch) {
+            return Err(crate::error::invalid_input(
+                "fpe_profiles.preserve_characters must contain distinct characters without controls",
+            ));
+        }
+        if seen.len() > FPE_PRESERVE_MAX_CHARS {
+            return Err(crate::error::invalid_input(format!(
+                "fpe_profiles.preserve_characters exceeds maximum allowed length: {FPE_PRESERVE_MAX_CHARS}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_preserved_characters(alphabet: &str, value: &str) -> Result<HashSet<char>, DynError> {
+    validate_preserve_characters(value)?;
+    let preserved: HashSet<_> = value.chars().collect();
+    if alphabet.chars().any(|ch| preserved.contains(&ch)) {
+        return Err(crate::error::invalid_input(
+            "fpe_profiles.preserve_characters overlaps the alphabet",
+        ));
+    }
+    Ok(preserved)
+}
+
+pub(crate) fn validate_profile_definition(value: &serde_json::Value) -> Result<(), DynError> {
+    let input: FpeProfileInput = serde_json::from_value(value.clone())
+        .map_err(|_| crate::error::invalid_input("invalid fpe profile definition"))?;
+    let alphabet = resolve_fpe_alphabet(
+        input.alphabet.as_deref(),
+        input.alphabet_preset,
+        input.letter_case,
+    )?;
+    validate_preserved_characters(
+        &alphabet,
+        input.preserve_characters.as_deref().unwrap_or_default(),
+    )?;
+    validate_fpe_profile_fields(
+        &input.name,
+        &input.fpe_version,
+        &alphabet,
+        input.min_len,
+        input.max_len,
+        &input.tweak_aad,
+    )
+    .map(drop)
 }
 
 pub fn validate_fpe_version(value: &str) -> Result<(), DynError> {
@@ -277,7 +452,7 @@ pub fn validate_fpe_profile_fields(
     validation::validate_aad_config_name("fpe_profiles.name", name)?;
     validate_fpe_version(fpe_version)?;
     let radix = validate_fpe_alphabet(alphabet)?;
-    validate_fpe_lengths(min_len, max_len, radix)?;
+    validate_profile_lengths(min_len, max_len, radix, Some(alphabet))?;
     validation::validate_labels(
         "fpe_profiles.tweak_aad",
         tweak_aad,
@@ -291,8 +466,9 @@ pub fn validate_fpe_alphabet(alphabet: &str) -> Result<usize, DynError> {
     let mut seen = HashSet::new();
     for item in alphabet.chars() {
         if !seen.insert(item) {
-            return Err(crate::error::invalid_input(
+            return Err(alphabet_validation_error(
                 "fpe_profiles.alphabet must not contain duplicate characters",
+                Some(alphabet),
             ));
         }
     }
@@ -321,10 +497,39 @@ fn prepare_fpe_alphabet(
 }
 
 pub fn validate_fpe_lengths(min_len: usize, max_len: usize, radix: usize) -> Result<(), DynError> {
+    validate_profile_lengths(min_len, max_len, radix, None)
+}
+
+fn alphabet_validation_error(message: &str, alphabet: Option<&str>) -> DynError {
+    let hint = match alphabet {
+        Some("num") => {
+            Some("alphabet \"num\" is literal; for the preset use alphabet_preset: \"num\"")
+        }
+        Some("alpha") => Some(
+            "alphabet \"alpha\" is literal; for the preset use alphabet_preset: \"alpha\" with letter_case",
+        ),
+        Some("alphanum") => Some(
+            "alphabet \"alphanum\" is literal; for the preset use alphabet_preset: \"alphanum\" with letter_case",
+        ),
+        _ => None,
+    };
+    crate::error::invalid_input(match hint {
+        Some(hint) => format!("{message}; {hint}"),
+        None => message.to_owned(),
+    })
+}
+
+fn validate_profile_lengths(
+    min_len: usize,
+    max_len: usize,
+    radix: usize,
+    alphabet: Option<&str>,
+) -> Result<(), DynError> {
     validate_fpe_length_bounds(min_len, max_len)?;
     if !fpe_domain_is_large_enough(radix, min_len) {
-        return Err(crate::error::invalid_input(
+        return Err(alphabet_validation_error(
             "fpe profile domain is too small for FF1",
+            alphabet,
         ));
     }
 
@@ -429,9 +634,14 @@ pub fn fpe_decrypt(profile: &FpeProfile, ciphertext: &str) -> Result<String, Dyn
 
 fn fpe_transform(
     profile: &FpeProfile,
-    mut digits: Zeroizing<Vec<u16>>,
+    value: PreparedFpeValue,
     encrypt: bool,
 ) -> Result<String, DynError> {
+    let PreparedFpeValue {
+        mut digits,
+        preserved,
+        total_len,
+    } = value;
     let input = vectis_fpe::ff1::FlexibleNumeralString::from(std::mem::take(&mut *digits));
     let output_result = if encrypt {
         profile
@@ -454,18 +664,25 @@ fn fpe_transform(
     };
     let output_digits = Zeroizing::new(Vec::<u16>::from(output));
 
-    output_digits
-        .iter()
-        .map(|digit| {
-            profile
-                .alphabet_chars()
-                .get(*digit as usize)
+    // Four bytes per Unicode scalar avoids reallocating a partially decrypted value.
+    let mut result = Zeroizing::new(String::with_capacity(total_len * 4));
+    let mut positions = preserved.iter().peekable();
+    let mut digits = output_digits.iter();
+    for position in 0..total_len {
+        if positions.peek().is_some_and(|item| item.0 == position) {
+            result.push(positions.next().expect("preserved position exists").1);
+        } else {
+            let ch = digits
+                .next()
+                .and_then(|digit| profile.alphabet_chars().get(*digit as usize))
                 .copied()
                 .ok_or_else(|| {
                     crate::error::internal("fpe operation returned invalid alphabet index")
-                })
-        })
-        .collect()
+                })?;
+            result.push(ch);
+        }
+    }
+    Ok(std::mem::take(&mut *result))
 }
 
 #[cfg(test)]
@@ -476,7 +693,10 @@ mod tests {
         FpeProfileInput {
             name: name.to_string(),
             fpe_version: FPE_VERSION_FF1_2025.to_string(),
-            alphabet: "0123456789".to_string(),
+            alphabet: Some("0123456789".to_string()),
+            alphabet_preset: None,
+            letter_case: None,
+            preserve_characters: None,
             min_len: 6,
             max_len: 32,
             tweak_aad: "tenant=acme;field=patient_id;version=1".to_string(),
@@ -533,6 +753,236 @@ mod tests {
         assert!(!debug.contains("alphabet_index"));
         assert!(debug.contains("cipher"));
         assert!(!debug.contains("070707"));
+    }
+
+    #[test]
+    fn legacy_ciphertext_vector() {
+        let state = validate_fpe_profiles(
+            vec![input("patient-id", kid())],
+            |_| true,
+            |_| Ok(fpe_key()),
+        )
+        .unwrap();
+        let profile = state.get("patient-id").unwrap();
+        assert_eq!(fpe_encrypt(&profile, "001234567").unwrap(), "392168046");
+        assert_eq!(fpe_decrypt(&profile, "392168046").unwrap(), "001234567");
+    }
+
+    #[test]
+    fn presets_have_exact_order_and_strict_selectors() {
+        let upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        let lower = "abcdefghijklmnopqrstuvwxyz";
+        assert_eq!(
+            resolve_fpe_alphabet(None, Some(AlphabetPreset::Num), None).unwrap(),
+            "0123456789"
+        );
+        for (case, expected) in [
+            (LetterCase::Uppercase, upper.to_owned()),
+            (LetterCase::Lowercase, lower.to_owned()),
+            (LetterCase::Mixed, format!("{upper}{lower}")),
+        ] {
+            assert_eq!(
+                resolve_fpe_alphabet(None, Some(AlphabetPreset::Alpha), Some(case)).unwrap(),
+                expected
+            );
+            assert_eq!(
+                resolve_fpe_alphabet(None, Some(AlphabetPreset::Alphanum), Some(case)).unwrap(),
+                format!("0123456789{expected}")
+            );
+        }
+        assert_eq!(
+            resolve_fpe_alphabet(Some("num"), None, None).unwrap(),
+            "num"
+        );
+        assert!(resolve_fpe_alphabet(None, None, None).is_err());
+        assert!(resolve_fpe_alphabet(Some("0123456789"), Some(AlphabetPreset::Num), None).is_err());
+        assert!(resolve_fpe_alphabet(None, Some(AlphabetPreset::Alpha), None).is_err());
+        assert!(
+            resolve_fpe_alphabet(None, Some(AlphabetPreset::Num), Some(LetterCase::Mixed)).is_err()
+        );
+        assert!(resolve_fpe_alphabet(Some("0123456789"), None, Some(LetterCase::Mixed)).is_err());
+    }
+
+    #[test]
+    fn literal_preset_hints_only_annotate_existing_failures() {
+        let error = validate_fpe_profile_fields(
+            "literal-num",
+            FPE_VERSION_FF1_2025,
+            "num",
+            6,
+            32,
+            "tenant=test",
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "fpe profile domain is too small for FF1; alphabet \"num\" is literal; for the preset use alphabet_preset: \"num\""
+        );
+        assert!(matches!(
+            error.downcast_ref::<crate::error::VectisError>(),
+            Some(crate::error::VectisError::InvalidInput(_))
+        ));
+        for name in ["alpha", "alphanum"] {
+            let error = resolve_fpe_alphabet(Some(name), None, None)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.starts_with("fpe_profiles.alphabet must not contain duplicate characters;")
+            );
+            assert!(error.contains(&format!("alphabet_preset: \"{name}\" with letter_case")));
+            assert!(!error.chars().any(char::is_control));
+            assert!(error.chars().count() <= 256);
+        }
+        assert_eq!(
+            validate_fpe_alphabet("001234").unwrap_err().to_string(),
+            "fpe_profiles.alphabet must not contain duplicate characters"
+        );
+        assert_eq!(
+            validate_fpe_lengths(6, 32, 3).unwrap_err().to_string(),
+            "fpe profile domain is too small for FF1"
+        );
+        let mut definition = input("literal-num", kid());
+        definition.alphabet = Some("num".to_owned());
+        definition.min_len = 13;
+        let state = validate_fpe_profiles(vec![definition], |_| true, |_| Ok(fpe_key())).unwrap();
+        let profile = state.get("literal-num").unwrap();
+        assert_eq!(profile.alphabet(), "num");
+        let plaintext = format!("{}n", "num".repeat(4));
+        let ciphertext = fpe_encrypt(&profile, &plaintext).unwrap();
+        assert!(ciphertext.chars().all(|ch| "num".contains(ch)));
+        assert_eq!(fpe_decrypt(&profile, &ciphertext).unwrap(), plaintext);
+    }
+
+    #[test]
+    fn effective_domain_errors_explain_excluded_characters_without_reflection() {
+        let profile = formatted_profile(None, Some(AlphabetPreset::Num), None, "-");
+        for (field, error) in [
+            ("plaintext", fpe_encrypt(&profile, "001-23").unwrap_err()),
+            ("ciphertext", fpe_decrypt(&profile, "001-23").unwrap_err()),
+        ] {
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "{field} effective domain is too small for FF1 after excluding preserved characters"
+                )
+            );
+            assert!(!error.to_string().contains("001-23"));
+            assert!(matches!(
+                error.downcast_ref::<crate::error::VectisError>(),
+                Some(crate::error::VectisError::InvalidInput(_))
+            ));
+        }
+        assert!(fpe_encrypt(&profile, "001-234").is_ok());
+    }
+
+    #[test]
+    fn optional_fields_reject_null_and_preserve_serialized_presence() {
+        let original = serde_json::json!({"name":"patient-id","fpe_version":FPE_VERSION_FF1_2025,"alphabet":"0123456789","min_len":6,"max_len":32,"tweak_aad":"tenant=acme;field=patient_id;version=1","kid":kid()});
+        let input: FpeProfileInput = serde_json::from_value(original.clone()).unwrap();
+        assert_eq!(serde_json::to_value(input).unwrap(), original);
+        for field in [
+            "name",
+            "fpe_version",
+            "alphabet",
+            "alphabet_preset",
+            "letter_case",
+            "preserve_characters",
+            "min_len",
+            "max_len",
+            "tweak_aad",
+            "kid",
+        ] {
+            let mut value = original.clone();
+            value[field] = serde_json::Value::Null;
+            assert!(
+                serde_json::from_value::<FpeProfileInput>(value).is_err(),
+                "{field}"
+            );
+        }
+        let mut explicit = original.clone();
+        explicit["preserve_characters"] = serde_json::json!("");
+        let input: FpeProfileInput = serde_json::from_value(explicit.clone()).unwrap();
+        assert_eq!(serde_json::to_value(input).unwrap(), explicit);
+        for (field, value) in [("alphabet_preset", "NUM"), ("letter_case", "upper")] {
+            let mut bad = original.clone();
+            bad[field] = serde_json::json!(value);
+            assert!(serde_json::from_value::<FpeProfileInput>(bad).is_err());
+        }
+    }
+
+    fn formatted_profile(
+        alphabet: Option<&str>,
+        preset: Option<AlphabetPreset>,
+        case: Option<LetterCase>,
+        preserve: &str,
+    ) -> Arc<FpeProfile> {
+        let mut profile = input("patient-id", kid());
+        profile.alphabet = alphabet.map(str::to_owned);
+        profile.alphabet_preset = preset;
+        profile.letter_case = case;
+        profile.preserve_characters = Some(preserve.to_owned());
+        validate_fpe_profiles(vec![profile], |_| true, |_| Ok(fpe_key()))
+            .unwrap()
+            .get("patient-id")
+            .unwrap()
+    }
+
+    #[test]
+    fn separators_preserve_positions_and_encrypt_one_effective_domain() {
+        let profile = formatted_profile(None, Some(AlphabetPreset::Num), None, "- ");
+        let value = "001-234-567";
+        let ciphertext = fpe_encrypt(&profile, value).unwrap();
+        assert_eq!(ciphertext.replace('-', ""), "392168046");
+        for plaintext in [value, "-001234-", "--001--234--", " 001234 "] {
+            let encrypted = fpe_encrypt(&profile, plaintext).unwrap();
+            assert_eq!(encrypted.chars().count(), plaintext.chars().count());
+            for (position, ch) in plaintext.chars().enumerate() {
+                if profile.preserved.contains(&ch) {
+                    assert_eq!(encrypted.chars().nth(position), Some(ch));
+                }
+            }
+            assert_eq!(fpe_decrypt(&profile, &encrypted).unwrap(), plaintext);
+        }
+        assert!(fpe_encrypt(&profile, "--001-23--").is_err());
+        assert!(fpe_encrypt(&profile, "------").is_err());
+        assert!(fpe_encrypt(&profile, "001234!").is_err());
+        assert!(fpe_decrypt(&profile, "--001-23--").is_err());
+        assert!(fpe_encrypt(&profile, &format!("{}001234", "-".repeat(26))).is_ok());
+        assert!(fpe_encrypt(&profile, &format!("{}001234", "-".repeat(27))).is_err());
+        let alpha = formatted_profile(
+            None,
+            Some(AlphabetPreset::Alpha),
+            Some(LetterCase::Mixed),
+            "-",
+        );
+        let ciphertext = fpe_encrypt(&alpha, "-ABCD-").unwrap();
+        assert_eq!(fpe_decrypt(&alpha, &ciphertext).unwrap(), "-ABCD-");
+    }
+
+    #[test]
+    fn unicode_format_and_preserved_character_bounds() {
+        let profile = formatted_profile(Some("零一二三四五六七八九"), None, None, "🩺");
+        let input = "零零一🩺二三四";
+        let encrypted = fpe_encrypt(&profile, input).unwrap();
+        assert_eq!(encrypted.chars().count(), 7);
+        assert_eq!(encrypted.chars().nth(3), Some('🩺'));
+        assert_eq!(fpe_decrypt(&profile, &encrypted).unwrap(), input);
+        let exact: String = (0x1f600..0x1f600 + FPE_PRESERVE_MAX_CHARS as u32)
+            .map(|v| char::from_u32(v).unwrap())
+            .collect();
+        assert!(validate_preserved_characters("0123456789", &exact).is_ok());
+        let error = validate_preserve_characters(&(exact + "🩺")).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "fpe_profiles.preserve_characters exceeds maximum allowed length: {FPE_PRESERVE_MAX_CHARS}"
+            )
+        );
+        for bad in ["--", "\n", "\u{7f}", "\u{85}"] {
+            assert!(validate_preserve_characters(bad).is_err());
+        }
+        assert!(validate_preserved_characters("0123456789", "-0").is_err());
+        assert!(validate_preserve_characters(" ").is_ok());
     }
 
     #[test]
@@ -595,7 +1045,7 @@ mod tests {
     #[test]
     fn rejects_invalid_alphabet() {
         let mut profile = input("patient-id", kid());
-        profile.alphabet = "001234".to_string();
+        profile.alphabet = Some("001234".to_string());
         assert!(
             validate_fpe_profiles(vec![profile], |item| item == kid(), |_| Ok(fpe_key())).is_err()
         );

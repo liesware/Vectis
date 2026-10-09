@@ -565,6 +565,15 @@ Envelope, `type=internal-message` AAD, audit event names and metrics are unchang
 
 ## Format-Preserving Encryption
 
+Signed FPE profiles select one literal Unicode alphabet or an ASCII preset
+`num|alpha|alphanum`. Letter presets require `uppercase|lowercase|mixed` case.
+Optional `preserve_characters` retains at most 32 distinct non-control characters
+outside the alphabet. FF1 processes all remaining characters as one unit, not
+one operation per group. Bounds count the total Unicode scalar length; the
+million-value domain floor counts only encrypted characters. Formatting remains
+visible and unauthenticated. Existing custom profiles and their serialized
+representation are unchanged when new fields are absent. See [API](API.md#format-preserving-encryption).
+
 Vectis exposes local FF1 FPE endpoints for fields that must stay inside a
 signed alphabet and length range:
 

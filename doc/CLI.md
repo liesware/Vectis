@@ -376,7 +376,28 @@ vectis config fpe add --name patient-id-decimal-v1 --kid <kid> --alphabet 012345
 vectis config fpe get patient-id-decimal-v1
 vectis config fpe update patient-id-decimal-v1 --max-len 40
 vectis config fpe delete patient-id-decimal-v1
+vectis config fpe add --name patient-id-formatted-v1 --kid <kid> --alphabet-preset num --preserve-characters '-' --min-len 6 --max-len 32 --tweak-aad 'tenant=acme;field=patient_id;version=1'
+vectis config fpe add --name label-formatted-v1 --kid <kid> --alphabet-preset alphanum --letter-case mixed --preserve-characters '- ' --min-len 6 --max-len 32 --tweak-aad 'tenant=acme;field=label;version=1'
 ```
+
+Exactly one of `--alphabet` and `--alphabet-preset` is required on add. Presets
+must use `--alphabet-preset`: `--alphabet num` literally selects `n`, `u`, `m`,
+not digits. That custom alphabet is valid with `--min-len 13`; `--alphabet alpha`
+and `--alphabet alphanum` contain duplicate characters and fail with a preset hint.
+No keyword is reserved or converted in valid custom alphabets. Presets
+are `num`, `alpha`, `alphanum`; alpha/alphanum require `--letter-case`
+`uppercase|lowercase|mixed`, while num/custom prohibit it. On update, an explicit
+selector replaces the previous selector. Compatible alpha/alphanum updates may
+inherit case; custom/num remove inherited case but reject an explicit case flag.
+`--preserve-characters ''` clears the policy while retaining the explicit field.
+Up to 32 distinct Unicode characters are allowed, without controls or alphabet
+overlap. Total length includes separators, but only variable characters count
+toward the minimum million-value domain.
+For num with minimum six and preserved `-`, `001-234` is accepted, while
+`001-23` meets total length but fails the domain check: only five symbols are
+encrypted. This validation is per value. Inputs and formatting are not normalized
+or authenticated. Use a new profile to adopt another format; requests still
+select only the profile. Invalid edits leave configuration unchanged.
 
 `fpe_version` defaults to `fpe-ff1-2025`; that is the only accepted version in
 this release. `min_len` must be at least `6`, and `max_len` must be greater than

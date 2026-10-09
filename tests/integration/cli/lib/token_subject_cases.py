@@ -116,3 +116,5 @@ def _runtime_contracts(env, configuration, directory):
     require("404" in run_cli(["token", "decode-batch", "--json", json.dumps(stored_batch)], env, expect_success=False).stderr, "deleted subject prevents recovery")
     from .symmetric_cases import symmetric_runtime_contracts
     symmetric_runtime_contracts(env, configuration, directory)
+    from .fpe_cases import fpe_runtime_contracts
+    fpe_runtime_contracts(env, directory)

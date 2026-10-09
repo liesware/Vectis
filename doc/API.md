@@ -1150,7 +1150,62 @@ Response:
 
 FPE is a local field operation. It preserves an alphabet and length range defined by a signed config profile. It is deterministic for the same key, profile, tweak AAD, and plaintext. It does not authenticate data and does not replace AEAD message encryption.
 
-FPE profiles live in `config.json` under `fpe_profiles`. Requests cannot provide `alphabet`, `tweak_aad`, `min_len`, `max_len`, or `fpe_version`; those values come only from signed config.
+FPE profiles live in `config.json` under `fpe_profiles`. Requests cannot provide
+alphabet selectors, letter case, preserved characters, tweak, bounds or version;
+those values come only from signed config. Exactly one of `alphabet` (literal
+custom Unicode alphabet) or `alphabet_preset` is required. Presets are ASCII:
+
+| Preset / case | Resolved alphabet order |
+| --- | --- |
+| `num` | `0123456789`; `letter_case` prohibited |
+| `alpha / uppercase` | `ABCDEFGHIJKLMNOPQRSTUVWXYZ` |
+| `alpha / lowercase` | `abcdefghijklmnopqrstuvwxyz` |
+| `alpha / mixed` | Uppercase letters followed by lowercase letters |
+| `alphanum` | `0123456789` followed by letters of the required case |
+
+`letter_case` is required for alpha/alphanum and prohibited for custom/num.
+Preset names belong in `alphabet_preset`, not in `alphabet`. The literal
+`alphabet: "num"` contains only `n`, `u`, `m`; it can be valid with `min_len: 13`
+because `3^13 = 1,594,323`. Literal `"alpha"` and `"alphanum"` contain duplicate
+characters and are rejected. Duplicate-character or insufficient-profile-domain
+errors for these exact literals include a preset hint, but valid custom alphabets
+are never reserved or converted.
+`preserve_characters` is optional and empty when absent: at most 32 distinct
+Unicode characters, without controls or overlap with the alphabet. Spaces are
+allowed. No trimming, case conversion or Unicode normalization is performed.
+Declared fields never accept `null`; omitted fields remain omitted during
+serialization, including legacy config signing. Explicit `""` remains explicit.
+
+Lengths count the complete text in Unicode scalar values, including separators,
+not bytes or graphemes. The variable characters are encrypted together in one
+FF1 operation, then separators are restored at their original positions.
+Separators may repeat or appear at either end; no grouping pattern is enforced.
+The effective domain must satisfy `radix^variable_character_count >= 1,000,000`;
+separators contribute nothing to that count. All-separator input is rejected.
+For a numeric preset with `min_len: 6` and `preserve_characters: "-"`, `001-234`
+is accepted: it has six encrypted symbols. `001-23` meets the total length of
+six but has only five encrypted symbols, so it is rejected. The domain is
+checked per value, not inferred solely from its configured minimum length.
+Preserved formatting reveals structure and is not authenticated. Alphanum does
+not preserve per-position letter/digit classes such as `LLDDDD`.
+
+Example of a new signed profile:
+
+```json
+{
+  "name": "patient-id-formatted-v1",
+  "fpe_version": "fpe-ff1-2025",
+  "alphabet_preset": "num",
+  "preserve_characters": "-",
+  "min_len": 6,
+  "max_len": 32,
+  "tweak_aad": "tenant=acme;field=patient_id;version=1",
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed"
+}
+```
+
+Use a new profile when adopting another alphabet/order or preserved format.
+Changing an existing profile may prevent recovery of earlier ciphertexts.
 
 All FPE requests include a client-defined `ref`. It is required, non-empty, at most 128 characters, and echoed in the response. Batch requests require every item `ref` to be unique within the request.
 
@@ -2539,7 +2594,10 @@ Top level:
 | --- | --- | --- | --- |
 | `name` | yes | unique non-empty text | Profile selected by FPE requests. |
 | `fpe_version` | yes | `fpe-ff1-2025` | FF1 profile version and HKDF binding value. |
-| `alphabet` | yes | unique characters, no control chars | Domain alphabet for plaintext and ciphertext. |
+| `alphabet` | exactly one selector | 2..65536 unique Unicode characters, no controls | Literal custom alphabet; alternative to `alphabet_preset`. |
+| `alphabet_preset` | exactly one selector | `num`, `alpha`, `alphanum` | Fixed ASCII preset; alternative to `alphabet`. |
+| `letter_case` | alpha/alphanum only | `uppercase`, `lowercase`, `mixed` | Required for letter presets; prohibited for num/custom. |
+| `preserve_characters` | no | 0..32 distinct Unicode characters, no controls or alphabet overlap | Preserved positions; absent means empty, explicit empty remains serialized. |
 | `min_len` | yes | integer >= 6 | Minimum accepted field length. |
 | `max_len` | yes | integer >= `min_len` | Maximum accepted field length. |
 | `tweak_aad` | yes | `key=value;key=value`, max 128 chars | Literal cryptographic tweak context from signed config. Keys must be unique and use `[A-Za-z0-9_.-]+`. |

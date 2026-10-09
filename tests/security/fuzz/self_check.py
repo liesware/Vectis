@@ -19,7 +19,7 @@ from unittest.mock import patch
 from campaign import RunSummary, TargetMetrics, resolve_seed, select_targets, target_rng, target_seed
 from client import FuzzResponse
 from mutations import mutate_raw, mutate_structured
-from oracle import MAX_RESPONSE_DURATION_MS, slow_response_findings
+from oracle import MAX_RESPONSE_DURATION_MS, slow_response_findings, oracle
 from semantics import (
     subject_contract_semantic,
     token_batch_budget_semantic,
@@ -84,7 +84,19 @@ def self_check():
     altered_subject = list(subject_responses)
     altered_subject[4] = (200, '{"ref":"subject-token","plaintext":"wrong"}')
     expect(subject_contract_semantic(altered_subject), "subject retry cannot replace seed")
+    formatted = {"ref":"fpe", "profile":"fuzz-fpe-formatted-v1", "plaintext":"001-234-567"}
+    expect(not fpe_semantic(formatted, formatted, 200, '{"ciphertext":"987-654-321"}'), "formatted FPE preserves separator positions")
+    expect(fpe_semantic(formatted, formatted, 200, '{"ciphertext":"987654321"}'), "formatted FPE rejects lost separators")
+    inverse = {"kid":"a"*64,"profile":"fuzz-fpe-formatted-v1","ciphertext":"987-654-321"}
+    expect(not fpe_semantic(inverse, inverse, 200, '{"plaintext":"001-234-567"}'), "formatted FPE expected plaintext uses its profile")
+    expect(fpe_semantic(inverse, inverse, 200, '{"plaintext":"001234567"}'), "formatted FPE detects wrong recovered formatting")
     delete = {"ref":"delete-1", "token":"tok_synthetic"}
+    for detail in [
+        'fpe profile domain is too small for FF1; alphabet "num" is literal; for the preset use alphabet_preset: "num"',
+        'batch item 1 failed: plaintext effective domain is too small for FF1 after excluding preserved characters',
+    ]:
+        expect(not oracle(400, json.dumps({"error": detail}), "AUTH-SECRET", "UNSEAL-SECRET", {400}, False), "FPE diagnostics retain clean public error shape")
+        expect(not any(ch.isascii() and (ord(ch) < 32 or ord(ch) == 127) for ch in detail) and len(detail) <= 256, "FPE diagnostics remain bounded and control-free")
     budget_context = {"plaintext": "synthetic"}
     budget_case = {"refs": ["r"], "checks": [
         ("over-budget", 413, '{"error":"token decode batch exceeds maximum allowed envelope size"}'),

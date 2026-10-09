@@ -1,0 +1,1 @@
+{"version":"v1","fpe_profiles":[{"name":"literal-alpha","kid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","fpe_version":"fpe-ff1-2025","alphabet":"alpha","min_len":6,"max_len":32,"tweak_aad":"tenant=fuzz;field=id;version=1"}]}

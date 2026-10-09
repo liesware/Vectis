@@ -2478,6 +2478,74 @@ components:
         variant:
           $ref: "#/components/schemas/SymmetricAlgorithm"
 
+    FpeProfileConfig:
+      type: object
+      description: >
+        Signed configuration entry, not an HTTP operation input. Exactly one
+        alphabet selector is required. Custom alphabet order is preserved without
+        normalization. Preserved characters must be distinct and disjoint from
+        the resolved alphabet; these constraints are enforced by Vectis.
+        Length bounds include separators; the effective FF1 domain counts only
+        encrypted characters and must contain at least 1,000,000 values.
+      additionalProperties: false
+      required: [name, fpe_version, min_len, max_len, tweak_aad, kid]
+      properties:
+        name:
+          $ref: "#/components/schemas/AadSafeText"
+          maxLength: 128
+        fpe_version:
+          type: string
+          const: fpe-ff1-2025
+        kid:
+          $ref: "#/components/schemas/Kid"
+        alphabet:
+          $ref: "#/components/schemas/TextField"
+          minLength: 2
+          maxLength: 65536
+        alphabet_preset:
+          type: string
+          enum: [num, alpha, alphanum]
+        letter_case:
+          type: string
+          enum: [uppercase, lowercase, mixed]
+        preserve_characters:
+          type: string
+          maxLength: 32
+          pattern: '^[^\x00-\x1F\x7F-\x9F]*$'
+          description: Optional, empty when absent. Distinct Unicode characters; no controls, trimming or normalization. Explicit empty string remains present when serialized.
+        min_len:
+          type: integer
+          minimum: 6
+          maximum: 1024
+        max_len:
+          type: integer
+          minimum: 6
+          maximum: 1024
+        tweak_aad:
+          type: string
+          minLength: 1
+          maxLength: 128
+      oneOf:
+        - required: [alphabet]
+          not:
+            anyOf:
+              - required: [alphabet_preset]
+              - required: [letter_case]
+        - required: [alphabet_preset]
+          properties:
+            alphabet_preset:
+              const: num
+          not:
+            anyOf:
+              - required: [alphabet]
+              - required: [letter_case]
+        - required: [alphabet_preset, letter_case]
+          properties:
+            alphabet_preset:
+              enum: [alpha, alphanum]
+          not:
+            required: [alphabet]
+
     FpeEncryptInput:
       type: object
       additionalProperties: false

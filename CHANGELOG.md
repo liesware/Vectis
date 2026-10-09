@@ -8,6 +8,10 @@ manually for releases; the Git history remains the detailed engineering record.
 Changes staged for v0.9.0, the first official release.
 
 ### Added
+- Signed FPE alphabet presets (`num`, `alpha`, `alphanum`) with explicit letter
+  case and optional preserved characters. Formatting bounds include separators,
+  while the effective FF1 domain counts only variable characters. Existing
+  custom profiles, key derivation, tweaks and ciphertexts are unchanged.
 - Add optional stored subject keys for single and batch tokenization, with
   authenticated per-subject seeds, independent create/delete permissions and
   request-scoped key derivation. Existing profiles default to legacy `none` mode.

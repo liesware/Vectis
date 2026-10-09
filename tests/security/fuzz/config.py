@@ -181,6 +181,14 @@ def configure_fpe_profile(client, kid):
             "kid": kid,
         }
     ]
+    config["fpe_profiles"].extend([
+        {"name": "fuzz-fpe-formatted-v1", "fpe_version": "fpe-ff1-2025", "alphabet_preset": "num",
+         "preserve_characters": "-", "min_len": 6, "max_len": 32,
+         "tweak_aad": "tenant=fuzz;field=formatted;version=1", "kid": kid},
+        {"name": "fuzz-fpe-alpha-v1", "fpe_version": "fpe-ff1-2025", "alphabet_preset": "alphanum",
+         "letter_case": "mixed", "preserve_characters": "- ", "min_len": 6, "max_len": 32,
+         "tweak_aad": "tenant=fuzz;field=alpha;version=1", "kid": kid},
+    ])
     CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
     sign_config_file()
     status, body = client.post_json("/config/reload", {}, auth=True)

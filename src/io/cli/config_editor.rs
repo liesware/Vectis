@@ -74,6 +74,9 @@ enum FieldKind {
     FpeProfileName,
     FpeVersion,
     FpeAlphabet,
+    FpeAlphabetPreset,
+    FpeLetterCase,
+    FpePreserveCharacters,
     FpeTweakAad,
     TokenProfileName,
     TokenPrefix,
@@ -300,7 +303,34 @@ const FPE_PROFILES_SECTION: SectionSpec = SectionSpec {
             json_field: "alphabet",
             kind: FieldKind::FpeAlphabet,
             cardinality: FieldCardinality::One,
-            required_on_add: true,
+            required_on_add: false,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--alphabet-preset",
+            json_field: "alphabet_preset",
+            kind: FieldKind::FpeAlphabetPreset,
+            cardinality: FieldCardinality::One,
+            required_on_add: false,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--letter-case",
+            json_field: "letter_case",
+            kind: FieldKind::FpeLetterCase,
+            cardinality: FieldCardinality::One,
+            required_on_add: false,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--preserve-characters",
+            json_field: "preserve_characters",
+            kind: FieldKind::FpePreserveCharacters,
+            cardinality: FieldCardinality::One,
+            required_on_add: false,
             mutable_on_update: true,
             default_on_add: None,
         },
@@ -991,7 +1021,25 @@ fn section_update(
         spec.key_field,
         &key,
     )?;
-    object_mut(item)?.extend(update);
+    if spec.json_section == "fpe_profiles" {
+        let mut candidate = item.clone();
+        let fields = object_mut(&mut candidate)?;
+        if update.contains_key("alphabet") {
+            fields.remove("alphabet_preset");
+            fields.remove("letter_case");
+        }
+        if update.contains_key("alphabet_preset") {
+            fields.remove("alphabet");
+            if update.get("alphabet_preset").and_then(Value::as_str) == Some("num") {
+                fields.remove("letter_case");
+            }
+        }
+        fields.extend(update);
+        fpe::validate_profile_definition(&candidate)?;
+        *item = candidate;
+    } else {
+        object_mut(item)?.extend(update);
+    }
 
     Ok(section_response("updated", spec, item.clone()))
 }
@@ -1039,6 +1087,9 @@ fn parse_section_add(spec: &SectionSpec, args: Vec<String>) -> Result<Value, Dyn
             .or_insert_with(|| default.value.to_value());
     }
     validate_parsed_field_combinations(spec, &parsed)?;
+    if spec.json_section == "fpe_profiles" {
+        fpe::validate_profile_definition(&Value::Object(parsed.clone()))?;
+    }
     Ok(Value::Object(parsed))
 }
 
@@ -1102,6 +1153,19 @@ fn validate_tokenization_profile_parsed_fields(
 }
 
 fn validate_fpe_profile_parsed_fields(parsed: &Map<String, Value>) -> Result<(), DynError> {
+    if parsed.contains_key("alphabet") && parsed.contains_key("alphabet_preset") {
+        return Err(invalid_input(
+            "--alphabet and --alphabet-preset are mutually exclusive",
+        ));
+    }
+    if parsed.contains_key("letter_case")
+        && (parsed.contains_key("alphabet")
+            || parsed.get("alphabet_preset").and_then(Value::as_str) == Some("num"))
+    {
+        return Err(invalid_input(
+            "--letter-case is prohibited for custom/num alphabets",
+        ));
+    }
     let min_len = optional_usize_field(parsed, "min_len")?;
     let max_len = optional_usize_field(parsed, "max_len")?;
 
@@ -1291,6 +1355,26 @@ fn parse_field_value(field: &FieldSpec, raw: &str) -> Result<Value, DynError> {
         FieldKind::FpeAlphabet => {
             fpe::validate_fpe_alphabet(raw)?;
             Ok(Value::String(raw.to_string()))
+        }
+        FieldKind::FpeAlphabetPreset => {
+            validation::validate_allowed_value(
+                "alphabet_preset",
+                raw,
+                &["num", "alpha", "alphanum"],
+            )?;
+            Ok(Value::String(raw.to_owned()))
+        }
+        FieldKind::FpeLetterCase => {
+            validation::validate_allowed_value(
+                "letter_case",
+                raw,
+                &["uppercase", "lowercase", "mixed"],
+            )?;
+            Ok(Value::String(raw.to_owned()))
+        }
+        FieldKind::FpePreserveCharacters => {
+            fpe::validate_preserve_characters(raw)?;
+            Ok(Value::String(raw.to_owned()))
         }
         FieldKind::FpeTweakAad => {
             validation::validate_labels(
@@ -2970,8 +3054,7 @@ mod tests {
     }
 
     #[test]
-    fn fpe_profile_domain_stays_in_full_config_validation() {
-        let mut domain_local = local_config();
+    fn fpe_profile_domain_is_validated_before_add() {
         let small_domain = parse_section_add(
             &FPE_PROFILES_SECTION,
             vec![
@@ -2989,12 +3072,9 @@ mod tests {
                 String::from("tenant=acme"),
             ],
         )
-        .expect("field parser only validates field-local values");
-        section_add_value(&mut domain_local, &FPE_PROFILES_SECTION, small_domain).unwrap();
+        .unwrap_err();
         assert_eq!(
-            validate_local_config(&domain_local)
-                .unwrap_err()
-                .to_string(),
+            small_domain.to_string(),
             "fpe profile domain is too small for FF1"
         );
     }
@@ -3023,7 +3103,8 @@ mod tests {
         section_add_value(&mut local, &FPE_PROFILES_SECTION, value).unwrap();
         validate_local_config(&local).expect("seed profile must validate");
 
-        section_update(
+        let before = local.value.clone();
+        let err = section_update(
             &mut local,
             &FPE_PROFILES_SECTION,
             vec![
@@ -3032,11 +3113,68 @@ mod tests {
                 String::from("6"),
             ],
         )
-        .expect("parser must not invent radix for partial update");
-
-        let err = validate_local_config(&local)
-            .expect_err("full config validation must reject the small binary domain");
+        .expect_err("merged profile must reject a small domain before mutation");
         assert_eq!(err.to_string(), "fpe profile domain is too small for FF1");
+        assert_eq!(local.value, before);
+    }
+
+    #[test]
+    fn fpe_selector_updates_replace_fields_and_validate_before_mutation() {
+        let mut local = local_config();
+        let value = parse_section_add(
+            &FPE_PROFILES_SECTION,
+            valid_fpe_profile_args("formatted", "6", "32"),
+        )
+        .unwrap();
+        section_add_value(&mut local, &FPE_PROFILES_SECTION, value).unwrap();
+        let update = |local: &mut LocalConfig, args: &[&str]| {
+            section_update(
+                local,
+                &FPE_PROFILES_SECTION,
+                std::iter::once("formatted")
+                    .chain(args.iter().copied())
+                    .map(str::to_owned)
+                    .collect(),
+            )
+        };
+        for args in [
+            vec!["--alphabet-preset", "alpha"],
+            vec!["--alphabet", "0123456789", "--alphabet-preset", "num"],
+            vec!["--alphabet-preset", "num", "--letter-case", "mixed"],
+            vec!["--preserve-characters", "0"],
+            vec!["--preserve-characters", "--"],
+        ] {
+            let before = local.value.clone();
+            assert!(update(&mut local, &args).is_err());
+            assert_eq!(local.value, before);
+        }
+        update(
+            &mut local,
+            &[
+                "--alphabet-preset",
+                "alpha",
+                "--letter-case",
+                "mixed",
+                "--preserve-characters",
+                "-",
+            ],
+        )
+        .unwrap();
+        let fields = &local.value["fpe_profiles"][0];
+        assert!(fields.get("alphabet").is_none());
+        assert_eq!(fields["alphabet_preset"], "alpha");
+        update(&mut local, &["--alphabet-preset", "alphanum"]).unwrap();
+        assert_eq!(local.value["fpe_profiles"][0]["letter_case"], "mixed");
+        update(&mut local, &["--alphabet-preset", "num"]).unwrap();
+        assert!(local.value["fpe_profiles"][0].get("letter_case").is_none());
+        update(
+            &mut local,
+            &["--alphabet", "0123456789", "--preserve-characters", ""],
+        )
+        .unwrap();
+        let fields = &local.value["fpe_profiles"][0];
+        assert!(fields.get("alphabet_preset").is_none());
+        assert_eq!(fields["preserve_characters"], "");
     }
 
     #[test]

@@ -20,6 +20,7 @@ from semantics import (
     COMMITMENT_PROFILE,
     FPE_BATCH_PLAINTEXTS,
     FPE_PLAINTEXT,
+    FPE_FORMATTED_PLAINTEXTS,
     FPE_PROFILE,
     INTERNAL_SEED_PLAINTEXT,
     KID_HEX,
@@ -326,7 +327,15 @@ def fpe_seeds(client):
         "profile": FPE_PROFILE,
         "ciphertext": parsed["ciphertext"],
     }
-    return [(f"/fpe/encrypt/{kid}", encrypt_seed), ("/fpe/decrypt", decrypt_seed)]
+    result = [(f"/fpe/encrypt/{kid}", encrypt_seed), ("/fpe/decrypt", decrypt_seed)]
+    for profile, plaintext in FPE_FORMATTED_PLAINTEXTS.items():
+        seed = {"ref": "fpe-formatted", "profile": profile, "plaintext": plaintext}
+        status, body = client.post_json(f"/fpe/encrypt/{kid}", seed, auth=True)
+        if status != 200:
+            raise RuntimeError("could not prepare formatted FPE seed")
+        ciphertext = json.loads(body)["ciphertext"]
+        result.extend([(f"/fpe/encrypt/{kid}", seed), ("/fpe/decrypt", {"ref": "fpe-formatted", "kid": kid, "profile": profile, "ciphertext": ciphertext})])
+    return result
 
 
 def fpe_batch_seeds(client):

@@ -141,4 +141,41 @@ def run_fpe(ctx):
     return CaseResult(passed=2)
 
 
+@cases('positive.fpe.formatted')
+def run_formatted(ctx):
+    kid = ctx.artifacts["positive.keys"][0][0]
+    profiles = [
+        {"name": "patient-id-formatted-v1", "alphabet_preset": "num", "preserve_characters": "-"},
+        {"name": "label-formatted-v1", "alphabet_preset": "alphanum", "letter_case": "mixed", "preserve_characters": "- "},
+        {"name": "unicode-formatted-v1", "alphabet": "零一二三四五六七八九", "preserve_characters": "🩺"},
+    ]
+    plaintexts = ["001-234-567", "AbC-012 xYZ", "零零一🩺二三四"]
+    for profile in profiles:
+        profile.update(kid=kid, fpe_version="fpe-ff1-2025", min_len=6, max_len=32, tweak_aad="tenant=acme;field=formatted;version=1")
+    ctx.config_data["fpe_profiles"].extend(profiles)
+    ctx.write_config()
+    ctx.reload_config()
+    for profile, plaintext in zip(profiles, plaintexts):
+        body = {"ref": "formatted", "profile": profile["name"], "plaintext": plaintext}
+        encrypted = ctx.client.post(f"/fpe/encrypt/{kid}", body, auth=True)
+        require(len(encrypted["ciphertext"]) == len(plaintext), "formatted Unicode length preserved")
+        for index, ch in enumerate(plaintext):
+            if ch in profile["preserve_characters"]:
+                require(encrypted["ciphertext"][index] == ch, "separator position preserved")
+        decoded = ctx.client.post("/fpe/decrypt", {"ref": "formatted", "profile": profile["name"], "kid": kid, "ciphertext": encrypted["ciphertext"]}, auth=True)
+        require(decoded["plaintext"] == plaintext, "formatted FPE exact round trip")
+    batch = {"profile": profiles[0]["name"], "items": [{"ref": "a", "plaintext": "001-234"}, {"ref": "b", "plaintext": "--567890--"}]}
+    encrypted = ctx.client.post(f"/fpe/encrypt/batch/{kid}", batch, auth=True)
+    decoded = ctx.client.post("/fpe/decrypt/batch", {"profile": batch["profile"], "kid": kid, "items": encrypted["items"]}, auth=True)
+    require([(item["ref"], item["plaintext"]) for item in decoded["items"]] == [(item["ref"], item["plaintext"]) for item in batch["items"]], "formatted batch order and plaintext")
+    invalid = {"profile": batch["profile"], "items": [batch["items"][0], {"ref": "b", "plaintext": "--12345--"}]}
+    status, error = ctx.http.post(f"/fpe/encrypt/batch/{kid}", invalid, auth=True)
+    require(status == 400 and error == {"error": "batch item 1 failed: plaintext effective domain is too small for FF1 after excluding preserved characters"}, "effective domain failure rejects entire batch with clear indexed error")
+    bad_decrypt = {"profile": batch["profile"], "kid": kid, "items": [encrypted["items"][0], {"ref": "b", "ciphertext": "--12345--"}]}
+    status, error = ctx.http.post("/fpe/decrypt/batch", bad_decrypt, auth=True)
+    require(status == 400 and error == {"error": "batch item 1 failed: ciphertext effective domain is too small for FF1 after excluding preserved characters"}, "decrypt rejects entire batch with clear indexed error")
+    print("- FPE presets, Unicode, preserved separators and batch domain: OK", flush=True)
+    return CaseResult()
+
+
 CASES = cases.tuple()
