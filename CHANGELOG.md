@@ -8,6 +8,11 @@ manually for releases; the Git history remains the detailed engineering record.
 Changes staged for v0.9.0, the first official release.
 
 ### Added
+- Optional signed-profile FPE authentication (`authenticated: true`), using an
+  independently derived HMAC-BLAKE2b-256 key and a separate lowercase hex tag.
+  Decrypt authenticates the whole batch before FF1. Legacy ciphertexts, outputs
+  and config signatures remain compatible; no replay protection or automatic
+  ciphertext migration is introduced.
 - Signed FPE alphabet presets (`num`, `alpha`, `alphanum`) with explicit letter
   case and optional preserved characters. Formatting bounds include separators,
   while the effective FF1 domain counts only variable characters. Existing

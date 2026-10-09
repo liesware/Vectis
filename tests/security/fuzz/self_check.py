@@ -85,6 +85,11 @@ def self_check():
     altered_subject[4] = (200, '{"ref":"subject-token","plaintext":"wrong"}')
     expect(subject_contract_semantic(altered_subject), "subject retry cannot replace seed")
     formatted = {"ref":"fpe", "profile":"fuzz-fpe-formatted-v1", "plaintext":"001-234-567"}
+    authenticated = dict(formatted, profile="fuzz-fpe-auth-v1")
+    expect(not fpe_semantic(authenticated, authenticated, 200, json.dumps({"ciphertext":"987-654-321","tag":"a"*64})), "authenticated FPE requires a separate lowercase tag")
+    expect(fpe_semantic(authenticated, authenticated, 200, '{"ciphertext":"987-654-321"}'), "authenticated FPE cannot omit tag")
+    authentic_inverse = {"kid":"a"*64,"profile":"fuzz-fpe-auth-v1","ciphertext":"987-654-321","tag":"a"*64}
+    expect(fpe_semantic(dict(authentic_inverse,tag="b"*64),authentic_inverse,200,'{"plaintext":"001-234-567"}'), "FPE must reject mutated authentication tag")
     expect(not fpe_semantic(formatted, formatted, 200, '{"ciphertext":"987-654-321"}'), "formatted FPE preserves separator positions")
     expect(fpe_semantic(formatted, formatted, 200, '{"ciphertext":"987654321"}'), "formatted FPE rejects lost separators")
     inverse = {"kid":"a"*64,"profile":"fuzz-fpe-formatted-v1","ciphertext":"987-654-321"}

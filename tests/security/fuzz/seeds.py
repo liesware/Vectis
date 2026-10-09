@@ -333,8 +333,10 @@ def fpe_seeds(client):
         status, body = client.post_json(f"/fpe/encrypt/{kid}", seed, auth=True)
         if status != 200:
             raise RuntimeError("could not prepare formatted FPE seed")
-        ciphertext = json.loads(body)["ciphertext"]
-        result.extend([(f"/fpe/encrypt/{kid}", seed), ("/fpe/decrypt", {"ref": "fpe-formatted", "kid": kid, "profile": profile, "ciphertext": ciphertext})])
+        encoded = json.loads(body)
+        inverse = {"ref": "fpe-formatted", "kid": kid, "profile": profile, "ciphertext": encoded["ciphertext"]}
+        if "tag" in encoded: inverse["tag"] = encoded["tag"]
+        result.extend([(f"/fpe/encrypt/{kid}", seed), ("/fpe/decrypt", inverse)])
     return result
 
 

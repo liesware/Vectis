@@ -476,6 +476,18 @@ async fn validate_config_for_local_node() -> Result<
                 request,
             )
         },
+        |request| {
+            let loaded_key = keys_db_state.get(request.kid).ok_or_else(|| {
+                invalid_input(format!(
+                    "fpe profile references kid not loaded in memory: {}",
+                    request.kid
+                ))
+            })?;
+            crate::core::fpe::derive_fpe_auth_key_for_profile(
+                loaded_key.keys().symmetric().key_hex(),
+                request,
+            )
+        },
     )?;
     let output = ConfigValidationOutput {
         status: "valid",

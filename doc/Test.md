@@ -146,7 +146,11 @@ runtime.
 ## Python HTTP Tests
 
 FPE coverage includes signed ASCII presets and Unicode custom alphabets,
-preserved separator positions, effective-domain rejection and all-or-nothing
+optional authentication tags and authenticate-before-FF1 checks. Unit tests use
+a thread-local counter to ensure no decrypt is attempted when any batch tag
+fails. HTTP/CLI and existing fuzz targets cover required/forbidden tags, strict
+encoding, context mutation and legacy outputs without a tag.
+Coverage also includes preserved separator positions, effective-domain rejection and all-or-nothing
 batch errors. CLI tests cover selector replacement, case inheritance/removal and
 invalid edits without writes. Native `fuzz_fpe_roundtrip` exercises legacy,
 preset and Unicode profiles, including insufficient effective domains; curated

@@ -1148,7 +1148,7 @@ Response:
 
 ## Format-Preserving Encryption
 
-FPE is a local field operation. It preserves an alphabet and length range defined by a signed config profile. It is deterministic for the same key, profile, tweak AAD, and plaintext. It does not authenticate data and does not replace AEAD message encryption.
+FPE is a local field operation. It preserves an alphabet and length range defined by a signed config profile. It is deterministic for the same key, profile, tweak AAD, and plaintext. Legacy profiles do not authenticate data; optional authenticated profiles transport a separate MAC tag. FPE does not replace AEAD message encryption.
 
 FPE profiles live in `config.json` under `fpe_profiles`. Requests cannot provide
 alphabet selectors, letter case, preserved characters, tweak, bounds or version;
@@ -1186,7 +1186,8 @@ For a numeric preset with `min_len: 6` and `preserve_characters: "-"`, `001-234`
 is accepted: it has six encrypted symbols. `001-23` meets the total length of
 six but has only five encrypted symbols, so it is rejected. The domain is
 checked per value, not inferred solely from its configured minimum length.
-Preserved formatting reveals structure and is not authenticated. Alphanum does
+Preserved formatting reveals structure; legacy profiles do not authenticate it.
+Authenticated profiles cover it through the separate tag. Alphanum does
 not preserve per-position letter/digit classes such as `LLDDDD`.
 
 Example of a new signed profile:
@@ -1206,6 +1207,48 @@ Example of a new signed profile:
 
 Use a new profile when adopting another alphabet/order or preserved format.
 Changing an existing profile may prevent recovery of earlier ciphertexts.
+
+### Optional FPE Authentication
+
+Set `authenticated: true` in a new signed profile to enable authentication.
+The field accepts only JSON booleans, rejects `null` and defaults to false.
+False is omitted from canonical config serialization, including explicit false;
+legacy signatures and definitions remain unchanged. Requests cannot disable it.
+
+Encrypt inputs are unchanged. Authenticated outputs include `tag` beside
+`ciphertext`; legacy outputs omit it entirely. Decrypt requires `tag` for
+authenticated profiles and prohibits it for legacy profiles. Tags are exactly
+64 lowercase ASCII hex characters (32 bytes), without whitespace or padding.
+In batch, the tag belongs to each item, not the top-level request:
+
+```json
+{"ref":"reg1","kid":"<kid>","profile":"patient-id-auth-v1","ciphertext":"839-201","tag":"<64 lowercase hex characters returned by encrypt>"}
+```
+
+The worker verifies HMAC before running FF1. Batch verifies every item first;
+any authentication failure returns one error without plaintext or partial items.
+An incorrect well-formed tag returns `400` with `fpe authentication failed`;
+batch errors retain `batch item N failed: fpe authentication failed`. Malformed
+inputs and authorization/lifecycle failures retain their existing classifications.
+
+The independent MAC key uses HKDF-BLAKE2b-256 from the operational symmetric
+key, salt `vectis:fpe:mac:v1`, output 32 bytes and this single validated info:
+
+```text
+purpose=fpe-auth;profile=<name>;kid=<kid>;fpe_version=<version>;auth_version=v1
+```
+
+HMAC-BLAKE2b-256 covers `canonical_json_v1` of the object with fields
+`purpose: "fpe-auth"`, `auth_version: "v1"`, `kid`, `profile`, `fpe_version`,
+`alphabet` (resolved), `preserve_characters` (exact configured order, empty if
+absent), `tweak_aad` and the complete `ciphertext`, including separators. It
+does not include `ref`, plaintext or preset selectors. FF1 derivation is unchanged.
+
+Authentication binds content and context under a shared key; it does not prevent
+replay, replace authorization or hide deterministic equality. Retain ciphertext
+and tag together. Changing alphabet, preserved order or tweak invalidates tags.
+No ciphertexts are migrated or retagged automatically. All existing budgets
+remain; tags contribute to the global 2 MiB request limit.
 
 All FPE requests include a client-defined `ref`. It is required, non-empty, at most 128 characters, and echoed in the response. Batch requests require every item `ref` to be unique within the request.
 
@@ -2598,6 +2641,7 @@ Top level:
 | `alphabet_preset` | exactly one selector | `num`, `alpha`, `alphanum` | Fixed ASCII preset; alternative to `alphabet`. |
 | `letter_case` | alpha/alphanum only | `uppercase`, `lowercase`, `mixed` | Required for letter presets; prohibited for num/custom. |
 | `preserve_characters` | no | 0..32 distinct Unicode characters, no controls or alphabet overlap | Preserved positions; absent means empty, explicit empty remains serialized. |
+| `authenticated` | no | boolean; default false, no null | True requires separate tags. False is omitted in canonical serialization. |
 | `min_len` | yes | integer >= 6 | Minimum accepted field length. |
 | `max_len` | yes | integer >= `min_len` | Maximum accepted field length. |
 | `tweak_aad` | yes | `key=value;key=value`, max 128 chars | Literal cryptographic tweak context from signed config. Keys must be unique and use `[A-Za-z0-9_.-]+`. |

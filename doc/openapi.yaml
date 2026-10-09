@@ -2478,6 +2478,13 @@ components:
         variant:
           $ref: "#/components/schemas/SymmetricAlgorithm"
 
+    FpeAuthTag:
+      type: string
+      minLength: 64
+      maxLength: 64
+      pattern: '^[0-9a-f]{64}$'
+      description: HMAC-BLAKE2b-256; required for authenticated profiles and prohibited for legacy decrypt. Never nullable.
+
     FpeProfileConfig:
       type: object
       description: >
@@ -2513,6 +2520,10 @@ components:
           maxLength: 32
           pattern: '^[^\x00-\x1F\x7F-\x9F]*$'
           description: Optional, empty when absent. Distinct Unicode characters; no controls, trimming or normalization. Explicit empty string remains present when serialized.
+        authenticated:
+          type: boolean
+          default: false
+          description: Signed policy; false is omitted in canonical serialization. Requests cannot override it.
         min_len:
           type: integer
           minimum: 6
@@ -2574,6 +2585,8 @@ components:
         ciphertext:
           $ref: "#/components/schemas/TextField"
           example: "839201"
+        tag:
+          $ref: "#/components/schemas/FpeAuthTag"
 
     FpeEncryptBatchInput:
       type: object
@@ -2618,6 +2631,8 @@ components:
               ciphertext:
                 $ref: "#/components/schemas/TextField"
                 example: "839201"
+              tag:
+                $ref: "#/components/schemas/FpeAuthTag"
 
     FpeDecryptInput:
       type: object
@@ -2634,6 +2649,8 @@ components:
         ciphertext:
           $ref: "#/components/schemas/TextField"
           example: "839201"
+        tag:
+          $ref: "#/components/schemas/FpeAuthTag"
 
     FpeDecryptOutput:
       type: object
@@ -2669,6 +2686,8 @@ components:
               ciphertext:
                 $ref: "#/components/schemas/TextField"
                 example: "839201"
+              tag:
+                $ref: "#/components/schemas/FpeAuthTag"
 
     FpeDecryptBatchOutput:
       type: object

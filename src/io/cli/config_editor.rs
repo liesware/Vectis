@@ -335,6 +335,15 @@ const FPE_PROFILES_SECTION: SectionSpec = SectionSpec {
             default_on_add: None,
         },
         FieldSpec {
+            flag: "--authenticated",
+            json_field: "authenticated",
+            kind: FieldKind::Bool,
+            cardinality: FieldCardinality::One,
+            required_on_add: false,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
             flag: "--min-len",
             json_field: "min_len",
             kind: FieldKind::Usize,
@@ -1723,6 +1732,11 @@ fn validate_local_config(local: &LocalConfig) -> Result<(), DynError> {
                     crate::core::sharing::SHARING_KEY_SIZE_BYTES
                 ]),
             })
+        },
+        |_| {
+            Ok(zeroize::Zeroizing::new(
+                vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+            ))
         },
     )?;
     Ok(())

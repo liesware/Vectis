@@ -756,9 +756,9 @@ const CONFIG_HELP: CommandHelp = CommandHelp {
         "vectis config permissions grant <client> --kid <kid|*> --action <action>",
         "vectis config permissions revoke <client> --kid <kid|*> --action <action>",
         "vectis config fpe list",
-        "vectis config fpe add --name <name> --kid <kid> (--alphabet <chars> | --alphabet-preset <preset>) [--letter-case <case>] [--preserve-characters <chars>] --min-len <n> --max-len <n> --tweak-aad <aad> [--fpe-version fpe-ff1-2025]",
+        "vectis config fpe add --name <name> --kid <kid> (--alphabet <chars> | --alphabet-preset <preset>) [--letter-case <case>] [--preserve-characters <chars>] [--authenticated true|false] --min-len <n> --max-len <n> --tweak-aad <aad> [--fpe-version fpe-ff1-2025]",
         "vectis config fpe get <name>",
-        "vectis config fpe update <name> [--kid <kid>] [--alphabet <chars> | --alphabet-preset <preset>] [--letter-case <case>] [--preserve-characters <chars>] [--min-len <n>] [--max-len <n>] [--tweak-aad <aad>] [--fpe-version fpe-ff1-2025]",
+        "vectis config fpe update <name> [--kid <kid>] [--alphabet <chars> | --alphabet-preset <preset>] [--letter-case <case>] [--preserve-characters <chars>] [--authenticated true|false] [--min-len <n>] [--max-len <n>] [--tweak-aad <aad>] [--fpe-version fpe-ff1-2025]",
         "vectis config fpe delete <name>",
         "vectis config token list",
         "vectis config token add --name <name> --kid <kid> --token-prefix <prefix> --token-len <n> --max-plaintext-len <n> --one-time <true|false>",
@@ -978,6 +978,7 @@ const CONFIG_FPE_HELP: CommandHelp = CommandHelp {
                 "  preserve-characters: at most 32 distinct characters outside the alphabet",
                 "  lengths include separators; only encrypted characters count toward the FF1 domain",
                 "  explicit selectors replace the previous selector; custom/num remove inherited case",
+                "  authenticated: optional false default; true requires a separate tag on decrypt",
                 "  min_len must be at least 6",
                 "  run `vectis config sign`, then `vectis config reload` after edits",
             ],
@@ -1235,6 +1236,7 @@ const FPE_HELP: CommandHelp = CommandHelp {
             lines: &[
                 "  encrypt <kid>         POST /fpe/encrypt/{kid}, requires VECTIS_APIKEY",
                 "  decrypt               POST /fpe/decrypt, requires VECTIS_APIKEY",
+                "  authenticated profile Include the encrypt output tag in decrypt JSON/file",
             ],
         },
         HelpSection {

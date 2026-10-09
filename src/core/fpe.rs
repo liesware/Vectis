@@ -13,6 +13,14 @@ pub const FPE_KEY_SIZE_BYTES: usize = 32;
 pub const FPE_VALUE_MIN_LEN: usize = 6;
 pub const FPE_VALUE_MAX_LEN: usize = 1024;
 pub const FPE_PRESERVE_MAX_CHARS: usize = 32;
+pub const FPE_AUTH_KEY_SALT: &[u8] = b"vectis:fpe:mac:v1";
+pub const FPE_AUTH_KEY_SIZE_BYTES: usize = 32;
+pub const FPE_AUTH_VERSION: &str = "v1";
+pub const FPE_AUTH_MAC: &str = "HMAC(BLAKE2b(256))";
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -30,7 +38,7 @@ pub enum LetterCase {
     Mixed,
 }
 
-fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+pub(crate) fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: Deserialize<'de>,
@@ -71,6 +79,8 @@ pub(crate) struct FpeProfileInput {
         skip_serializing_if = "Option::is_none"
     )]
     preserve_characters: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    authenticated: bool,
     min_len: usize,
     max_len: usize,
     tweak_aad: String,
@@ -90,6 +100,8 @@ pub struct FpeProfile {
     cipher: PreparedFpeCipher,
     preserve_characters: String,
     preserved: HashSet<char>,
+    authenticated: bool,
+    auth_key: Option<Zeroizing<Vec<u8>>>,
 }
 
 #[derive(Clone, Default)]
@@ -105,6 +117,7 @@ impl fmt::Debug for FpeProfile {
             .field("fpe_version", &self.fpe_version)
             .field("alphabet", &self.alphabet)
             .field("preserve_characters", &self.preserve_characters)
+            .field("authenticated", &self.authenticated)
             .field("min_len", &self.min_len)
             .field("max_len", &self.max_len)
             .field("tweak_aad", &self.tweak_aad)
@@ -123,6 +136,9 @@ impl fmt::Debug for FpeProfilesState {
 }
 
 impl FpeProfile {
+    pub fn authenticated(&self) -> bool {
+        self.authenticated
+    }
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -216,6 +232,7 @@ impl Zeroize for FpeProfile {
         self.max_len = 0;
         self.tweak_aad.zeroize();
         self.kid.zeroize();
+        self.auth_key = None;
     }
 }
 
@@ -229,6 +246,7 @@ pub(crate) fn validate_fpe_profiles(
     profile_inputs: Vec<FpeProfileInput>,
     is_loaded_kid: impl Fn(&str) -> bool,
     derive_fpe_key: impl Fn(FpeKeyDerivationRequest<'_>) -> Result<Zeroizing<Vec<u8>>, DynError>,
+    derive_fpe_auth_key: impl Fn(FpeKeyDerivationRequest<'_>) -> Result<Zeroizing<Vec<u8>>, DynError>,
 ) -> Result<FpeProfilesState, DynError> {
     let mut seen_names = HashSet::new();
     let mut profiles = Vec::new();
@@ -275,6 +293,21 @@ pub(crate) fn validate_fpe_profiles(
         }
         let (alphabet_chars, alphabet_index) = prepare_fpe_alphabet(&alphabet)?;
         let cipher = build_fpe_cipher(&fpe_key, alphabet_chars.len())?;
+        let auth_key = if profile.authenticated {
+            let key = derive_fpe_auth_key(FpeKeyDerivationRequest {
+                kid: &profile.kid,
+                profile_name: &profile.name,
+                fpe_version: &profile.fpe_version,
+            })?;
+            if key.len() != FPE_AUTH_KEY_SIZE_BYTES {
+                return Err(crate::error::internal(
+                    "derived fpe authentication key has invalid length",
+                ));
+            }
+            Some(key)
+        } else {
+            None
+        };
 
         profiles.push(FpeProfile {
             name: profile.name,
@@ -289,6 +322,8 @@ pub(crate) fn validate_fpe_profiles(
             cipher,
             preserve_characters,
             preserved,
+            authenticated: profile.authenticated,
+            auth_key,
         });
     }
 
@@ -299,6 +334,128 @@ pub struct FpeKeyDerivationRequest<'a> {
     pub kid: &'a str,
     pub profile_name: &'a str,
     pub fpe_version: &'a str,
+}
+
+pub(crate) fn derive_fpe_auth_key_for_profile(
+    source: &str,
+    request: FpeKeyDerivationRequest<'_>,
+) -> Result<Zeroizing<Vec<u8>>, DynError> {
+    let source = Zeroizing::new(hex::decode(source)?);
+    let info = validation::build_validated_aad(&[
+        ("purpose", "fpe-auth"),
+        ("profile", request.profile_name),
+        ("kid", request.kid),
+        ("fpe_version", request.fpe_version),
+        ("auth_version", FPE_AUTH_VERSION),
+    ])?;
+    Ok(Zeroizing::new(crate::core::crypto::create_hkdf(
+        &source,
+        FPE_AUTH_KEY_SALT,
+        info.as_bytes(),
+        FPE_AUTH_KEY_SIZE_BYTES,
+    )?))
+}
+
+#[derive(Serialize)]
+struct FpeAuthMaterial<'a> {
+    purpose: &'static str,
+    auth_version: &'static str,
+    kid: &'a str,
+    profile: &'a str,
+    fpe_version: &'a str,
+    alphabet: &'a str,
+    preserve_characters: &'a str,
+    tweak_aad: &'a str,
+    ciphertext: &'a str,
+}
+
+fn auth_bytes(profile: &FpeProfile, ciphertext: &str) -> Result<Zeroizing<Vec<u8>>, DynError> {
+    let key = profile
+        .auth_key
+        .as_ref()
+        .ok_or_else(|| crate::error::internal("fpe authentication key unavailable"))?;
+    let material = crate::core::canonical::canonical_json_v1(&FpeAuthMaterial {
+        purpose: "fpe-auth",
+        auth_version: FPE_AUTH_VERSION,
+        kid: profile.kid(),
+        profile: profile.name(),
+        fpe_version: profile.fpe_version(),
+        alphabet: profile.alphabet(),
+        preserve_characters: profile.preserve_characters(),
+        tweak_aad: profile.tweak_aad(),
+        ciphertext,
+    })?;
+    let tag = crate::core::crypto::create_hmac_with_algorithm(FPE_AUTH_MAC, key, &material)
+        .map_err(|_| crate::error::internal("fpe authentication operation failed"))?;
+    if tag.len() != FPE_AUTH_KEY_SIZE_BYTES {
+        return Err(crate::error::internal(
+            "fpe authentication tag has invalid length",
+        ));
+    }
+    Ok(Zeroizing::new(tag))
+}
+
+pub fn validate_auth_tag(tag: &str) -> Result<(), DynError> {
+    if tag.len() != 64
+        || !tag
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(crate::error::invalid_input(
+            "fpe tag must be 64 lowercase hexadecimal characters",
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_tag_policy(profile: &FpeProfile, tag: Option<&str>) -> Result<(), DynError> {
+    match (profile.authenticated(), tag) {
+        (true, None) => Err(crate::error::invalid_input(
+            "fpe tag is required for authenticated profiles",
+        )),
+        (false, Some(_)) => Err(crate::error::invalid_input(
+            "fpe tag is prohibited for legacy profiles",
+        )),
+        (_, Some(tag)) => validate_auth_tag(tag),
+        _ => Ok(()),
+    }
+}
+
+pub fn generate_auth_tag(
+    profile: &FpeProfile,
+    ciphertext: &str,
+) -> Result<Option<String>, DynError> {
+    if !profile.authenticated() {
+        return Ok(None);
+    }
+    Ok(Some(hex::encode(auth_bytes(profile, ciphertext)?)))
+}
+
+pub fn verify_auth_tag(
+    profile: &FpeProfile,
+    ciphertext: &str,
+    tag: Option<&str>,
+) -> Result<(), DynError> {
+    validate_tag_policy(profile, tag)?;
+    if let Some(tag) = tag {
+        let received = Zeroizing::new(hex::decode(tag)?);
+        let expected = auth_bytes(profile, ciphertext)?;
+        if !crate::core::crypto::constant_time_eq(&received, &expected) {
+            return Err(crate::error::invalid_input("fpe authentication failed"));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+thread_local! { static DECRYPT_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(crate) fn reset_decrypt_calls() {
+    DECRYPT_CALLS.set(0);
+}
+#[cfg(test)]
+pub(crate) fn decrypt_calls() -> usize {
+    DECRYPT_CALLS.get()
 }
 
 struct PreparedFpeValue {
@@ -628,6 +785,8 @@ pub fn fpe_encrypt(profile: &FpeProfile, plaintext: &str) -> Result<String, DynE
 }
 
 pub fn fpe_decrypt(profile: &FpeProfile, ciphertext: &str) -> Result<String, DynError> {
+    #[cfg(test)]
+    DECRYPT_CALLS.set(DECRYPT_CALLS.get() + 1);
     let digits = parse_fpe_value_digits("ciphertext", ciphertext, profile)?;
     fpe_transform(profile, digits, false)
 }
@@ -697,6 +856,7 @@ mod tests {
             alphabet_preset: None,
             letter_case: None,
             preserve_characters: None,
+            authenticated: false,
             min_len: 6,
             max_len: 32,
             tweak_aad: "tenant=acme;field=patient_id;version=1".to_string(),
@@ -740,6 +900,11 @@ mod tests {
             vec![input("patient-id", kid())],
             |item| item == kid(),
             |_| Ok(fpe_key()),
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
         )
         .expect("profile must validate");
         assert_eq!(state.len(), 1);
@@ -761,11 +926,128 @@ mod tests {
             vec![input("patient-id", kid())],
             |_| true,
             |_| Ok(fpe_key()),
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
         )
         .unwrap();
         let profile = state.get("patient-id").unwrap();
         assert_eq!(fpe_encrypt(&profile, "001234567").unwrap(), "392168046");
         assert_eq!(fpe_decrypt(&profile, "392168046").unwrap(), "001234567");
+    }
+
+    #[test]
+    fn authentication_default_and_false_preserve_legacy_serialization() {
+        let original = serde_json::to_value(input("legacy", kid())).unwrap();
+        assert!(original.get("authenticated").is_none());
+        let mut explicit = original.clone();
+        explicit["authenticated"] = serde_json::json!(false);
+        let decoded: FpeProfileInput = serde_json::from_value(explicit).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), original);
+        for invalid in [
+            serde_json::Value::Null,
+            serde_json::json!("true"),
+            serde_json::json!(1),
+        ] {
+            let mut value = original.clone();
+            value["authenticated"] = invalid;
+            assert!(serde_json::from_value::<FpeProfileInput>(value).is_err());
+        }
+        let state = validate_fpe_profiles(
+            vec![input("legacy", kid())],
+            |_| true,
+            |_| Ok(fpe_key()),
+            |_| panic!("legacy must not derive a MAC key"),
+        )
+        .unwrap();
+        assert!(!state.get("legacy").unwrap().authenticated());
+        let mut enabled = input("enabled", kid());
+        enabled.authenticated = true;
+        assert!(
+            validate_fpe_profiles(
+                vec![enabled],
+                |_| true,
+                |_| Ok(fpe_key()),
+                |_| Ok(Zeroizing::new(vec![9; 31]))
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn authentication_key_derivation_is_separate_and_binds_context() {
+        let derive = |name: &str| {
+            derive_fpe_auth_key_for_profile(
+                &"11".repeat(32),
+                FpeKeyDerivationRequest {
+                    kid: kid(),
+                    profile_name: name,
+                    fpe_version: FPE_VERSION_FF1_2025,
+                },
+            )
+            .unwrap()
+        };
+        let key = derive("auth");
+        assert_eq!(key.len(), FPE_AUTH_KEY_SIZE_BYTES);
+        assert_eq!(key, derive("auth"));
+        assert_ne!(key, real_fpe_key(kid(), "auth", FPE_VERSION_FF1_2025));
+        assert_ne!(key, derive("other"));
+        let info = "purpose=fpe-auth;profile=auth;kid=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;fpe_version=fpe-ff1-2025;auth_version=v1";
+        let expected =
+            crate::core::crypto::create_hkdf(&[0x11; 32], FPE_AUTH_KEY_SALT, info.as_bytes(), 32)
+                .unwrap();
+        assert_eq!(key.as_slice(), expected.as_slice());
+    }
+
+    #[test]
+    fn authentication_binds_exact_material_and_zeroizes_key() {
+        let mut definition = input("auth", kid());
+        definition.authenticated = true;
+        definition.preserve_characters = Some("- ".to_owned());
+        let mut state = validate_fpe_profiles(
+            vec![definition],
+            |_| true,
+            |_| Ok(fpe_key()),
+            |_| Ok(Zeroizing::new(vec![9; 32])),
+        )
+        .unwrap();
+        let mut profile = state.profiles.pop().unwrap();
+        let profile = Arc::get_mut(&mut profile).unwrap();
+        let ciphertext = fpe_encrypt(profile, "001-234").unwrap();
+        let tag = generate_auth_tag(profile, &ciphertext).unwrap().unwrap();
+        assert!(validate_auth_tag(&tag).is_ok());
+        verify_auth_tag(profile, &ciphertext, Some(&tag)).unwrap();
+        assert_eq!(
+            verify_auth_tag(profile, &ciphertext.replace('-', " "), Some(&tag))
+                .unwrap_err()
+                .to_string(),
+            "fpe authentication failed"
+        );
+        assert!(format!("{profile:?}").find("090909").is_none());
+        macro_rules! mutated {
+            ($field:ident, $value:expr) => {{
+                let original = std::mem::replace(&mut profile.$field, $value.to_owned());
+                assert_eq!(
+                    verify_auth_tag(profile, &ciphertext, Some(&tag))
+                        .unwrap_err()
+                        .to_string(),
+                    "fpe authentication failed"
+                );
+                profile.$field = original;
+            }};
+        }
+        mutated!(kid, &"b".repeat(64));
+        mutated!(name, "other");
+        mutated!(fpe_version, "different");
+        mutated!(alphabet, "9876543210");
+        mutated!(preserve_characters, " -");
+        mutated!(tweak_aad, "tenant=other");
+        profile.zeroize();
+        assert!(profile.auth_key.is_none());
+        assert!(profile.authenticated());
+        assert!(verify_auth_tag(profile, &ciphertext, Some(&tag)).is_err());
     }
 
     #[test]
@@ -844,7 +1126,17 @@ mod tests {
         let mut definition = input("literal-num", kid());
         definition.alphabet = Some("num".to_owned());
         definition.min_len = 13;
-        let state = validate_fpe_profiles(vec![definition], |_| true, |_| Ok(fpe_key())).unwrap();
+        let state = validate_fpe_profiles(
+            vec![definition],
+            |_| true,
+            |_| Ok(fpe_key()),
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
+        )
+        .unwrap();
         let profile = state.get("literal-num").unwrap();
         assert_eq!(profile.alphabet(), "num");
         let plaintext = format!("{}n", "num".repeat(4));
@@ -921,10 +1213,19 @@ mod tests {
         profile.alphabet_preset = preset;
         profile.letter_case = case;
         profile.preserve_characters = Some(preserve.to_owned());
-        validate_fpe_profiles(vec![profile], |_| true, |_| Ok(fpe_key()))
-            .unwrap()
-            .get("patient-id")
-            .unwrap()
+        validate_fpe_profiles(
+            vec![profile],
+            |_| true,
+            |_| Ok(fpe_key()),
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
+        )
+        .unwrap()
+        .get("patient-id")
+        .unwrap()
     }
 
     #[test]
@@ -991,6 +1292,11 @@ mod tests {
             vec![input("patient-id", kid())],
             |item| item == kid(),
             |_| Ok(fpe_key()),
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
         )
         .expect("profile must validate");
         let first = state.get("patient-id").expect("profile must exist");
@@ -1010,17 +1316,33 @@ mod tests {
     fn in_flight_profile_keeps_old_snapshot_after_state_replacement() {
         let mut old_input = input("patient-id", kid());
         old_input.tweak_aad = "tenant=old;field=patient_id;version=1".to_string();
-        let mut old_state =
-            validate_fpe_profiles(vec![old_input], |item| item == kid(), |_| Ok(fpe_key()))
-                .expect("old profile must validate");
+        let mut old_state = validate_fpe_profiles(
+            vec![old_input],
+            |item| item == kid(),
+            |_| Ok(fpe_key()),
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
+        )
+        .expect("old profile must validate");
         let in_flight = old_state.get("patient-id").expect("profile must exist");
 
         old_state.zeroize();
         let mut new_input = input("patient-id", kid());
         new_input.tweak_aad = "tenant=new;field=patient_id;version=1".to_string();
-        let new_state =
-            validate_fpe_profiles(vec![new_input], |item| item == kid(), |_| Ok(fpe_key()))
-                .expect("new profile must validate");
+        let new_state = validate_fpe_profiles(
+            vec![new_input],
+            |item| item == kid(),
+            |_| Ok(fpe_key()),
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
+        )
+        .expect("new profile must validate");
         let current = new_state.get("patient-id").expect("profile must exist");
 
         assert_eq!(
@@ -1037,6 +1359,11 @@ mod tests {
             vec![input("patient-id", kid()), input("patient-id", kid())],
             |item| item == kid(),
             |_| Ok(fpe_key()),
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
         )
         .expect_err("duplicate name must fail");
         assert!(err.to_string().contains("duplicated name"));
@@ -1047,18 +1374,44 @@ mod tests {
         let mut profile = input("patient-id", kid());
         profile.alphabet = Some("001234".to_string());
         assert!(
-            validate_fpe_profiles(vec![profile], |item| item == kid(), |_| Ok(fpe_key())).is_err()
+            validate_fpe_profiles(
+                vec![profile],
+                |item| item == kid(),
+                |_| Ok(fpe_key()),
+                |_| Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES]
+                )),
+            )
+            .is_err()
         );
 
         let mut profile = input("patient-id", kid());
         profile.max_len = FPE_VALUE_MAX_LEN;
-        validate_fpe_profiles(vec![profile], |item| item == kid(), |_| Ok(fpe_key()))
-            .expect("maximum allowed fpe length must validate");
+        validate_fpe_profiles(
+            vec![profile],
+            |item| item == kid(),
+            |_| Ok(fpe_key()),
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
+        )
+        .expect("maximum allowed fpe length must validate");
 
         let mut profile = input("patient-id", kid());
         profile.max_len = FPE_VALUE_MAX_LEN + 1;
-        let err = validate_fpe_profiles(vec![profile], |item| item == kid(), |_| Ok(fpe_key()))
-            .expect_err("oversized fpe max length must fail");
+        let err = validate_fpe_profiles(
+            vec![profile],
+            |item| item == kid(),
+            |_| Ok(fpe_key()),
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
+        )
+        .expect_err("oversized fpe max length must fail");
         assert_eq!(
             err.to_string(),
             "fpe_profiles.max_len exceeds maximum allowed value"
@@ -1091,14 +1444,30 @@ mod tests {
         let mut profile = input("patient-id", kid());
         profile.min_len = FPE_VALUE_MIN_LEN - 1;
         assert!(
-            validate_fpe_profiles(vec![profile], |item| item == kid(), |_| Ok(fpe_key())).is_err()
+            validate_fpe_profiles(
+                vec![profile],
+                |item| item == kid(),
+                |_| Ok(fpe_key()),
+                |_| Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES]
+                )),
+            )
+            .is_err()
         );
 
         let mut profile = input("patient-id", kid());
         profile.min_len = 4;
         profile.max_len = 3;
         assert!(
-            validate_fpe_profiles(vec![profile], |item| item == kid(), |_| Ok(fpe_key())).is_err()
+            validate_fpe_profiles(
+                vec![profile],
+                |item| item == kid(),
+                |_| Ok(fpe_key()),
+                |_| Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES]
+                )),
+            )
+            .is_err()
         );
 
         let err =
@@ -1188,7 +1557,10 @@ mod tests {
             validate_fpe_profiles(
                 vec![input("patient-id", kid())],
                 |_| false,
-                |_| { Ok(fpe_key()) }
+                |_| { Ok(fpe_key()) },
+                |_| Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES]
+                )),
             )
             .is_err()
         );
@@ -1279,6 +1651,11 @@ mod tests {
             vec![input("patient-id", kid())],
             |item| item == kid(),
             |_| Ok(fpe_key()),
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
         )
         .expect("profile must validate");
         let profile = state.get("patient-id").expect("profile must exist");
@@ -1295,6 +1672,11 @@ mod tests {
             vec![input("patient-id", kid())],
             |item| item == kid(),
             real_fpe_key_for_request,
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
         )
         .expect("profile must validate");
         let profile = state.get("patient-id").expect("profile must exist");
@@ -1311,6 +1693,11 @@ mod tests {
             vec![input("patient-id", kid())],
             |item| item == kid(),
             real_fpe_key_for_request,
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
         )
         .expect("profile must validate");
         let profile = state.get("patient-id").expect("profile must exist");
@@ -1322,6 +1709,11 @@ mod tests {
             vec![other_tweak],
             |item| item == kid(),
             real_fpe_key_for_request,
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
         )
         .expect("profile must validate");
         let other_tweak_profile = other_tweak_state
@@ -1332,6 +1724,11 @@ mod tests {
             vec![input("other-profile", kid())],
             |item| item == kid(),
             real_fpe_key_for_request,
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
         )
         .expect("profile must validate");
         let other_profile = other_profile_state
@@ -1355,6 +1752,11 @@ mod tests {
             vec![input("patient-id", kid())],
             |item| item == kid(),
             |_| Ok(fpe_key()),
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
         )
         .expect("profile must validate");
         let profile = state.get("patient-id").expect("profile must exist");
@@ -1378,6 +1780,11 @@ mod tests {
             vec![input("patient-id", kid())],
             |item| item == kid(),
             |_| Ok(fpe_key()),
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
         )
         .expect("profile must validate");
         let profile = state.get("patient-id").expect("profile must exist");

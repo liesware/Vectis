@@ -27,7 +27,7 @@ RECIPIENT_HEX = "b" * 64
 INTERNAL_SEED_PLAINTEXT = "fuzz seed plaintext"
 FPE_PROFILE = "fuzz-patient-id-decimal-v1"
 FPE_PLAINTEXT = "1234567890"
-FPE_FORMATTED_PLAINTEXTS = {"fuzz-fpe-formatted-v1": "001-234-567", "fuzz-fpe-alpha-v1": "AbC-012 xYZ"}
+FPE_FORMATTED_PLAINTEXTS = {"fuzz-fpe-formatted-v1": "001-234-567", "fuzz-fpe-alpha-v1": "AbC-012 xYZ", "fuzz-fpe-auth-v1": "001-234-567"}
 FPE_BATCH_PLAINTEXTS = [FPE_PLAINTEXT, "9876543210"]
 TOKENIZATION_PROFILE = "fuzz-patient-id-token-v1"
 ONE_TIME_TOKENIZATION_PROFILE = "fuzz-one-time-token-v1"
@@ -171,12 +171,16 @@ def fpe_semantic(sent_value, seed, status, body):
 
     if "plaintext" in seed:
         ciphertext = parsed.get("ciphertext")
+        if isinstance(sent_value, dict) and sent_value.get("profile") == "fuzz-fpe-auth-v1":
+            tag = parsed.get("tag")
+            if not isinstance(tag, str) or len(tag) != 64 or any(ch not in "0123456789abcdef" for ch in tag):
+                findings.append("SEMANTIC: authenticated FPE encrypt returned missing or malformed tag")
         if ciphertext is None:
             findings.append("SEMANTIC: fpe encrypt 200 body is missing ciphertext")
         if isinstance(sent_value, dict) and isinstance(sent_value.get("plaintext"), str) and isinstance(ciphertext, str):
             plaintext = sent_value["plaintext"]
             profile = sent_value.get("profile")
-            preserve = {"fuzz-fpe-formatted-v1": "-", "fuzz-fpe-alpha-v1": "- "}.get(profile, "") if isinstance(profile, str) else ""
+            preserve = {"fuzz-fpe-formatted-v1": "-", "fuzz-fpe-alpha-v1": "- ", "fuzz-fpe-auth-v1":"-"}.get(profile, "") if isinstance(profile, str) else ""
             if len(ciphertext) != len(plaintext):
                 findings.append("SEMANTIC: FPE changed total character length")
             if any(ch in preserve and output != ch for ch, output in zip(plaintext, ciphertext)):
@@ -196,7 +200,7 @@ def fpe_semantic(sent_value, seed, status, body):
         if sent_value == seed and plaintext != expected_plaintext:
             findings.append("SEMANTIC: fpe decrypt returned unexpected plaintext")
         if (
-            _fields_differ(sent_value, seed, ("kid", "profile", "ciphertext"))
+            _fields_differ(sent_value, seed, ("kid", "profile", "ciphertext", "tag"))
             and plaintext == expected_plaintext
         ):
             findings.append(

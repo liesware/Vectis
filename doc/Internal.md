@@ -285,7 +285,9 @@ config:
 The FPE key is derived from the loaded key's symmetric key with `INTERNAL_KEYS_HKDF`,
 using the profile name, KID, and FPE version as AAD-style info. Encrypt requires
 an `active` key. Decrypt allows `active` and `retired`. FPE preserves format but
-does not authenticate data and is not part of the remote message protocol.
+does not authenticate data in legacy profiles and is not part of the remote
+message protocol. Authenticated profiles use an independent MAC key and verify
+the separate tag before FF1; batch authenticates every item before decryption.
 
 ### Tokenization Flow
 

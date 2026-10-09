@@ -571,7 +571,9 @@ Optional `preserve_characters` retains at most 32 distinct non-control character
 outside the alphabet. FF1 processes all remaining characters as one unit, not
 one operation per group. Bounds count the total Unicode scalar length; the
 million-value domain floor counts only encrypted characters. Formatting remains
-visible and unauthenticated. Existing custom profiles and their serialized
+visible and unauthenticated for legacy profiles. Optional `authenticated: true`
+covers ciphertext and exact profile context with a separate HMAC tag, verified
+before any FF1 decrypt (all tags first for batch). Existing custom profiles and their serialized
 representation are unchanged when new fields are absent. See [API](API.md#format-preserving-encryption).
 
 Vectis exposes local FF1 FPE endpoints for fields that must stay inside a
@@ -583,8 +585,9 @@ signed alphabet and length range:
 FPE profiles live in signed config under `fpe_profiles`. Requests select a
 profile by name; alphabet, length bounds, tweak AAD, FPE version, and bound KID
 come from signed config. FPE is deterministic for the same key/profile/tweak and
-plaintext. It preserves format, but it does not authenticate data and does not
-replace AEAD message encryption.
+plaintext. Legacy profiles do not authenticate data; authenticated profiles require
+the separately returned tag. Neither mode replaces AEAD message encryption or
+prevents replay. See [optional authentication](API.md#optional-fpe-authentication).
 
 ## Reversible Tokenization
 

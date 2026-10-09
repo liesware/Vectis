@@ -407,6 +407,18 @@ impl HttpState {
                         request,
                     )
                 },
+                |request| {
+                    let source = config_key_sources.by_kid.get(request.kid).ok_or_else(|| {
+                        crate::error::invalid_input(format!(
+                            "fpe profile references kid not loaded in memory: {}",
+                            request.kid
+                        ))
+                    })?;
+                    crate::core::fpe::derive_fpe_auth_key_for_profile(
+                        &source.symmetric_key_hex,
+                        request,
+                    )
+                },
             )
         })
         .await;

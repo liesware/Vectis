@@ -370,6 +370,15 @@ permissions so the shell does not expand it.
 Edits the local `fpe_profiles` section in `VECTIS_CONFIG_PATH`. The lookup key
 is `name`. Names must be unique.
 
+`--authenticated true|false` enables optional authentication in the signed
+profile. Omission on update preserves the policy; invalid values fail before
+writing. False is omitted in canonical serialization. Adopt true through a new
+profile, then sign and reload; existing ciphertexts are not migrated.
+
+```sh
+vectis config fpe add --name patient-id-auth-v1 --kid <kid> --alphabet-preset num --preserve-characters '-' --authenticated true --min-len 6 --max-len 32 --tweak-aad 'tenant=acme;field=patient_id;version=1'
+```
+
 ```sh
 vectis config fpe list
 vectis config fpe add --name patient-id-decimal-v1 --kid <kid> --alphabet 0123456789 --min-len 6 --max-len 32 --tweak-aad 'tenant=acme;field=patient_id;version=1'
@@ -675,6 +684,19 @@ Small JSON inputs can be passed directly with `--json`, but files are easier to
 read and audit.
 
 ### `vectis fpe`
+
+Authenticated encrypt returns a separate 64-character lowercase hex `tag`.
+Include it in the existing decrypt JSON or file input; there is no tag flag.
+Legacy outputs omit tag and legacy decrypt forbids supplying it. `ref` is not
+authenticated and may change. No request can override the signed policy.
+
+```sh
+vectis fpe decrypt --json '{"ref":"reg1","kid":"<kid>","profile":"patient-id-auth-v1","ciphertext":"<ciphertext>","tag":"<tag returned by encrypt>"}'
+```
+
+Authentication failures return `400` with `fpe authentication failed` and no
+plaintext. It does not prevent replay or hide deterministic equality. Tags count
+toward existing HTTP size limits; no budgets are raised.
 
 Calls local format-preserving encryption endpoints. FPE profiles are not
 defined in the request; they are loaded from signed `config.json`.

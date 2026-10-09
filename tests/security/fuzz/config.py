@@ -182,6 +182,9 @@ def configure_fpe_profile(client, kid):
         }
     ]
     config["fpe_profiles"].extend([
+        {"name": "fuzz-fpe-auth-v1", "fpe_version": "fpe-ff1-2025", "alphabet_preset": "num",
+         "preserve_characters": "-", "authenticated": True, "min_len": 6, "max_len": 32,
+         "tweak_aad": "tenant=fuzz;field=auth;version=1", "kid": kid},
         {"name": "fuzz-fpe-formatted-v1", "fpe_version": "fpe-ff1-2025", "alphabet_preset": "num",
          "preserve_characters": "-", "min_len": 6, "max_len": 32,
          "tweak_aad": "tenant=fuzz;field=formatted;version=1", "kid": kid},

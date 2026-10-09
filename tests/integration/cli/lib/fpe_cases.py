@@ -58,3 +58,20 @@ def fpe_runtime_contracts(env, directory):
     run_cli(["config", "fpe", "update", "formatted-cli", "--alphabet", "0123456789", "--preserve-characters", ""], env)
     item = run_cli_json(["config", "fpe", "get", "formatted-cli"], env)
     require("alphabet_preset" not in item and "letter_case" not in item and item["preserve_characters"] == "", "custom selector replaces preset and retains explicit empty")
+    for invalid in ["null", "True", "1", "yes"]:
+        before=config.read_bytes()
+        run_cli(["config","fpe","update","formatted-cli","--authenticated",invalid],env,expect_success=False)
+        require(config.read_bytes()==before,"invalid authenticated flag does not write")
+    run_cli(["config","fpe","add","--name","auth-cli",*common,"--alphabet-preset","num","--preserve-characters","-","--authenticated","true"],env)
+    run_cli(["config","fpe","update","auth-cli","--max-len","40"],env)
+    require(run_cli_json(["config","fpe","get","auth-cli"],env)["authenticated"] is True,"update omission preserves auth")
+    run_cli(["config","sign"],env); run_cli(["config","reload"],env)
+    body={"ref":"auth","profile":"auth-cli","plaintext":"001-234"}
+    encrypted=run_cli_json(["fpe","encrypt",kid,"--json",json.dumps(body)],env)
+    require(len(encrypted["tag"])==64,"CLI transports authentication tag")
+    inverse={"ref":"new-ref","profile":"auth-cli","kid":kid,"ciphertext":encrypted["ciphertext"],"tag":encrypted["tag"]}
+    source=Path(directory)/"authenticated-fpe.json"; source.write_text(json.dumps(inverse),encoding="utf-8")
+    require(run_cli_json(["fpe","decrypt","--file",str(source)],env)["plaintext"]==body["plaintext"],"CLI authenticated file round trip")
+    require("plaintext: 001-234" in run_cli(["fpe","decrypt","--file",str(source),"--output","yaml"],env).stdout,"authenticated YAML output")
+    wrong=dict(inverse,tag="0"*64)
+    require("fpe authentication failed" in run_cli(["fpe","decrypt","--json",json.dumps(wrong)],env,expect_success=False).stderr,"CLI reports fixed authentication error")
