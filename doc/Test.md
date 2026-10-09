@@ -580,7 +580,7 @@ Each iteration rotates between those suites and exercises local operations:
 - FPE, tokenization, MAC, blind indexes, masking, commitments and their batch
   endpoints where available;
 - secret sharing split/combine;
-- internal message encrypt/decrypt;
+- symmetric encrypt/decrypt;
 - compact sign/verification;
 - `/metrics` during teardown.
 

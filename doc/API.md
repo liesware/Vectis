@@ -1,6 +1,6 @@
 # Vectis HTTP API
 
-Vectis protects data throughout its lifecycle. The HTTP API exposes operations to create key material, validate keys, publish public keys, sign message hashes, exchange protected messages between Vectis instances, and encrypt/decrypt internal messages.
+Vectis protects data throughout its lifecycle. The HTTP API exposes operations to create key material, validate keys, publish public keys, sign message hashes, exchange protected messages between Vectis instances, and encrypt/decrypt local data through the symmetric family.
 
 For a consolidated inventory of request, field, batch, profile, storage, and
 runtime bounds, see [Limits](Limits.md).
@@ -124,8 +124,8 @@ Endpoints requiring auth:
 - `POST /sign/{kid}`
 - `POST /message/{sender_kid}`
 - `POST /message/decrypt`
-- `POST /message/internal/encrypt/{kid}`
-- `POST /message/internal/decrypt`
+- `POST /symmetric/encrypt/{kid}`
+- `POST /symmetric/decrypt`
 - `POST /fpe/encrypt/{kid}`
 - `POST /fpe/encrypt/batch/{kid}`
 - `POST /fpe/decrypt`
@@ -696,6 +696,7 @@ Allowed actions:
 - `self-test`
 - `sign`
 - `message`
+- `symmetric`
 - `fpe-encrypt`
 - `fpe-decrypt`
 - `token-encode`
@@ -720,7 +721,8 @@ Permission mapping:
 | `lifecycle` | `POST /lifecycle/{kid}` |
 | `self-test` | `GET /self-test/keys/{kid}` |
 | `sign` | `POST /sign/{kid}` |
-| `message` | `POST /message/{sender_kid}`, `POST /message/decrypt`, `POST /message/internal/encrypt/{kid}`, `POST /message/internal/decrypt` |
+| `message` | `POST /message/{sender_kid}`, `POST /message/decrypt` |
+| `symmetric` | `POST /symmetric/encrypt/{kid}`, `POST /symmetric/decrypt` |
 | `fpe-encrypt` | `POST /fpe/encrypt/{kid}`, `POST /fpe/encrypt/batch/{kid}` |
 | `fpe-decrypt` | `POST /fpe/decrypt`, `POST /fpe/decrypt/batch` |
 | `token-encode` | `POST /token/encode/{kid}`, `POST /token/encode/batch/{kid}`, and their `/subject/{subject}` variants |
@@ -1089,13 +1091,18 @@ Response:
 }
 ```
 
-## Internal Messages
+## Symmetric Encryption
 
-These endpoints encrypt and decrypt internal messages with the symmetric key associated with a `kid`. They are meant for local data protection without running the network exchange flow between Vectis instances.
+These Data Protection endpoints encrypt and decrypt local data with the symmetric
+key associated with a `kid`, without running the exchange flow between Vectis
+instances. Both require the independent per-KID `symmetric` permission, not
+`message`. The envelope and AAD retain `type=internal-message` and their existing
+version. Audit event names are `symmetric.encrypt.*` and `symmetric.decrypt.*`; the
+metrics are preserved and the audit action is `symmetric`.
 
-### POST /message/internal/encrypt/{kid}
+### POST /symmetric/encrypt/{kid}
 
-Requires auth.
+Requires `X-API-Key`, `symmetric` permission for the path KID and an `active` key.
 
 `plaintext` is limited to `1,047,552` bytes when encoded as UTF-8. Exceeding
 this functional limit returns `400`; exceeding the global 2 MiB HTTP request
@@ -1124,11 +1131,12 @@ Response:
 }
 ```
 
-### POST /message/internal/decrypt
+### POST /symmetric/decrypt
 
-Requires auth.
+Requires `X-API-Key` and `symmetric` permission for the envelope KID. The key may
+be `active` or `retired`. The complete envelope is required.
 
-Request: the JSON returned by `POST /message/internal/encrypt/{kid}`.
+Request: the JSON returned by `POST /symmetric/encrypt/{kid}`.
 
 Response:
 
@@ -2523,7 +2531,7 @@ Top level:
 | `client` | yes | text, unique | Client label. |
 | `apikey_hash` | yes | 64 hex (32 bytes) | Server-side verifier for this client's `X-API-Key`. |
 | `status` | yes | `active` \| `disabled` \| `revoked` | Only `active` clients are authorized. |
-| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `fpe-encrypt`, `fpe-decrypt`, `token-encode`, `token-decode`, `token-delete`, `subject-create`, `subject-delete`, `mac-create`, `mac-verify`, `commit-create`, `commit-verify`, `share-split`, `share-combine`, `index-create`, `index-verify`, `mask`, `metrics`, `time-attest`. `kid: "*"` is required for global actions `admin`, `metrics`, and `time-attest`; crypto profile actions require explicit KIDs. An `admin` action grants all endpoints and ignores kid-scoped grants. |
+| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `symmetric`, `fpe-encrypt`, `fpe-decrypt`, `token-encode`, `token-decode`, `token-delete`, `subject-create`, `subject-delete`, `mac-create`, `mac-verify`, `commit-create`, `commit-verify`, `share-split`, `share-combine`, `index-create`, `index-verify`, `mask`, `metrics`, `time-attest`. `kid: "*"` is required for global actions `admin`, `metrics`, and `time-attest`; crypto profile actions require explicit KIDs. An `admin` action grants all endpoints and ignores kid-scoped grants. |
 
 `fpe_profiles[]` entries:
 
@@ -2689,8 +2697,8 @@ CLI output defaults to YAML for readability. Add `--output json` to HTTP client 
 | `vectis message send <sender_kid>` | `POST /message/{sender_kid}` | Yes |
 | `vectis message receive` | `POST /message` | No |
 | `vectis message decrypt` | `POST /message/decrypt` | Yes |
-| `vectis message internal encrypt <kid>` | `POST /message/internal/encrypt/{kid}` | Yes |
-| `vectis message internal decrypt` | `POST /message/internal/decrypt` | Yes |
+| `vectis symmetric encrypt <kid>` | `POST /symmetric/encrypt/{kid}` | Yes |
+| `vectis symmetric decrypt` | `POST /symmetric/decrypt` | Yes |
 | `vectis fpe encrypt <kid>` | `POST /fpe/encrypt/{kid}` | Yes |
 | `vectis fpe decrypt` | `POST /fpe/decrypt` | Yes |
 | `vectis token encode <kid>` | `POST /token/encode/{kid}` | Yes |

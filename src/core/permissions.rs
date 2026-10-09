@@ -13,6 +13,7 @@ pub const PERMISSION_ACTIONS: &[&str] = &[
     "self-test",
     "sign",
     "message",
+    "symmetric",
     "fpe-encrypt",
     "fpe-decrypt",
     "token-encode",
@@ -468,6 +469,36 @@ mod tests {
         assert_eq!(state.len(), 1);
         let authed = state.authenticate_hash(&hex64('1')).unwrap();
         assert!(!authed.is_admin());
+    }
+
+    #[test]
+    fn symmetric_and_message_permissions_are_independent() {
+        for (allowed, denied) in [("symmetric", "message"), ("message", "symmetric")] {
+            let inputs = vec![client(
+                "app",
+                &hex64('1'),
+                "active",
+                json!([{"kid": hex64('a'), "actions": [allowed]}]),
+            )];
+            let state = validate_permission_clients(inputs, |_| true).unwrap();
+            let authed = state.authenticate_hash(&hex64('1')).unwrap();
+            assert!(
+                state
+                    .require_permission(&authed, Some(&hex64('a')), allowed)
+                    .is_ok()
+            );
+            assert!(
+                state
+                    .require_permission(&authed, Some(&hex64('a')), denied)
+                    .is_err()
+            );
+            assert!(
+                state
+                    .require_permission(&authed, Some(&hex64('b')), allowed)
+                    .is_err()
+            );
+            assert!(state.require_permission(&authed, None, allowed).is_err());
+        }
     }
 
     #[test]

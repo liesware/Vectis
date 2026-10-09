@@ -228,13 +228,13 @@ def internal_seeds(client):
     for case in KEY_CASES:
         kid = _create_key(client, case)
         status, body = client.post_json(
-            f"/message/internal/encrypt/{kid}",
+            f"/symmetric/encrypt/{kid}",
             {"plaintext": INTERNAL_SEED_PLAINTEXT},
             auth=True,
         )
         if status != 200:
             raise RuntimeError(f"could not encrypt seed message: HTTP {status}: {body}")
-        seeds.append(("/message/internal/decrypt", json.loads(body)))
+        seeds.append(("/symmetric/decrypt", json.loads(body)))
     return seeds
 
 
@@ -243,7 +243,7 @@ def internal_encrypt_seeds(client):
     for case in KEY_CASES:
         kid = _create_key(client, case)
         seeds.append(
-            (f"/message/internal/encrypt/{kid}", {"plaintext": INTERNAL_SEED_PLAINTEXT})
+            (f"/symmetric/encrypt/{kid}", {"plaintext": INTERNAL_SEED_PLAINTEXT})
         )
     return seeds
 

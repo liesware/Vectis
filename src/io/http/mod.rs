@@ -519,8 +519,8 @@ fn record_operation_denied_metric(event_name: &str) {
         "message.send.denied" => core_metrics::record_message("send", "denied"),
         "message.receive.denied" => core_metrics::record_message("receive", "denied"),
         "message.decrypt.denied" => core_metrics::record_message("decrypt", "denied"),
-        "message.internal.encrypt.denied" => core_metrics::record_message("send", "denied"),
-        "message.internal.decrypt.denied" => core_metrics::record_message("decrypt", "denied"),
+        "symmetric.encrypt.denied" => core_metrics::record_message("send", "denied"),
+        "symmetric.decrypt.denied" => core_metrics::record_message("decrypt", "denied"),
         "fpe.encrypt.denied" => core_metrics::record_crypto_operation("fpe_encrypt", "failed"),
         "fpe.decrypt.denied" => core_metrics::record_crypto_operation("fpe_decrypt", "failed"),
         "fpe.encrypt.batch.denied" => record_crypto_failed("fpe_encrypt_batch"),
@@ -622,11 +622,11 @@ pub fn router(state: HttpState) -> Router {
         .route("/shares/combine", post(sharing::combine_endpoint))
         .route("/pub/{kid}", get(pubkey::pub_endpoint))
         .route(
-            "/message/internal/encrypt/{kid}",
+            "/symmetric/encrypt/{kid}",
             post(message::internal_encrypt_endpoint),
         )
         .route(
-            "/message/internal/decrypt",
+            "/symmetric/decrypt",
             post(message::internal_decrypt_endpoint),
         )
         .route("/message/decrypt", post(message::decrypt_endpoint))

@@ -30,6 +30,7 @@ pub(crate) const EXECUTABLE_COMMANDS: &[&str] = &[
     "shares",
     "time",
     "message",
+    "symmetric",
 ];
 
 pub(crate) const HTTP_COMMANDS: &[&str] = &[
@@ -53,6 +54,7 @@ pub(crate) const HTTP_COMMANDS: &[&str] = &[
     "shares",
     "time",
     "message",
+    "symmetric",
 ];
 
 pub(crate) const CONFIG_COMMANDS: &[&str] = &[
@@ -261,7 +263,8 @@ const ROOT_HELP: CommandHelp = CommandHelp {
                 "  commit                Create or verify cryptographic commitments through HTTP",
                 "  shares                Split or combine Shamir secret shares through HTTP",
                 "  time                  Attest the server clock through HTTP",
-                "  message               Send, receive, encrypt, or decrypt messages through HTTP",
+                "  message               Send, receive, or decrypt protected messages through HTTP",
+                "  symmetric             Encrypt or decrypt local data through HTTP",
             ],
         },
         HelpSection {
@@ -1540,21 +1543,12 @@ const MESSAGE_HELP: CommandHelp = CommandHelp {
         "vectis message receive --file envelope.json",
         "vectis message decrypt --json '<json>'",
         "vectis message decrypt --file encrypted-message.json",
-        "vectis message internal encrypt <kid> --json '<json>'",
-        "vectis message internal encrypt <kid> --file plaintext.json",
-        "vectis message internal decrypt --json '<json>'",
-        "vectis message internal decrypt --file internal-message.json",
     ],
-    summary: Some(
-        "Sends protected messages, receives envelopes, and encrypts/decrypts internal messages.",
-    ),
+    summary: Some("Sends protected messages, receives envelopes, and decrypts protected messages."),
     sections: &[
         HelpSection {
             title: "Common JSON examples:",
-            lines: &[
-                r#"  send:              {"recipient_kid":"<kid>","message":"hello vectis"}"#,
-                r#"  internal encrypt:  {"plaintext":"hello vectis"}"#,
-            ],
+            lines: &[r#"  send:              {"recipient_kid":"<kid>","message":"hello vectis"}"#],
         },
         HelpSection {
             title: "Endpoints:",
@@ -1562,8 +1556,6 @@ const MESSAGE_HELP: CommandHelp = CommandHelp {
                 "  send                  POST /message/{sender_kid}, requires VECTIS_APIKEY",
                 "  receive               POST /message, public",
                 "  decrypt               POST /message/decrypt, requires VECTIS_APIKEY",
-                "  internal encrypt      POST /message/internal/encrypt/{kid}, requires VECTIS_APIKEY",
-                "  internal decrypt      POST /message/internal/decrypt, requires VECTIS_APIKEY",
             ],
         },
         HelpSection {
@@ -1571,6 +1563,38 @@ const MESSAGE_HELP: CommandHelp = CommandHelp {
             lines: &[
                 "  --json <json>         JSON object as a shell argument",
                 "  --file <path>         Path to a JSON file",
+            ],
+        },
+    ],
+    output: true,
+};
+
+const SYMMETRIC_HELP: CommandHelp = CommandHelp {
+    key: "symmetric",
+    heading: "Usage:",
+    usage: &[
+        "vectis symmetric encrypt <kid> --json '<json>'",
+        "vectis symmetric encrypt <kid> --file plaintext.json",
+        "vectis symmetric decrypt --json '<json>'",
+        "vectis symmetric decrypt --file envelope.json",
+    ],
+    summary: Some("Encrypts and decrypts local data using the per-KID symmetric permission."),
+    sections: &[
+        HelpSection {
+            title: "Input:",
+            lines: &[
+                r#"  encrypt: {"plaintext":"synthetic data"}"#,
+                "  decrypt               Complete envelope; no positional KID",
+                "  --json <json>         JSON object as a shell argument",
+                "  --file <path>         Path to a JSON file",
+            ],
+        },
+        HelpSection {
+            title: "Endpoints:",
+            lines: &[
+                "  encrypt               POST /symmetric/encrypt/{kid}",
+                "  decrypt               POST /symmetric/decrypt",
+                "  authentication        Requires VECTIS_APIKEY and symmetric permission",
             ],
         },
     ],
@@ -1614,6 +1638,7 @@ const COMMAND_HELPS: &[CommandHelp] = &[
     SHARES_HELP,
     TIME_HELP,
     MESSAGE_HELP,
+    SYMMETRIC_HELP,
 ];
 
 #[cfg(test)]
@@ -1734,6 +1759,18 @@ mod tests {
     #[test]
     fn command_help_unknown_falls_back_to_root() {
         assert_eq!(render_help("unknown"), render_help(""));
+    }
+
+    #[test]
+    fn symmetric_help_is_separate_from_protected_messaging() {
+        let help = render_help("symmetric");
+        assert!(help.contains("vectis symmetric encrypt <kid>"));
+        assert!(help.contains("vectis symmetric decrypt --file"));
+        assert!(render_help("").contains("symmetric"));
+        let message = render_help("message");
+        assert!(!message.contains("internal"));
+        assert!(!message.contains("/symmetric/"));
+        assert!(message.contains("vectis message send"));
     }
 
     #[test]

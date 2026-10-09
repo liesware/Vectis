@@ -47,6 +47,7 @@ cat > "${SITE_DIR}/config.json" <<JSON
             "index-verify",
             "mask",
             "message",
+            "symmetric",
             "sign"
           ]
         }

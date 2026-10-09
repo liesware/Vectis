@@ -5,8 +5,8 @@ info:
   description: >
     Vectis protects data throughout its lifecycle. The API creates key material,
     validates keys, publishes public keys, signs message hashes, exchanges
-    protected messages between Vectis instances, and encrypts/decrypts internal
-    messages.
+    protected messages between Vectis instances, and encrypts/decrypts local data
+    through the symmetric family.
 servers:
   - url: http://127.0.0.1:3000
     description: Local default server over HTTP
@@ -24,6 +24,7 @@ tags:
   - name: Public Keys
   - name: Signatures
   - name: Messages
+  - name: Symmetric Encryption
   - name: FPE
   - name: Tokenization
   - name: MAC
@@ -503,10 +504,11 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
-  /message/internal/encrypt/{kid}:
+  /symmetric/encrypt/{kid}:
     post:
-      tags: [Messages]
-      summary: Encrypt an internal message with a local key
+      tags: [Symmetric Encryption]
+      summary: Encrypt local data with a symmetric key
+      description: Requires symmetric permission for the path KID and an active key. Envelope, AAD and crypto are unchanged.
       security:
         - ApiKeyAuth: []
       parameters:
@@ -519,7 +521,7 @@ paths:
               $ref: "#/components/schemas/InternalEncryptMessageInput"
       responses:
         "200":
-          description: Internal encrypted message
+          description: Symmetric-key envelope
           content:
             application/json:
               schema:
@@ -529,10 +531,11 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
-  /message/internal/decrypt:
+  /symmetric/decrypt:
     post:
-      tags: [Messages]
-      summary: Decrypt an internal encrypted message
+      tags: [Symmetric Encryption]
+      description: Requires symmetric permission for the envelope KID and an active or retired key. Receives the complete envelope.
+      summary: Decrypt a symmetric-key envelope
       security:
         - ApiKeyAuth: []
       requestBody:

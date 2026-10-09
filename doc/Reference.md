@@ -161,8 +161,8 @@ Important modules:
 - `ops/key_validation.rs`: validation of generated key material.
 - `ops/pubkey.rs`: public key output.
 - `ops/sign.rs`: hybrid signing and signature verification.
-- `ops/message.rs`: protected message send, receive, decrypt, internal encrypt,
-  and internal decrypt flows.
+- `ops/message.rs`: protected message send, receive, decrypt, symmetric encrypt,
+  and symmetric decrypt flows.
 - `ops/tokenization.rs`: reversible token encode/decode flows.
 - `ops/apikey.rs`: API key generation and hashing.
 - `ops/test.rs`: self-test operations.
@@ -482,6 +482,7 @@ Supported actions:
 - `self-test`;
 - `sign`;
 - `message`;
+- `symmetric`;
 - `metrics`.
 - `fpe-encrypt`;
 - `fpe-decrypt`;
@@ -548,16 +549,19 @@ The final app receives encrypted local delivery, not direct remote plaintext. It
 can call `POST /message/decrypt` on its local Vectis instance to recover the
 plaintext.
 
-## Internal Message Encryption
+## Symmetric Encryption
 
-Vectis also exposes local internal encryption and decryption endpoints:
+Vectis exposes these Data Protection endpoints for local encryption and decryption:
 
-- `POST /message/internal/encrypt/{kid}`;
-- `POST /message/internal/decrypt`.
+- `POST /symmetric/encrypt/{kid}`;
+- `POST /symmetric/decrypt`.
 
 These endpoints protect data using a local operational key rather than sending
 to a remote Vectis peer. They are useful for local application integration where
 an app wants Vectis-managed encryption without cross-instance transport.
+Both require the per-KID `symmetric` grant, independently of `message`.
+Encrypt requires an active key; decrypt permits active or retired keys.
+Envelope, `type=internal-message` AAD, audit event names and metrics are unchanged.
 
 ## Format-Preserving Encryption
 
@@ -867,8 +871,8 @@ Vectis exposes these major endpoint groups:
 - public keys: `/pub/{kid}`;
 - signing: `/sign/{kid}`, `/sign/verification`;
 - messaging: `/message/{sender_kid}`, `/message`, `/message/decrypt`;
-- internal messaging: `/message/internal/encrypt/{kid}`,
-  `/message/internal/decrypt`;
+- symmetric encryption: `/symmetric/encrypt/{kid}`,
+  `/symmetric/decrypt`;
 - FPE: `/fpe/encrypt/{kid}`, `/fpe/decrypt`;
 - tokenization: `/token/encode/{kid}`, `/token/decode`;
 - MAC: `/mac/{kid}`, `/mac/batch/{kid}`, `/mac/verify`,
@@ -978,10 +982,10 @@ provide universal write atomicity. Audit records are hash-chained locally and
 use stable security event names such as `auth.success`,
 `permission.denied`, `config.reload.failed`, `key.create.success`,
 `key.reload.success`, `key.reload.partial`,
-`message.receive.denied`, `message.internal.encrypt.success`, and
-`verify.failed`. Remote sends use `message.send.*`; local internal encryption
-and decryption use `message.internal.encrypt.*` and
-`message.internal.decrypt.*`.
+`message.receive.denied`, `symmetric.encrypt.success`, and
+`verify.failed`. Remote sends use `message.send.*`; local symmetric-key
+encryption and decryption use `symmetric.encrypt.*` and
+`symmetric.decrypt.*`.
 
 Audit records use logical identity and resource fields (`actor`, `actor_fp`,
 `root`, `admin`, `kid`, `remote_kid`, `action`, `outcome`, `reason`) and must not

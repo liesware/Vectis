@@ -56,6 +56,7 @@ reload` mutate keys, key lifecycle, or the loaded config.
 
 ### Data Protection
 
+- `vectis symmetric`
 - `vectis fpe`
 - `vectis token`
 - `vectis mac`
@@ -629,14 +630,24 @@ signature has four unpadded Base64URL segments.
 
 ### `vectis message`
 
-Sends, receives, encrypts, or decrypts messages.
+Sends, receives, or decrypts protected messages.
 
 ```sh
 vectis message send <sender_kid> --file send-message.json
 vectis message receive --file envelope.json
 vectis message decrypt --file encrypted-message.json
-vectis message internal encrypt <kid> --file plaintext.json
-vectis message internal decrypt --file internal-message.json
+```
+
+### `vectis symmetric`
+
+Data Protection: encrypt or decrypt local data with the per-KID `symmetric`
+permission. `message` does not grant these operations. Encrypt requires an active
+key; decrypt permits active or retired keys. Both require `VECTIS_APIKEY`.
+
+```sh
+vectis symmetric encrypt <kid> --json '{"plaintext":"synthetic data"}'
+vectis symmetric encrypt <kid> --file plaintext.json
+vectis symmetric decrypt --file envelope.json
 ```
 
 Small JSON inputs can be passed directly with `--json`, but files are easier to

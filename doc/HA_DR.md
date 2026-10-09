@@ -265,8 +265,8 @@ For functional smoke tests, validate:
 - `GET /pub/{kid}` for a known loaded key;
 - `POST /sign/{kid}`;
 - `POST /sign/verification`;
-- `POST /message/internal/encrypt/{kid}`;
-- `POST /message/internal/decrypt`;
+- `POST /symmetric/encrypt/{kid}`;
+- `POST /symmetric/decrypt`;
 - one remote message send through a configured `remote_routes` entry.
 
 If the smoke test fails after restore, do not assume the database is the only

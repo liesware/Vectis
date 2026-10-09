@@ -502,13 +502,13 @@ function exerciseSharing(suite) {
 function exerciseInternalMessage(suite) {
   const input = `internal-${suite.name}-${__VU}-${__ITER}`;
   const encrypted = post(
-    `/message/internal/encrypt/${suite.kid}`,
+    `/symmetric/encrypt/${suite.kid}`,
     { plaintext: input },
     "internal_message_encrypt",
     suite.profile,
   );
   const decrypted = post(
-    "/message/internal/decrypt",
+    "/symmetric/decrypt",
     encrypted,
     "internal_message_decrypt",
     suite.profile,

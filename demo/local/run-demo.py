@@ -409,13 +409,13 @@ def run_internal_message(base_url, kid, api_key, plaintext):
     print("== Internal Message ==", flush=True)
     encrypted = post_json(
         base_url,
-        f"/message/internal/encrypt/{kid}",
+        f"/symmetric/encrypt/{kid}",
         {"plaintext": plaintext},
         api_key,
     )
     decrypted = post_json(
         base_url,
-        "/message/internal/decrypt",
+        "/symmetric/decrypt",
         encrypted["response"],
         api_key,
     )

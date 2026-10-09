@@ -47,6 +47,7 @@ const ROOT_COMMANDS: &[RootCommand] = &[
     RootCommand::new("mask", RootCommandKind::Http),
     RootCommand::new("time", RootCommandKind::Http),
     RootCommand::new("message", RootCommandKind::Http),
+    RootCommand::new("symmetric", RootCommandKind::Http),
 ];
 
 impl RootCommand {

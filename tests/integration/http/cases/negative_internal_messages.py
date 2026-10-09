@@ -43,63 +43,63 @@ def _(ctx):
 @cases('negative.operations.internal-encrypt-without-auth')
 def _(ctx):
     status, _ = ctx.http.post(
-        f"/message/internal/encrypt/{ctx.fixtures.key_id}",
+        f"/symmetric/encrypt/{ctx.fixtures.key_id}",
         {"plaintext": "hello vectis"},
     )
-    require_status("POST /message/internal/encrypt/{kid} without auth", status, 401)
+    require_status("POST /symmetric/encrypt/{kid} without auth", status, 401)
 
 
 @cases('negative.operations.internal-encrypt-kid-not-hex')
 def _(ctx):
     status, _ = ctx.http.post(
-        "/message/internal/encrypt/not-hex",
+        "/symmetric/encrypt/not-hex",
         {"plaintext": "hello vectis"},
         auth=True,
     )
-    require_status("POST /message/internal/encrypt/{kid} kid not hex", status, 400)
+    require_status("POST /symmetric/encrypt/{kid} kid not hex", status, 400)
 
 
 @cases('negative.operations.internal-encrypt-empty-plaintext')
 def _(ctx):
     status, _ = ctx.http.post(
-        f"/message/internal/encrypt/{ctx.fixtures.key_id}",
+        f"/symmetric/encrypt/{ctx.fixtures.key_id}",
         {"plaintext": ""},
         auth=True,
     )
-    require_status("POST /message/internal/encrypt/{kid} empty plaintext", status, 400)
+    require_status("POST /symmetric/encrypt/{kid} empty plaintext", status, 400)
 
 
 @cases('negative.operations.internal-encrypt-unknown-field')
 def _(ctx):
     status, body = ctx.http.post(
-        f"/message/internal/encrypt/{ctx.fixtures.key_id}",
+        f"/symmetric/encrypt/{ctx.fixtures.key_id}",
         {"plaintext": "hello", "sorpresa": True},
         auth=True,
     )
-    require_status("POST /message/internal/encrypt/{kid} unknown field", status, 400)
-    require_unknown_field_error("POST /message/internal/encrypt/{kid} unknown field", body, "sorpresa")
+    require_status("POST /symmetric/encrypt/{kid} unknown field", status, 400)
+    require_unknown_field_error("POST /symmetric/encrypt/{kid} unknown field", body, "sorpresa")
 
 
 @cases('negative.operations.internal-decrypt-without-auth')
 def _(ctx):
-    status, _ = ctx.http.post("/message/internal/decrypt", ctx.fixtures.internal_message)
-    require_status("POST /message/internal/decrypt without auth", status, 401)
+    status, _ = ctx.http.post("/symmetric/decrypt", ctx.fixtures.internal_message)
+    require_status("POST /symmetric/decrypt without auth", status, 401)
 
 
 @cases('negative.operations.internal-decrypt-tampered-kid')
 def _(ctx):
     bad = copy.deepcopy(ctx.fixtures.internal_message)
     bad["kid"] = "00" * 32
-    status, _ = ctx.http.post("/message/internal/decrypt", bad, auth=True)
-    require_status("POST /message/internal/decrypt tampered kid", status, 404)
+    status, _ = ctx.http.post("/symmetric/decrypt", bad, auth=True)
+    require_status("POST /symmetric/decrypt tampered kid", status, 404)
 
 
 @cases('negative.operations.internal-decrypt-tampered-ciphertext')
 def _(ctx):
     bad = copy.deepcopy(ctx.fixtures.internal_message)
     bad["message"]["ctx"] = tamper_hex(bad["message"]["ctx"])
-    status, body = ctx.http.post("/message/internal/decrypt", bad, auth=True)
-    require_status("POST /message/internal/decrypt tampered ciphertext", status, 400)
+    status, body = ctx.http.post("/symmetric/decrypt", bad, auth=True)
+    require_status("POST /symmetric/decrypt tampered ciphertext", status, 400)
     require(
         body.get("error") == "message authentication failed",
         "tampered ciphertext must fail authentication cleanly",

@@ -656,7 +656,7 @@ allowed or denied.
 - Lifecycle denied.
 - Config reload failed.
 - Message send or receive failed.
-- Internal encrypt/decrypt was used.
+- Symmetric encrypt/decrypt was used.
 
 ### Checks
 
@@ -691,8 +691,8 @@ config.reload.stale
 config.reload.failed
 message.send.success
 message.send.failed
-message.internal.encrypt.success
-message.internal.decrypt.success
+symmetric.encrypt.success
+symmetric.decrypt.success
 ```
 
 ### Recovery

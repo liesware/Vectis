@@ -18,6 +18,13 @@ Changes staged for v0.9.0, the first official release.
   `token-delete` permission and allowed in any key lifecycle state.
 
 ### Changed
+- Breaking: local encryption moves to `POST /symmetric/encrypt/{kid}` and
+  `POST /symmetric/decrypt`, and `vectis symmetric encrypt|decrypt`. The former
+  `/message/internal/*` routes and `vectis message internal` commands are removed.
+  Local operations now require the per-KID `symmetric` permission; `message`
+  remains exclusive to protected messaging. Grant `symmetric`, sign and reload
+  configuration explicitly; no grant conversion is performed. Envelopes, AAD,
+  crypto, lifecycle, audit event names and metrics remain unchanged.
 - Tokenization plaintext maximum raised to 16,384 characters, with a dedicated
   token envelope limit (131,072) independent from the operational-key envelope
   limit (32,768).

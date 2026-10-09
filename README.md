@@ -165,7 +165,7 @@ protection primitives and workflows.
 - local re-encryption before final app delivery: the receiving application
   never gets remote plaintext directly;
 - public key publication by `kid`;
-- internal encrypt/decrypt endpoints for local protected data;
+- symmetric encrypt/decrypt endpoints for local protected data;
 - local FF1 format-preserving encryption for signed field profiles;
 - local reversible random tokenization for signed token profiles;
 - local MAC create/verify for signed MAC profiles;
@@ -237,7 +237,7 @@ Cryptographic capability
         +-- FPE / tokenization / masking
         +-- MAC / blind indexes / commitments
         +-- secret sharing / signatures
-        +-- internal encryption / protected messages
+        +-- symmetric encryption / protected messages
         v
 Protected output / verification result / shares / peer delivery
 ```
@@ -320,7 +320,7 @@ The demo exercises:
 - reversible token encode/decode;
 - MAC create/verify;
 - blind index create/verify;
-- `/message/internal` encrypt/decrypt;
+- `/symmetric/encrypt/{kid}` and `/symmetric/decrypt` (local data protection);
 - sign and verification.
 
 See [demo/local/README.md](demo/local/README.md).
@@ -494,7 +494,7 @@ native `cargo-fuzz` targets.
 - [SECURITY.md](SECURITY.md): supported versions and private vulnerability reporting.
 - [demo/message/README.md](demo/message/README.md): clinical data exchange demo.
 - [demo/local/README.md](demo/local/README.md): local FPE, tokenization, MAC,
-  masking, commitments, secret sharing, blind indexes, internal message, and
+  masking, commitments, secret sharing, blind indexes, symmetric encryption, and
   sign demo.
 - [charts/vectis/README.md](charts/vectis/README.md): Kubernetes Helm chart.
 

@@ -38,7 +38,7 @@ For the exact request/response schema of every endpoint, see
 | Split a secret so only a threshold of holders can recover it | **Secret Sharing** |
 | Show only **part** of a value on screen (e.g. last 4 digits) | **Masking** |
 | Move a record to **another service or organization** | **Protected Messages** |
-| Protect a payload **locally at rest** | **Internal encrypt/decrypt** |
+| Protect a payload **locally at rest** | **Symmetric encrypt/decrypt** |
 | Prove a document's **authenticity and time** | **Signatures** |
 
 All local data-protection operations (FPE, Tokenization, MAC, Blind Index,
@@ -273,18 +273,18 @@ vectis message decrypt --file encrypted-message.json
 See the two-site clinical demo in [demo/message/README.md](../demo/message/README.md).
 
 **When not to use it.** If the data never leaves the local node, you don't need the
-network exchange — use **Internal encrypt/decrypt**. If you only need to prove a
+network exchange — use **Symmetric encrypt/decrypt**. If you only need to prove a
 document's authenticity (not confidentiality), use **Signatures**.
 
 ---
 
-## Internal Encrypt/Decrypt — Local Data at Rest
+## Symmetric Encrypt/Decrypt — Local Data at Rest
 
 **Problem.** You need to hold a sensitive blob locally — in a queue, cache, or
 database — and decrypt it later, without running the full inter-instance exchange
 flow.
 
-**Solution.** Internal messages are encrypted and decrypted with the symmetric key
+**Solution.** Data is encrypted and decrypted with the symmetric key
 bound to a `kid`, using authenticated encryption. This is local protection for a
 single node, not a network protocol.
 
@@ -297,8 +297,8 @@ single node, not a network protocol.
 **Example.**
 
 ```sh
-vectis message internal encrypt <kid> --file plaintext.json
-vectis message internal decrypt --file internal-message.json
+vectis symmetric encrypt <kid> --file plaintext.json
+vectis symmetric decrypt --file internal-message.json
 ```
 
 **When not to use it.** If the data must reach *another* Vectis instance or

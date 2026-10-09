@@ -114,3 +114,5 @@ def _runtime_contracts(env, configuration, directory):
     require(deleted.stdout == "", "204 must leave stdout empty")
     require("404" in run_cli(["subject", "delete", kid, subject], env, expect_success=False).stderr, "second subject delete fails")
     require("404" in run_cli(["token", "decode-batch", "--json", json.dumps(stored_batch)], env, expect_success=False).stderr, "deleted subject prevents recovery")
+    from .symmetric_cases import symmetric_runtime_contracts
+    symmetric_runtime_contracts(env, configuration, directory)

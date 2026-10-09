@@ -60,6 +60,7 @@ const HTTP_COMMANDS: &[HttpCommand] = &[
     HttpCommand::new("shares", command_shares),
     HttpCommand::new("time", command_time),
     HttpCommand::new("message", command_message),
+    HttpCommand::new("symmetric", command_symmetric),
 ];
 
 const CONFIG_COMMANDS: &[ConfigCommand] = &[
@@ -169,6 +170,7 @@ boxed_command!(command_commit, run_commit);
 boxed_command!(command_shares, run_shares);
 boxed_command!(command_time, run_time);
 boxed_command!(command_message, run_message);
+boxed_command!(command_symmetric, run_symmetric);
 
 fn config_command_init(args: Vec<String>, output: OutputFormat) -> CommandFuture {
     Box::pin(async move {
@@ -932,29 +934,25 @@ async fn run_message(args: Vec<String>, output: OutputFormat) -> Result<(), DynE
                 .send(Method::POST, "/message/decrypt", true, Some(body), output)
                 .await
         }
-        "internal" => run_internal_message(rest, &client, output).await,
         _ => Err(invalid_input(format!(
             "unknown message command: {subcommand}"
         ))),
     }
 }
 
-async fn run_internal_message(
-    args: Vec<String>,
-    client: &CliHttpClient,
-    output: OutputFormat,
-) -> Result<(), DynError> {
-    let (subcommand, rest) = split_subcommand(args, "message internal command")?;
+async fn run_symmetric(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+    let client = CliHttpClient::from_env()?;
+    let (subcommand, rest) = split_subcommand(args, "symmetric command")?;
 
     match subcommand.as_str() {
         "encrypt" => {
-            let (kid, rest) = split_positional_arg(rest, "kid", "message internal encrypt")?;
+            let (kid, rest) = split_positional_arg(rest, "kid", "symmetric encrypt")?;
             validate_kid("kid", &kid)?;
             let body = parse_json_source(rest)?;
             client
                 .send(
                     Method::POST,
-                    &format!("/message/internal/encrypt/{kid}"),
+                    &format!("/symmetric/encrypt/{kid}"),
                     true,
                     Some(body),
                     output,
@@ -964,17 +962,11 @@ async fn run_internal_message(
         "decrypt" => {
             let body = parse_json_source(rest)?;
             client
-                .send(
-                    Method::POST,
-                    "/message/internal/decrypt",
-                    true,
-                    Some(body),
-                    output,
-                )
+                .send(Method::POST, "/symmetric/decrypt", true, Some(body), output)
                 .await
         }
         _ => Err(invalid_input(format!(
-            "unknown message internal command: {subcommand}"
+            "unknown symmetric command: {subcommand}"
         ))),
     }
 }
@@ -1709,7 +1701,7 @@ mod tests {
             ("shares split", "kid", "--profile"),
             ("mask", "kid", "--profile"),
             ("message send", "sender kid", "--profile"),
-            ("message internal encrypt", "kid", "--profile"),
+            ("symmetric encrypt", "kid", "--profile"),
             ("lifecycle", "kid", "--reason"),
         ] {
             let err = split_positional_arg(strings(&[flag, "value"]), field, command)
