@@ -777,6 +777,11 @@ This principle applies to:
 
 ## Storage
 
+See [Database Model and Cryptographic Storage](BD.md) for the logical ER diagram,
+table responsibilities, per-column algorithms, transactions and recovery limits.
+See [Cryptographic Flows and Key Derivation](Cryptography.md) for init/unseal,
+the key hierarchy and exact derivation contexts.
+
 The storage abstraction supports SQLite and PostgreSQL. SQLite is the local
 default. PostgreSQL is the shared durable backend for multi-node deployments.
 

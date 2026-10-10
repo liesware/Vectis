@@ -25,6 +25,13 @@ under policy, a digest you can search without revealing, a commitment you can
 prove later, shares no single holder can read, a protected message only the
 registered peer can open.
 
+**Vaulted and vaultless tokenization.** Choose opaque random tokens backed by
+encrypted storage, or format-preserving tokens powered by FF1 without a
+per-value token vault. Symmetric encryption also protects data without storing
+its ciphertexts in Vectis. Vaultless does not mean stateless: keys and
+configuration remain, and subject-aware operations also depend on stored
+subject seeds.
+
 > In Latin, *vectis* can mean a lever, crowbar, fastening bar, or carrying pole:
 > a simple tool used to move something heavy with controlled force.
 
@@ -165,9 +172,17 @@ protection primitives and workflows.
 - local re-encryption before final app delivery: the receiving application
   never gets remote plaintext directly;
 - public key publication by `kid`;
-- symmetric encrypt/decrypt endpoints for local protected data;
-- local FF1 format-preserving encryption for signed field profiles;
-- local reversible random tokenization for signed token profiles;
+- symmetric encrypt/decrypt endpoints for local protected data, optionally
+  using existing subject seeds without storing ciphertexts in Vectis;
+- local FF1 format-preserving encryption for signed field profiles, with ASCII
+  alphabet presets, Unicode custom alphabets, preserved separators, optional
+  authentication tags, and subject-derived keys;
+- local reversible random tokenization for signed token profiles, with
+  reusable or one-time tokens and explicit token deletion;
+- shared subject seeds for tokenization, FPE, and symmetric encryption, with
+  independent purpose-derived keys for each capability;
+- batch operations where supported, preserving item order and all-or-nothing
+  contracts, including transactional one-time token consumption;
 - local MAC create/verify for signed MAC profiles;
 - local keyed cryptographic commitments with random openings;
 - local blind indexes that reuse signed MAC profiles and persist deterministic
@@ -184,8 +199,18 @@ protection primitives and workflows.
 - HKDF-derived internal keys for storage encryption and API key verification;
 - operational key creation and validation;
 - encrypted key lifecycle metadata and runtime lifecycle enforcement;
+- idempotent subject creation and transactional deletion of the subject seed
+  and its associated token rows;
 - SQLite/PostgreSQL-backed storage for encrypted operational keys, encrypted
-  tokenization payloads, and blind index digests behind a storage abstraction.
+  tokenization payloads, encrypted subject seeds, and blind index digests behind
+  a storage abstraction.
+
+Deleting a shared subject blocks future seed openings for tokens, FPE, and
+symmetric, but does not erase external ciphertexts or cancel requests that
+already opened the seed. Backups can restore access. See the
+[API contracts](doc/API.md), [database model](doc/BD.md), and
+[cryptographic flows](doc/Cryptography.md) for the exact guarantees and
+key/configuration dependencies.
 
 **Operations and observability**
 
@@ -242,9 +267,13 @@ Cryptographic capability
 Protected output / verification result / shares / peer delivery
 ```
 
-FPE, masking, MAC, commitments, and secret sharing return their results directly.
+FPE, symmetric encryption, masking, MAC, commitments, and secret sharing return
+their results directly; Vectis does not persist FPE or symmetric ciphertexts.
 Tokenization stores the plaintext in encrypted form, while blind indexes persist
-deterministic digests for membership checks. Protected messaging resolves
+deterministic digests for membership checks. Subject-aware operations first
+authenticate and open an existing encrypted seed, then derive independent
+capability keys; sharing a seed does not mean sharing a derived key.
+Protected messaging resolves
 authorized peers from signed configuration and locally re-encrypts a verified
 message before final application delivery.
 
@@ -476,6 +505,10 @@ native `cargo-fuzz` targets.
   beginning with PostgreSQL storage.
 - [doc/Build.md](doc/Build.md): source build requirements and commands.
 - [doc/API.md](doc/API.md): HTTP API and CLI mapping.
+- [doc/BD.md](doc/BD.md): database entity model, column protection, transactions
+  and recovery requirements.
+- [doc/Cryptography.md](doc/Cryptography.md): init/unseal flow, key hierarchy,
+  exact HKDF contexts and cryptographic flows per capability.
 - [doc/Limits.md](doc/Limits.md): consolidated input, profile, runtime, storage,
   and encoding limits.
 - [doc/UseCases.md](doc/UseCases.md): real-world use cases per feature.
