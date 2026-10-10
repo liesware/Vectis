@@ -92,6 +92,7 @@ values must also be unique within the request.
 | FPE | Alphabet size | `2..=65,536`, with unique characters | characters | Explicit | Alphabet validation computes the radix | [`validate_fpe_alphabet`](../src/core/fpe.rs) |
 | FPE | Preserved characters | `0..=32`, distinct, no controls or alphabet overlap | Unicode scalar values | Explicit | Empty default; spaces allowed, no normalization | [`FPE_PRESERVE_MAX_CHARS`](../src/core/fpe.rs) |
 | FPE | Authentication tag | Exactly `64` lowercase hex characters / `32` bytes | hex characters / bytes | Profile-controlled | Required for authenticated decrypt, prohibited for legacy; never nullable. All batch tags verified before FF1; existing request limits include tags | [`validate_auth_tag`](../src/core/fpe.rs) |
+| FPE | Subject mode and ID | `none` or `stored`; ID exactly 64 lowercase hex characters | mode / hex characters | Profile-controlled | Existing subject seed and original signed creator profile required; one context per batch, no cache or fallback. All FPE/HTTP limits remain | [`FpeContext`](../src/core/fpe.rs), [`validate_subject`](../src/core/subjects.rs) |
 | FPE | Minimum domain size | At least `1,000,000` possible values | values | Effective | Checked for profile minimum and per input using only encrypted characters; separators do not contribute | [`validate_fpe_lengths`](../src/core/fpe.rs), [`fpe_domain_is_large_enough`](../src/core/fpe.rs) |
 | Tokenization | Plaintext length | Profile maximum inside `1..=16,384` | Unicode characters | Profile-controlled | Single and batch encode check the selected profile before storage | [`TOKEN_PLAINTEXT_MAX_LEN`](../src/core/tokenization.rs#L17), [`prepare_encode`](../src/ops/tokenization.rs#L392) |
 | Tokenization | Random token component | Minimum `32`; no explicit maximum | bytes | No dedicated limit | Signed profile validation enforces only the minimum | [`TOKEN_LEN_MIN_BYTES`](../src/core/tokenization.rs#L16), [`validate_token_lengths`](../src/core/tokenization.rs#L282) |
@@ -117,6 +118,11 @@ values must also be unique within the request.
 | Hybrid signatures | Message hash | `40`, `56`, `64`, `96`, or `128`, according to the declared hash | hex characters | Explicit | Hash encoding must exactly match the algorithm output size | [`hash_output_size_bytes`](../src/core/crypto.rs#L45), [`validate_hash_hex_field`](../src/core/validation.rs#L488) |
 
 ### Symmetric Encryption Round Trips
+
+Subject-bound symmetric operations retain these limits. Subject IDs are exactly
+64 lowercase ASCII hex characters, and seed size/validation remain those of the
+existing subject envelope. The subject and AAD count toward HTTP body size;
+no ciphertext storage or batch budget is introduced.
 
 `/symmetric/encrypt` enforces an inclusive plaintext limit of
 `1,047,552` UTF-8 bytes. Its output contains hex-encoded ciphertext and is

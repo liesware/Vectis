@@ -634,29 +634,35 @@ async fn run_sign(args: Vec<String>, output: OutputFormat) -> Result<(), DynErro
 }
 
 async fn run_fpe(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+    let (method, path, body) = fpe_request(args)?;
+    CliHttpClient::from_env()?
+        .send(method, &path, true, Some(body), output)
+        .await
+}
+
+fn fpe_request(args: Vec<String>) -> Result<(Method, String, Value), DynError> {
     let (subcommand, rest) = split_subcommand(args, "fpe command")?;
-    let client = CliHttpClient::from_env()?;
 
     match subcommand.as_str() {
         "encrypt" => {
             let (kid, rest) = split_positional_arg(rest, "kid", "fpe encrypt")?;
             validate_kid("kid", &kid)?;
+            let (subject, rest) = parse_subject_option(rest, "fpe encrypt")?;
             let body = parse_json_source(rest)?;
-            client
-                .send(
-                    Method::POST,
-                    &format!("/fpe/encrypt/{kid}"),
-                    true,
-                    Some(body),
-                    output,
-                )
-                .await
+            let mut path = format!("/fpe/encrypt/{kid}");
+            if let Some(subject) = subject {
+                path.push_str(&format!("/subject/{subject}"));
+            }
+            Ok((Method::POST, path, body))
         }
         "decrypt" => {
+            if rest.iter().any(|arg| arg == "--subject") {
+                return Err(invalid_input(
+                    "--subject is not accepted for fpe decrypt; include subject in JSON",
+                ));
+            }
             let body = parse_json_source(rest)?;
-            client
-                .send(Method::POST, "/fpe/decrypt", true, Some(body), output)
-                .await
+            Ok((Method::POST, "/fpe/decrypt".to_owned(), body))
         }
         _ => Err(invalid_input(format!("unknown fpe command: {subcommand}"))),
     }
@@ -953,29 +959,35 @@ async fn run_message(args: Vec<String>, output: OutputFormat) -> Result<(), DynE
 }
 
 async fn run_symmetric(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
-    let client = CliHttpClient::from_env()?;
+    let (method, path, body) = symmetric_request(args)?;
+    CliHttpClient::from_env()?
+        .send(method, &path, true, Some(body), output)
+        .await
+}
+
+fn symmetric_request(args: Vec<String>) -> Result<(Method, String, Value), DynError> {
     let (subcommand, rest) = split_subcommand(args, "symmetric command")?;
 
     match subcommand.as_str() {
         "encrypt" => {
             let (kid, rest) = split_positional_arg(rest, "kid", "symmetric encrypt")?;
             validate_kid("kid", &kid)?;
+            let (subject, rest) = parse_subject_option(rest, "symmetric encrypt")?;
             let body = parse_json_source(rest)?;
-            client
-                .send(
-                    Method::POST,
-                    &format!("/symmetric/encrypt/{kid}"),
-                    true,
-                    Some(body),
-                    output,
-                )
-                .await
+            let mut path = format!("/symmetric/encrypt/{kid}");
+            if let Some(subject) = subject {
+                path.push_str(&format!("/subject/{subject}"));
+            }
+            Ok((Method::POST, path, body))
         }
         "decrypt" => {
+            if rest.iter().any(|arg| arg == "--subject") {
+                return Err(invalid_input(
+                    "--subject is not accepted for symmetric decrypt; include subject in JSON",
+                ));
+            }
             let body = parse_json_source(rest)?;
-            client
-                .send(Method::POST, "/symmetric/decrypt", true, Some(body), output)
-                .await
+            Ok((Method::POST, "/symmetric/decrypt".to_owned(), body))
         }
         _ => Err(invalid_input(format!(
             "unknown symmetric command: {subcommand}"
@@ -1479,6 +1491,101 @@ mod tests {
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn fpe_subject_requests_preserve_body_and_select_only_encrypt_route() {
+        let kid = "a".repeat(64);
+        let subject = "b".repeat(64);
+        let raw = r#"{"ref":"test","profile":"stored","plaintext":"001234"}"#;
+        let (method, path, body) = fpe_request(strings(&[
+            "encrypt",
+            &kid,
+            "--subject",
+            &subject,
+            "--json",
+            raw,
+        ]))
+        .unwrap();
+        assert_eq!(method, Method::POST);
+        assert_eq!(path, format!("/fpe/encrypt/{kid}/subject/{subject}"));
+        assert_eq!(body, serde_json::from_str::<Value>(raw).unwrap());
+        let (_, path, _) = fpe_request(strings(&["encrypt", &kid, "--json", raw])).unwrap();
+        assert_eq!(path, format!("/fpe/encrypt/{kid}"));
+        let decrypt = serde_json::json!({"subject":subject,"kid":kid});
+        let (_, path, body) =
+            fpe_request(strings(&["decrypt", "--json", &decrypt.to_string()])).unwrap();
+        assert_eq!(path, "/fpe/decrypt");
+        assert_eq!(body, decrypt);
+        assert!(fpe_request(strings(&["decrypt", "--subject", &subject, "--json", raw])).is_err());
+        assert!(
+            fpe_request(strings(&[
+                "encrypt",
+                &kid,
+                "--subject",
+                &subject.to_uppercase(),
+                "--json",
+                raw
+            ]))
+            .is_err()
+        );
+        assert!(
+            fpe_request(strings(&[
+                "encrypt",
+                &kid,
+                "--subject",
+                &subject,
+                "--subject",
+                &subject,
+                "--json",
+                raw
+            ]))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn symmetric_subject_requests_preserve_json_and_validate_flags() {
+        let kid = "a".repeat(64);
+        let subject = "b".repeat(64);
+        let raw = r#"{"plaintext":"synthetic"}"#;
+        let (method, path, body) = symmetric_request(strings(&[
+            "encrypt",
+            &kid,
+            "--subject",
+            &subject,
+            "--json",
+            raw,
+        ]))
+        .unwrap();
+        assert_eq!(method, Method::POST);
+        assert_eq!(path, format!("/symmetric/encrypt/{kid}/subject/{subject}"));
+        assert_eq!(body, serde_json::from_str::<Value>(raw).unwrap());
+        assert_eq!(
+            symmetric_request(strings(&["encrypt", &kid, "--json", raw]))
+                .unwrap()
+                .1,
+            format!("/symmetric/encrypt/{kid}")
+        );
+        assert_eq!(
+            symmetric_request(strings(&["decrypt", "--json", raw]))
+                .unwrap()
+                .1,
+            "/symmetric/decrypt"
+        );
+        for flags in [
+            vec!["--subject", ""],
+            vec!["--subject", "BAD"],
+            vec!["--subject", &subject, "--subject", &subject],
+        ] {
+            let mut args = strings(&["encrypt", &kid]);
+            args.extend(strings(&flags));
+            args.extend(strings(&["--json", raw]));
+            assert!(symmetric_request(args).is_err());
+        }
+        assert!(
+            symmetric_request(strings(&["decrypt", "--subject", &subject, "--json", raw])).is_err()
+        );
     }
 
     #[test]

@@ -50,7 +50,11 @@ const FPE_CONFIG: &str = r#"{
       "kid": "e04daae3fa0ab03ab91e8c80608f176a0010dc4514263c6f02ce78288153bde1"
     }
   ],
-  "tokenization_profiles": [],
+  "tokenization_profiles": [{
+    "name": "subject-creator", "kid": "e04daae3fa0ab03ab91e8c80608f176a0010dc4514263c6f02ce78288153bde1",
+    "token_prefix": "fuzz_subject", "token_len": 32, "max_plaintext_len": 128,
+    "one_time": false, "subject_mode": "stored"
+  }],
   "mac_profiles": [],
   "masking_profiles": [],
   "commitment_profiles": [],
@@ -68,14 +72,33 @@ static CONFIG: LazyLock<ConfigState> = LazyLock::new(|| {
     common::validate_fuzz_config_content(FPE_CONFIG).expect("fuzz FPE config must validate")
 });
 
+static CONTEXTS: LazyLock<Vec<fpe::FpeContext>> = LazyLock::new(|| {
+    let creator = CONFIG.tokenization_profiles.get("subject-creator").unwrap();
+    let subject = vectis::core::subjects::subject_id(&creator, "synthetic-user").unwrap();
+    let envelope = vectis::core::subjects::create_seed(&creator, &subject).unwrap();
+    let mut contexts: Vec<_> = PROFILE_NAMES
+        .iter()
+        .map(|name| CONFIG.fpe_profiles.get(name).unwrap().into())
+        .collect();
+    for authenticated in [false, true] {
+        let mut config: serde_json::Value = serde_json::from_str(FPE_CONFIG).unwrap();
+        let definition = &mut config["fpe_profiles"][0];
+        definition["subject_mode"] = serde_json::json!("stored");
+        definition["authenticated"] = serde_json::json!(authenticated);
+        let prepared = common::validate_fuzz_config_content(&config.to_string()).unwrap();
+        let profile = prepared.fpe_profiles.get(PROFILE_NAMES[0]).unwrap();
+        contexts.push(
+            fpe::FpeContext::from_subject_envelope(profile, &creator, &subject, &envelope).unwrap(),
+        );
+    }
+    contexts
+});
+
 fuzz_target!(|data: &[u8]| {
     if data.len() < 6 {
         return;
     }
-    let profile = CONFIG
-        .fpe_profiles
-        .get(PROFILE_NAMES[usize::from(data[0]) % PROFILE_NAMES.len()])
-        .expect("fpe profile must be present");
+    let profile = &CONTEXTS[usize::from(data[0]) % CONTEXTS.len()];
 
     // Map arbitrary bytes into a plaintext this profile actually accepts: each
     // byte selects an alphabet character and the length is clamped to the profile's
@@ -98,18 +121,27 @@ fuzz_target!(|data: &[u8]| {
     // return the exact plaintext. A rejection from encrypt is not a bug (the
     // profile legitimately constrains its domain); a failed decrypt or a
     // mismatch is.
-    let Ok(ciphertext) = fpe::fpe_encrypt(&profile, &plaintext) else {
+    let Ok(ciphertext) = profile.encrypt(&plaintext) else {
         return;
     };
-    let tag = fpe::generate_auth_tag(&profile, &ciphertext).expect("tag generation must succeed");
-    fpe::verify_auth_tag(&profile, &ciphertext, tag.as_deref()).expect("our own tag must verify");
+    let tag = profile
+        .generate_tag(&ciphertext)
+        .expect("tag generation must succeed");
+    profile
+        .verify_tag(&ciphertext, tag.as_deref())
+        .expect("our own tag must verify");
     if let Some(tag) = &tag {
         let mut changed = tag.clone();
         changed.replace_range(..1, if tag.starts_with('0') { "1" } else { "0" });
-        assert!(fpe::verify_auth_tag(&profile, &ciphertext, Some(&changed)).is_err());
-        assert!(fpe::verify_auth_tag(&profile, &(ciphertext.clone() + "-"), Some(tag)).is_err());
+        assert!(profile.verify_tag(&ciphertext, Some(&changed)).is_err());
+        assert!(
+            profile
+                .verify_tag(&(ciphertext.clone() + "-"), Some(tag))
+                .is_err()
+        );
     }
-    let recovered = fpe::fpe_decrypt(&profile, &ciphertext)
+    let recovered = profile
+        .decrypt(&ciphertext)
         .expect("decrypt of our own ciphertext must succeed");
     assert_eq!(
         recovered, plaintext,
@@ -136,11 +168,12 @@ fuzz_target!(|data: &[u8]| {
         );
         let domain = (0..count).fold(1usize, |domain, _| domain.saturating_mul(alphabet.len()));
         if count == 0 || domain < 1_000_000 {
-            assert!(fpe::fpe_encrypt(&profile, &formatted).is_err());
+            assert!(profile.encrypt(&formatted).is_err());
         } else {
-            let encrypted = fpe::fpe_encrypt(&profile, &formatted)
+            let encrypted = profile
+                .encrypt(&formatted)
                 .expect("effective domain must be sufficient");
-            assert_eq!(fpe::fpe_decrypt(&profile, &encrypted).unwrap(), formatted);
+            assert_eq!(profile.decrypt(&encrypted).unwrap(), formatted);
         }
     }
 });

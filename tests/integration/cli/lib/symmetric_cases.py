@@ -58,6 +58,33 @@ def symmetric_runtime_contracts(env, configuration, directory):
     for args in [["symmetric", "decrypt", kid, "--file", str(envelope_file)],
                  ["symmetric", "encrypt", kid, "--json", json.dumps(plaintext), "--file", str(source)]]:
         run_cli(args, env, expect_success=False)
+    configuration["tokenization_profiles"].append({
+        "name": "cli-symmetric-subject", "kid": kid, "token_prefix": "cli_sym_seed",
+        "token_len": 32, "max_plaintext_len": 128, "one_time": False, "subject_mode": "stored",
+    })
+    write_config(env, configuration)
+    run_cli(["config", "sign"], env)
+    run_cli(["config", "reload"], env)
+    create = {"profile": "cli-symmetric-subject", "subject_name": "synthetic-person"}
+    subject = run_cli_json(["subject", "create", kid, "--json", json.dumps(create)], env)["subject"]
+    subject_envelope = run_cli_json(["symmetric", "encrypt", kid, "--subject", subject, "--file", str(source)], credentials["symmetric"])
+    require(subject_envelope["subject"] == subject, "subject included in symmetric envelope")
+    require(run_cli_json(["symmetric", "decrypt", "--json", json.dumps(subject_envelope)], credentials["symmetric"]) == plaintext,
+            "symmetric subject JSON round trip")
+    envelope_file.write_text(json.dumps(subject_envelope), encoding="utf-8")
+    require("plaintext: synthetic symmetric data" in run_cli(["symmetric", "decrypt", "--file", str(envelope_file), "--output", "yaml"], credentials["symmetric"]).stdout,
+            "subject symmetric file/YAML round trip")
+    for args in [["symmetric", "encrypt", kid, "--subject", subject.upper(), "--file", str(source)],
+                 ["symmetric", "encrypt", kid, "--subject", subject, "--subject", subject, "--file", str(source)],
+                 ["symmetric", "decrypt", "--subject", subject, "--file", str(envelope_file)]]:
+        run_cli(args, credentials["symmetric"], expect_success=False)
+    run_cli(["subject", "delete", kid, subject], env)
+    require("404" in run_cli(["symmetric", "decrypt", "--file", str(envelope_file)], credentials["symmetric"], expect_success=False).stderr,
+            "deleted subject blocks symmetric")
+    run_cli_json(["subject", "create", kid, "--json", json.dumps(create)], env)
+    require("message authentication failed" in run_cli(["symmetric", "decrypt", "--file", str(envelope_file)], credentials["symmetric"], expect_success=False).stderr,
+            "recreated subject cannot recover old envelope")
+    envelope_file.write_text(json.dumps(envelope), encoding="utf-8")
     run_cli(["lifecycle", kid, "--status", "retired", "--reason", "symmetric test"], env)
     require(run_cli_json(["symmetric", "decrypt", "--file", str(envelope_file)], env) == plaintext, "retired key decrypts")
     require("403" in run_cli(["symmetric", "encrypt", kid, "--file", str(source)], env, expect_success=False).stderr,

@@ -28,7 +28,7 @@ pub enum SubjectMode {
 }
 
 impl SubjectMode {
-    fn is_none(&self) -> bool {
+    pub(crate) fn is_none(&self) -> bool {
         *self == Self::None
     }
 }

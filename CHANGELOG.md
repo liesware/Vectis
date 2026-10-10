@@ -8,6 +8,15 @@ manually for releases; the Git history remains the detailed engineering record.
 Changes staged for v0.9.0, the first official release.
 
 ### Added
+- Subject-bound symmetric encryption reuses existing authenticated subject seeds
+  with purpose-separated keys and subject-bound AEAD context. Adds an encrypt
+  route and CLI `--subject`; decrypt accepts the full subject envelope. Legacy
+  ciphertexts remain compatible. No ciphertext storage, fallback or migration.
+- Stored FPE subject contexts reuse existing subject seeds, with independent
+  request-scoped FF1 and optional MAC keys. Subject encrypt routes and CLI
+  `--subject` preserve legacy behavior. Original creator configuration must
+  remain available; subject deletion affects tokens and FPE without deleting
+  externally stored FPE ciphertexts. No automatic migration or secret cache.
 - Optional signed-profile FPE authentication (`authenticated: true`), using an
   independently derived HMAC-BLAKE2b-256 key and a separate lowercase hex tag.
   Decrypt authenticates the whole batch before FF1. Legacy ciphertexts, outputs

@@ -39,6 +39,53 @@ pub async fn token_context(
     .await
 }
 
+pub(super) async fn subject_origin(
+    state: &HttpState,
+    snapshot: &crate::core::config_file::ConfigState,
+    kid: &str,
+    subject: &str,
+) -> Result<(crate::core::storage::SubjectRow, Arc<TokenizationProfile>), DynError> {
+    let row = state.storage().get_subject(kid, subject).await?;
+    let name = subjects::seed_profile_hint(&row.seed)?;
+    let origin = snapshot
+        .tokenization_profiles
+        .get(&name)
+        .ok_or_else(|| crate::error::internal("stored subject seed is invalid"))?;
+    if origin.kid() != kid || origin.subject_mode() != tokenization::SubjectMode::Stored {
+        return Err(crate::error::internal("stored subject seed is invalid"));
+    }
+    Ok((row, origin))
+}
+
+pub async fn fpe_context(
+    state: &HttpState,
+    snapshot: &crate::core::config_file::ConfigState,
+    profile: Arc<crate::core::fpe::FpeProfile>,
+    kid: &str,
+    subject: Option<&str>,
+    use_kind: ops::keys::ProfileUse,
+) -> Result<crate::core::fpe::FpeContext, DynError> {
+    crate::core::fpe::validate_subject_mode(&profile, subject)?;
+    state
+        .with_keys_db_state(|keys| {
+            ops::keys::prepare_profile_use(keys, kid, profile.kid(), "fpe", use_kind)
+        })
+        .await?;
+    let Some(subject) = subject else {
+        return Ok(profile.into());
+    };
+    let (row, origin) = subject_origin(state, snapshot, kid, subject).await?;
+    blocking::spawn_blocking_crypto(move || {
+        crate::core::fpe::FpeContext::from_subject_envelope(
+            profile,
+            &origin,
+            &row.subject,
+            &row.seed,
+        )
+    })
+    .await
+}
+
 pub async fn create_endpoint(
     State(state): State<HttpState>,
     Path(kid): Path<String>,

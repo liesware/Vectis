@@ -157,6 +157,20 @@ preset and Unicode profiles, including insufficient effective domains; curated
 input/config seeds cover incompatible selectors, nulls and overlap. Legacy
 serialization and a deterministic ciphertext vector are regression-tested.
 
+Stored FPE coverage shares an existing tokenization subject across both
+capabilities, with authenticated and unauthenticated single/batch operations.
+Tests cover FPE-only grants, creator-profile resolution, missing subjects,
+deletion/recreation, lifecycle and strict CLI subject flags. Native round-trip
+fuzzing includes stored contexts; input/config seeds include nullable subjects
+and subject modes that must be rejected.
+
+Subject symmetric coverage uses the same seed across tokens, FPE and symmetric
+without token grants for the symmetric client. Tests cover canonical AAD,
+tampering, missing/incompatible creator profiles, deletion/recreation, lifecycle,
+strict CLI flags and legacy envelopes. Unit tests reject missing prepared
+contexts and corrupt seeds with no fallback; native AEAD fuzzing covers derived
+subject keys and failure under another seed or the general key.
+
 The positive suite races eight subject creations and expects one `201` and
 seven `200` responses with the same ID and unchanged seed. Storage tests cover
 transactional token purging, stale-generation writes and encode/delete races.

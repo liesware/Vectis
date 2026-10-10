@@ -551,6 +551,13 @@ plaintext.
 
 ## Symmetric Encryption
 
+`POST /symmetric/encrypt/{kid}/subject/{subject}` reuses an existing subject seed
+with independent purpose-bound symmetric keys. Decrypt receives subject inside
+the complete envelope; permission and lifecycle are unchanged. The original
+creator profile must remain available. No ciphertexts are stored in Vectis.
+Deleting the shared subject also affects tokens and FPE, not external ciphertexts.
+See [subject symmetric](API.md#existing-subject-keys) for derivation and AAD.
+
 Vectis exposes these Data Protection endpoints for local encryption and decryption:
 
 - `POST /symmetric/encrypt/{kid}`;
@@ -564,6 +571,14 @@ Encrypt requires an active key; decrypt permits active or retired keys.
 Envelope, `type=internal-message` AAD, audit event names and metrics are unchanged.
 
 ## Format-Preserving Encryption
+
+FPE profiles optionally use `subject_mode: stored` to reuse a seed created by a
+tokenization profile for the same KID. Its original signed creator configuration
+authenticates the envelope; child FF1 and optional MAC keys are independent of
+tokens. General routes accept none; subject encrypt routes include the ID and
+decrypt bodies supply it. Seed deletion affects both capabilities but does not
+erase external FPE ciphertexts. See [FPE subjects](API.md#fpe-with-existing-subject-keys)
+for derivation, lifecycle, backups and in-flight limitations.
 
 Signed FPE profiles select one literal Unicode alphabet or an ASCII preset
 `num|alpha|alphanum`. Letter presets require `uppercase|lowercase|mixed` case.
@@ -580,6 +595,9 @@ Vectis exposes local FF1 FPE endpoints for fields that must stay inside a
 signed alphabet and length range:
 
 - `POST /fpe/encrypt/{kid}`;
+- `POST /fpe/encrypt/batch/{kid}`;
+- `POST /fpe/encrypt/{kid}/subject/{subject}`;
+- `POST /fpe/encrypt/batch/{kid}/subject/{subject}`;
 - `POST /fpe/decrypt`.
 
 FPE profiles live in signed config under `fpe_profiles`. Requests select a
@@ -885,7 +903,7 @@ Vectis exposes these major endpoint groups:
 - messaging: `/message/{sender_kid}`, `/message`, `/message/decrypt`;
 - symmetric encryption: `/symmetric/encrypt/{kid}`,
   `/symmetric/decrypt`;
-- FPE: `/fpe/encrypt/{kid}`, `/fpe/decrypt`;
+- FPE: `/fpe/encrypt/{kid}`, `/fpe/encrypt/batch/{kid}`, their `/subject/{subject}` variants, `/fpe/decrypt`, `/fpe/decrypt/batch`;
 - tokenization: `/token/encode/{kid}`, `/token/decode`;
 - MAC: `/mac/{kid}`, `/mac/batch/{kid}`, `/mac/verify`,
   `/mac/verify/batch`;

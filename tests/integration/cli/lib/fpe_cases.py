@@ -75,3 +75,19 @@ def fpe_runtime_contracts(env, directory):
     require("plaintext: 001-234" in run_cli(["fpe","decrypt","--file",str(source),"--output","yaml"],env).stdout,"authenticated YAML output")
     wrong=dict(inverse,tag="0"*64)
     require("fpe authentication failed" in run_cli(["fpe","decrypt","--json",json.dumps(wrong)],env,expect_success=False).stderr,"CLI reports fixed authentication error")
+    run_cli(["config","token","add","--name","fpe-seed-origin-cli","--kid",kid,"--token-prefix","fpe_seed","--token-len","32","--max-plaintext-len","128","--one-time","false","--subject-mode","stored"],env)
+    run_cli(["config","fpe","add","--name","subject-fpe-cli",*common,"--alphabet-preset","num","--preserve-characters","-","--authenticated","true","--subject-mode","stored"],env)
+    run_cli(["config","sign"],env); run_cli(["config","reload"],env)
+    created=run_cli_json(["subject","create",kid,"--json",json.dumps({"profile":"fpe-seed-origin-cli","subject_name":"shared-cli-user"})],env)
+    subject=created["subject"]
+    body={"ref":"subject","profile":"subject-fpe-cli","plaintext":"001-234"}
+    source.write_text(json.dumps(body),encoding="utf-8")
+    encoded=run_cli_json(["fpe","encrypt",kid,"--subject",subject,"--file",str(source)],env)
+    require(encoded["subject"]==subject,"CLI selects subject route and preserves input")
+    inverse={"ref":"subject","kid":kid,"profile":body["profile"],"subject":subject,"ciphertext":encoded["ciphertext"],"tag":encoded["tag"]}
+    require(run_cli_json(["fpe","decrypt","--json",json.dumps(inverse)],env)["plaintext"]==body["plaintext"],"CLI subject round trip")
+    for options in [["--subject"],["--subject","A"*64],["--subject",subject,"--subject",subject]]:
+        run_cli(["fpe","encrypt",kid,*options,"--json",json.dumps(body)],env,expect_success=False)
+    run_cli(["fpe","decrypt","--subject",subject,"--json",json.dumps(inverse)],env,expect_success=False)
+    run_cli(["subject","delete",kid,subject],env)
+    require("404" in run_cli(["fpe","decrypt","--json",json.dumps(inverse)],env,expect_success=False).stderr,"CLI deleted seed prevents recovery")

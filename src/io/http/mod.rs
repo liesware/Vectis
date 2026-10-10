@@ -600,6 +600,14 @@ pub fn router(state: HttpState) -> Router {
         .route("/fpe/encrypt/batch/{kid}", post(fpe_encrypt_batch))
         .route("/fpe/decrypt/batch", post(fpe::decrypt_batch_endpoint))
         .route("/fpe/encrypt/{kid}", post(fpe::encrypt_endpoint))
+        .route(
+            "/fpe/encrypt/{kid}/subject/{subject}",
+            post(fpe::encrypt_subject_endpoint),
+        )
+        .route(
+            "/fpe/encrypt/batch/{kid}/subject/{subject}",
+            post(fpe::encrypt_batch_subject_endpoint),
+        )
         .route("/fpe/decrypt", post(fpe::decrypt_endpoint))
         .route("/token/encode/batch/{kid}", post(token_encode_batch))
         .route("/token/decode/batch", post(token::decode_batch_endpoint))
@@ -640,6 +648,10 @@ pub fn router(state: HttpState) -> Router {
         .route(
             "/symmetric/decrypt",
             post(message::internal_decrypt_endpoint),
+        )
+        .route(
+            "/symmetric/encrypt/{kid}/subject/{subject}",
+            post(message::internal_encrypt_subject_endpoint),
         )
         .route("/message/decrypt", post(message::decrypt_endpoint))
         .route("/message", post(message::receive_endpoint))

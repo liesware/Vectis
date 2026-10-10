@@ -1,4 +1,4 @@
-use crate::core::validation;
+use crate::core::{tokenization::SubjectMode, validation};
 use crate::error::DynError;
 use crate::ops::keys;
 use serde::{Deserialize, Serialize};
@@ -81,6 +81,8 @@ pub(crate) struct FpeProfileInput {
     preserve_characters: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     authenticated: bool,
+    #[serde(default, skip_serializing_if = "SubjectMode::is_none")]
+    subject_mode: SubjectMode,
     min_len: usize,
     max_len: usize,
     tweak_aad: String,
@@ -97,11 +99,191 @@ pub struct FpeProfile {
     kid: String,
     alphabet_chars: PreparedFpeAlphabet,
     alphabet_index: PreparedFpeAlphabetIndex,
-    cipher: PreparedFpeCipher,
+    cipher: Option<PreparedFpeCipher>,
+    parent_key: Option<Zeroizing<Vec<u8>>>,
+    subject_mode: SubjectMode,
     preserve_characters: String,
     preserved: HashSet<char>,
     authenticated: bool,
     auth_key: Option<Zeroizing<Vec<u8>>>,
+}
+
+pub struct FpeContext {
+    profile: Arc<FpeProfile>,
+    keys: FpeContextKeys,
+}
+
+enum FpeContextKeys {
+    Legacy,
+    Subject {
+        subject: String,
+        cipher: PreparedFpeCipher,
+        auth_key: Option<Zeroizing<Vec<u8>>>,
+    },
+}
+
+impl From<Arc<FpeProfile>> for FpeContext {
+    fn from(profile: Arc<FpeProfile>) -> Self {
+        Self {
+            profile,
+            keys: FpeContextKeys::Legacy,
+        }
+    }
+}
+
+impl std::ops::Deref for FpeContext {
+    type Target = FpeProfile;
+    fn deref(&self) -> &FpeProfile {
+        &self.profile
+    }
+}
+
+impl FpeContext {
+    pub fn from_subject_envelope(
+        profile: Arc<FpeProfile>,
+        origin: &crate::core::tokenization::TokenizationProfile,
+        subject: &str,
+        envelope: &str,
+    ) -> Result<Self, DynError> {
+        validate_subject_mode(&profile, Some(subject))?;
+        if origin.kid() != profile.kid() || origin.subject_mode() != SubjectMode::Stored {
+            return Err(crate::error::internal("stored subject seed is invalid"));
+        }
+        let seed = crate::core::subjects::open_authenticated_seed(origin, subject, envelope)?;
+        Self::with_subject(profile, subject, &seed)
+    }
+    pub fn subject(&self) -> Option<&str> {
+        match &self.keys {
+            FpeContextKeys::Legacy => None,
+            FpeContextKeys::Subject { subject, .. } => Some(subject),
+        }
+    }
+
+    pub fn validate_mode(&self, expected: Option<&str>) -> Result<(), DynError> {
+        validate_subject_mode(&self.profile, expected)?;
+        if self.subject() != expected {
+            return Err(crate::error::invalid_input(
+                "subject does not match FPE context",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn with_subject(
+        profile: Arc<FpeProfile>,
+        subject: &str,
+        seed: &crate::core::subjects::OpenedSeed,
+    ) -> Result<Self, DynError> {
+        validate_subject_mode(&profile, Some(subject))?;
+        let parent = profile
+            .parent_key
+            .as_ref()
+            .ok_or_else(|| crate::error::internal("FPE parent key unavailable"))?;
+        let info = |purpose: &str, auth: bool| {
+            let mut fields = vec![
+                ("purpose", purpose),
+                ("kid", profile.kid()),
+                ("profile", profile.name()),
+                ("fpe_version", profile.fpe_version()),
+            ];
+            if auth {
+                fields.push(("auth_version", FPE_AUTH_VERSION));
+            }
+            fields.push(("version", "v1"));
+            validation::build_validated_aad(&fields)
+        };
+        let key = Zeroizing::new(crate::core::crypto::create_hkdf(
+            parent,
+            seed.as_bytes(),
+            info("subject-fpe-encryption", false)?.as_bytes(),
+            32,
+        )?);
+        let cipher = build_fpe_cipher(&key, profile.alphabet_chars.len())?;
+        let auth_key = if profile.authenticated() {
+            let parent = profile
+                .auth_key
+                .as_ref()
+                .ok_or_else(|| crate::error::internal("FPE parent MAC key unavailable"))?;
+            Some(Zeroizing::new(crate::core::crypto::create_hkdf(
+                parent,
+                seed.as_bytes(),
+                info("subject-fpe-authentication", true)?.as_bytes(),
+                32,
+            )?))
+        } else {
+            None
+        };
+        Ok(Self {
+            profile,
+            keys: FpeContextKeys::Subject {
+                subject: subject.to_owned(),
+                cipher,
+                auth_key,
+            },
+        })
+    }
+
+    fn cipher(&self) -> Result<&vectis_fpe::ff1::FF1<aes::Aes256>, DynError> {
+        self.validate_mode(self.subject())?;
+        match &self.keys {
+            FpeContextKeys::Legacy => self.profile.cipher(),
+            FpeContextKeys::Subject { cipher, .. } => Ok(cipher),
+        }
+    }
+
+    fn auth_key(&self) -> Option<&[u8]> {
+        match &self.keys {
+            FpeContextKeys::Legacy => self.profile.auth_key.as_ref().map(|key| key.as_slice()),
+            FpeContextKeys::Subject { auth_key, .. } => auth_key.as_ref().map(|key| key.as_slice()),
+        }
+    }
+
+    pub fn encrypt(&self, value: &str) -> Result<String, DynError> {
+        let cipher = self.cipher()?;
+        fpe_transform(
+            &self.profile,
+            parse_fpe_value_digits("plaintext", value, &self.profile)?,
+            true,
+            cipher,
+        )
+    }
+
+    pub fn decrypt(&self, value: &str) -> Result<String, DynError> {
+        let cipher = self.cipher()?;
+        #[cfg(test)]
+        DECRYPT_CALLS.set(DECRYPT_CALLS.get() + 1);
+        fpe_transform(
+            &self.profile,
+            parse_fpe_value_digits("ciphertext", value, &self.profile)?,
+            false,
+            cipher,
+        )
+    }
+
+    pub fn generate_tag(&self, ciphertext: &str) -> Result<Option<String>, DynError> {
+        self.validate_mode(self.subject())?;
+        generate_tag_with_key(&self.profile, ciphertext, self.auth_key())
+    }
+
+    pub fn verify_tag(&self, ciphertext: &str, tag: Option<&str>) -> Result<(), DynError> {
+        self.validate_mode(self.subject())?;
+        verify_tag_with_key(&self.profile, ciphertext, tag, self.auth_key())
+    }
+}
+
+pub fn validate_subject_mode(profile: &FpeProfile, subject: Option<&str>) -> Result<(), DynError> {
+    if let Some(subject) = subject {
+        crate::core::subjects::validate_subject(subject)?;
+    }
+    match (profile.subject_mode(), subject) {
+        (SubjectMode::Stored, None) => Err(crate::error::invalid_input(
+            "subject is required for stored FPE profiles",
+        )),
+        (SubjectMode::None, Some(_)) => Err(crate::error::invalid_input(
+            "subject is prohibited for legacy FPE profiles",
+        )),
+        _ => Ok(()),
+    }
 }
 
 #[derive(Clone, Default)]
@@ -118,6 +300,7 @@ impl fmt::Debug for FpeProfile {
             .field("alphabet", &self.alphabet)
             .field("preserve_characters", &self.preserve_characters)
             .field("authenticated", &self.authenticated)
+            .field("subject_mode", &self.subject_mode)
             .field("min_len", &self.min_len)
             .field("max_len", &self.max_len)
             .field("tweak_aad", &self.tweak_aad)
@@ -136,6 +319,9 @@ impl fmt::Debug for FpeProfilesState {
 }
 
 impl FpeProfile {
+    pub fn subject_mode(&self) -> SubjectMode {
+        self.subject_mode
+    }
     pub fn authenticated(&self) -> bool {
         self.authenticated
     }
@@ -171,8 +357,10 @@ impl FpeProfile {
         &self.kid
     }
 
-    fn cipher(&self) -> &vectis_fpe::ff1::FF1<aes::Aes256> {
-        &self.cipher
+    fn cipher(&self) -> Result<&vectis_fpe::ff1::FF1<aes::Aes256>, DynError> {
+        self.cipher.as_deref().ok_or_else(|| {
+            crate::error::invalid_input("stored FPE profile requires a subject context")
+        })
     }
 
     fn alphabet_chars(&self) -> &[char] {
@@ -233,6 +421,7 @@ impl Zeroize for FpeProfile {
         self.tweak_aad.zeroize();
         self.kid.zeroize();
         self.auth_key = None;
+        self.parent_key = None;
     }
 }
 
@@ -292,7 +481,13 @@ pub(crate) fn validate_fpe_profiles(
             return Err(crate::error::internal("derived fpe key has invalid length"));
         }
         let (alphabet_chars, alphabet_index) = prepare_fpe_alphabet(&alphabet)?;
-        let cipher = build_fpe_cipher(&fpe_key, alphabet_chars.len())?;
+        let (cipher, parent_key) = match profile.subject_mode {
+            SubjectMode::None => (
+                Some(build_fpe_cipher(&fpe_key, alphabet_chars.len())?),
+                None,
+            ),
+            SubjectMode::Stored => (None, Some(fpe_key)),
+        };
         let auth_key = if profile.authenticated {
             let key = derive_fpe_auth_key(FpeKeyDerivationRequest {
                 kid: &profile.kid,
@@ -320,6 +515,8 @@ pub(crate) fn validate_fpe_profiles(
             alphabet_chars,
             alphabet_index,
             cipher,
+            parent_key,
+            subject_mode: profile.subject_mode,
             preserve_characters,
             preserved,
             authenticated: profile.authenticated,
@@ -369,11 +566,12 @@ struct FpeAuthMaterial<'a> {
     ciphertext: &'a str,
 }
 
-fn auth_bytes(profile: &FpeProfile, ciphertext: &str) -> Result<Zeroizing<Vec<u8>>, DynError> {
-    let key = profile
-        .auth_key
-        .as_ref()
-        .ok_or_else(|| crate::error::internal("fpe authentication key unavailable"))?;
+fn auth_bytes(
+    profile: &FpeProfile,
+    ciphertext: &str,
+    key: Option<&[u8]>,
+) -> Result<Zeroizing<Vec<u8>>, DynError> {
+    let key = key.ok_or_else(|| crate::error::internal("fpe authentication key unavailable"))?;
     let material = crate::core::canonical::canonical_json_v1(&FpeAuthMaterial {
         purpose: "fpe-auth",
         auth_version: FPE_AUTH_VERSION,
@@ -425,10 +623,23 @@ pub fn generate_auth_tag(
     profile: &FpeProfile,
     ciphertext: &str,
 ) -> Result<Option<String>, DynError> {
+    validate_subject_mode(profile, None)?;
+    generate_tag_with_key(
+        profile,
+        ciphertext,
+        profile.auth_key.as_ref().map(|key| key.as_slice()),
+    )
+}
+
+fn generate_tag_with_key(
+    profile: &FpeProfile,
+    ciphertext: &str,
+    key: Option<&[u8]>,
+) -> Result<Option<String>, DynError> {
     if !profile.authenticated() {
         return Ok(None);
     }
-    Ok(Some(hex::encode(auth_bytes(profile, ciphertext)?)))
+    Ok(Some(hex::encode(auth_bytes(profile, ciphertext, key)?)))
 }
 
 pub fn verify_auth_tag(
@@ -436,10 +647,25 @@ pub fn verify_auth_tag(
     ciphertext: &str,
     tag: Option<&str>,
 ) -> Result<(), DynError> {
+    validate_subject_mode(profile, None)?;
+    verify_tag_with_key(
+        profile,
+        ciphertext,
+        tag,
+        profile.auth_key.as_ref().map(|key| key.as_slice()),
+    )
+}
+
+fn verify_tag_with_key(
+    profile: &FpeProfile,
+    ciphertext: &str,
+    tag: Option<&str>,
+    key: Option<&[u8]>,
+) -> Result<(), DynError> {
     validate_tag_policy(profile, tag)?;
     if let Some(tag) = tag {
         let received = Zeroizing::new(hex::decode(tag)?);
-        let expected = auth_bytes(profile, ciphertext)?;
+        let expected = auth_bytes(profile, ciphertext, key)?;
         if !crate::core::crypto::constant_time_eq(&received, &expected) {
             return Err(crate::error::invalid_input("fpe authentication failed"));
         }
@@ -781,20 +1007,21 @@ fn build_fpe_cipher(fpe_key: &[u8], radix: usize) -> Result<PreparedFpeCipher, D
 
 pub fn fpe_encrypt(profile: &FpeProfile, plaintext: &str) -> Result<String, DynError> {
     let digits = parse_fpe_value_digits("plaintext", plaintext, profile)?;
-    fpe_transform(profile, digits, true)
+    fpe_transform(profile, digits, true, profile.cipher()?)
 }
 
 pub fn fpe_decrypt(profile: &FpeProfile, ciphertext: &str) -> Result<String, DynError> {
     #[cfg(test)]
     DECRYPT_CALLS.set(DECRYPT_CALLS.get() + 1);
     let digits = parse_fpe_value_digits("ciphertext", ciphertext, profile)?;
-    fpe_transform(profile, digits, false)
+    fpe_transform(profile, digits, false, profile.cipher()?)
 }
 
 fn fpe_transform(
     profile: &FpeProfile,
     value: PreparedFpeValue,
     encrypt: bool,
+    cipher: &vectis_fpe::ff1::FF1<aes::Aes256>,
 ) -> Result<String, DynError> {
     let PreparedFpeValue {
         mut digits,
@@ -803,13 +1030,9 @@ fn fpe_transform(
     } = value;
     let input = vectis_fpe::ff1::FlexibleNumeralString::from(std::mem::take(&mut *digits));
     let output_result = if encrypt {
-        profile
-            .cipher()
-            .encrypt(profile.tweak_aad().as_bytes(), &input)
+        cipher.encrypt(profile.tweak_aad().as_bytes(), &input)
     } else {
-        profile
-            .cipher()
-            .decrypt(profile.tweak_aad().as_bytes(), &input)
+        cipher.decrypt(profile.tweak_aad().as_bytes(), &input)
     };
     let mut input_digits = Vec::<u16>::from(input);
     input_digits.zeroize();
@@ -857,6 +1080,7 @@ mod tests {
             letter_case: None,
             preserve_characters: None,
             authenticated: false,
+            subject_mode: SubjectMode::None,
             min_len: 6,
             max_len: 32,
             tweak_aad: "tenant=acme;field=patient_id;version=1".to_string(),
@@ -936,6 +1160,126 @@ mod tests {
         let profile = state.get("patient-id").unwrap();
         assert_eq!(fpe_encrypt(&profile, "001234567").unwrap(), "392168046");
         assert_eq!(fpe_decrypt(&profile, "392168046").unwrap(), "001234567");
+    }
+
+    #[test]
+    fn subject_context_uses_original_seed_and_separate_versioned_keys() {
+        let token_input = serde_json::json!([{"name":"creator-token","kid":kid(),"token_prefix":"tok_subject","token_len":32,"max_plaintext_len":128,"one_time":false,"subject_mode":"stored"}]);
+        let tokens = crate::core::tokenization::validate_tokenization_profiles(
+            serde_json::from_value(token_input).unwrap(),
+            |_| true,
+            |request| {
+                crate::core::tokenization::derive_tokenization_keys(
+                    &"11".repeat(32),
+                    "AES-256/GCM",
+                    request,
+                )
+            },
+        )
+        .unwrap();
+        let creator = tokens.get("creator-token").unwrap();
+        let subject = crate::core::subjects::subject_id(&creator, "user").unwrap();
+        let envelope = crate::core::subjects::create_seed(&creator, &subject).unwrap();
+        assert_eq!(
+            crate::core::subjects::seed_profile_hint(&envelope).unwrap(),
+            "creator-token"
+        );
+        let seed =
+            crate::core::subjects::open_authenticated_seed(&creator, &subject, &envelope).unwrap();
+        let token_keys = crate::core::subjects::open_seed(&creator, &subject, &envelope).unwrap();
+        for authenticated in [false, true] {
+            let mut def = input("stored-fpe", kid());
+            def.authenticated = authenticated;
+            def.subject_mode = SubjectMode::Stored;
+            def.preserve_characters = Some("-".to_owned());
+            let profiles = validate_fpe_profiles(
+                vec![def],
+                |_| true,
+                |_| Ok(fpe_key()),
+                |_| Ok(Zeroizing::new(vec![9; 32])),
+            )
+            .unwrap();
+            let profile = profiles.get("stored-fpe").unwrap();
+            assert!(profile.cipher.is_none());
+            assert!(fpe_encrypt(&profile, "001-234").is_err());
+            assert!(
+                FpeContext::from(profile.clone())
+                    .encrypt("001-234")
+                    .is_err()
+            );
+            let ctx = FpeContext::with_subject(profile.clone(), &subject, &seed).unwrap();
+            let ciphertext = ctx.encrypt("001-234").unwrap();
+            let tag = ctx.generate_tag(&ciphertext).unwrap();
+            ctx.verify_tag(&ciphertext, tag.as_deref()).unwrap();
+            assert_eq!(ctx.decrypt(&ciphertext).unwrap(), "001-234");
+            let info = format!(
+                "purpose=subject-fpe-encryption;kid={};profile=stored-fpe;fpe_version=fpe-ff1-2025;version=v1",
+                kid()
+            );
+            let expected = Zeroizing::new(
+                crate::core::crypto::create_hkdf(&[7; 32], seed.as_bytes(), info.as_bytes(), 32)
+                    .unwrap(),
+            );
+            assert_ne!(expected.as_slice(), token_keys.hash_key.as_slice());
+            assert_ne!(expected.as_slice(), token_keys.data_key.as_slice());
+            let cipher = build_fpe_cipher(&expected, 10).unwrap();
+            assert_eq!(
+                ciphertext,
+                fpe_transform(
+                    &profile,
+                    parse_fpe_value_digits("plaintext", "001-234", &profile).unwrap(),
+                    true,
+                    &cipher
+                )
+                .unwrap()
+            );
+            if let FpeContextKeys::Subject {
+                auth_key: Some(key),
+                ..
+            } = &ctx.keys
+            {
+                let info = format!(
+                    "purpose=subject-fpe-authentication;kid={};profile=stored-fpe;fpe_version=fpe-ff1-2025;auth_version=v1;version=v1",
+                    kid()
+                );
+                let expected_mac = crate::core::crypto::create_hkdf(
+                    &[9; 32],
+                    seed.as_bytes(),
+                    info.as_bytes(),
+                    32,
+                )
+                .unwrap();
+                assert_eq!(key.as_slice(), expected_mac.as_slice());
+                assert_ne!(key.as_slice(), expected.as_slice());
+            }
+            let replacement = crate::core::subjects::create_seed(&creator, &subject).unwrap();
+            let new_seed =
+                crate::core::subjects::open_authenticated_seed(&creator, &subject, &replacement)
+                    .unwrap();
+            let recreated = FpeContext::with_subject(profile, &subject, &new_seed).unwrap();
+            if authenticated {
+                assert!(recreated.verify_tag(&ciphertext, tag.as_deref()).is_err());
+            }
+        }
+        let mut definition = serde_json::to_value(input("mode", kid())).unwrap();
+        assert!(definition.get("subject_mode").is_none());
+        definition["subject_mode"] = serde_json::json!("none");
+        assert!(
+            serde_json::to_value(
+                serde_json::from_value::<FpeProfileInput>(definition.clone()).unwrap()
+            )
+            .unwrap()
+            .get("subject_mode")
+            .is_none()
+        );
+        for bad in [
+            serde_json::Value::Null,
+            serde_json::json!("other"),
+            serde_json::json!(true),
+        ] {
+            definition["subject_mode"] = bad;
+            assert!(serde_json::from_value::<FpeProfileInput>(definition.clone()).is_err());
+        }
     }
 
     #[test]

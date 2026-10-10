@@ -531,10 +531,38 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
+  /symmetric/encrypt/{kid}/subject/{subject}:
+    post:
+      tags: [Symmetric Encryption]
+      summary: Encrypt local data with an existing subject seed
+      description: Requires symmetric permission and an active KID. Uses the KID algorithm and a separately derived subject key. The signed stored tokenization profile that created the seed must remain available. No token permission or ciphertext storage is required.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+        - $ref: "#/components/parameters/Subject"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InternalEncryptMessageInput"
+      responses:
+        "200":
+          description: Complete subject-bound symmetric envelope
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubjectSymmetricEnvelope"
+        "413":
+          $ref: "#/components/responses/RequestBodyTooLarge"
+        default:
+          $ref: "#/components/responses/Error"
+
   /symmetric/decrypt:
     post:
       tags: [Symmetric Encryption]
-      description: Requires symmetric permission for the envelope KID and an active or retired key. Receives the complete envelope.
+      description: Requires symmetric permission for the envelope KID and an active or retired key. A non-null subject selects subject-bound decryption with no fallback; absence selects legacy. The AAD purpose must match and is authenticated. Missing subjects return 404; corrupt seeds or missing creator configuration produce sanitized internal errors.
       summary: Decrypt a symmetric-key envelope
       security:
         - ApiKeyAuth: []
@@ -613,6 +641,62 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/FpeEncryptBatchOutput"
+        "413":
+          $ref: "#/components/responses/RequestBodyTooLarge"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /fpe/encrypt/{kid}/subject/{subject}:
+    post:
+      tags: [FPE]
+      summary: Encrypt a field with an existing subject seed
+      description: Requires fpe-encrypt, an active KID and a matching stored FPE profile. Seed is opened using its original signed tokenization profile; no token permission is required. No fallback to general keys.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+        - $ref: "#/components/parameters/Subject"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FpeEncryptInput"
+      responses:
+        "200":
+          description: Ciphertext, subject and optional authentication tag
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FpeSubjectEncryptOutput"
+        "413":
+          $ref: "#/components/responses/RequestBodyTooLarge"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /fpe/encrypt/batch/{kid}/subject/{subject}:
+    post:
+      tags: [FPE]
+      summary: Encrypt a batch with one existing subject seed
+      description: Requires fpe-encrypt, an active KID and a stored FPE profile. Opens seed and prepares keys once for the whole batch. Ordering and all-or-nothing guarantees are unchanged.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Kid"
+        - $ref: "#/components/parameters/Subject"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FpeEncryptBatchInput"
+      responses:
+        "200":
+          description: Complete ciphertext batch with one top-level subject
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FpeSubjectEncryptBatchOutput"
         "413":
           $ref: "#/components/responses/RequestBodyTooLarge"
         default:
@@ -2461,8 +2545,17 @@ components:
           $ref: "#/components/schemas/Timestamp"
         kid:
           $ref: "#/components/schemas/Kid"
+        subject:
+          $ref: "#/components/schemas/Subject"
+          description: Present only for subject-bound symmetric envelopes; never nullable.
         message:
           $ref: "#/components/schemas/InternalMessageCipher"
+
+    SubjectSymmetricEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/InternalMessageOutput"
+        - type: object
+          required: [subject]
 
     InternalMessageCipher:
       type: object
@@ -2524,6 +2617,8 @@ components:
           type: boolean
           default: false
           description: Signed policy; false is omitted in canonical serialization. Requests cannot override it.
+        subject_mode:
+          $ref: "#/components/schemas/SubjectMode"
         min_len:
           type: integer
           minimum: 6
@@ -2570,6 +2665,24 @@ components:
         plaintext:
           $ref: "#/components/schemas/TextField"
           example: "123456"
+
+    FpeSubjectEncryptOutput:
+      allOf:
+        - $ref: "#/components/schemas/FpeEncryptOutput"
+        - type: object
+          required: [subject]
+          properties:
+            subject:
+              $ref: "#/components/schemas/Subject"
+
+    FpeSubjectEncryptBatchOutput:
+      allOf:
+        - $ref: "#/components/schemas/FpeEncryptBatchOutput"
+        - type: object
+          required: [subject]
+          properties:
+            subject:
+              $ref: "#/components/schemas/Subject"
 
     FpeEncryptOutput:
       type: object
@@ -2643,6 +2756,9 @@ components:
           $ref: "#/components/schemas/ClientRef"
         kid:
           $ref: "#/components/schemas/Kid"
+        subject:
+          $ref: "#/components/schemas/Subject"
+          description: Required for stored FPE profiles, prohibited for none; never nullable. One subject applies to all batch items.
         profile:
           $ref: "#/components/schemas/TextField"
           example: patient-id-decimal-v1
@@ -2669,6 +2785,9 @@ components:
       properties:
         kid:
           $ref: "#/components/schemas/Kid"
+        subject:
+          $ref: "#/components/schemas/Subject"
+          description: Required for stored FPE profiles, prohibited for none; never nullable. One subject applies to all batch items.
         profile:
           $ref: "#/components/schemas/TextField"
           example: patient-id-decimal-v1

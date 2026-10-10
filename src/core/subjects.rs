@@ -17,6 +17,36 @@ pub struct SubjectTokenKeys {
     pub(crate) data_key: Zeroizing<Vec<u8>>,
 }
 
+pub(crate) struct OpenedSeed(Zeroizing<Vec<u8>>);
+
+impl OpenedSeed {
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+// A lookup hint only: the selected signed profile must authenticate the full AAD.
+pub(crate) fn seed_profile_hint(envelope: &str) -> Result<String, DynError> {
+    (|| {
+        validate_seed_envelope(envelope)?;
+        let aad = STANDARD.decode(
+            envelope
+                .split('.')
+                .nth(2)
+                .ok_or_else(|| crate::error::internal("invalid subject envelope"))?,
+        )?;
+        let aad = std::str::from_utf8(&aad)?;
+        let fields = validation::parse_aad_fields(aad)?;
+        let names: Vec<_> = fields.iter().filter(|(key, _)| key == "profile").collect();
+        if names.len() != 1 {
+            return Err(crate::error::internal("invalid subject profile hint"));
+        }
+        validation::validate_aad_config_name("subject profile", &names[0].1)?;
+        Ok(names[0].1.clone())
+    })()
+    .map_err(|_: DynError| crate::error::internal("stored subject seed is invalid"))
+}
+
 #[derive(Serialize, Deserialize, zeroize::Zeroize, zeroize::ZeroizeOnDrop)]
 #[serde(deny_unknown_fields)]
 struct SeedPayload {
@@ -139,6 +169,16 @@ pub fn open_seed(
     subject: &str,
     envelope: &str,
 ) -> Result<SubjectTokenKeys, DynError> {
+    let seed = open_authenticated_seed(profile, subject, envelope)?;
+    derive_token_keys(profile, subject, &seed)
+        .map_err(|_| crate::error::internal("stored subject seed is invalid"))
+}
+
+pub(crate) fn open_authenticated_seed(
+    profile: &TokenizationProfile,
+    subject: &str,
+    envelope: &str,
+) -> Result<OpenedSeed, DynError> {
     // Stored corruption is an internal failure, never reflected to callers.
     open_seed_inner(profile, subject, envelope)
         .map_err(|_| crate::error::internal("stored subject seed is invalid"))
@@ -148,7 +188,7 @@ fn open_seed_inner(
     profile: &TokenizationProfile,
     subject: &str,
     envelope: &str,
-) -> Result<SubjectTokenKeys, DynError> {
+) -> Result<OpenedSeed, DynError> {
     validate_seed_envelope(envelope)?;
     let cipher = crypto::symmetric_cipher(profile.cipher_algorithm())
         .ok_or_else(|| crate::error::internal("unsupported subject cipher"))?;
@@ -172,18 +212,27 @@ fn open_seed_inner(
     )?);
     let payload: SeedPayload = serde_json::from_slice(&plaintext)?;
     validation::validate_symmetric_key("seed", &payload.seed, SUBJECT_SEED_BYTES)?;
-    let seed = Zeroizing::new(hex::decode(&payload.seed)?);
+    Ok(OpenedSeed(Zeroizing::new(hex::decode(&payload.seed)?)))
+}
+
+fn derive_token_keys(
+    profile: &TokenizationProfile,
+    subject: &str,
+    seed: &OpenedSeed,
+) -> Result<SubjectTokenKeys, DynError> {
+    let cipher = crypto::symmetric_cipher(profile.cipher_algorithm())
+        .ok_or_else(|| crate::error::internal("unsupported subject cipher"))?;
     Ok(SubjectTokenKeys {
         subject: subject.to_owned(),
         hash_key: Zeroizing::new(crypto::create_hkdf(
             profile.hash_key(),
-            &seed,
+            seed.as_bytes(),
             key_info(profile, "subject-token-hash")?.as_bytes(),
             32,
         )?),
         data_key: Zeroizing::new(crypto::create_hkdf(
             profile.data_key(),
-            &seed,
+            seed.as_bytes(),
             key_info(profile, "subject-token-data")?.as_bytes(),
             cipher.key_size_bytes,
         )?),
@@ -193,6 +242,7 @@ fn open_seed_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zeroize::Zeroize;
 
     fn profile(name: &str, kid: &str, cipher: &str) -> std::sync::Arc<TokenizationProfile> {
         let state = crate::core::tokenization::validate_tokenization_profiles(
@@ -277,6 +327,25 @@ mod tests {
                 assert_eq!(error.to_string(), "stored subject seed is invalid");
             }
         }
+    }
+
+    #[test]
+    fn seed_hint_is_untrusted_and_opening_remains_bound_to_creator() {
+        let creator = profile("creator", &"a".repeat(64), "AES-256/GCM");
+        let other = profile("other", &"a".repeat(64), "AES-256/GCM");
+        let subject = subject_id(&creator, "user").unwrap();
+        let envelope = create_seed(&creator, &subject).unwrap();
+        assert!(open_authenticated_seed(&other, &subject, &envelope).is_err());
+        let mut parts = envelope.split('.').map(str::to_owned).collect::<Vec<_>>();
+        let aad = String::from_utf8(STANDARD.decode(&parts[2]).unwrap()).unwrap();
+        parts[2] = STANDARD.encode(aad.replace("profile=creator", "profile=other"));
+        let tampered = parts.join(".");
+        assert_eq!(seed_profile_hint(&tampered).unwrap(), "other");
+        assert!(open_authenticated_seed(&other, &subject, &tampered).is_err());
+        let mut seed = open_authenticated_seed(&creator, &subject, &envelope).unwrap();
+        assert_eq!(seed.as_bytes().len(), 32);
+        seed.0.zeroize();
+        assert!(seed.as_bytes().is_empty());
     }
 
     #[test]

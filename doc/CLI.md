@@ -370,6 +370,16 @@ permissions so the shell does not expand it.
 Edits the local `fpe_profiles` section in `VECTIS_CONFIG_PATH`. The lookup key
 is `name`. Names must be unique.
 
+`--subject-mode none|stored` selects general or per-subject keys. None is the
+default and omitted in canonical serialization. For stored FPE, first create a
+subject with a stored tokenization profile for the same KID, then reuse its ID.
+The creator's original profile and compatible wrapping keys must remain in signed
+config. Authentication is independent of subject mode.
+
+```sh
+vectis config fpe add --name patient-id-subject-v1 --kid <kid> --alphabet-preset num --preserve-characters '-' --authenticated true --subject-mode stored --min-len 6 --max-len 32 --tweak-aad 'tenant=acme;field=patient_id;version=1'
+```
+
 `--authenticated true|false` enables optional authentication in the signed
 profile. Omission on update preserves the policy; invalid values fail before
 writing. False is omitted in canonical serialization. Adopt true through a new
@@ -670,6 +680,20 @@ vectis message decrypt --file encrypted-message.json
 
 ### `vectis symmetric`
 
+Use `--subject <id>` only for encrypt to reuse an existing subject for the same
+KID. Decrypt receives the complete envelope, including subject, in JSON/file:
+
+```sh
+vectis symmetric encrypt <kid> --subject <subject> --json '{"plaintext":"synthetic data"}'
+vectis symmetric encrypt <kid> --subject <subject> --file plaintext.json
+vectis symmetric decrypt --file subject-envelope.json
+```
+
+Only `symmetric` permission is required. The seed's original signed tokenization
+profile must remain available. Deletion blocks future decrypt; recreation does
+not recover old ciphertexts. No fallback, ciphertext storage or batch commands
+are introduced. Calls without subject preserve legacy behavior.
+
 Data Protection: encrypt or decrypt local data with the per-KID `symmetric`
 permission. `message` does not grant these operations. Encrypt requires an active
 key; decrypt permits active or retired keys. Both require `VECTIS_APIKEY`.
@@ -684,6 +708,23 @@ Small JSON inputs can be passed directly with `--json`, but files are easier to
 read and audit.
 
 ### `vectis fpe`
+
+Stored profiles use the existing subject ID for encrypt and include it in decrypt
+JSON/file. None profiles prohibit subjects. No token permission is required;
+FPE permissions and lifecycle are unchanged. Batch subject operations are HTTP
+only; one top-level subject covers the complete batch.
+
+```sh
+vectis fpe encrypt <kid> --subject <subject> --json '{"ref":"reg1","profile":"patient-id-subject-v1","plaintext":"001-234"}'
+vectis fpe decrypt --file subject-fpe-envelope.json
+```
+
+Decrypt JSON contains `kid`, `profile`, `subject`, `ciphertext`, `ref` and `tag`
+when authenticated. There is no decrypt subject flag or fallback to general keys.
+Deletion of the shared seed blocks future tokens and FPE; in-flight requests and
+backups can retain access. Ciphertexts outside Vectis are not deleted. Recreating
+the ID gives a new seed: authenticated recovery fails; unauthenticated recovery
+may produce plausible incorrect data.
 
 Authenticated encrypt returns a separate 64-character lowercase hex `tag`.
 Include it in the existing decrypt JSON or file input; there is no tag flag.

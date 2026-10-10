@@ -344,6 +344,15 @@ const FPE_PROFILES_SECTION: SectionSpec = SectionSpec {
             default_on_add: None,
         },
         FieldSpec {
+            flag: "--subject-mode",
+            json_field: "subject_mode",
+            kind: FieldKind::SubjectMode,
+            cardinality: FieldCardinality::One,
+            required_on_add: false,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
             flag: "--min-len",
             json_field: "min_len",
             kind: FieldKind::Usize,
