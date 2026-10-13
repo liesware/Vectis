@@ -3,6 +3,7 @@ use crate::error::DynError;
 use crate::ops::keys::{self, KeysDbState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+#[cfg(test)]
 use std::sync::Arc;
 use tracing::info;
 use zeroize::Zeroizing;
@@ -24,6 +25,10 @@ pub struct FpeDecryptInput {
     kid: String,
     profile: String,
     ciphertext: String,
+    #[serde(default, deserialize_with = "fpe::deserialize_present")]
+    tag: Option<String>,
+    #[serde(default, deserialize_with = "fpe::deserialize_present")]
+    subject: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -47,6 +52,8 @@ pub struct FpeDecryptBatchItemInput {
     #[serde(rename = "ref")]
     ref_id: String,
     ciphertext: String,
+    #[serde(default, deserialize_with = "fpe::deserialize_present")]
+    tag: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -55,6 +62,8 @@ pub struct FpeDecryptBatchInput {
     kid: String,
     profile: String,
     items: Vec<FpeDecryptBatchItemInput>,
+    #[serde(default, deserialize_with = "fpe::deserialize_present")]
+    subject: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -64,6 +73,10 @@ pub struct FpeEncryptOutput {
     kid: String,
     profile: String,
     ciphertext: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tag: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subject: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -78,6 +91,8 @@ pub struct FpeEncryptBatchOutputItem {
     #[serde(rename = "ref")]
     ref_id: String,
     ciphertext: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tag: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -85,6 +100,8 @@ pub struct FpeEncryptBatchOutput {
     kid: String,
     profile: String,
     items: Vec<FpeEncryptBatchOutputItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subject: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -124,6 +141,8 @@ pub struct ValidatedFpeDecryptInput {
     kid: String,
     profile: String,
     ciphertext: Zeroizing<String>,
+    tag: Option<String>,
+    subject: Option<String>,
 }
 
 pub struct ValidatedFpeEncryptBatchItem {
@@ -139,35 +158,37 @@ pub struct ValidatedFpeEncryptBatchInput {
 pub struct ValidatedFpeDecryptBatchItem {
     ref_id: String,
     ciphertext: Zeroizing<String>,
+    tag: Option<String>,
 }
 
 pub struct ValidatedFpeDecryptBatchInput {
     kid: String,
     profile: String,
     items: Vec<ValidatedFpeDecryptBatchItem>,
+    subject: Option<String>,
 }
 
 pub struct PreparedFpeEncrypt {
     kid: String,
-    profile: Arc<fpe::FpeProfile>,
+    profile: fpe::FpeContext,
     input: ValidatedFpeEncryptInput,
 }
 
 pub struct PreparedFpeDecrypt {
     kid: String,
-    profile: Arc<fpe::FpeProfile>,
+    profile: fpe::FpeContext,
     input: ValidatedFpeDecryptInput,
 }
 
 pub struct PreparedFpeEncryptBatch {
     kid: String,
-    profile: Arc<fpe::FpeProfile>,
+    profile: fpe::FpeContext,
     input: ValidatedFpeEncryptBatchInput,
 }
 
 pub struct PreparedFpeDecryptBatch {
     kid: String,
-    profile: Arc<fpe::FpeProfile>,
+    profile: fpe::FpeContext,
     input: ValidatedFpeDecryptBatchInput,
 }
 
@@ -178,6 +199,9 @@ impl ValidatedFpeEncryptInput {
 }
 
 impl ValidatedFpeDecryptInput {
+    pub fn subject(&self) -> Option<&str> {
+        self.subject.as_deref()
+    }
     pub fn kid(&self) -> &str {
         &self.kid
     }
@@ -194,6 +218,9 @@ impl ValidatedFpeEncryptBatchInput {
 }
 
 impl ValidatedFpeDecryptBatchInput {
+    pub fn subject(&self) -> Option<&str> {
+        self.subject.as_deref()
+    }
     pub fn kid(&self) -> &str {
         &self.kid
     }
@@ -250,12 +277,20 @@ pub fn validate_decrypt_input(
     keys::validate_key_id(&input.kid)?;
     validation::validate_aad_config_name("profile", &input.profile)?;
     validation::validate_text_field("ciphertext", &input.ciphertext)?;
+    if let Some(tag) = &input.tag {
+        fpe::validate_auth_tag(tag)?;
+    }
+    if let Some(subject) = &input.subject {
+        crate::core::subjects::validate_subject(subject)?;
+    }
 
     Ok(ValidatedFpeDecryptInput {
         ref_id,
         kid: input.kid,
         profile: input.profile,
         ciphertext: Zeroizing::new(input.ciphertext),
+        tag: input.tag,
+        subject: input.subject,
     })
 }
 
@@ -290,6 +325,9 @@ pub fn validate_encrypt_batch_input(
 pub fn validate_decrypt_batch_input(
     input: FpeDecryptBatchInput,
 ) -> Result<ValidatedFpeDecryptBatchInput, DynError> {
+    if let Some(subject) = &input.subject {
+        crate::core::subjects::validate_subject(subject)?;
+    }
     keys::validate_key_id(&input.kid)?;
     validation::validate_aad_config_name("profile", &input.profile)?;
     crate::ops::batch::validate_len(
@@ -303,9 +341,15 @@ pub fn validate_decrypt_batch_input(
             .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
         validation::validate_text_field("ciphertext", &item.ciphertext)
             .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
+        if let Some(tag) = &item.tag {
+            fpe::validate_auth_tag(tag).map_err(|err| {
+                crate::error::with_prefix(&format!("batch item {index} failed"), err)
+            })?;
+        }
         items.push(ValidatedFpeDecryptBatchItem {
             ref_id,
             ciphertext: Zeroizing::new(item.ciphertext),
+            tag: item.tag,
         });
     }
     crate::ops::batch::validate_unique_refs(items.iter().map(|item| item.ref_id.as_str()), "fpe")?;
@@ -314,15 +358,17 @@ pub fn validate_decrypt_batch_input(
         kid: input.kid,
         profile: input.profile,
         items,
+        subject: input.subject,
     })
 }
 
 pub fn prepare_encrypt(
     keys_db_state: &KeysDbState,
     kid: &str,
-    profile: Arc<fpe::FpeProfile>,
+    profile: impl Into<fpe::FpeContext>,
     input: ValidatedFpeEncryptInput,
 ) -> Result<PreparedFpeEncrypt, DynError> {
+    let profile = profile.into();
     keys::prepare_profile_use(
         keys_db_state,
         kid,
@@ -331,6 +377,7 @@ pub fn prepare_encrypt(
         keys::ProfileUse::NewUse,
     )?;
 
+    profile.validate_mode(profile.subject())?;
     Ok(PreparedFpeEncrypt {
         kid: kid.to_string(),
         profile,
@@ -340,9 +387,10 @@ pub fn prepare_encrypt(
 
 pub fn prepare_decrypt(
     keys_db_state: &KeysDbState,
-    profile: Arc<fpe::FpeProfile>,
+    profile: impl Into<fpe::FpeContext>,
     input: ValidatedFpeDecryptInput,
 ) -> Result<PreparedFpeDecrypt, DynError> {
+    let profile = profile.into();
     keys::prepare_profile_use(
         keys_db_state,
         &input.kid,
@@ -351,6 +399,8 @@ pub fn prepare_decrypt(
         keys::ProfileUse::Verify,
     )?;
 
+    profile.validate_mode(input.subject.as_deref())?;
+    fpe::validate_tag_policy(&profile, input.tag.as_deref())?;
     Ok(PreparedFpeDecrypt {
         kid: input.kid.clone(),
         profile,
@@ -361,9 +411,10 @@ pub fn prepare_decrypt(
 pub fn prepare_encrypt_batch(
     keys_db_state: &KeysDbState,
     kid: &str,
-    profile: Arc<fpe::FpeProfile>,
+    profile: impl Into<fpe::FpeContext>,
     input: ValidatedFpeEncryptBatchInput,
 ) -> Result<PreparedFpeEncryptBatch, DynError> {
+    let profile = profile.into();
     keys::prepare_profile_use(
         keys_db_state,
         kid,
@@ -372,6 +423,7 @@ pub fn prepare_encrypt_batch(
         keys::ProfileUse::NewUse,
     )?;
 
+    profile.validate_mode(profile.subject())?;
     Ok(PreparedFpeEncryptBatch {
         kid: kid.to_string(),
         profile,
@@ -381,9 +433,10 @@ pub fn prepare_encrypt_batch(
 
 pub fn prepare_decrypt_batch(
     keys_db_state: &KeysDbState,
-    profile: Arc<fpe::FpeProfile>,
+    profile: impl Into<fpe::FpeContext>,
     input: ValidatedFpeDecryptBatchInput,
 ) -> Result<PreparedFpeDecryptBatch, DynError> {
+    let profile = profile.into();
     keys::prepare_profile_use(
         keys_db_state,
         &input.kid,
@@ -392,6 +445,11 @@ pub fn prepare_decrypt_batch(
         keys::ProfileUse::Verify,
     )?;
 
+    profile.validate_mode(input.subject.as_deref())?;
+    for (index, item) in input.items.iter().enumerate() {
+        fpe::validate_tag_policy(&profile, item.tag.as_deref())
+            .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
+    }
     Ok(PreparedFpeDecryptBatch {
         kid: input.kid.clone(),
         profile,
@@ -400,7 +458,8 @@ pub fn prepare_decrypt_batch(
 }
 
 pub fn encrypt(prepared: PreparedFpeEncrypt) -> Result<FpeEncryptOutput, DynError> {
-    let ciphertext = fpe::fpe_encrypt(&prepared.profile, &prepared.input.plaintext)?;
+    let ciphertext = prepared.profile.encrypt(&prepared.input.plaintext)?;
+    let tag = prepared.profile.generate_tag(&ciphertext)?;
     info!(
         kid = %prepared.kid,
         profile = %prepared.profile.name(),
@@ -413,11 +472,16 @@ pub fn encrypt(prepared: PreparedFpeEncrypt) -> Result<FpeEncryptOutput, DynErro
         kid: prepared.kid,
         profile: prepared.profile.name().to_string(),
         ciphertext,
+        tag,
+        subject: prepared.profile.subject().map(str::to_owned),
     })
 }
 
 pub fn decrypt(prepared: PreparedFpeDecrypt) -> Result<FpeDecryptOutput, DynError> {
-    let plaintext = fpe::fpe_decrypt(&prepared.profile, &prepared.input.ciphertext)?;
+    prepared
+        .profile
+        .verify_tag(&prepared.input.ciphertext, prepared.input.tag.as_deref())?;
+    let plaintext = prepared.profile.decrypt(&prepared.input.ciphertext)?;
     info!(
         kid = %prepared.kid,
         profile = %prepared.profile.name(),
@@ -434,11 +498,18 @@ pub fn decrypt(prepared: PreparedFpeDecrypt) -> Result<FpeDecryptOutput, DynErro
 pub fn encrypt_batch(prepared: PreparedFpeEncryptBatch) -> Result<FpeEncryptBatchOutput, DynError> {
     let mut items = Vec::with_capacity(prepared.input.items.len());
     for (index, item) in prepared.input.items.iter().enumerate() {
-        let ciphertext = fpe::fpe_encrypt(&prepared.profile, &item.plaintext)
+        let ciphertext = prepared
+            .profile
+            .encrypt(&item.plaintext)
+            .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
+        let tag = prepared
+            .profile
+            .generate_tag(&ciphertext)
             .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
         items.push(FpeEncryptBatchOutputItem {
             ref_id: item.ref_id.clone(),
             ciphertext,
+            tag,
         });
     }
     info!(
@@ -452,13 +523,23 @@ pub fn encrypt_batch(prepared: PreparedFpeEncryptBatch) -> Result<FpeEncryptBatc
         kid: prepared.kid,
         profile: prepared.profile.name().to_string(),
         items,
+        subject: prepared.profile.subject().map(str::to_owned),
     })
 }
 
 pub fn decrypt_batch(prepared: PreparedFpeDecryptBatch) -> Result<FpeDecryptBatchOutput, DynError> {
+    // Authenticate the complete batch before recovering any plaintext.
+    for (index, item) in prepared.input.items.iter().enumerate() {
+        prepared
+            .profile
+            .verify_tag(&item.ciphertext, item.tag.as_deref())
+            .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
+    }
     let mut items = Vec::with_capacity(prepared.input.items.len());
     for (index, item) in prepared.input.items.iter().enumerate() {
-        let plaintext = fpe::fpe_decrypt(&prepared.profile, &item.ciphertext)
+        let plaintext = prepared
+            .profile
+            .decrypt(&item.ciphertext)
             .map_err(|err| crate::error::with_prefix(&format!("batch item {index} failed"), err))?;
         items.push(FpeDecryptBatchOutputItem {
             ref_id: item.ref_id.clone(),
@@ -486,6 +567,124 @@ mod tests {
 
     fn hex64(seed: char) -> String {
         String::from(seed).repeat(64)
+    }
+
+    fn test_auth_profile(authenticated: bool) -> Arc<fpe::FpeProfile> {
+        let definition: fpe::FpeProfileInput = serde_json::from_value(json!({"name":"auth-test", "kid":hex64('a'), "fpe_version":"fpe-ff1-2025", "alphabet_preset":"num", "preserve_characters":"-", "min_len":6, "max_len":32, "tweak_aad":"tenant=test", "authenticated":authenticated})).unwrap();
+        fpe::validate_fpe_profiles(
+            vec![definition],
+            |_| true,
+            |_| Ok(Zeroizing::new(vec![7; 32])),
+            |_| Ok(Zeroizing::new(vec![9; 32])),
+        )
+        .unwrap()
+        .get("auth-test")
+        .unwrap()
+    }
+
+    #[test]
+    fn authentication_is_checked_before_any_single_or_batch_decrypt() {
+        let profile = test_auth_profile(true);
+        let ciphertext = fpe::fpe_encrypt(&profile, "001-234").unwrap();
+        let tag = fpe::generate_auth_tag(&profile, &ciphertext)
+            .unwrap()
+            .unwrap();
+        let request = |tag: &str| {
+            validate_decrypt_input(parse_decrypt_input(json!({"ref":"changed-ref", "kid":hex64('a'), "profile":"auth-test", "ciphertext":ciphertext, "tag":tag})).unwrap()).unwrap()
+        };
+        let mut wrong = tag.clone();
+        wrong.replace_range(..1, if tag.starts_with('0') { "1" } else { "0" });
+        fpe::reset_decrypt_calls();
+        let failed = decrypt(PreparedFpeDecrypt {
+            kid: hex64('a'),
+            profile: profile.clone().into(),
+            input: request(&wrong),
+        });
+        assert_eq!(
+            failed.err().unwrap().to_string(),
+            "fpe authentication failed"
+        );
+        assert_eq!(fpe::decrypt_calls(), 0);
+        let valid = decrypt(PreparedFpeDecrypt {
+            kid: hex64('a'),
+            profile: profile.clone().into(),
+            input: request(&tag),
+        })
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(valid).unwrap(),
+            json!({"ref":"changed-ref","plaintext":"001-234"})
+        );
+        let input = validate_decrypt_batch_input(parse_decrypt_batch_input(json!({"kid":hex64('a'),"profile":"auth-test","items":[{"ref":"a","ciphertext":ciphertext,"tag":tag},{"ref":"b","ciphertext":ciphertext,"tag":wrong}]})).unwrap()).unwrap();
+        fpe::reset_decrypt_calls();
+        let failed = decrypt_batch(PreparedFpeDecryptBatch {
+            kid: hex64('a'),
+            profile: profile.into(),
+            input,
+        });
+        assert_eq!(
+            failed.err().unwrap().to_string(),
+            "batch item 1 failed: fpe authentication failed"
+        );
+        assert_eq!(fpe::decrypt_calls(), 0);
+    }
+
+    #[test]
+    fn tag_encoding_and_policy_are_strict_and_legacy_outputs_omit_tag() {
+        let profile = test_auth_profile(true);
+        let legacy = test_auth_profile(false);
+        let ciphertext = "001-234";
+        assert!(fpe::validate_tag_policy(&profile, None).is_err());
+        assert!(fpe::validate_tag_policy(&legacy, Some(&"a".repeat(64))).is_err());
+        for invalid in [
+            json!(null),
+            json!(true),
+            json!(0),
+            json!("a".repeat(63)),
+            json!("a".repeat(65)),
+            json!("A".repeat(64)),
+            json!("g".repeat(64)),
+            json!(format!("{} ", "a".repeat(63))),
+        ] {
+            assert!(parse_decrypt_input(json!({"ref":"test","kid":hex64('a'),"profile":"auth-test","ciphertext":ciphertext,"tag":invalid})).and_then(validate_decrypt_input).is_err());
+        }
+        for profile in [profile, legacy] {
+            let input = validate_encrypt_input(
+                parse_encrypt_input(
+                    json!({"ref":"test","profile":"auth-test","plaintext":"001-234"}),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            let output = encrypt(PreparedFpeEncrypt {
+                kid: hex64('a'),
+                profile: profile.clone().into(),
+                input,
+            })
+            .unwrap();
+            let value = serde_json::to_value(output).unwrap();
+            assert_eq!(value.get("tag").is_some(), profile.authenticated());
+        }
+    }
+
+    #[test]
+    fn subject_input_is_strict_single_and_batch_and_forbidden_for_legacy() {
+        let subject = hex64('b');
+        for invalid in [
+            json!(null),
+            json!(true),
+            json!("B".repeat(64)),
+            json!("a".repeat(63)),
+        ] {
+            assert!(parse_decrypt_input(json!({"ref":"test","kid":hex64('a'),"profile":"auth-test","ciphertext":"001-234","subject":invalid})).and_then(validate_decrypt_input).is_err());
+            assert!(parse_decrypt_batch_input(json!({"kid":hex64('a'),"profile":"auth-test","subject":invalid,"items":[{"ref":"test","ciphertext":"001-234"}]})).and_then(validate_decrypt_batch_input).is_err());
+        }
+        let profile = test_auth_profile(false);
+        assert!(fpe::validate_subject_mode(&profile, Some(&subject)).is_err());
+        let input = validate_decrypt_input(parse_decrypt_input(json!({"ref":"test","kid":hex64('a'),"profile":"auth-test","ciphertext":"001-234","subject":subject})).unwrap()).unwrap();
+        assert_eq!(input.subject(), Some(subject.as_str()));
+        let input = validate_decrypt_batch_input(parse_decrypt_batch_input(json!({"kid":hex64('a'),"profile":"auth-test","subject":subject,"items":[{"ref":"test","ciphertext":"001-234"}]})).unwrap()).unwrap();
+        assert_eq!(input.subject(), Some(subject.as_str()));
     }
 
     fn encrypt_validation_error(profile: &str) -> String {

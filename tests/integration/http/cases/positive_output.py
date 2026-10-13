@@ -48,7 +48,7 @@ def print_message(rows):
 
 
 def print_internal_message(rows):
-    print("internal message:")
+    print("symmetric:")
     for key_id, timestamp, variant, ctx_len, plaintext in rows:
         print(f"- kid: {key_id}")
         print(f"  encrypt: OK")
@@ -106,5 +106,4 @@ def print_token_batch(rows):
         print(f"  tokens: {','.join(token_previews)}")
         print(f"  plain_texts: {','.join(plaintexts)}")
     print()
-
 

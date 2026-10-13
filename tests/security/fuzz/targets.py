@@ -1038,7 +1038,7 @@ def _lifecycle_new_requests(context, state, index):
         "commitment_create": (f"/commit/{kid}", {"ref": f"{suffix}-commitment", "profile": profiles["commitment"], "plaintext": COMMITMENT_PLAINTEXTS[0]}, True),
         "share_split": (f"/shares/split/{kid}", {"profile": profiles["sharing"], "plaintext": SHARING_PLAINTEXT}, True),
         "sign": (f"/sign/{kid}", {"message_hash": {"alg": "BLAKE2b(256)", "hex": "cd" * 32}}, True),
-        "internal_encrypt": (f"/message/internal/encrypt/{kid}", {"plaintext": INTERNAL_SEED_PLAINTEXT}, True),
+        "internal_encrypt": (f"/symmetric/encrypt/{kid}", {"plaintext": INTERNAL_SEED_PLAINTEXT}, True),
     }
 
 
@@ -1076,7 +1076,7 @@ def _lifecycle_historical_requests(context, state, index, outputs):
         "commitment_verify": ("/commit/verify", {"ref": f"{suffix}-commitment-verify", "kid": kid, "profile": profiles["commitment"], "plaintext": COMMITMENT_PLAINTEXTS[0], "opening": commitment.get("opening"), "commitment": commitment.get("commitment")}, True),
         "share_combine": ("/shares/combine", {"kid": kid, "profile": profiles["sharing"], "shares": split.get("shares", [])[:3]}, True),
         "sign_verify": ("/sign/verification", signature, False),
-        "internal_decrypt": ("/message/internal/decrypt", internal, True),
+        "internal_decrypt": ("/symmetric/decrypt", internal, True),
         "mask": (f"/mask/{kid}", {"ref": f"{suffix}-mask", "profile": profiles["mask"], "plaintext": MASKING_PLAINTEXTS[0]}, True),
     }
 

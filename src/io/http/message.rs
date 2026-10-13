@@ -9,12 +9,12 @@ use axum::http::{HeaderMap, StatusCode};
 use std::error::Error;
 use tracing::error;
 
-const AUDIT_MESSAGE_INTERNAL_ENCRYPT_DENIED: &str = "message.internal.encrypt.denied";
-const AUDIT_MESSAGE_INTERNAL_ENCRYPT_FAILED: &str = "message.internal.encrypt.failed";
-const AUDIT_MESSAGE_INTERNAL_ENCRYPT_SUCCESS: &str = "message.internal.encrypt.success";
-const AUDIT_MESSAGE_INTERNAL_DECRYPT_DENIED: &str = "message.internal.decrypt.denied";
-const AUDIT_MESSAGE_INTERNAL_DECRYPT_FAILED: &str = "message.internal.decrypt.failed";
-const AUDIT_MESSAGE_INTERNAL_DECRYPT_SUCCESS: &str = "message.internal.decrypt.success";
+const AUDIT_SYMMETRIC_ENCRYPT_DENIED: &str = "symmetric.encrypt.denied";
+const AUDIT_SYMMETRIC_ENCRYPT_FAILED: &str = "symmetric.encrypt.failed";
+const AUDIT_SYMMETRIC_ENCRYPT_SUCCESS: &str = "symmetric.encrypt.success";
+const AUDIT_SYMMETRIC_DECRYPT_DENIED: &str = "symmetric.decrypt.denied";
+const AUDIT_SYMMETRIC_DECRYPT_FAILED: &str = "symmetric.decrypt.failed";
+const AUDIT_SYMMETRIC_DECRYPT_SUCCESS: &str = "symmetric.decrypt.success";
 
 pub async fn send_endpoint(
     State(state): State<HttpState>,
@@ -386,22 +386,41 @@ pub async fn internal_encrypt_endpoint(
     headers: HeaderMap,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::message::InternalMessageOutput>, (StatusCode, Json<ErrorResponse>)> {
+    internal_encrypt(state, kid, None, headers, request).await
+}
+
+pub async fn internal_encrypt_subject_endpoint(
+    State(state): State<HttpState>,
+    Path((kid, subject)): Path<(String, String)>,
+    headers: HeaderMap,
+    JsonBody(request): JsonBody,
+) -> Result<Json<ops::message::InternalMessageOutput>, (StatusCode, Json<ErrorResponse>)> {
+    internal_encrypt(state, kid, Some(subject), headers, request).await
+}
+
+async fn internal_encrypt(
+    state: HttpState,
+    kid: String,
+    subject: Option<String>,
+    headers: HeaderMap,
+    request: serde_json::Value,
+) -> Result<Json<ops::message::InternalMessageOutput>, (StatusCode, Json<ErrorResponse>)> {
     let request_context = state.authorize_request(&headers).await?;
     request_context.require_permission_for(
         Some(&kid),
-        "message",
-        Some(AUDIT_MESSAGE_INTERNAL_ENCRYPT_DENIED),
+        "symmetric",
+        Some(AUDIT_SYMMETRIC_ENCRYPT_DENIED),
     )?;
     let actor = audit::actor_from_client(request_context.client());
 
     ops::keys::validate_key_id(&kid).map_err(|err| {
         message_failed_response(
             MessageFailure::new(
-                AUDIT_MESSAGE_INTERNAL_ENCRYPT_FAILED,
+                AUDIT_SYMMETRIC_ENCRYPT_FAILED,
                 Some(&actor),
                 Some(&kid),
                 None,
-                Some("message"),
+                Some("symmetric"),
                 "send",
             )
             .with_crypto("encrypt"),
@@ -411,11 +430,11 @@ pub async fn internal_encrypt_endpoint(
     state.ensure_keys_db_entry(&kid).await.map_err(|err| {
         message_failed_response(
             MessageFailure::new(
-                AUDIT_MESSAGE_INTERNAL_ENCRYPT_FAILED,
+                AUDIT_SYMMETRIC_ENCRYPT_FAILED,
                 Some(&actor),
                 Some(&kid),
                 None,
-                Some("message"),
+                Some("symmetric"),
                 "send",
             )
             .with_crypto("encrypt"),
@@ -425,11 +444,11 @@ pub async fn internal_encrypt_endpoint(
     let request = ops::message::parse_internal_encrypt_message_input(request).map_err(|err| {
         message_failed_response(
             MessageFailure::new(
-                AUDIT_MESSAGE_INTERNAL_ENCRYPT_FAILED,
+                AUDIT_SYMMETRIC_ENCRYPT_FAILED,
                 Some(&actor),
                 Some(&kid),
                 None,
-                Some("message"),
+                Some("symmetric"),
                 "send",
             )
             .with_crypto("encrypt"),
@@ -444,11 +463,11 @@ pub async fn internal_encrypt_endpoint(
         .map_err(|err| {
             message_failed_response(
                 MessageFailure::new(
-                    AUDIT_MESSAGE_INTERNAL_ENCRYPT_FAILED,
+                    AUDIT_SYMMETRIC_ENCRYPT_FAILED,
                     Some(&actor),
                     Some(&kid),
                     None,
-                    Some("message"),
+                    Some("symmetric"),
                     "send",
                 )
                 .with_crypto("encrypt"),
@@ -456,16 +475,43 @@ pub async fn internal_encrypt_endpoint(
             )
         })?;
 
+    let prepared = if let Some(subject) = subject {
+        let failed = |err: crate::error::DynError| {
+            message_failed_response(
+                MessageFailure::new(
+                    AUDIT_SYMMETRIC_ENCRYPT_FAILED,
+                    Some(&actor),
+                    Some(&kid),
+                    None,
+                    Some("symmetric"),
+                    "send",
+                )
+                .with_crypto("encrypt"),
+                err.as_ref(),
+            )
+        };
+        crate::core::subjects::validate_subject(&subject).map_err(&failed)?;
+        let (row, origin) =
+            super::subject::subject_origin(&state, request_context.config(), &kid, &subject)
+                .await
+                .map_err(&failed)?;
+        prepared
+            .with_subject(origin, row.subject, row.seed)
+            .map_err(&failed)?
+    } else {
+        prepared
+    };
+
     match blocking::spawn_blocking_crypto(move || ops::message::encrypt_internal_message(prepared))
         .await
     {
         Ok(output) => {
             audit::operation_success(
-                AUDIT_MESSAGE_INTERNAL_ENCRYPT_SUCCESS,
+                AUDIT_SYMMETRIC_ENCRYPT_SUCCESS,
                 Some(&actor),
                 Some(&kid),
                 None,
-                Some("message"),
+                Some("symmetric"),
             );
             record_message_success("send");
             record_crypto_success("encrypt");
@@ -474,11 +520,11 @@ pub async fn internal_encrypt_endpoint(
         Err(err) => {
             let response = message_failed_result(
                 MessageFailure::new(
-                    AUDIT_MESSAGE_INTERNAL_ENCRYPT_FAILED,
+                    AUDIT_SYMMETRIC_ENCRYPT_FAILED,
                     Some(&actor),
                     Some(&kid),
                     None,
-                    Some("message"),
+                    Some("symmetric"),
                     "send",
                 )
                 .with_crypto("encrypt"),
@@ -501,11 +547,11 @@ pub async fn internal_decrypt_endpoint(
     let request = ops::message::parse_internal_decrypt_message_input(request).map_err(|err| {
         message_failed_response(
             MessageFailure::new(
-                AUDIT_MESSAGE_INTERNAL_DECRYPT_FAILED,
+                AUDIT_SYMMETRIC_DECRYPT_FAILED,
                 Some(&actor),
                 None,
                 None,
-                Some("message"),
+                Some("symmetric"),
                 "decrypt",
             )
             .with_crypto("decrypt"),
@@ -514,18 +560,19 @@ pub async fn internal_decrypt_endpoint(
     })?;
     request_context.require_permission_for(
         Some(&request.kid),
-        "message",
-        Some(AUDIT_MESSAGE_INTERNAL_DECRYPT_DENIED),
+        "symmetric",
+        Some(AUDIT_SYMMETRIC_DECRYPT_DENIED),
     )?;
     let kid = request.kid.clone();
+    let subject = request.subject.clone();
     ops::keys::validate_key_id(&kid).map_err(|err| {
         message_failed_response(
             MessageFailure::new(
-                AUDIT_MESSAGE_INTERNAL_DECRYPT_FAILED,
+                AUDIT_SYMMETRIC_DECRYPT_FAILED,
                 Some(&actor),
                 Some(&kid),
                 None,
-                Some("message"),
+                Some("symmetric"),
                 "decrypt",
             )
             .with_crypto("decrypt"),
@@ -535,11 +582,11 @@ pub async fn internal_decrypt_endpoint(
     state.ensure_keys_db_entry(&kid).await.map_err(|err| {
         message_failed_response(
             MessageFailure::new(
-                AUDIT_MESSAGE_INTERNAL_DECRYPT_FAILED,
+                AUDIT_SYMMETRIC_DECRYPT_FAILED,
                 Some(&actor),
                 Some(&kid),
                 None,
-                Some("message"),
+                Some("symmetric"),
                 "decrypt",
             )
             .with_crypto("decrypt"),
@@ -554,11 +601,11 @@ pub async fn internal_decrypt_endpoint(
         .map_err(|err| {
             message_failed_response(
                 MessageFailure::new(
-                    AUDIT_MESSAGE_INTERNAL_DECRYPT_FAILED,
+                    AUDIT_SYMMETRIC_DECRYPT_FAILED,
                     Some(&actor),
                     Some(&kid),
                     None,
-                    Some("message"),
+                    Some("symmetric"),
                     "decrypt",
                 )
                 .with_crypto("decrypt"),
@@ -566,16 +613,42 @@ pub async fn internal_decrypt_endpoint(
             )
         })?;
 
+    let prepared = if let Some(subject) = subject {
+        let failed = |err: crate::error::DynError| {
+            message_failed_response(
+                MessageFailure::new(
+                    AUDIT_SYMMETRIC_DECRYPT_FAILED,
+                    Some(&actor),
+                    Some(&kid),
+                    None,
+                    Some("symmetric"),
+                    "decrypt",
+                )
+                .with_crypto("decrypt"),
+                err.as_ref(),
+            )
+        };
+        let (row, origin) =
+            super::subject::subject_origin(&state, request_context.config(), &kid, &subject)
+                .await
+                .map_err(&failed)?;
+        prepared
+            .with_subject(origin, row.subject, row.seed)
+            .map_err(&failed)?
+    } else {
+        prepared
+    };
+
     match blocking::spawn_blocking_crypto(move || ops::message::decrypt_internal_message(prepared))
         .await
     {
         Ok(output) => {
             audit::operation_success(
-                AUDIT_MESSAGE_INTERNAL_DECRYPT_SUCCESS,
+                AUDIT_SYMMETRIC_DECRYPT_SUCCESS,
                 Some(&actor),
                 Some(&kid),
                 None,
-                Some("message"),
+                Some("symmetric"),
             );
             record_message_success("decrypt");
             record_crypto_success("decrypt");
@@ -584,11 +657,11 @@ pub async fn internal_decrypt_endpoint(
         Err(err) => {
             let response = message_failed_result(
                 MessageFailure::new(
-                    AUDIT_MESSAGE_INTERNAL_DECRYPT_FAILED,
+                    AUDIT_SYMMETRIC_DECRYPT_FAILED,
                     Some(&actor),
                     Some(&kid),
                     None,
-                    Some("message"),
+                    Some("symmetric"),
                     "decrypt",
                 )
                 .with_crypto("decrypt"),

@@ -18,7 +18,7 @@ load_app_env() {
 
 load_app_env
 
-all_actions='"fpe-encrypt", "fpe-decrypt", "token-encode", "token-decode", "mac-create", "mac-verify", "index-create", "index-verify", "mask", "commit-create", "commit-verify", "share-split", "share-combine", "message", "sign", "self-test"'
+all_actions='"fpe-encrypt", "fpe-decrypt", "token-encode", "token-decode", "mac-create", "mac-verify", "index-create", "index-verify", "mask", "commit-create", "commit-verify", "share-split", "share-combine", "symmetric", "sign", "self-test"'
 
 cat > "${SITE_DIR}/config.json" <<JSON
 {

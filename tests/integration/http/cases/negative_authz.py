@@ -7,6 +7,7 @@ authz clients. Each case is a plain function taking ctx.
 
 import hashlib
 import json
+import copy
 
 from lib.casekit import CaseSet
 from lib.client import StatusClient, raw_http_request
@@ -39,7 +40,7 @@ def _(ctx):
     ctx.set_permissions(
         [
             {"client": "negative-limited-message", "apikey_hash": limited_api_key_hash,
-             "status": "active", "permissions": [{"kid": key_id, "actions": ["message"]}]},
+             "status": "active", "permissions": [{"kid": key_id, "actions": ["symmetric"]}]},
             {"client": "negative-metrics", "apikey_hash": metrics_api_key_hash,
              "status": "active", "permissions": [{"kid": "*", "actions": ["metrics"]}]},
             {"client": "negative-admin", "apikey_hash": admin_api_key_hash,
@@ -73,17 +74,43 @@ def _(ctx):
 @cases('negative.authz.limited-can-message')
 def _(ctx):
     status, _ = ctx.fixtures.limited.post(
-        f"/message/internal/encrypt/{ctx.fixtures.key_id}",
-        {"plaintext": "limited message permission"},
+        f"/symmetric/encrypt/{ctx.fixtures.key_id}",
+        {"plaintext": "limited symmetric permission"},
         auth=True,
     )
-    require_status("limited client can message", status, 200)
+    require_status("limited client can encrypt symmetric data", status, 200)
 
 
 @cases('negative.authz.limited-blocks-keys-reload')
 def _(ctx):
     status, _ = ctx.fixtures.limited.post("/keys/reload", {}, auth=True)
     require_status("limited client blocks keys reload", status, 403)
+
+
+@cases('negative.authz.symmetric-independent-of-message')
+def _(ctx):
+    original = copy.deepcopy(ctx.config_data)
+    key, key_hash = create_api_key_pair()
+    kid = ctx.fixtures.key_id
+    try:
+        ctx.config_data["permissions"].append({"client": "message-only", "apikey_hash": key_hash,
+            "status": "active", "permissions": [{"kid": kid, "actions": ["message"]}]})
+        ctx.write_config()
+        ctx.reload_config()
+        message_client = StatusClient(ctx.base_url, key)
+        status, envelope = ctx.http.post(f"/symmetric/encrypt/{kid}", {"plaintext": "synthetic data"}, auth=True)
+        require_status("root symmetric encrypt", status, 200)
+        for path, body in [(f"/symmetric/encrypt/{kid}", {"plaintext": "synthetic data"}), ("/symmetric/decrypt", envelope)]:
+            require_status("message-only grant cannot use symmetric", message_client.post(path, body, auth=True)[0], 403)
+        require_status("symmetric-only grant cannot send protected messages", ctx.fixtures.limited.post(
+            f"/message/{kid}", {"recipient_kid": kid, "message": "synthetic"}, auth=True)[0], 403)
+        for path, body in [(f"/message/internal/encrypt/{kid}", {"plaintext": "synthetic data"}),
+                           ("/message/internal/decrypt", envelope)]:
+            require_status("retired local encryption route", ctx.http.post(path, body, auth=True)[0], 404)
+    finally:
+        ctx.config_data = original
+        ctx.write_config()
+        ctx.reload_config()
 
 
 @cases('negative.authz.limited-blocks-routes')

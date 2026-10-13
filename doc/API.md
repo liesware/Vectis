@@ -1,6 +1,6 @@
 # Vectis HTTP API
 
-Vectis protects data throughout its lifecycle. The HTTP API exposes operations to create key material, validate keys, publish public keys, sign message hashes, exchange protected messages between Vectis instances, and encrypt/decrypt internal messages.
+Vectis protects data throughout its lifecycle. The HTTP API exposes operations to create key material, validate keys, publish public keys, sign message hashes, exchange protected messages between Vectis instances, and encrypt/decrypt local data through the symmetric family.
 
 For a consolidated inventory of request, field, batch, profile, storage, and
 runtime bounds, see [Limits](Limits.md).
@@ -124,8 +124,9 @@ Endpoints requiring auth:
 - `POST /sign/{kid}`
 - `POST /message/{sender_kid}`
 - `POST /message/decrypt`
-- `POST /message/internal/encrypt/{kid}`
-- `POST /message/internal/decrypt`
+- `POST /symmetric/encrypt/{kid}`
+- `POST /symmetric/encrypt/{kid}/subject/{subject}`
+- `POST /symmetric/decrypt`
 - `POST /fpe/encrypt/{kid}`
 - `POST /fpe/encrypt/batch/{kid}`
 - `POST /fpe/decrypt`
@@ -696,6 +697,7 @@ Allowed actions:
 - `self-test`
 - `sign`
 - `message`
+- `symmetric`
 - `fpe-encrypt`
 - `fpe-decrypt`
 - `token-encode`
@@ -720,7 +722,8 @@ Permission mapping:
 | `lifecycle` | `POST /lifecycle/{kid}` |
 | `self-test` | `GET /self-test/keys/{kid}` |
 | `sign` | `POST /sign/{kid}` |
-| `message` | `POST /message/{sender_kid}`, `POST /message/decrypt`, `POST /message/internal/encrypt/{kid}`, `POST /message/internal/decrypt` |
+| `message` | `POST /message/{sender_kid}`, `POST /message/decrypt` |
+| `symmetric` | `POST /symmetric/encrypt/{kid}`, its `/subject/{subject}` variant, `POST /symmetric/decrypt` |
 | `fpe-encrypt` | `POST /fpe/encrypt/{kid}`, `POST /fpe/encrypt/batch/{kid}` |
 | `fpe-decrypt` | `POST /fpe/decrypt`, `POST /fpe/decrypt/batch` |
 | `token-encode` | `POST /token/encode/{kid}`, `POST /token/encode/batch/{kid}`, and their `/subject/{subject}` variants |
@@ -1089,13 +1092,59 @@ Response:
 }
 ```
 
-## Internal Messages
+## Symmetric Encryption
 
-These endpoints encrypt and decrypt internal messages with the symmetric key associated with a `kid`. They are meant for local data protection without running the network exchange flow between Vectis instances.
+### Existing Subject Keys
 
-### POST /message/internal/encrypt/{kid}
+`POST /symmetric/encrypt/{kid}/subject/{subject}` accepts the same
+`{"plaintext":"..."}` input and returns the complete envelope with an additional
+top-level `subject`. `/symmetric/decrypt` accepts it unchanged. Absence selects
+legacy; presence selects only subject keys. Null and incompatible AAD are rejected;
+there is no fallback. No symmetric profile or ciphertext storage is added.
 
-Requires auth.
+The same subject can protect tokens, FPE and symmetric data for its KID. Only the
+`symmetric` grant is required; encrypt requires active, decrypt active or retired.
+The seed's creator name is an untrusted hint resolved in the signed snapshot.
+Its original stored tokenization profile and compatible wrapping keys must remain
+available to authenticate the complete seed envelope before derivation.
+
+HKDF-BLAKE2b-256 uses the operational symmetric key bytes as IKM and the opened
+32-byte subject seed as salt. Its validated, single-line info is:
+
+```text
+purpose=subject-symmetric-encryption;kid=<kid>;cipher_alg=<algorithm>;version=v1
+```
+
+Output length and AEAD algorithm follow the KID; token/FPE keys are not reused.
+Nonces remain random. Temporary seed/keys are zeroized without secret caches.
+Subject AAD is constructed in this exact order:
+
+```text
+version=v1;type=subject-symmetric;kid=<kid>;subject=<subject>;timestamp=<timestamp>;cipher_alg=<algorithm>
+```
+
+Decrypt reconstructs and checks the AAD; the envelope cannot choose a different
+algorithm from the KID. Missing subject returns `404`; invalid input/context
+returns `400`; corrupt seed or missing/incompatible creator configuration returns
+a sanitized internal error. AEAD failure returns `400` with
+`message authentication failed`, never plaintext.
+
+Deletion blocks future operations across all capabilities, but cannot delete
+externally stored ciphertexts or cancel requests that already opened the seed.
+Recreating the ID generates a new seed and old envelopes fail authentication.
+Backups can restore access; an authenticated timestamp does not prevent replay.
+Legacy AAD (`type=internal-message`), formats and limits remain unchanged.
+
+These Data Protection endpoints encrypt and decrypt local data with the symmetric
+key associated with a `kid`, without running the exchange flow between Vectis
+instances. Both require the independent per-KID `symmetric` permission, not
+`message`. The envelope and AAD retain `type=internal-message` and their existing
+version. Audit event names are `symmetric.encrypt.*` and `symmetric.decrypt.*`; the
+metrics are preserved and the audit action is `symmetric`.
+
+### POST /symmetric/encrypt/{kid}
+
+Requires `X-API-Key`, `symmetric` permission for the path KID and an `active` key.
 
 `plaintext` is limited to `1,047,552` bytes when encoded as UTF-8. Exceeding
 this functional limit returns `400`; exceeding the global 2 MiB HTTP request
@@ -1124,11 +1173,12 @@ Response:
 }
 ```
 
-### POST /message/internal/decrypt
+### POST /symmetric/decrypt
 
-Requires auth.
+Requires `X-API-Key` and `symmetric` permission for the envelope KID. The key may
+be `active` or `retired`. The complete envelope is required.
 
-Request: the JSON returned by `POST /message/internal/encrypt/{kid}`.
+Request: the JSON returned by `POST /symmetric/encrypt/{kid}`.
 
 Response:
 
@@ -1140,9 +1190,166 @@ Response:
 
 ## Format-Preserving Encryption
 
-FPE is a local field operation. It preserves an alphabet and length range defined by a signed config profile. It is deterministic for the same key, profile, tweak AAD, and plaintext. It does not authenticate data and does not replace AEAD message encryption.
+FPE is a local field operation. It preserves an alphabet and length range defined by a signed config profile. It is deterministic for the same key, profile, tweak AAD, and plaintext. Legacy profiles do not authenticate data; optional authenticated profiles transport a separate MAC tag. FPE does not replace AEAD message encryption.
 
-FPE profiles live in `config.json` under `fpe_profiles`. Requests cannot provide `alphabet`, `tweak_aad`, `min_len`, `max_len`, or `fpe_version`; those values come only from signed config.
+FPE profiles live in `config.json` under `fpe_profiles`. Requests cannot provide
+alphabet selectors, letter case, preserved characters, tweak, bounds or version;
+those values come only from signed config. Exactly one of `alphabet` (literal
+custom Unicode alphabet) or `alphabet_preset` is required. Presets are ASCII:
+
+| Preset / case | Resolved alphabet order |
+| --- | --- |
+| `num` | `0123456789`; `letter_case` prohibited |
+| `alpha / uppercase` | `ABCDEFGHIJKLMNOPQRSTUVWXYZ` |
+| `alpha / lowercase` | `abcdefghijklmnopqrstuvwxyz` |
+| `alpha / mixed` | Uppercase letters followed by lowercase letters |
+| `alphanum` | `0123456789` followed by letters of the required case |
+
+`letter_case` is required for alpha/alphanum and prohibited for custom/num.
+Preset names belong in `alphabet_preset`, not in `alphabet`. The literal
+`alphabet: "num"` contains only `n`, `u`, `m`; it can be valid with `min_len: 13`
+because `3^13 = 1,594,323`. Literal `"alpha"` and `"alphanum"` contain duplicate
+characters and are rejected. Duplicate-character or insufficient-profile-domain
+errors for these exact literals include a preset hint, but valid custom alphabets
+are never reserved or converted.
+`preserve_characters` is optional and empty when absent: at most 32 distinct
+Unicode characters, without controls or overlap with the alphabet. Spaces are
+allowed. No trimming, case conversion or Unicode normalization is performed.
+Declared fields never accept `null`; omitted fields remain omitted during
+serialization, including legacy config signing. Explicit `""` remains explicit.
+
+Lengths count the complete text in Unicode scalar values, including separators,
+not bytes or graphemes. The variable characters are encrypted together in one
+FF1 operation, then separators are restored at their original positions.
+Separators may repeat or appear at either end; no grouping pattern is enforced.
+The effective domain must satisfy `radix^variable_character_count >= 1,000,000`;
+separators contribute nothing to that count. All-separator input is rejected.
+For a numeric preset with `min_len: 6` and `preserve_characters: "-"`, `001-234`
+is accepted: it has six encrypted symbols. `001-23` meets the total length of
+six but has only five encrypted symbols, so it is rejected. The domain is
+checked per value, not inferred solely from its configured minimum length.
+Preserved formatting reveals structure; legacy profiles do not authenticate it.
+Authenticated profiles cover it through the separate tag. Alphanum does
+not preserve per-position letter/digit classes such as `LLDDDD`.
+
+Example of a new signed profile:
+
+```json
+{
+  "name": "patient-id-formatted-v1",
+  "fpe_version": "fpe-ff1-2025",
+  "alphabet_preset": "num",
+  "preserve_characters": "-",
+  "min_len": 6,
+  "max_len": 32,
+  "tweak_aad": "tenant=acme;field=patient_id;version=1",
+  "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed"
+}
+```
+
+Use a new profile when adopting another alphabet/order or preserved format.
+Changing an existing profile may prevent recovery of earlier ciphertexts.
+
+### FPE with Existing Subject Keys
+
+Signed FPE profiles accept `subject_mode: none|stored`, default `none`. Null and
+unknown modes are rejected; none is omitted during canonical serialization so
+legacy signatures remain compatible. `authenticated` is independent.
+
+Create a subject through the existing tokenization-backed `POST /subject/{kid}`
+contract, then reuse its returned ID with any stored FPE profile for the same
+KID. Do not create a separate subject for each FPE profile. These routes require
+`fpe-encrypt` and an active key, not token permissions:
+
+```text
+POST /fpe/encrypt/{kid}/subject/{subject}
+POST /fpe/encrypt/batch/{kid}/subject/{subject}
+```
+
+Encrypt bodies are unchanged; responses add `subject` (top level in batch).
+Legacy encrypt routes require none profiles and subject routes require stored.
+Decrypt routes remain `/fpe/decrypt` and `/fpe/decrypt/batch`. Their JSON requires
+subject for stored and prohibits it for none; null is always invalid. Batch
+uses one top-level subject for all items. Authenticated items retain separate tags.
+
+```json
+{"ref":"reg1","kid":"<kid>","profile":"patient-id-subject-v1","subject":"<64 lowercase hex characters>","ciphertext":"001-234","tag":"<tag returned by authenticated encrypt>"}
+```
+
+The seed envelope contains the creator's tokenization profile name in its AAD.
+That name is only an untrusted lookup hint: the signed snapshot selects the
+original profile, mode and cipher; the complete AAD and envelope are verified
+before the seed is used. The original stored profile must belong to the same KID
+and remain available with compatible configuration and wrapping keys. Requests
+cannot specify an alternate creator profile. Missing subjects return `404`;
+missing/incompatible creator configuration or corrupt seeds produce a sanitized
+internal error. There is never fallback to the general FPE key.
+
+Child keys use HKDF-BLAKE2b-256 with the opened seed as salt and 32-byte output:
+
+```text
+IKM = parent FF1 key
+info = purpose=subject-fpe-encryption;kid=<kid>;profile=<fpe-profile>;fpe_version=<version>;version=v1
+
+IKM = parent FPE MAC key, only when authenticated=true
+info = purpose=subject-fpe-authentication;kid=<kid>;profile=<fpe-profile>;fpe_version=<version>;auth_version=v1;version=v1
+```
+
+All info strings are validated single-line contexts. FF1 remains AES-256 and MAC
+remains HMAC-BLAKE2b-256. Token-derived keys are not reused. The HMAC material
+described below is unchanged and does not include subject; the seed binds the derived key.
+Seed is opened and keys/cipher prepared once per request or batch, without secret
+caching or cloning full profiles. Temporary secrets are zeroized.
+
+Deleting the shared subject affects both tokens and FPE. It purges existing token
+rows but cannot delete externally stored FPE ciphertexts. Future seed lookups
+fail; requests that already opened it may finish. Backups can restore access.
+Recreation keeps the ID but creates a new seed: old authenticated tags fail;
+unauthenticated FPE may produce a plausible but incorrect plaintext. No detection
+or recovery guarantee applies without authentication. Adoption requires new
+profiles; no automatic ciphertext migration occurs.
+
+### Optional FPE Authentication
+
+Set `authenticated: true` in a new signed profile to enable authentication.
+The field accepts only JSON booleans, rejects `null` and defaults to false.
+False is omitted from canonical config serialization, including explicit false;
+legacy signatures and definitions remain unchanged. Requests cannot disable it.
+
+Encrypt inputs are unchanged. Authenticated outputs include `tag` beside
+`ciphertext`; legacy outputs omit it entirely. Decrypt requires `tag` for
+authenticated profiles and prohibits it for legacy profiles. Tags are exactly
+64 lowercase ASCII hex characters (32 bytes), without whitespace or padding.
+In batch, the tag belongs to each item, not the top-level request:
+
+```json
+{"ref":"reg1","kid":"<kid>","profile":"patient-id-auth-v1","ciphertext":"839-201","tag":"<64 lowercase hex characters returned by encrypt>"}
+```
+
+The worker verifies HMAC before running FF1. Batch verifies every item first;
+any authentication failure returns one error without plaintext or partial items.
+An incorrect well-formed tag returns `400` with `fpe authentication failed`;
+batch errors retain `batch item N failed: fpe authentication failed`. Malformed
+inputs and authorization/lifecycle failures retain their existing classifications.
+
+The independent MAC key uses HKDF-BLAKE2b-256 from the operational symmetric
+key, salt `vectis:fpe:mac:v1`, output 32 bytes and this single validated info:
+
+```text
+purpose=fpe-auth;profile=<name>;kid=<kid>;fpe_version=<version>;auth_version=v1
+```
+
+HMAC-BLAKE2b-256 covers `canonical_json_v1` of the object with fields
+`purpose: "fpe-auth"`, `auth_version: "v1"`, `kid`, `profile`, `fpe_version`,
+`alphabet` (resolved), `preserve_characters` (exact configured order, empty if
+absent), `tweak_aad` and the complete `ciphertext`, including separators. It
+does not include `ref`, plaintext or preset selectors. FF1 derivation is unchanged.
+
+Authentication binds content and context under a shared key; it does not prevent
+replay, replace authorization or hide deterministic equality. Retain ciphertext
+and tag together. Changing alphabet, preserved order or tweak invalidates tags.
+No ciphertexts are migrated or retagged automatically. All existing budgets
+remain; tags contribute to the global 2 MiB request limit.
 
 All FPE requests include a client-defined `ref`. It is required, non-empty, at most 128 characters, and echoed in the response. Batch requests require every item `ref` to be unique within the request.
 
@@ -1280,7 +1487,7 @@ Tokenization profiles live in `config.json` under `tokenization_profiles`. Reque
 ### Subject Keys
 
 Subject keys provide independently generated, server-held seeds for
-subject-scoped tokenization. They are not public/private key pairs or user
+subject-scoped tokenization, FPE and symmetric encryption. They are not public/private key pairs or user
 credentials. Seed and derived key material are never returned to clients.
 
 The integration flow is:
@@ -1295,7 +1502,9 @@ The integration flow is:
 The subject domain is **KID + profile + exact subject name**. For example,
 `synthetic-user` under two different profiles has two different subject IDs and
 independent seeds. Deleting one does not delete the subject or tokens of the
-other. A subject ID cannot be reused with another KID or profile.
+other. A subject ID cannot be reused with another KID. Token operations remain
+bound to the creator tokenization profile; FPE and symmetric can reuse its seed
+under the same KID without changing that original identity or seed envelope.
 
 The application maintains this association; Vectis has no subject get/list
 endpoint. Permissions are scoped to KIDs, not individual subjects or end users.
@@ -1398,6 +1607,10 @@ Do not submit the name in place of the returned ID to token or deletion endpoint
 Deletes the stored seed and all its associated token rows in one transaction. Requires `X-API-Key` and the
 independent per-KID `subject-delete` grant. `subject-create`, `token-encode`,
 `token-decode` and `token-delete` do not grant this operation.
+
+The same seed may serve FPE and symmetric encryption. Deletion blocks their
+future seed lookups too, but cannot erase ciphertexts held outside Vectis.
+Requests already holding derived keys may finish; backups can restore access.
 
 Request: use the identifier returned by create; **no request body or profile** is
 required, and there is no JSON content-type requirement for this endpoint.
@@ -2523,7 +2736,7 @@ Top level:
 | `client` | yes | text, unique | Client label. |
 | `apikey_hash` | yes | 64 hex (32 bytes) | Server-side verifier for this client's `X-API-Key`. |
 | `status` | yes | `active` \| `disabled` \| `revoked` | Only `active` clients are authorized. |
-| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `fpe-encrypt`, `fpe-decrypt`, `token-encode`, `token-decode`, `token-delete`, `subject-create`, `subject-delete`, `mac-create`, `mac-verify`, `commit-create`, `commit-verify`, `share-split`, `share-combine`, `index-create`, `index-verify`, `mask`, `metrics`, `time-attest`. `kid: "*"` is required for global actions `admin`, `metrics`, and `time-attest`; crypto profile actions require explicit KIDs. An `admin` action grants all endpoints and ignores kid-scoped grants. |
+| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `symmetric`, `fpe-encrypt`, `fpe-decrypt`, `token-encode`, `token-decode`, `token-delete`, `subject-create`, `subject-delete`, `mac-create`, `mac-verify`, `commit-create`, `commit-verify`, `share-split`, `share-combine`, `index-create`, `index-verify`, `mask`, `metrics`, `time-attest`. `kid: "*"` is required for global actions `admin`, `metrics`, and `time-attest`; crypto profile actions require explicit KIDs. An `admin` action grants all endpoints and ignores kid-scoped grants. |
 
 `fpe_profiles[]` entries:
 
@@ -2531,7 +2744,12 @@ Top level:
 | --- | --- | --- | --- |
 | `name` | yes | unique non-empty text | Profile selected by FPE requests. |
 | `fpe_version` | yes | `fpe-ff1-2025` | FF1 profile version and HKDF binding value. |
-| `alphabet` | yes | unique characters, no control chars | Domain alphabet for plaintext and ciphertext. |
+| `alphabet` | exactly one selector | 2..65536 unique Unicode characters, no controls | Literal custom alphabet; alternative to `alphabet_preset`. |
+| `alphabet_preset` | exactly one selector | `num`, `alpha`, `alphanum` | Fixed ASCII preset; alternative to `alphabet`. |
+| `letter_case` | alpha/alphanum only | `uppercase`, `lowercase`, `mixed` | Required for letter presets; prohibited for num/custom. |
+| `preserve_characters` | no | 0..32 distinct Unicode characters, no controls or alphabet overlap | Preserved positions; absent means empty, explicit empty remains serialized. |
+| `authenticated` | no | boolean; default false, no null | True requires separate tags. False is omitted in canonical serialization. |
+| `subject_mode` | no | `none` (default) or `stored`, no null | Reuse existing subject seeds; none is omitted in canonical serialization. |
 | `min_len` | yes | integer >= 6 | Minimum accepted field length. |
 | `max_len` | yes | integer >= `min_len` | Maximum accepted field length. |
 | `tweak_aad` | yes | `key=value;key=value`, max 128 chars | Literal cryptographic tweak context from signed config. Keys must be unique and use `[A-Za-z0-9_.-]+`. |
@@ -2689,8 +2907,9 @@ CLI output defaults to YAML for readability. Add `--output json` to HTTP client 
 | `vectis message send <sender_kid>` | `POST /message/{sender_kid}` | Yes |
 | `vectis message receive` | `POST /message` | No |
 | `vectis message decrypt` | `POST /message/decrypt` | Yes |
-| `vectis message internal encrypt <kid>` | `POST /message/internal/encrypt/{kid}` | Yes |
-| `vectis message internal decrypt` | `POST /message/internal/decrypt` | Yes |
+| `vectis symmetric encrypt <kid>` | `POST /symmetric/encrypt/{kid}` | Yes |
+| `vectis symmetric encrypt <kid> --subject <subject>` | `POST /symmetric/encrypt/{kid}/subject/{subject}` | Yes |
+| `vectis symmetric decrypt` | `POST /symmetric/decrypt` | Yes |
 | `vectis fpe encrypt <kid>` | `POST /fpe/encrypt/{kid}` | Yes |
 | `vectis fpe decrypt` | `POST /fpe/decrypt` | Yes |
 | `vectis token encode <kid>` | `POST /token/encode/{kid}` | Yes |

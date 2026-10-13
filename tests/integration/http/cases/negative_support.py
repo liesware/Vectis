@@ -107,7 +107,7 @@ def create_valid_token(client, key_id):
 
 def create_valid_internal_message(client, key_id):
     status, response = client.post(
-        f"/message/internal/encrypt/{key_id}",
+        f"/symmetric/encrypt/{key_id}",
         {"plaintext": "negative internal message"},
         auth=True,
     )

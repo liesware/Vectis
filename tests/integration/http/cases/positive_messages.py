@@ -49,13 +49,13 @@ def validate_internal_message_output(response, key_id, case):
 def encrypt_internal_message(client, message_number, key_id, case):
     plaintext_message = f"{MESSAGE} internal {message_number}"
     encrypted = client.post(
-        f"/message/internal/encrypt/{key_id}",
+        f"/symmetric/encrypt/{key_id}",
         {"plaintext": plaintext_message},
         auth=True,
     )
     validate_internal_message_output(encrypted, key_id, case)
 
-    decrypted = client.post("/message/internal/decrypt", encrypted, auth=True)
+    decrypted = client.post("/symmetric/decrypt", encrypted, auth=True)
     require(
         decrypted.get("plaintext") == plaintext_message,
         "internal message decrypt plaintext mismatch",

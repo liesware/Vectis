@@ -35,7 +35,7 @@ def validate_permissions_flow(ctx, key_id, case):
             "permissions": [
                 {
                     "kid": key_id,
-                    "actions": ["message"],
+                    "actions": ["symmetric"],
                 }
             ],
         },
@@ -96,7 +96,7 @@ def validate_permissions_flow(ctx, key_id, case):
     reload_config(ctx, admin_client)
 
     return [
-        ("limited message key", "OK"),
+        ("limited symmetric key", "OK"),
         ("metrics key", "OK"),
         ("admin key", "OK"),
         ("root permissions list", "OK"),

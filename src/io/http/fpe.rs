@@ -14,6 +14,25 @@ pub async fn encrypt_endpoint(
     headers: HeaderMap,
     JsonBody(request): JsonBody,
 ) -> Result<Json<ops::fpe::FpeEncryptOutput>, (StatusCode, Json<ErrorResponse>)> {
+    encrypt(state, kid, None, headers, request).await
+}
+
+pub async fn encrypt_subject_endpoint(
+    State(state): State<HttpState>,
+    Path((kid, subject)): Path<(String, String)>,
+    headers: HeaderMap,
+    JsonBody(request): JsonBody,
+) -> Result<Json<ops::fpe::FpeEncryptOutput>, (StatusCode, Json<ErrorResponse>)> {
+    encrypt(state, kid, Some(subject), headers, request).await
+}
+
+async fn encrypt(
+    state: HttpState,
+    kid: String,
+    subject: Option<String>,
+    headers: HeaderMap,
+    request: serde_json::Value,
+) -> Result<Json<ops::fpe::FpeEncryptOutput>, (StatusCode, Json<ErrorResponse>)> {
     let request_context = state.authorize_request(&headers).await?;
     request_context.require_permission_for(
         Some(&kid),
@@ -67,6 +86,25 @@ pub async fn encrypt_endpoint(
             err.as_ref(),
         ));
     };
+    let profile = super::subject::fpe_context(
+        &state,
+        request_context.config(),
+        profile,
+        &kid,
+        subject.as_deref(),
+        ops::keys::ProfileUse::NewUse,
+    )
+    .await
+    .map_err(|err| {
+        crypto_failed_response(
+            "fpe.encrypt.failed",
+            Some(&actor),
+            Some(&kid),
+            Some("fpe-encrypt"),
+            "fpe_encrypt",
+            err.as_ref(),
+        )
+    })?;
     let prepared = match state
         .with_keys_db_state(|keys_db_state| {
             ops::fpe::prepare_encrypt(keys_db_state, &kid, profile, input)
@@ -118,6 +156,25 @@ pub async fn encrypt_batch_endpoint(
     Path(kid): Path<String>,
     headers: HeaderMap,
     JsonBody(request): JsonBody,
+) -> Result<Json<ops::fpe::FpeEncryptBatchOutput>, (StatusCode, Json<ErrorResponse>)> {
+    encrypt_batch(state, kid, None, headers, request).await
+}
+
+pub async fn encrypt_batch_subject_endpoint(
+    State(state): State<HttpState>,
+    Path((kid, subject)): Path<(String, String)>,
+    headers: HeaderMap,
+    JsonBody(request): JsonBody,
+) -> Result<Json<ops::fpe::FpeEncryptBatchOutput>, (StatusCode, Json<ErrorResponse>)> {
+    encrypt_batch(state, kid, Some(subject), headers, request).await
+}
+
+async fn encrypt_batch(
+    state: HttpState,
+    kid: String,
+    subject: Option<String>,
+    headers: HeaderMap,
+    request: serde_json::Value,
 ) -> Result<Json<ops::fpe::FpeEncryptBatchOutput>, (StatusCode, Json<ErrorResponse>)> {
     let request_context = state.authorize_request(&headers).await?;
     request_context.require_permission_for(
@@ -173,6 +230,25 @@ pub async fn encrypt_batch_endpoint(
             err.as_ref(),
         ));
     };
+    let profile = super::subject::fpe_context(
+        &state,
+        request_context.config(),
+        profile,
+        &kid,
+        subject.as_deref(),
+        ops::keys::ProfileUse::NewUse,
+    )
+    .await
+    .map_err(|err| {
+        crypto_failed_response(
+            "fpe.encrypt.batch.failed",
+            Some(&actor),
+            Some(&kid),
+            Some("fpe-encrypt"),
+            "fpe_encrypt_batch",
+            err.as_ref(),
+        )
+    })?;
     let prepared = match state
         .with_keys_db_state(|keys_db_state| {
             ops::fpe::prepare_encrypt_batch(keys_db_state, &kid, profile, input)
@@ -270,6 +346,26 @@ pub async fn decrypt_endpoint(
             err.as_ref(),
         ));
     };
+    let subject = input.subject().map(str::to_owned);
+    let profile = super::subject::fpe_context(
+        &state,
+        request_context.config(),
+        profile,
+        &kid,
+        subject.as_deref(),
+        ops::keys::ProfileUse::Verify,
+    )
+    .await
+    .map_err(|err| {
+        crypto_failed_response(
+            "fpe.decrypt.failed",
+            Some(&actor),
+            Some(&kid),
+            Some("fpe-decrypt"),
+            "fpe_decrypt",
+            err.as_ref(),
+        )
+    })?;
     let prepared = match state
         .with_keys_db_state(|keys_db_state| {
             ops::fpe::prepare_decrypt(keys_db_state, profile, input)
@@ -363,6 +459,26 @@ pub async fn decrypt_batch_endpoint(
             err.as_ref(),
         ));
     };
+    let subject = input.subject().map(str::to_owned);
+    let profile = super::subject::fpe_context(
+        &state,
+        request_context.config(),
+        profile,
+        &kid,
+        subject.as_deref(),
+        ops::keys::ProfileUse::Verify,
+    )
+    .await
+    .map_err(|err| {
+        crypto_failed_response(
+            "fpe.decrypt.batch.failed",
+            Some(&actor),
+            Some(&kid),
+            Some("fpe-decrypt"),
+            "fpe_decrypt_batch",
+            err.as_ref(),
+        )
+    })?;
     let prepared = match state
         .with_keys_db_state(|keys_db_state| {
             ops::fpe::prepare_decrypt_batch(keys_db_state, profile, input)

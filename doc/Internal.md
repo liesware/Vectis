@@ -66,7 +66,7 @@ Important `ops` responsibilities:
 - public key output;
 - hybrid timestamp signing and verification;
 - local SLH-DSA artifact key handling, compact signatures, and offline verification;
-- protected message send, receive, decrypt, and internal message encryption;
+- protected message send, receive, decrypt, and symmetric encryption;
 - FPE, tokenization, MAC/index, commitment, sharing, and masking operations;
 - API key generation.
 
@@ -253,20 +253,22 @@ The receiver flow is:
 Verify-before-decrypt is mandatory. A message must not be decrypted until the
 sender identity and signatures have been validated.
 
-### Internal Messages
+### Symmetric Encryption
 
-`POST /message/internal/encrypt/{kid}` encrypts a local plaintext using the
+`POST /symmetric/encrypt/{kid}` encrypts a local plaintext using the
 local symmetric key for `kid`.
 
-`POST /message/internal/decrypt` decrypts that internal message.
+`POST /symmetric/decrypt` decrypts that symmetric envelope.
 
-These are local operations. They use separate audit events:
+These local operations require the per-KID `symmetric` grant, independently of
+protected messaging's `message` grant. The AAD retains `type=internal-message`.
+Audit action is `symmetric`; the metrics are preserved and the event names are:
 
-- `message.internal.encrypt.*`;
-- `message.internal.decrypt.*`.
+- `symmetric.encrypt.*`;
+- `symmetric.decrypt.*`.
 
 Remote message send uses `message.send.*`. The audit log must be able to tell
-local internal encryption from remote delivery.
+local symmetric encryption from remote delivery.
 
 ### FPE Flow
 
@@ -283,7 +285,9 @@ config:
 The FPE key is derived from the loaded key's symmetric key with `INTERNAL_KEYS_HKDF`,
 using the profile name, KID, and FPE version as AAD-style info. Encrypt requires
 an `active` key. Decrypt allows `active` and `retired`. FPE preserves format but
-does not authenticate data and is not part of the remote message protocol.
+does not authenticate data in legacy profiles and is not part of the remote
+message protocol. Authenticated profiles use an independent MAC key and verify
+the separate tag before FF1; batch authenticates every item before decryption.
 
 ### Tokenization Flow
 

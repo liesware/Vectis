@@ -141,4 +141,90 @@ def run_fpe(ctx):
     return CaseResult(passed=2)
 
 
+@cases('positive.fpe.formatted')
+def run_formatted(ctx):
+    kid = ctx.artifacts["positive.keys"][0][0]
+    profiles = [
+        {"name": "patient-id-formatted-v1", "alphabet_preset": "num", "preserve_characters": "-"},
+        {"name": "label-formatted-v1", "alphabet_preset": "alphanum", "letter_case": "mixed", "preserve_characters": "- "},
+        {"name": "unicode-formatted-v1", "alphabet": "零一二三四五六七八九", "preserve_characters": "🩺"},
+    ]
+    plaintexts = ["001-234-567", "AbC-012 xYZ", "零零一🩺二三四"]
+    for profile in profiles:
+        profile.update(kid=kid, fpe_version="fpe-ff1-2025", min_len=6, max_len=32, tweak_aad="tenant=acme;field=formatted;version=1")
+    ctx.config_data["fpe_profiles"].extend(profiles)
+    ctx.write_config()
+    ctx.reload_config()
+    for profile, plaintext in zip(profiles, plaintexts):
+        body = {"ref": "formatted", "profile": profile["name"], "plaintext": plaintext}
+        encrypted = ctx.client.post(f"/fpe/encrypt/{kid}", body, auth=True)
+        require(len(encrypted["ciphertext"]) == len(plaintext), "formatted Unicode length preserved")
+        for index, ch in enumerate(plaintext):
+            if ch in profile["preserve_characters"]:
+                require(encrypted["ciphertext"][index] == ch, "separator position preserved")
+        decoded = ctx.client.post("/fpe/decrypt", {"ref": "formatted", "profile": profile["name"], "kid": kid, "ciphertext": encrypted["ciphertext"]}, auth=True)
+        require(decoded["plaintext"] == plaintext, "formatted FPE exact round trip")
+    batch = {"profile": profiles[0]["name"], "items": [{"ref": "a", "plaintext": "001-234"}, {"ref": "b", "plaintext": "--567890--"}]}
+    encrypted = ctx.client.post(f"/fpe/encrypt/batch/{kid}", batch, auth=True)
+    decoded = ctx.client.post("/fpe/decrypt/batch", {"profile": batch["profile"], "kid": kid, "items": encrypted["items"]}, auth=True)
+    require([(item["ref"], item["plaintext"]) for item in decoded["items"]] == [(item["ref"], item["plaintext"]) for item in batch["items"]], "formatted batch order and plaintext")
+    invalid = {"profile": batch["profile"], "items": [batch["items"][0], {"ref": "b", "plaintext": "--12345--"}]}
+    status, error = ctx.http.post(f"/fpe/encrypt/batch/{kid}", invalid, auth=True)
+    require(status == 400 and error == {"error": "batch item 1 failed: plaintext effective domain is too small for FF1 after excluding preserved characters"}, "effective domain failure rejects entire batch with clear indexed error")
+    bad_decrypt = {"profile": batch["profile"], "kid": kid, "items": [encrypted["items"][0], {"ref": "b", "ciphertext": "--12345--"}]}
+    status, error = ctx.http.post("/fpe/decrypt/batch", bad_decrypt, auth=True)
+    require(status == 400 and error == {"error": "batch item 1 failed: ciphertext effective domain is too small for FF1 after excluding preserved characters"}, "decrypt rejects entire batch with clear indexed error")
+    print("- FPE presets, Unicode, preserved separators and batch domain: OK", flush=True)
+    return CaseResult()
+
+
+@cases('positive.fpe.authenticated')
+def run_authenticated(ctx):
+    kid = ctx.artifacts["positive.keys"][0][0]
+    profile = {"name":"authenticated-fpe-v1", "kid":kid, "fpe_version":"fpe-ff1-2025",
+               "alphabet_preset":"num", "preserve_characters":"- ", "authenticated":True,
+               "min_len":6, "max_len":32, "tweak_aad":"tenant=acme;field=auth;version=1"}
+    ctx.config_data["fpe_profiles"].append(profile)
+    unicode_profile = dict(profile, name="authenticated-unicode-v1", alphabet="零一二三四五六七八九", preserve_characters="🩺")
+    unicode_profile.pop("alphabet_preset")
+    ctx.config_data["fpe_profiles"].append(unicode_profile)
+    ctx.write_config(); ctx.reload_config()
+    for active, plaintext in [(profile,"001-234"),(unicode_profile,"零零一🩺二三四")]:
+        encoded = ctx.client.post(f"/fpe/encrypt/{kid}", {"ref":"auth", "profile":active["name"], "plaintext":plaintext}, auth=True)
+        tag = encoded["tag"]
+        require(len(tag)==64 and all(ch in "0123456789abcdef" for ch in tag), "auth tag is lowercase hex")
+        inverse = {"ref":"different-ref", "kid":kid, "profile":active["name"], "ciphertext":encoded["ciphertext"], "tag":tag}
+        decoded = ctx.client.post("/fpe/decrypt", inverse, auth=True)
+        require(decoded == {"ref":"different-ref","plaintext":plaintext}, "auth round trip and ref independence")
+        changed = dict(inverse, tag=("1" if tag[0]=="0" else "0")+tag[1:])
+        require(ctx.http.post("/fpe/decrypt", changed, auth=True) == (400,{"error":"fpe authentication failed"}), "wrong tag fails without plaintext")
+        for invalid in [None, True, 1, "a"*63, "a"*65, "A"*64, "g"*64]:
+            status, error = ctx.http.post("/fpe/decrypt", dict(inverse,tag=invalid), auth=True)
+            require(status == 400 and set(error)=={"error"}, "invalid tag shape rejects cleanly")
+        missing = dict(inverse); missing.pop("tag")
+        require(ctx.http.post("/fpe/decrypt", missing, auth=True)[0] == 400, "auth tag cannot be omitted")
+        require(ctx.http.post("/fpe/decrypt", dict(inverse,authenticated=False), auth=True)[0] == 400, "request cannot disable auth")
+    values = ["001-234", "567-890"]
+    encoded = ctx.client.post(f"/fpe/encrypt/batch/{kid}", {"profile":profile["name"],"items":[{"ref":str(i),"plaintext":p} for i,p in enumerate(values)]}, auth=True)
+    inverse = {"kid":kid,"profile":profile["name"],"items":encoded["items"]}
+    decoded = ctx.client.post("/fpe/decrypt/batch", inverse, auth=True)
+    require([item["plaintext"] for item in decoded["items"]]==values, "authenticated batch order")
+    bad = [dict(item) for item in encoded["items"]]; bad[1]["tag"]="0"*64
+    require(ctx.http.post("/fpe/decrypt/batch",dict(inverse,items=bad),auth=True)==(400,{"error":"batch item 1 failed: fpe authentication failed"}), "bad final tag rejects entire batch")
+    changed = dict(encoded["items"][0], kid=kid, profile=profile["name"])
+    changed["ciphertext"] = changed["ciphertext"].replace('-', ' ')
+    require(ctx.http.post("/fpe/decrypt",changed,auth=True)==(400,{"error":"fpe authentication failed"}), "separator changes are authenticated")
+    for field, replacement in [("tweak_aad","tenant=other"),("preserve_characters"," -")]:
+        original = profile[field]; profile[field]=replacement
+        ctx.write_config(); ctx.reload_config()
+        require(ctx.http.post("/fpe/decrypt",dict(encoded["items"][0],kid=kid,profile=profile["name"]),auth=True)==(400,{"error":"fpe authentication failed"}), "signed context mutation invalidates tags")
+        profile[field]=original
+    ctx.write_config(); ctx.reload_config()
+    legacy = ctx.client.post(f"/fpe/encrypt/{kid}", {"ref":"legacy","profile":"patient-id-decimal-v1","plaintext":"001234"},auth=True)
+    require("tag" not in legacy, "legacy output omits tag")
+    require(ctx.http.post("/fpe/decrypt",dict(legacy,tag="0"*64),auth=True)[0]==400, "legacy rejects supplied tag")
+    print("- authenticated FPE: tags, Unicode, batch, context and legacy compatibility: OK",flush=True)
+    return CaseResult()
+
+
 CASES = cases.tuple()

@@ -161,8 +161,8 @@ Important modules:
 - `ops/key_validation.rs`: validation of generated key material.
 - `ops/pubkey.rs`: public key output.
 - `ops/sign.rs`: hybrid signing and signature verification.
-- `ops/message.rs`: protected message send, receive, decrypt, internal encrypt,
-  and internal decrypt flows.
+- `ops/message.rs`: protected message send, receive, decrypt, symmetric encrypt,
+  and symmetric decrypt flows.
 - `ops/tokenization.rs`: reversible token encode/decode flows.
 - `ops/apikey.rs`: API key generation and hashing.
 - `ops/test.rs`: self-test operations.
@@ -482,6 +482,7 @@ Supported actions:
 - `self-test`;
 - `sign`;
 - `message`;
+- `symmetric`;
 - `metrics`.
 - `fpe-encrypt`;
 - `fpe-decrypt`;
@@ -548,30 +549,63 @@ The final app receives encrypted local delivery, not direct remote plaintext. It
 can call `POST /message/decrypt` on its local Vectis instance to recover the
 plaintext.
 
-## Internal Message Encryption
+## Symmetric Encryption
 
-Vectis also exposes local internal encryption and decryption endpoints:
+`POST /symmetric/encrypt/{kid}/subject/{subject}` reuses an existing subject seed
+with independent purpose-bound symmetric keys. Decrypt receives subject inside
+the complete envelope; permission and lifecycle are unchanged. The original
+creator profile must remain available. No ciphertexts are stored in Vectis.
+Deleting the shared subject also affects tokens and FPE, not external ciphertexts.
+See [subject symmetric](API.md#existing-subject-keys) for derivation and AAD.
 
-- `POST /message/internal/encrypt/{kid}`;
-- `POST /message/internal/decrypt`.
+Vectis exposes these Data Protection endpoints for local encryption and decryption:
+
+- `POST /symmetric/encrypt/{kid}`;
+- `POST /symmetric/decrypt`.
 
 These endpoints protect data using a local operational key rather than sending
 to a remote Vectis peer. They are useful for local application integration where
 an app wants Vectis-managed encryption without cross-instance transport.
+Both require the per-KID `symmetric` grant, independently of `message`.
+Encrypt requires an active key; decrypt permits active or retired keys.
+Envelope, `type=internal-message` AAD, audit event names and metrics are unchanged.
 
 ## Format-Preserving Encryption
+
+FPE profiles optionally use `subject_mode: stored` to reuse a seed created by a
+tokenization profile for the same KID. Its original signed creator configuration
+authenticates the envelope; child FF1 and optional MAC keys are independent of
+tokens. General routes accept none; subject encrypt routes include the ID and
+decrypt bodies supply it. Seed deletion affects both capabilities but does not
+erase external FPE ciphertexts. See [FPE subjects](API.md#fpe-with-existing-subject-keys)
+for derivation, lifecycle, backups and in-flight limitations.
+
+Signed FPE profiles select one literal Unicode alphabet or an ASCII preset
+`num|alpha|alphanum`. Letter presets require `uppercase|lowercase|mixed` case.
+Optional `preserve_characters` retains at most 32 distinct non-control characters
+outside the alphabet. FF1 processes all remaining characters as one unit, not
+one operation per group. Bounds count the total Unicode scalar length; the
+million-value domain floor counts only encrypted characters. Formatting remains
+visible and unauthenticated for legacy profiles. Optional `authenticated: true`
+covers ciphertext and exact profile context with a separate HMAC tag, verified
+before any FF1 decrypt (all tags first for batch). Existing custom profiles and their serialized
+representation are unchanged when new fields are absent. See [API](API.md#format-preserving-encryption).
 
 Vectis exposes local FF1 FPE endpoints for fields that must stay inside a
 signed alphabet and length range:
 
 - `POST /fpe/encrypt/{kid}`;
+- `POST /fpe/encrypt/batch/{kid}`;
+- `POST /fpe/encrypt/{kid}/subject/{subject}`;
+- `POST /fpe/encrypt/batch/{kid}/subject/{subject}`;
 - `POST /fpe/decrypt`.
 
 FPE profiles live in signed config under `fpe_profiles`. Requests select a
 profile by name; alphabet, length bounds, tweak AAD, FPE version, and bound KID
 come from signed config. FPE is deterministic for the same key/profile/tweak and
-plaintext. It preserves format, but it does not authenticate data and does not
-replace AEAD message encryption.
+plaintext. Legacy profiles do not authenticate data; authenticated profiles require
+the separately returned tag. Neither mode replaces AEAD message encryption or
+prevents replay. See [optional authentication](API.md#optional-fpe-authentication).
 
 ## Reversible Tokenization
 
@@ -743,6 +777,11 @@ This principle applies to:
 
 ## Storage
 
+See [Database Model and Cryptographic Storage](BD.md) for the logical ER diagram,
+table responsibilities, per-column algorithms, transactions and recovery limits.
+See [Cryptographic Flows and Key Derivation](Cryptography.md) for init/unseal,
+the key hierarchy and exact derivation contexts.
+
 The storage abstraction supports SQLite and PostgreSQL. SQLite is the local
 default. PostgreSQL is the shared durable backend for multi-node deployments.
 
@@ -867,9 +906,9 @@ Vectis exposes these major endpoint groups:
 - public keys: `/pub/{kid}`;
 - signing: `/sign/{kid}`, `/sign/verification`;
 - messaging: `/message/{sender_kid}`, `/message`, `/message/decrypt`;
-- internal messaging: `/message/internal/encrypt/{kid}`,
-  `/message/internal/decrypt`;
-- FPE: `/fpe/encrypt/{kid}`, `/fpe/decrypt`;
+- symmetric encryption: `/symmetric/encrypt/{kid}`,
+  `/symmetric/decrypt`;
+- FPE: `/fpe/encrypt/{kid}`, `/fpe/encrypt/batch/{kid}`, their `/subject/{subject}` variants, `/fpe/decrypt`, `/fpe/decrypt/batch`;
 - tokenization: `/token/encode/{kid}`, `/token/decode`;
 - MAC: `/mac/{kid}`, `/mac/batch/{kid}`, `/mac/verify`,
   `/mac/verify/batch`;
@@ -978,10 +1017,10 @@ provide universal write atomicity. Audit records are hash-chained locally and
 use stable security event names such as `auth.success`,
 `permission.denied`, `config.reload.failed`, `key.create.success`,
 `key.reload.success`, `key.reload.partial`,
-`message.receive.denied`, `message.internal.encrypt.success`, and
-`verify.failed`. Remote sends use `message.send.*`; local internal encryption
-and decryption use `message.internal.encrypt.*` and
-`message.internal.decrypt.*`.
+`message.receive.denied`, `symmetric.encrypt.success`, and
+`verify.failed`. Remote sends use `message.send.*`; local symmetric-key
+encryption and decryption use `symmetric.encrypt.*` and
+`symmetric.decrypt.*`.
 
 Audit records use logical identity and resource fields (`actor`, `actor_fp`,
 `root`, `admin`, `kid`, `remote_kid`, `action`, `outcome`, `reason`) and must not

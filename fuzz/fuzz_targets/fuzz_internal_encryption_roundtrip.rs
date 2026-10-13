@@ -35,4 +35,13 @@ fuzz_target!(|data: &[u8]| {
         message.as_bytes(),
         "symmetric AEAD round-trip must preserve the message"
     );
+
+    let seed = [0x35; 32];
+    let kid = "a".repeat(64);
+    let subject_key = vectis::ops::message::derive_subject_symmetric_key(&key, &seed, &kid, ALGORITHM).unwrap();
+    let ciphertext = crypto::encrypt_symmetric(ALGORITHM, &message, &subject_key, &nonce, aad).unwrap();
+    assert_eq!(crypto::decrypt_symmetric(ALGORITHM, &ciphertext, &subject_key, &nonce, aad).unwrap(), message.as_bytes());
+    assert!(crypto::decrypt_symmetric(ALGORITHM, &ciphertext, &key, &nonce, aad).is_err());
+    let different = vectis::ops::message::derive_subject_symmetric_key(&key, &[0x36;32], &kid, ALGORITHM).unwrap();
+    assert!(crypto::decrypt_symmetric(ALGORITHM, &ciphertext, &different, &nonce, aad).is_err());
 });

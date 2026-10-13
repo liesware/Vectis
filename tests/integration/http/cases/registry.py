@@ -17,6 +17,8 @@ from . import (
     negative_subjects,
     positive_commitments,
     positive_fpe,
+    positive_fpe_subjects,
+    positive_symmetric_subjects,
     positive_health,
     positive_keys,
     positive_lifecycle,
@@ -44,6 +46,8 @@ POSITIVE_CASES = (
     *positive_tokenization.CASES,  # tokenization, tokenization.one-time
     *positive_token_delete.CASES,
     *positive_subjects.CASES,
+    *positive_fpe_subjects.CASES,
+    *positive_symmetric_subjects.CASES,
     *positive_token_budget.CASES,
     *positive_mac_index.CASES,  # mac, index
     *positive_commitments.CASES,  # commit

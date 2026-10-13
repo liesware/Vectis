@@ -45,7 +45,7 @@ def assert_blocks_pub(ctx, kid, label):
 
 
 def assert_blocks_internal_decrypt(ctx, message, label):
-    status, _ = ctx.http.post("/message/internal/decrypt", message, auth=True)
+    status, _ = ctx.http.post("/symmetric/decrypt", message, auth=True)
     require_status(f"{label} key blocks internal decrypt", status, 403)
 
 
@@ -99,7 +99,7 @@ def _(ctx):
 
 @cases('negative.lifecycle.disabled-blocks-internal-decrypt')
 def _(ctx):
-    status, _ = ctx.http.post("/message/internal/decrypt", ctx.fixtures.disabled_internal_message, auth=True)
+    status, _ = ctx.http.post("/symmetric/decrypt", ctx.fixtures.disabled_internal_message, auth=True)
     require_status("disabled key blocks internal decrypt", status, 403)
 
 
@@ -124,7 +124,7 @@ def _(ctx):
 @cases('negative.lifecycle.retired-allows-internal-decrypt')
 def _(ctx):
     status, response = ctx.http.post(
-        "/message/internal/decrypt",
+        "/symmetric/decrypt",
         ctx.fixtures.retired_internal_message,
         auth=True,
     )

@@ -8,6 +8,24 @@ manually for releases; the Git history remains the detailed engineering record.
 Changes staged for v0.9.0, the first official release.
 
 ### Added
+- Subject-bound symmetric encryption reuses existing authenticated subject seeds
+  with purpose-separated keys and subject-bound AEAD context. Adds an encrypt
+  route and CLI `--subject`; decrypt accepts the full subject envelope. Legacy
+  ciphertexts remain compatible. No ciphertext storage, fallback or migration.
+- Stored FPE subject contexts reuse existing subject seeds, with independent
+  request-scoped FF1 and optional MAC keys. Subject encrypt routes and CLI
+  `--subject` preserve legacy behavior. Original creator configuration must
+  remain available; subject deletion affects tokens and FPE without deleting
+  externally stored FPE ciphertexts. No automatic migration or secret cache.
+- Optional signed-profile FPE authentication (`authenticated: true`), using an
+  independently derived HMAC-BLAKE2b-256 key and a separate lowercase hex tag.
+  Decrypt authenticates the whole batch before FF1. Legacy ciphertexts, outputs
+  and config signatures remain compatible; no replay protection or automatic
+  ciphertext migration is introduced.
+- Signed FPE alphabet presets (`num`, `alpha`, `alphanum`) with explicit letter
+  case and optional preserved characters. Formatting bounds include separators,
+  while the effective FF1 domain counts only variable characters. Existing
+  custom profiles, key derivation, tweaks and ciphertexts are unchanged.
 - Add optional stored subject keys for single and batch tokenization, with
   authenticated per-subject seeds, independent create/delete permissions and
   request-scoped key derivation. Existing profiles default to legacy `none` mode.
@@ -18,6 +36,13 @@ Changes staged for v0.9.0, the first official release.
   `token-delete` permission and allowed in any key lifecycle state.
 
 ### Changed
+- Breaking: local encryption moves to `POST /symmetric/encrypt/{kid}` and
+  `POST /symmetric/decrypt`, and `vectis symmetric encrypt|decrypt`. The former
+  `/message/internal/*` routes and `vectis message internal` commands are removed.
+  Local operations now require the per-KID `symmetric` permission; `message`
+  remains exclusive to protected messaging. Grant `symmetric`, sign and reload
+  configuration explicitly; no grant conversion is performed. Envelopes, AAD,
+  crypto, lifecycle, audit event names and metrics remain unchanged.
 - Tokenization plaintext maximum raised to 16,384 characters, with a dedicated
   token envelope limit (131,072) independent from the operational-key envelope
   limit (32,768).

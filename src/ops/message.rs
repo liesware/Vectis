@@ -126,7 +126,19 @@ pub struct InternalEncryptMessageInput {
 pub struct InternalMessageOutput {
     pub timestamp: String,
     pub kid: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_subject",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub subject: Option<String>,
     pub message: InternalMessageCipher,
+}
+
+fn deserialize_subject<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -150,6 +162,7 @@ struct ValidatedDecryptMessageInput {
 pub struct PreparedInternalEncryptMessage {
     key: Arc<LoadedOpsKey>,
     input: ValidatedInternalEncryptMessageInput,
+    subject: Option<SubjectMaterial>,
 }
 
 struct ValidatedInternalEncryptMessageInput {
@@ -159,6 +172,115 @@ struct ValidatedInternalEncryptMessageInput {
 pub struct PreparedInternalDecryptMessage {
     key: Arc<LoadedOpsKey>,
     input: ValidatedInternalDecryptMessageInput,
+    subject: Option<SubjectMaterial>,
+}
+
+struct SubjectMaterial {
+    origin: Arc<crate::core::tokenization::TokenizationProfile>,
+    subject: String,
+    envelope: String,
+}
+
+fn subject_material(
+    key: &LoadedOpsKey,
+    origin: Arc<crate::core::tokenization::TokenizationProfile>,
+    subject: String,
+    envelope: String,
+) -> Result<SubjectMaterial, DynError> {
+    crate::core::subjects::validate_subject(&subject)?;
+    if origin.kid() != key.id()
+        || origin.subject_mode() != crate::core::tokenization::SubjectMode::Stored
+    {
+        return Err(crate::error::internal("stored subject seed is invalid"));
+    }
+    Ok(SubjectMaterial {
+        origin,
+        subject,
+        envelope,
+    })
+}
+
+impl PreparedInternalEncryptMessage {
+    pub fn with_subject(
+        mut self,
+        origin: Arc<crate::core::tokenization::TokenizationProfile>,
+        subject: String,
+        envelope: String,
+    ) -> Result<Self, DynError> {
+        self.subject = Some(subject_material(&self.key, origin, subject, envelope)?);
+        Ok(self)
+    }
+}
+
+impl PreparedInternalDecryptMessage {
+    pub fn with_subject(
+        mut self,
+        origin: Arc<crate::core::tokenization::TokenizationProfile>,
+        subject: String,
+        envelope: String,
+    ) -> Result<Self, DynError> {
+        if self.input.input.subject.as_deref() != Some(subject.as_str()) {
+            return Err(crate::error::invalid_input(
+                "subject does not match symmetric context",
+            ));
+        }
+        self.subject = Some(subject_material(&self.key, origin, subject, envelope)?);
+        Ok(self)
+    }
+}
+
+fn internal_key(
+    key: &LoadedOpsKey,
+    subject: Option<&SubjectMaterial>,
+) -> Result<Zeroizing<Vec<u8>>, DynError> {
+    let cipher = crypto::symmetric_cipher(key.keys().symmetric().variant()).ok_or_else(|| {
+        crate::error::invalid_input("internal message symmetric algorithm is not supported")
+    })?;
+    validation::validate_symmetric_key(
+        "internal message symmetric key",
+        key.keys().symmetric().key_hex(),
+        cipher.key_size_bytes,
+    )?;
+    let parent = Zeroizing::new(hex::decode(key.keys().symmetric().key_hex())?);
+    let Some(subject) = subject else {
+        return Ok(parent);
+    };
+    let seed = crate::core::subjects::open_authenticated_seed(
+        &subject.origin,
+        &subject.subject,
+        &subject.envelope,
+    )?;
+    derive_subject_symmetric_key(&parent, seed.as_bytes(), key.id(), cipher.algorithm)
+}
+
+pub fn derive_subject_symmetric_key(
+    parent: &[u8],
+    seed: &[u8],
+    kid: &str,
+    algorithm: &str,
+) -> Result<Zeroizing<Vec<u8>>, DynError> {
+    keys::KeyId::parse(kid)?;
+    let cipher = crypto::symmetric_cipher(algorithm)
+        .ok_or_else(|| crate::error::invalid_input("message.variant is not supported"))?;
+    if parent.len() != cipher.key_size_bytes
+        || seed.len() != crate::core::subjects::SUBJECT_SEED_BYTES
+    {
+        return Err(crate::error::internal(
+            "invalid subject symmetric key material",
+        ));
+    }
+    let info = validation::build_validated_aad(&[
+        ("purpose", "subject-symmetric-encryption"),
+        ("kid", kid),
+        ("cipher_alg", cipher.algorithm),
+        ("version", "v1"),
+    ])?;
+    Ok(Zeroizing::new(crypto::create_hkdf(
+        parent,
+        seed,
+        info.as_bytes(),
+        cipher.key_size_bytes,
+    )?))
 }
 
 struct ValidatedInternalDecryptMessageInput {
@@ -307,7 +429,11 @@ pub fn prepare_internal_encrypt_message(
     let key = keys::get_loaded_key(keys_db_state, kid)?;
     keys::require_lifecycle_for_new_use(&key)?;
 
-    Ok(PreparedInternalEncryptMessage { key, input })
+    Ok(PreparedInternalEncryptMessage {
+        key,
+        input,
+        subject: None,
+    })
 }
 
 pub fn prepare_internal_decrypt_message(
@@ -318,7 +444,11 @@ pub fn prepare_internal_decrypt_message(
     let key = keys::get_loaded_key(keys_db_state, &input.input.kid)?;
     keys::require_lifecycle_for_decrypt_or_verify(&key)?;
 
-    Ok(PreparedInternalDecryptMessage { key, input })
+    Ok(PreparedInternalDecryptMessage {
+        key,
+        input,
+        subject: None,
+    })
 }
 
 pub fn prepare_receive_message(
@@ -564,9 +694,17 @@ pub fn encrypt_internal_message(
         cipher.key_size_bytes,
     )?;
 
-    let key = Zeroizing::new(hex::decode(prepared.key.keys().symmetric().key_hex())?);
+    let key = internal_key(&prepared.key, prepared.subject.as_ref())?;
     let nonce = Zeroizing::new(crypto::random_bytes(cipher.nonce_size_bytes)?);
-    let aad = build_internal_message_aad(prepared.key.id(), &timestamp, cipher.algorithm)?;
+    let aad = match &prepared.subject {
+        Some(subject) => build_subject_symmetric_aad(
+            prepared.key.id(),
+            &subject.subject,
+            &timestamp,
+            cipher.algorithm,
+        )?,
+        None => build_internal_message_aad(prepared.key.id(), &timestamp, cipher.algorithm)?,
+    };
     let ciphertext = crypto::encrypt_symmetric(
         cipher.algorithm,
         &prepared.input.plaintext,
@@ -584,6 +722,10 @@ pub fn encrypt_internal_message(
     Ok(InternalMessageOutput {
         timestamp,
         kid: prepared.key.id().to_string(),
+        subject: prepared
+            .subject
+            .as_ref()
+            .map(|material| material.subject.clone()),
         message: InternalMessageCipher {
             ctx: hex::encode(ciphertext),
             nonce: hex::encode(&*nonce),
@@ -596,6 +738,17 @@ pub fn encrypt_internal_message(
 pub fn decrypt_internal_message(
     prepared: PreparedInternalDecryptMessage,
 ) -> Result<DecryptMessageOutput, DynError> {
+    if prepared.input.input.subject.as_deref()
+        != prepared
+            .subject
+            .as_ref()
+            .map(|material| material.subject.as_str())
+    {
+        return Err(crate::error::invalid_input(
+            "subject symmetric context is required",
+        ));
+    }
+    let key = internal_key(&prepared.key, prepared.subject.as_ref())?;
     let input = prepared.input.input;
     let aad = parse_aad_fields(&input.message.aad)?;
     let kid = aad_field(&aad, "kid")?;
@@ -631,7 +784,6 @@ pub fn decrypt_internal_message(
         cipher.key_size_bytes,
     )?;
 
-    let key = Zeroizing::new(hex::decode(prepared.key.keys().symmetric().key_hex())?);
     let nonce = Zeroizing::new(
         hex::decode(&input.message.nonce)
             .map_err(|_| crate::error::invalid_input("message.nonce is not valid hex"))?,
@@ -752,10 +904,28 @@ fn validate_internal_decrypt_message_input(
     }
 
     let aad = parse_aad_fields(&input.message.aad)?;
+    if let Some(subject) = &input.subject {
+        crate::core::subjects::validate_subject(subject)?;
+        let expected = build_subject_symmetric_aad(
+            &input.kid,
+            subject,
+            &input.timestamp,
+            &input.message.variant,
+        )?;
+        if input.message.aad != expected {
+            return Err(crate::error::invalid_input(
+                "subject symmetric aad does not match envelope",
+            ));
+        }
+    }
     validation::validate_allowed_value(
         "message.aad.type",
         aad_field(&aad, "type")?,
-        &["internal-message"],
+        &[if input.subject.is_some() {
+            "subject-symmetric"
+        } else {
+            "internal-message"
+        }],
     )?;
     keys::KeyId::parse(aad_field(&aad, "kid")?)?;
     validation::validate_text_field("message.aad.timestamp", aad_field(&aad, "timestamp")?)?;
@@ -1350,6 +1520,22 @@ fn build_internal_message_aad(
     ])
 }
 
+fn build_subject_symmetric_aad(
+    kid: &str,
+    subject: &str,
+    timestamp: &str,
+    algorithm: &str,
+) -> Result<String, DynError> {
+    validation::build_validated_aad(&[
+        ("version", "v1"),
+        ("type", "subject-symmetric"),
+        ("kid", kid),
+        ("subject", subject),
+        ("timestamp", timestamp),
+        ("cipher_alg", algorithm),
+    ])
+}
+
 fn build_stored_protected_message_aad(
     version: &str,
     sender_kid: &str,
@@ -1810,6 +1996,7 @@ mod tests {
         let output = InternalMessageOutput {
             timestamp: timestamp.to_string(),
             kid: kid.clone(),
+            subject: None,
             message: InternalMessageCipher {
                 ctx: "a".repeat(
                     (config::INTERNAL_MESSAGE_PLAINTEXT_MAX_SIZE + AEAD_TAG_SIZE_BYTES) * 2,
@@ -1827,6 +2014,204 @@ mod tests {
             "serialized decrypt request is {} bytes",
             serialized.len()
         );
+        let mut subject_output = output;
+        let subject = "b".repeat(64);
+        subject_output.subject = Some(subject.clone());
+        subject_output.message.aad =
+            build_subject_symmetric_aad(&kid, &subject, timestamp, cipher_alg).unwrap();
+        assert!(
+            serde_json::to_vec(&subject_output).unwrap().len() <= config::INTERNAL_HTTP_MAX_SIZE
+        );
+    }
+
+    #[test]
+    fn subject_symmetric_derivation_is_versioned_and_algorithm_bound() {
+        let kid = "a".repeat(64);
+        for algorithm in crypto::SYMMETRIC_ALGORITHMS {
+            let cipher = crypto::symmetric_cipher(algorithm).unwrap();
+            let parent = vec![7; cipher.key_size_bytes];
+            let seed = [9; 32];
+            let mut key = derive_subject_symmetric_key(&parent, &seed, &kid, algorithm).unwrap();
+            let info = format!(
+                "purpose=subject-symmetric-encryption;kid={kid};cipher_alg={algorithm};version=v1"
+            );
+            assert_eq!(
+                key.as_slice(),
+                crypto::create_hkdf(&parent, &seed, info.as_bytes(), cipher.key_size_bytes)
+                    .unwrap()
+            );
+            assert_ne!(key.as_slice(), parent.as_slice());
+            assert_ne!(
+                key.as_slice(),
+                derive_subject_symmetric_key(&parent, &[8; 32], &kid, algorithm)
+                    .unwrap()
+                    .as_slice()
+            );
+            assert_ne!(
+                key.as_slice(),
+                crypto::create_hkdf(
+                    &parent,
+                    &seed,
+                    b"purpose=subject-token-data",
+                    cipher.key_size_bytes
+                )
+                .unwrap()
+            );
+            key.zeroize();
+            assert!(key.is_empty());
+        }
+        assert!(derive_subject_symmetric_key(&[7; 32], &[9; 31], &kid, "AES-256/GCM").is_err());
+    }
+
+    #[test]
+    fn subject_symmetric_operations_never_fallback_and_authenticate_the_seed() {
+        use crate::core::{subjects, tokenization};
+        let kid = "a".repeat(64);
+        let keys = keys::test_keys_state_with_lifecycle(&kid, "active");
+        let profiles = tokenization::validate_tokenization_profiles(
+            serde_json::from_value(serde_json::json!([{"name":"seed-origin","kid":kid,"token_prefix":"test_seed","token_len":32,"max_plaintext_len":128,"one_time":false,"subject_mode":"stored"}])).unwrap(),
+            |_| true,
+            |request| tokenization::derive_tokenization_keys(&"11".repeat(32), "AES-256/GCM", request),
+        ).unwrap();
+        let origin = profiles.get("seed-origin").unwrap();
+        let subject = subjects::subject_id(&origin, "user").unwrap();
+        let seed_envelope = subjects::create_seed(&origin, &subject).unwrap();
+        let prepared = prepare_internal_encrypt_message(
+            &keys,
+            &kid,
+            InternalEncryptMessageInput {
+                plaintext: "synthetic".into(),
+            },
+        )
+        .unwrap()
+        .with_subject(origin.clone(), subject.clone(), seed_envelope.clone())
+        .unwrap();
+        let envelope = encrypt_internal_message(prepared).unwrap();
+        let value = serde_json::to_value(&envelope).unwrap();
+        let without_context = prepare_internal_decrypt_message(
+            &keys,
+            parse_internal_decrypt_message_input(value.clone()).unwrap(),
+        )
+        .unwrap();
+        assert!(decrypt_internal_message(without_context).is_err());
+        let prepared = prepare_internal_decrypt_message(
+            &keys,
+            parse_internal_decrypt_message_input(value.clone()).unwrap(),
+        )
+        .unwrap()
+        .with_subject(origin.clone(), subject.clone(), seed_envelope.clone())
+        .unwrap();
+        assert_eq!(
+            decrypt_internal_message(prepared).unwrap().plaintext,
+            "synthetic"
+        );
+        let prepared = prepare_internal_decrypt_message(
+            &keys,
+            parse_internal_decrypt_message_input(value.clone()).unwrap(),
+        )
+        .unwrap()
+        .with_subject(origin.clone(), subject.clone(), "invalid".into())
+        .unwrap();
+        assert_eq!(
+            decrypt_internal_message(prepared)
+                .err()
+                .unwrap()
+                .to_string(),
+            "stored subject seed is invalid"
+        );
+        let replacement = subjects::create_seed(&origin, &subject).unwrap();
+        let prepared = prepare_internal_decrypt_message(
+            &keys,
+            parse_internal_decrypt_message_input(value).unwrap(),
+        )
+        .unwrap()
+        .with_subject(origin.clone(), subject.clone(), replacement)
+        .unwrap();
+        assert_eq!(
+            decrypt_internal_message(prepared)
+                .err()
+                .unwrap()
+                .to_string(),
+            "message authentication failed"
+        );
+        let legacy = encrypt_internal_message(
+            prepare_internal_encrypt_message(
+                &keys,
+                &kid,
+                InternalEncryptMessageInput {
+                    plaintext: "legacy".into(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            serde_json::to_value(&legacy)
+                .unwrap()
+                .get("subject")
+                .is_none()
+        );
+        assert!(legacy.message.aad.contains("type=internal-message;"));
+        assert_eq!(
+            decrypt_internal_message(prepare_internal_decrypt_message(&keys, legacy).unwrap())
+                .unwrap()
+                .plaintext,
+            "legacy"
+        );
+    }
+
+    #[test]
+    fn subject_symmetric_inputs_require_exact_context_and_non_null_subject() {
+        let kid = "a".repeat(64);
+        let subject = "b".repeat(64);
+        let aad = build_subject_symmetric_aad(&kid, &subject, "123456", "AES-256/GCM").unwrap();
+        assert_eq!(
+            aad,
+            format!(
+                "version=v1;type=subject-symmetric;kid={kid};subject={subject};timestamp=123456;cipher_alg=AES-256/GCM"
+            )
+        );
+        let value = serde_json::json!({"kid":kid,"subject":subject,"timestamp":"123456","message":{"ctx":"00","nonce":"00".repeat(12),"aad":aad,"variant":"AES-256/GCM"}});
+        assert!(
+            validate_internal_decrypt_message_input_encoding(
+                parse_internal_decrypt_message_input(value.clone()).unwrap()
+            )
+            .is_ok()
+        );
+        for invalid in [
+            Value::Null,
+            serde_json::json!(true),
+            serde_json::json!("B".repeat(64)),
+            serde_json::json!("b".repeat(63)),
+        ] {
+            let mut changed = value.clone();
+            changed["subject"] = invalid;
+            assert!(
+                parse_internal_decrypt_message_input(changed)
+                    .and_then(validate_internal_decrypt_message_input_encoding)
+                    .is_err()
+            );
+        }
+        let mut removed = value.clone();
+        removed.as_object_mut().unwrap().remove("subject");
+        assert!(
+            parse_internal_decrypt_message_input(removed)
+                .and_then(validate_internal_decrypt_message_input_encoding)
+                .is_err()
+        );
+        for field in ["kid", "timestamp", "subject"] {
+            let mut changed = value.clone();
+            changed[field] = if field == "timestamp" {
+                serde_json::json!("123457")
+            } else {
+                serde_json::json!("c".repeat(64))
+            };
+            assert!(
+                parse_internal_decrypt_message_input(changed)
+                    .and_then(validate_internal_decrypt_message_input_encoding)
+                    .is_err()
+            );
+        }
     }
 
     proptest! {

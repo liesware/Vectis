@@ -79,6 +79,7 @@ struct ConfigValidationHooks<
     DeriveMacKey,
     DeriveCommitmentKey,
     DeriveSharingKey,
+    DeriveFpeAuthKey,
 > {
     is_loaded_kid: &'a IsLoadedKid,
     derive_fpe_key: &'a DeriveFpeKey,
@@ -87,6 +88,7 @@ struct ConfigValidationHooks<
     derive_mac_key: &'a DeriveMacKey,
     derive_commitment_key: &'a DeriveCommitmentKey,
     derive_sharing_key: &'a DeriveSharingKey,
+    derive_fpe_auth_key: &'a DeriveFpeAuthKey,
 }
 
 pub fn canonical_config_json(content: &str) -> Result<String, DynError> {
@@ -115,6 +117,9 @@ pub fn validate_config_content(
     derive_sharing_key: impl Fn(
         sharing::SharingKeyDerivationRequest<'_>,
     ) -> Result<sharing::DerivedSharingKey, DynError>,
+    derive_fpe_auth_key: impl Fn(
+        fpe::FpeKeyDerivationRequest<'_>,
+    ) -> Result<Zeroizing<Vec<u8>>, DynError>,
 ) -> Result<ConfigState, DynError> {
     let config_file = parse_config_json(content)?;
     let hooks = ConfigValidationHooks {
@@ -125,6 +130,7 @@ pub fn validate_config_content(
         derive_mac_key: &derive_mac_key,
         derive_commitment_key: &derive_commitment_key,
         derive_sharing_key: &derive_sharing_key,
+        derive_fpe_auth_key: &derive_fpe_auth_key,
     };
     validate_config_file(config_file, config, &hooks)
 }
@@ -158,6 +164,9 @@ pub fn load_config_state(
     derive_sharing_key: impl Fn(
         sharing::SharingKeyDerivationRequest<'_>,
     ) -> Result<sharing::DerivedSharingKey, DynError>,
+    derive_fpe_auth_key: impl Fn(
+        fpe::FpeKeyDerivationRequest<'_>,
+    ) -> Result<Zeroizing<Vec<u8>>, DynError>,
 ) -> Result<ConfigState, DynError> {
     let hooks = ConfigValidationHooks {
         is_loaded_kid: &is_loaded_kid,
@@ -167,6 +176,7 @@ pub fn load_config_state(
         derive_mac_key: &derive_mac_key,
         derive_commitment_key: &derive_commitment_key,
         derive_sharing_key: &derive_sharing_key,
+        derive_fpe_auth_key: &derive_fpe_auth_key,
     };
     match load_config_file(&config.config_path, verify_config, config, &hooks) {
         Ok(state) => {
@@ -208,6 +218,9 @@ pub fn reload_config_state(
     derive_sharing_key: impl Fn(
         sharing::SharingKeyDerivationRequest<'_>,
     ) -> Result<sharing::DerivedSharingKey, DynError>,
+    derive_fpe_auth_key: impl Fn(
+        fpe::FpeKeyDerivationRequest<'_>,
+    ) -> Result<Zeroizing<Vec<u8>>, DynError>,
 ) -> Result<ConfigState, DynError> {
     let hooks = ConfigValidationHooks {
         is_loaded_kid: &is_loaded_kid,
@@ -217,6 +230,7 @@ pub fn reload_config_state(
         derive_mac_key: &derive_mac_key,
         derive_commitment_key: &derive_commitment_key,
         derive_sharing_key: &derive_sharing_key,
+        derive_fpe_auth_key: &derive_fpe_auth_key,
     };
     match load_config_file(&config.config_path, verify_config, config, &hooks) {
         Ok(state) => Ok(state),
@@ -244,6 +258,7 @@ fn load_config_file(
         impl Fn(
             sharing::SharingKeyDerivationRequest<'_>,
         ) -> Result<sharing::DerivedSharingKey, DynError>,
+        impl Fn(fpe::FpeKeyDerivationRequest<'_>) -> Result<Zeroizing<Vec<u8>>, DynError>,
     >,
 ) -> Result<ConfigState, DynError> {
     let content = read_config_file(path)?;
@@ -275,6 +290,7 @@ fn validate_config_file(
         impl Fn(
             sharing::SharingKeyDerivationRequest<'_>,
         ) -> Result<sharing::DerivedSharingKey, DynError>,
+        impl Fn(fpe::FpeKeyDerivationRequest<'_>) -> Result<Zeroizing<Vec<u8>>, DynError>,
     >,
 ) -> Result<ConfigState, DynError> {
     protocol::validate_protocol_version("config.version", &config_file.version)?;
@@ -288,6 +304,7 @@ fn validate_config_file(
         config_file.fpe_profiles,
         hooks.is_loaded_kid,
         hooks.derive_fpe_key,
+        hooks.derive_fpe_auth_key,
     )?;
     let validated_tokenization_profiles = tokenization::validate_tokenization_profiles(
         config_file.tokenization_profiles,
@@ -504,6 +521,11 @@ mod tests {
             dummy_mac_key,
             dummy_commitment_key,
             dummy_sharing_key,
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
         )
         .unwrap();
         assert_eq!(state.routes.len(), 0);
@@ -530,6 +552,11 @@ mod tests {
             dummy_mac_key,
             dummy_commitment_key,
             dummy_sharing_key,
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
         );
         let _ = fs::remove_file(&path);
         assert!(result.is_err());
@@ -550,6 +577,11 @@ mod tests {
             dummy_mac_key,
             dummy_commitment_key,
             dummy_sharing_key,
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
         );
         let _ = fs::remove_file(&path);
         let err = match result {
@@ -578,6 +610,11 @@ mod tests {
             dummy_mac_key,
             dummy_commitment_key,
             dummy_sharing_key,
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
         );
 
         let _ = fs::remove_file(&path);
@@ -601,6 +638,11 @@ mod tests {
             dummy_mac_key,
             dummy_commitment_key,
             dummy_sharing_key,
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
         )
         .unwrap();
         assert_eq!(state.routes.len(), 0);
@@ -625,6 +667,11 @@ mod tests {
             dummy_mac_key,
             dummy_commitment_key,
             dummy_sharing_key,
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
         );
         let _ = fs::remove_file(&path);
         assert!(result.is_err());
@@ -649,6 +696,11 @@ mod tests {
             dummy_mac_key,
             dummy_commitment_key,
             dummy_sharing_key,
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
         );
 
         let _ = fs::remove_file(&path);
@@ -745,6 +797,11 @@ mod tests {
             dummy_mac_key,
             dummy_commitment_key,
             dummy_sharing_key,
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
         )
         .unwrap();
 
@@ -766,6 +823,11 @@ mod tests {
             dummy_mac_key,
             dummy_commitment_key,
             dummy_sharing_key,
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
         )
         .expect("time overrides must validate");
         assert_eq!(state.time_attestation.max_clock_skew_ms(), 250);
@@ -785,6 +847,11 @@ mod tests {
             dummy_mac_key,
             dummy_commitment_key,
             dummy_sharing_key,
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
         );
         let err = match result {
             Ok(_) => panic!("unsupported time providers must not validate"),
@@ -811,6 +878,9 @@ mod tests {
                 dummy_mac_key,
                 dummy_commitment_key,
                 dummy_sharing_key,
+                |_| Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES]
+                )),
             )
             .is_err()
         );
@@ -825,6 +895,9 @@ mod tests {
                 dummy_mac_key,
                 dummy_commitment_key,
                 dummy_sharing_key,
+                |_| Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES]
+                )),
             )
             .is_err()
         );
@@ -839,6 +912,9 @@ mod tests {
                 dummy_mac_key,
                 dummy_commitment_key,
                 dummy_sharing_key,
+                |_| Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES]
+                )),
             )
             .is_err()
         );
@@ -853,6 +929,9 @@ mod tests {
                 dummy_mac_key,
                 dummy_commitment_key,
                 dummy_sharing_key,
+                |_| Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES]
+                )),
             )
             .is_err()
         );
@@ -887,6 +966,11 @@ mod tests {
             dummy_mac_key,
             dummy_commitment_key,
             dummy_sharing_key,
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
         ) {
             Ok(_) => panic!("tokenization_version must be rejected as an unknown field"),
             Err(err) => err,
@@ -925,6 +1009,11 @@ mod tests {
             dummy_mac_key,
             dummy_commitment_key,
             dummy_sharing_key,
+            |_| {
+                Ok(zeroize::Zeroizing::new(
+                    vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
+                ))
+            },
         ) {
             Ok(_) => panic!("tokenization profiles must declare one_time"),
             Err(err) => err,

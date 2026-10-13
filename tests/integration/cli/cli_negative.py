@@ -641,8 +641,8 @@ def main():
                     "unknown message send option: --profile",
                 ),
                 (
-                    ["message", "internal", "encrypt", "--profile", "pan"],
-                    "unknown message internal encrypt option: --profile",
+                    ["symmetric", "encrypt", "--profile", "pan"],
+                    "unknown symmetric encrypt option: --profile",
                 ),
                 (
                     ["lifecycle", "--reason", "maintenance"],

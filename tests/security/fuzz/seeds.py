@@ -20,6 +20,7 @@ from semantics import (
     COMMITMENT_PROFILE,
     FPE_BATCH_PLAINTEXTS,
     FPE_PLAINTEXT,
+    FPE_FORMATTED_PLAINTEXTS,
     FPE_PROFILE,
     INTERNAL_SEED_PLAINTEXT,
     KID_HEX,
@@ -228,13 +229,13 @@ def internal_seeds(client):
     for case in KEY_CASES:
         kid = _create_key(client, case)
         status, body = client.post_json(
-            f"/message/internal/encrypt/{kid}",
+            f"/symmetric/encrypt/{kid}",
             {"plaintext": INTERNAL_SEED_PLAINTEXT},
             auth=True,
         )
         if status != 200:
             raise RuntimeError(f"could not encrypt seed message: HTTP {status}: {body}")
-        seeds.append(("/message/internal/decrypt", json.loads(body)))
+        seeds.append(("/symmetric/decrypt", json.loads(body)))
     return seeds
 
 
@@ -243,7 +244,7 @@ def internal_encrypt_seeds(client):
     for case in KEY_CASES:
         kid = _create_key(client, case)
         seeds.append(
-            (f"/message/internal/encrypt/{kid}", {"plaintext": INTERNAL_SEED_PLAINTEXT})
+            (f"/symmetric/encrypt/{kid}", {"plaintext": INTERNAL_SEED_PLAINTEXT})
         )
     return seeds
 
@@ -326,7 +327,17 @@ def fpe_seeds(client):
         "profile": FPE_PROFILE,
         "ciphertext": parsed["ciphertext"],
     }
-    return [(f"/fpe/encrypt/{kid}", encrypt_seed), ("/fpe/decrypt", decrypt_seed)]
+    result = [(f"/fpe/encrypt/{kid}", encrypt_seed), ("/fpe/decrypt", decrypt_seed)]
+    for profile, plaintext in FPE_FORMATTED_PLAINTEXTS.items():
+        seed = {"ref": "fpe-formatted", "profile": profile, "plaintext": plaintext}
+        status, body = client.post_json(f"/fpe/encrypt/{kid}", seed, auth=True)
+        if status != 200:
+            raise RuntimeError("could not prepare formatted FPE seed")
+        encoded = json.loads(body)
+        inverse = {"ref": "fpe-formatted", "kid": kid, "profile": profile, "ciphertext": encoded["ciphertext"]}
+        if "tag" in encoded: inverse["tag"] = encoded["tag"]
+        result.extend([(f"/fpe/encrypt/{kid}", seed), ("/fpe/decrypt", inverse)])
+    return result
 
 
 def fpe_batch_seeds(client):

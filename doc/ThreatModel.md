@@ -165,12 +165,14 @@ satisfy them need compensating controls.
 6. **Lifecycle states are authoritative and final.** `destroyed` is terminal by
    design; there are no guardrails or recovery paths. Managing the business
    consequences of lifecycle transitions belongs to the client.
-7. **FPE is deterministic and does not authenticate.** For the same
+7. **FPE is deterministic; legacy profiles do not authenticate.** For the same
    key/profile/tweak, equal plaintexts produce equal ciphertexts, so FPE leaks
    equality and frequency and enables correlation of repeated values. The profile
    must also define a large enough domain (the server rejects domains below one
-   million). FPE preserves format only; it does not authenticate data and does not
-   replace AEAD message encryption. Use it where equality leakage is acceptable
+   million). Optional signed `authenticated: true` profiles verify a separate
+   HMAC-BLAKE2b-256 tag over ciphertext and profile context before FF1, including
+   preserved separators. This does not hide equality, prevent replay or replace
+   authorization or AEAD message encryption. Use FPE where equality leakage is acceptable
    (for example, values that are already unique), and prefer tokenization when
    unlinkability is required.
 8. **Blind indexes deliberately reveal deterministic membership.** The same

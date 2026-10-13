@@ -145,6 +145,32 @@ runtime.
 
 ## Python HTTP Tests
 
+FPE coverage includes signed ASCII presets and Unicode custom alphabets,
+optional authentication tags and authenticate-before-FF1 checks. Unit tests use
+a thread-local counter to ensure no decrypt is attempted when any batch tag
+fails. HTTP/CLI and existing fuzz targets cover required/forbidden tags, strict
+encoding, context mutation and legacy outputs without a tag.
+Coverage also includes preserved separator positions, effective-domain rejection and all-or-nothing
+batch errors. CLI tests cover selector replacement, case inheritance/removal and
+invalid edits without writes. Native `fuzz_fpe_roundtrip` exercises legacy,
+preset and Unicode profiles, including insufficient effective domains; curated
+input/config seeds cover incompatible selectors, nulls and overlap. Legacy
+serialization and a deterministic ciphertext vector are regression-tested.
+
+Stored FPE coverage shares an existing tokenization subject across both
+capabilities, with authenticated and unauthenticated single/batch operations.
+Tests cover FPE-only grants, creator-profile resolution, missing subjects,
+deletion/recreation, lifecycle and strict CLI subject flags. Native round-trip
+fuzzing includes stored contexts; input/config seeds include nullable subjects
+and subject modes that must be rejected.
+
+Subject symmetric coverage uses the same seed across tokens, FPE and symmetric
+without token grants for the symmetric client. Tests cover canonical AAD,
+tampering, missing/incompatible creator profiles, deletion/recreation, lifecycle,
+strict CLI flags and legacy envelopes. Unit tests reject missing prepared
+contexts and corrupt seeds with no fallback; native AEAD fuzzing covers derived
+subject keys and failure under another seed or the general key.
+
 The positive suite races eight subject creations and expects one `201` and
 seven `200` responses with the same ID and unchanged seed. Storage tests cover
 transactional token purging, stale-generation writes and encode/delete races.
@@ -580,7 +606,7 @@ Each iteration rotates between those suites and exercises local operations:
 - FPE, tokenization, MAC, blind indexes, masking, commitments and their batch
   endpoints where available;
 - secret sharing split/combine;
-- internal message encrypt/decrypt;
+- symmetric encrypt/decrypt;
 - compact sign/verification;
 - `/metrics` during teardown.
 
