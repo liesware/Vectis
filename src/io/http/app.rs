@@ -1,10 +1,6 @@
 // Copyright 2026 Eduardo Lopez
 // SPDX-License-Identifier: Apache-2.0
 
-use artbox::{
-    Alignment, Artbox, Color, ColorStop, Fill, LinearGradient, RenderTarget, Renderer, fonts,
-};
-
 use crate::core::validation;
 use crate::core::{config, project, protocol, storage::StorageState};
 use crate::error::DynError;
@@ -15,6 +11,14 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, warn};
 use zeroize::Zeroizing;
+
+const BANNER: &str = r#"
+  _    __          __  _
+ | |  / /__  _____/ /_(_)____
+ | | / / _ \/ ___/ __/ / ___/
+ | |/ /  __/ /__/ /_/ (__  )
+ |___/\___/\___/\__/_/____/
+"#;
 
 pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
     let config = Arc::new(config::app_config()?);
@@ -187,23 +191,9 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         started_at,
         metrics_handle,
     }));
-    let renderer = Renderer::new(fonts::family("slant").unwrap())
-        .with_alignment(Alignment::Center)
-        .with_plain_fallback()
-        .with_fill(Fill::Linear(LinearGradient::new(
-            90.0,
-            vec![
-                ColorStop::new(0.00, Color::rgb(0, 200, 255)),
-                ColorStop::new(1.00, Color::rgb(255, 90, 120)),
-            ],
-        )));
-
-    let art = Artbox::from_renderer(renderer);
-    let target = RenderTarget::new(30, 6);
-    let rendered = art.render_text("Vectis", target)?;
     println!("--------------------------------------------------------------");
     println!("\nLicense: {}", project::LICENSE);
-    print!("{}", rendered.to_ansi_string());
+    print!("{BANNER}");
     println!("\nOpen Source Advanced Data Protection Service");
     println!("\n{}", project::COPYRIGHT);
     println!("Developed by {}", project::DEVELOPER);
@@ -313,6 +303,24 @@ mod tests {
     use tokio::sync::Notify;
     use tokio::task::JoinHandle;
     use tokio::time::{Instant, timeout};
+
+    #[test]
+    fn banner_is_static_plain_ascii() {
+        assert_eq!(
+            BANNER.lines().collect::<Vec<_>>(),
+            [
+                "",
+                "  _    __          __  _",
+                " | |  / /__  _____/ /_(_)____",
+                r" | | / / _ \/ ___/ __/ / ___/",
+                " | |/ /  __/ /__/ /_/ (__  )",
+                r" |___/\___/\___/\__/_/____/",
+            ]
+        );
+        assert!(BANNER.is_ascii());
+        assert!(!BANNER.contains('\x1b'));
+        assert!(BANNER.ends_with('\n'));
+    }
 
     async fn start_test_server(
         app: Router,

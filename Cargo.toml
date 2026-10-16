@@ -9,7 +9,6 @@ repository = "https://github.com/liesware/Vectis"
 [dependencies]
 addr = "0.15.6"
 aes = { version = "0.8", features = ["zeroize"] }
-artbox = "0.3.0"
 axum = "0.8.8"
 axum-server = { version = "0.7.2", features = ["tls-rustls"] }
 base64 = "0.22.1"

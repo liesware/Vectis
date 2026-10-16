@@ -36,6 +36,8 @@ Changes staged for v0.9.0, the first official release.
   `token-delete` permission and allowed in any key lifecycle state.
 
 ### Changed
+- Replaced the generated startup banner with static ASCII text, removing
+  `artbox` and its unused transitive dependencies, including `figlet-rs` and `zip`.
 - Breaking: local encryption moves to `POST /symmetric/encrypt/{kid}` and
   `POST /symmetric/decrypt`, and `vectis symmetric encrypt|decrypt`. The former
   `/message/internal/*` routes and `vectis message internal` commands are removed.
