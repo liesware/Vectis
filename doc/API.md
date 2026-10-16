@@ -7,6 +7,10 @@ runtime bounds, see [Limits](Limits.md).
 
 The `vectis` CLI is an HTTP client for the runtime API, except for `vectis init`, `vectis serve`, `vectis apikey create`, `vectis config sign`, and `vectis config list`, which are local commands.
 
+## Contents
+
+[Conventions](#conventions) · [Protocol Versioning](#protocol-versioning) · [Authentication](#authentication) · [Supported Algorithms](#supported-algorithms) · [Health and Validation](#health-and-validation) · [Keys](#keys) · [Config](#config) · [Routes](#routes) · [API Key Permissions](#api-key-permissions) · [Public Keys](#public-keys) · [Hybrid Timestamp Protocol](#hybrid-timestamp-protocol) · [Protected Messages Between Instances](#protected-messages-between-instances) · [Symmetric Encryption](#symmetric-encryption) · [Format-Preserving Encryption](#format-preserving-encryption) · [Tokenization](#tokenization) · [MAC](#mac) · [Cryptographic Commitments](#cryptographic-commitments) · [Masking](#masking) · [Blind Index](#blind-index) · [Final App Delivery](#final-app-delivery) · [Secret Sharing](#secret-sharing) · [Configuration File (`config.json`)](#configuration-file-configjson) · [Related Configuration](#related-configuration) · [CLI Mapping](#cli-mapping) · [Config Signature](#config-signature)
+
 ## Conventions
 
 - Default base URL: `http://127.0.0.1:3000`

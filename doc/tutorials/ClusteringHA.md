@@ -14,6 +14,10 @@ The lab demonstrates clustering, Nginx load balancing, and manual continuity
 after one Vectis process stops. It does not add active readiness polling or make
 the single PostgreSQL container highly available.
 
+## Contents
+
+[How This Cluster Works](#how-this-cluster-works) · [Prerequisites](#prerequisites) · [Understand The Cluster Identity](#understand-the-cluster-identity) · [Prepare The Cluster Variables](#prepare-the-cluster-variables) · [Create Node B](#create-node-b) · [Start Both Nodes](#start-both-nodes) · [Distribute A Signed Policy Change](#distribute-a-signed-policy-change) · [Run Cross-Node Workflows](#run-cross-node-workflows) · [Observe Local Key State](#observe-local-key-state) · [Add An Nginx Load Balancer](#add-an-nginx-load-balancer) · [Exercise Manual Failover](#exercise-manual-failover) · [Audit And Shutdown](#audit-and-shutdown) · [What This Lab Proved](#what-this-lab-proved)
+
 ## How This Cluster Works
 
 Picture one brain in two bodies. The *brain* — the cluster identity, the signed

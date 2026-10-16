@@ -9,6 +9,10 @@ tokens, and blind indexes survive a Vectis restart.
 All values used here are synthetic. The Docker credentials and unencrypted
 loopback PostgreSQL connection are suitable only for this local lab.
 
+## Contents
+
+[Why PostgreSQL](#why-postgresql) · [How This Lab Works](#how-this-lab-works) · [Purpose And Boundaries](#purpose-and-boundaries) · [Prerequisites](#prerequisites) · [Create An Isolated Workspace](#create-an-isolated-workspace) · [Start PostgreSQL With Docker](#start-postgresql-with-docker) · [Create The Schema And Runtime Role](#create-the-schema-and-runtime-role) · [Using An Existing PostgreSQL Server](#using-an-existing-postgresql-server) · [Configure Vectis](#configure-vectis) · [Start And Validate The Node](#start-and-validate-the-node) · [Create Durable State](#create-durable-state) · [Restart And Verify Persistence](#restart-and-verify-persistence) · [Inspect Stored State](#inspect-stored-state) · [Failure Modes](#failure-modes) · [What You Learned](#what-you-learned) · [Cleanup](#cleanup)
+
 ## Why PostgreSQL
 
 SQLite carried Getting Started because one node backed by one local file is the

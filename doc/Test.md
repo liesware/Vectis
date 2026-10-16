@@ -3,6 +3,10 @@
 This document explains the current Vectis test suite, what each layer proves,
 and how to run the tests consistently.
 
+## Contents
+
+[Testing Strategy](#testing-strategy) · [Prerequisites](#prerequisites) · [Rust Checks](#rust-checks) · [Rust Crypto Integration Tests](#rust-crypto-integration-tests) · [PostgreSQL Storage Smoke Test](#postgresql-storage-smoke-test) · [Python HTTP Tests](#python-http-tests) · [Python CLI Tests](#python-cli-tests) · [Schemathesis OpenAPI Tests](#schemathesis-openapi-tests) · [Dynamic API Scanning With OWASP ZAP](#dynamic-api-scanning-with-owasp-zap) · [Performance Testing With k6](#performance-testing-with-k6) · [Native Fuzzing With cargo-fuzz](#native-fuzzing-with-cargo-fuzz) · [Aggregate Workflow](#aggregate-workflow) · [Test File Reference](#test-file-reference)
+
 ## Testing Strategy
 
 Vectis uses several test layers because each one protects a different part of

@@ -1,5 +1,9 @@
 # Clustering
 
+## Contents
+
+[Purpose](#purpose) · [Non-Goals](#non-goals) · [Node Model](#node-model) · [Shared Storage](#shared-storage) · [Key Loading](#key-loading) · [Config Model](#config-model) · [Lifecycle Semantics](#lifecycle-semantics) · [High Availability](#high-availability) · [Disaster Recovery](#disaster-recovery) · [Database Ownership](#database-ownership) · [Failure Modes](#failure-modes) · [Operational Checklist](#operational-checklist) · [Future Work](#future-work)
+
 ## Purpose
 
 This document explains how Vectis behaves when more than one node serves the
@@ -88,6 +92,23 @@ CREATE TABLE indexes (
 `keys`, `properties`, and `tokens.data` are encrypted by Vectis before storage.
 `indexes.digest` is deterministic blind-index material and PostgreSQL does not
 need to understand its contents.
+
+```mermaid
+flowchart TB
+    OP["Operator"] -->|same init material and signed config to every node| NA
+    OP --> NB
+    subgraph NA["Node A, local runtime state"]
+        IA["Init material and unseal"] --> KA["KeysDbState in memory"]
+        CA["Signed config snapshot"]
+    end
+    subgraph NB["Node B, local runtime state"]
+        IB["Init material and unseal"] --> KB["KeysDbState in memory"]
+        CB["Signed config snapshot"]
+    end
+    DB[("Shared PostgreSQL: opskeys, tokens, subjects, indexes<br/>Encrypted: key material, properties, token payloads, subject seeds<br/>Visible: identifiers, envelope context, index digests")]
+    KA -->|write and load| DB
+    KB -->|explicit reload or missing-key lazy-load| DB
+```
 
 ## Key Loading
 

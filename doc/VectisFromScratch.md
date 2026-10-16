@@ -13,6 +13,10 @@ the mental map that ties it all together before you open `src/`.
 
 All values shown here are synthetic and used only as examples.
 
+## Contents
+
+[What Problem Vectis Solves](#what-problem-vectis-solves) · [How It Works: The Mental Model](#how-it-works-the-mental-model) · [The Capabilities At A Glance](#the-capabilities-at-a-glance) · [The Life Of An Operation](#the-life-of-an-operation) · [Startup Flow: `vectis serve`](#startup-flow-vectis-serve) · [The Secure-Handling Lifecycle: How Key Material Lives](#the-secure-handling-lifecycle-how-key-material-lives) · [The Key Hierarchy: Every Key And Where It Comes From](#the-key-hierarchy-every-key-and-where-it-comes-from) · [The Database And Its Tables](#the-database-and-its-tables) · [The Three Layers And The Dependency Graph](#the-three-layers-and-the-dependency-graph) · [Reference: The `core` Layer (`src/core/`)](#reference-the-core-layer-srccore) · [Reference: The `ops` Layer (`src/ops/`)](#reference-the-ops-layer-srcops) · [Reference: The `io` Layer (`src/io/`)](#reference-the-io-layer-srcio) · [Reference: Top Level And Schema (`src/`, `src/db/`)](#reference-top-level-and-schema-src-srcdb) · [The Security Spine](#the-security-spine) · [What Vectis Does Not Do](#what-vectis-does-not-do) · [Glossary](#glossary) · [Where To Start Reading The Code](#where-to-start-reading-the-code)
+
 ## What Problem Vectis Solves
 
 TLS protects the **connection**. An encrypted disk protects **storage**. But

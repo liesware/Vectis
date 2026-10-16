@@ -1,5 +1,9 @@
 # Getting Started With Vectis
 
+## Contents
+
+[Purpose](#purpose) · [How Vectis Works](#how-vectis-works) · [Download And Verify](#download-and-verify) · [Prepare The Workspace](#prepare-the-workspace) · [Initialize SQLite](#initialize-sqlite) · [Create Local TLS](#create-local-tls) · [Initialize Vectis](#initialize-vectis) · [Start And Bootstrap The Node](#start-and-bootstrap-the-node) · [Create Application Policy](#create-application-policy) · [Capability Tour](#capability-tour) · [Lifecycle](#lifecycle) · [Verify The Audit Chain](#verify-the-audit-chain) · [What You Learned](#what-you-learned) · [Optional Next Steps](#optional-next-steps)
+
 ## Purpose
 
 This tutorial builds one local Vectis node from a signed release, backed by

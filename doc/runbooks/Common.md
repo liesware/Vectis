@@ -9,6 +9,10 @@ Rule before touching cryptographic material:
 Vectis does not fix file permissions automatically. Vectis does not create
 PostgreSQL tables. Vectis does not auto-reload signed config after file changes.
 
+## Contents
+
+[Service Will Not Start](#service-will-not-start) · [Init File Permissions Are Too Open](#init-file-permissions-are-too-open) · [Unseal Key File Permissions Are Too Open](#unseal-key-file-permissions-are-too-open) · [Unseal Key Missing Or Invalid](#unseal-key-missing-or-invalid) · [Config Signature Or Config Reload Fails](#config-signature-or-config-reload-fails) · [Readiness Reports Storage Not Ready](#readiness-reports-storage-not-ready) · [PostgreSQL Schema Or Connectivity Failure](#postgresql-schema-or-connectivity-failure) · [Key Not Found](#key-not-found) · [Lifecycle Blocks Key Use](#lifecycle-blocks-key-use) · [Remote Route Not Found Or Sender Not Allowed](#remote-route-not-found-or-sender-not-allowed) · [Final App Cannot Be Reached](#final-app-cannot-be-reached) · [Message Verification Or Decrypt Failure](#message-verification-or-decrypt-failure) · [Metrics Endpoint Check](#metrics-endpoint-check) · [Audit Log Review](#audit-log-review) · [Restore Sanity Checklist After Restart Or Reload](#restore-sanity-checklist-after-restart-or-reload)
+
 ## Service Will Not Start
 
 ### Problem

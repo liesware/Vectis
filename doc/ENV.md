@@ -4,6 +4,10 @@ Vectis reads configuration from process environment variables first and then fro
 
 Do not store secrets in `.env` for production. In particular, `VECTIS_UNSEAL_KEY` is intentionally not listed in `env.dist`.
 
+## Contents
+
+[Local File Limits](#local-file-limits) · [Resolution Order](#resolution-order) · [HTTP](#http) · [CLI Client](#cli-client) · [Final App Delivery](#final-app-delivery) · [Authentication and Unsealing](#authentication-and-unsealing) · [API Key Permissions](#api-key-permissions) · [Storage](#storage) · [Logging](#logging) · [Observability](#observability) · [Hostnames](#hostnames) · [Crypto Profiles And Algorithm Settings](#crypto-profiles-and-algorithm-settings) · [Validation Message](#validation-message) · [Internal Constants](#internal-constants) · [Example `.env`](#example-env)
+
 ## Local File Limits
 
 Vectis reads local UTF-8 inputs with bounded readers before parsing them. The

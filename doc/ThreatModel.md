@@ -1,5 +1,9 @@
 # Vectis Threat Model
 
+## Contents
+
+[Scope And Status](#scope-and-status) · [Security Posture](#security-posture) · [System Overview](#system-overview) · [Assets](#assets) · [Trust Model](#trust-model) · [Threats Addressed](#threats-addressed) · [Explicit Assumptions](#explicit-assumptions) · [Out Of Scope / Non-Goals](#out-of-scope--non-goals) · [Residual Risks And Known Gaps](#residual-risks-and-known-gaps) · [Revision](#revision)
+
 ## Scope And Status
 
 Vectis is a cryptographic data protection service under active development.
@@ -118,6 +122,25 @@ In order of importance:
   openings; blind indexes intentionally expose deterministic membership; and
   share reconstruction trusts only authenticated, compatible shares meeting the
   configured threshold.
+
+```mermaid
+flowchart LR
+    OP["Operator, signs config.json with init keys"]
+    subgraph ext["Untrusted, authenticated callers"]
+        C["Clients: root and per-client API keys"]
+        P["Registered peers, signed remote_routes"]
+    end
+    subgraph inst["Trusted: local Vectis instance"]
+        A["Authenticate"] --> PM["Permission and lifecycle"]
+        PM --> KS["Keystore, derives per-profile keys"]
+    end
+    DB[("PostgreSQL or SQLite<br/>Encrypted: key material, properties, token payloads, subject seeds<br/>Visible: identifiers, envelope context, index digests")]
+    OP -->|signs policy| inst
+    C --> A
+    P -->|verify before decrypt| A
+    KS --> DB
+    inst --> APP["Final app, local re-encrypted delivery"]
+```
 
 ## Threats Addressed
 

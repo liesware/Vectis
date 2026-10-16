@@ -26,6 +26,10 @@ symmetric request processors, PostgreSQL owns durable concurrency and
 transaction semantics, and Kubernetes owns scheduling, probes, replacement,
 and Service routing.
 
+## Contents
+
+[How This Deployment Works](#how-this-deployment-works) · [Purpose And Boundaries](#purpose-and-boundaries) · [Prerequisites](#prerequisites) · [Create A Local Cluster With kind](#create-a-local-cluster-with-kind) · [Prepare The Management Host](#prepare-the-management-host) · [Create The Cluster Identity](#create-the-cluster-identity) · [Create Service TLS](#create-service-tls) · [Create The Initial Runtime Secret](#create-the-initial-runtime-secret) · [Configure The Helm Release](#configure-the-helm-release) · [Bootstrap Through The Service](#bootstrap-through-the-service) · [Create Application Policy](#create-application-policy) · [Roll Out Signed Policy V2](#roll-out-signed-policy-v2) · [Verify Both Pods Directly](#verify-both-pods-directly) · [Exercise Pod Replacement](#exercise-pod-replacement) · [Understand Runtime State](#understand-runtime-state) · [Rollback And Config History](#rollback-and-config-history) · [Logs And Audit](#logs-and-audit) · [Shut Down Or Continue](#shut-down-or-continue) · [What This Lab Proved](#what-this-lab-proved)
+
 ## How This Deployment Works
 
 Kubernetes runs and replaces the Vectis pods; Vectis protects the data. The two

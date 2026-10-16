@@ -1,5 +1,9 @@
 # CLI
 
+## Contents
+
+[Purpose](#purpose) · [Command Groups](#command-groups) · [Output](#output) · [SLH-DSA Artifact Signing](#slh-dsa-artifact-signing) · [Environment](#environment) · [Local Bootstrap Commands](#local-bootstrap-commands) · [Audit Verification](#audit-verification) · [HTTP Client Commands](#http-client-commands) · [Authentication](#authentication) · [Input Validation](#input-validation) · [Failure Model](#failure-model) · [What The CLI Does Not Do](#what-the-cli-does-not-do)
+
 ## Purpose
 
 Vectis is an API-first service. Applications integrate with Vectis through its

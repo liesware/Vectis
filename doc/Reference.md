@@ -1,5 +1,9 @@
 # How Vectis Works
 
+## Contents
+
+[Purpose](#purpose) · [What Vectis Does](#what-vectis-does) · [Core Model](#core-model) · [Repository Architecture](#repository-architecture) · [Runtime State](#runtime-state) · [Bootstrap Flow](#bootstrap-flow) · [Key Hierarchy](#key-hierarchy) · [Lifecycle Model](#lifecycle-model) · [Signed Unified Config](#signed-unified-config) · [Storage](#storage) · [HTTP API Shape](#http-api-shape) · [CLI Model](#cli-model) · [Security Boundaries And Invariants](#security-boundaries-and-invariants) · [How To Rebuild Vectis From Scratch](#how-to-rebuild-vectis-from-scratch) · [Reading Order For New Contributors](#reading-order-for-new-contributors) · [Glossary](#glossary)
+
 ## Purpose
 
 ## Time Attestation
@@ -113,6 +117,19 @@ src/
   core/   reusable infrastructure, validation, crypto, config, storage
   ops/    business operations and protocol flows
   io/     input/output adapters: HTTP and CLI
+```
+
+```mermaid
+flowchart TD
+    subgraph io["io: HTTP and CLI adapters"]
+        HTTP["io/http"]
+        CLI["io/cli"]
+    end
+    ops["ops: business operations and protocol flows"]
+    core["core: validation, crypto, config, storage"]
+    io --> ops
+    io --> core
+    ops --> core
 ```
 
 The rule of thumb is:
@@ -344,6 +361,19 @@ Allowed transitions:
 - `destroyed` -> no transitions
 
 Transitions to the same status are rejected.
+
+```mermaid
+stateDiagram-v2
+    [*] --> active
+    active --> disabled
+    disabled --> active
+    active --> retired
+    active --> compromised
+    active --> destroyed
+    retired --> [*]
+    compromised --> [*]
+    destroyed --> [*]
+```
 
 Lifecycle enforcement is centralized through helper functions in `ops/keys.rs`,
 such as:

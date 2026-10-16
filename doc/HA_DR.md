@@ -1,5 +1,9 @@
 # High Availability And Disaster Recovery
 
+## Contents
+
+[Purpose](#purpose) · [Critical Recovery Set](#critical-recovery-set) · [High Availability Model](#high-availability-model) · [Disaster Recovery Model](#disaster-recovery-model) · [Failure Scenarios](#failure-scenarios) · [RPO And RTO](#rpo-and-rto) · [Operational Checks](#operational-checks)
+
 ## Purpose
 
 This document explains how to keep Vectis available when something fails, and
@@ -27,13 +31,17 @@ A useful Vectis recovery set includes:
 - the unseal key or unseal provider state;
 - `config.json`;
 - `config_sign.json`;
-- PostgreSQL `opskeys`, `tokens`, and `indexes`;
+- PostgreSQL `opskeys`, `tokens`, `subjects`, and `indexes`;
 - API key distribution material;
 - TLS certificate and key material when running in `prod`;
 - audit logs if they are required for investigation or compliance.
 
 These items must match. Vectis stores operational keys encrypted. A database
 backup that cannot be decrypted is not useful recovery data.
+
+The `subjects.seed` envelopes are essential recovery material. Without them,
+subject-bound tokens and externally stored FPE or symmetric ciphertexts cannot
+be recovered, even with the matching operational keys and signed configuration.
 
 > A PostgreSQL backup without the matching init material is not a Vectis recovery backup.
 
@@ -80,6 +88,16 @@ should not receive normal traffic.
 The Helm chart follows this model: PostgreSQL only, `Deployment`, logs to
 stdout by default, no embedded PostgreSQL, and no automatic schema management.
 
+```mermaid
+flowchart TB
+    LB["Load balancer"] -->|only to ready nodes| N1["Vectis node 1<br/>local KeysDbState and config snapshot"]
+    LB -->|only to ready nodes| N2["Vectis node 2<br/>local KeysDbState and config snapshot"]
+    N1 --> PG[("Shared PostgreSQL<br/>own HA design")]
+    N2 --> PG
+    OP["Operator"] -->|matching init material and signed config| N1
+    OP --> N2
+```
+
 ## Disaster Recovery Model
 
 Recovery is not just restoring PostgreSQL. Recovery means restoring a coherent
@@ -87,7 +105,8 @@ set of data and cryptographic state.
 
 Recommended restore order:
 
-1. Restore PostgreSQL and verify the `opskeys`, `tokens`, and `indexes` tables exist.
+1. Restore PostgreSQL, including the data in `opskeys`, `tokens`, `subjects`, and
+   `indexes`.
 2. Restore `init.json` and the matching unseal method.
 3. Restore `config.json` and `config_sign.json`.
 4. Restore TLS material and runtime secrets if used.
@@ -95,6 +114,17 @@ Recommended restore order:
 6. Check `/healthz/ready`.
 7. Run explicit reloads if needed: `POST /keys/reload` and `POST /config/reload`.
 8. Validate keys, routes, permissions, and one complete message flow.
+
+```mermaid
+flowchart TD
+    S1["Restore PostgreSQL: opskeys, tokens, subjects, indexes"] --> S2["Restore init.json and matching unseal"]
+    S2 --> S3["Restore config.json and config_sign.json"]
+    S3 --> S4["Restore TLS and runtime secrets, if used"]
+    S4 --> S5["Start Vectis nodes"]
+    S5 --> S6["Check /healthz/ready"]
+    S6 --> S7["Explicit reloads: keys/reload and config/reload"]
+    S7 --> S8["Validate keys, routes, permissions, one message flow"]
+```
 
 ### One-Time Tokens After Restore
 

@@ -10,6 +10,10 @@ blocks for that backend. To keep the focus on recovery mechanics, Vectis runs
 in `dev` mode over loopback HTTP. A production recovery set must also include
 the TLS material and external operational controls used by that deployment.
 
+## Contents
+
+[How This Lab Works](#how-this-lab-works) · [What A Recovery Set Contains](#what-a-recovery-set-contains) · [Prerequisites](#prerequisites) · [Create Isolated Paths](#create-isolated-paths) · [Initialize The Node](#initialize-the-node) · [Seed State To Recover](#seed-state-to-recover) · [Back Up Storage](#back-up-storage) · [Back Up Identity And Policy](#back-up-identity-and-policy) · [Protect Runtime Secrets And Recovery Evidence](#protect-runtime-secrets-and-recovery-evidence) · [Finalize And Check The Recovery Set](#finalize-and-check-the-recovery-set) · [Simulate Loss](#simulate-loss) · [Restore Storage](#restore-storage) · [Restore Identity, Policy, And Runtime Secrets](#restore-identity-policy-and-runtime-secrets) · [Verify Recovery](#verify-recovery) · [Prove A Mismatched Identity Fails Closed](#prove-a-mismatched-identity-fails-closed) · [Recovery Boundaries](#recovery-boundaries) · [What You Learned](#what-you-learned) · [Cleanup](#cleanup)
+
 ## How This Lab Works
 
 Vectis storage contains protected records:

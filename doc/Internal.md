@@ -12,6 +12,10 @@ broken when changing Vectis.
 For system design, read [doc/Reference.md](Reference.md). For HTTP contracts,
 read [doc/API.md](API.md). For testing, read [doc/Test.md](Test.md).
 
+## Contents
+
+[Purpose](#purpose) · [Layer Map](#layer-map) · [Time Attestation](#time-attestation) · [Startup Flow](#startup-flow) · [HttpState](#httpstate) · [HTTP Request Flow](#http-request-flow) · [Key Flow](#key-flow) · [Message Flow](#message-flow) · [Signed Config Flow](#signed-config-flow) · [Zeroizing and Memory](#zeroizing-and-memory) · [Logging, Audit, and Metrics](#logging-audit-and-metrics) · [Error Boundary](#error-boundary) · [Internal Invariants](#internal-invariants)
+
 ## Layer Map
 
 ## Time Attestation
@@ -107,6 +111,23 @@ the same logical storage contract.
 11. Build `HttpState`.
 12. Start the HTTP server.
 
+```mermaid
+flowchart TD
+    ENV["Load env and .env"] --> CFG["Build and validate AppConfig"]
+    CFG --> INITF["Validate init key file path and permissions"]
+    INITF --> UNSEAL["Resolve unseal key: env, file, or prompt"]
+    UNSEAL --> DEC["Decrypt and validate init key material"]
+    DEC --> IK["Derive internal keys with INTERNAL_KEYS_HKDF"]
+    IK --> OBS["Init logging, audit, metrics"]
+    OBS --> STORE["Init storage backend"]
+    STORE --> KEYS["Load operational keys into memory"]
+    KEYS --> SIGN["Load signed config state"]
+    SIGN --> STATE["Build HttpState"]
+    STATE --> MODE{"VECTIS_MODE"}
+    MODE -->|dev| HTTP["Start HTTP server"]
+    MODE -->|prod| HTTPS["Start HTTPS server, TLS cert and key"]
+```
+
 `VECTIS_MODE=dev` starts an HTTP server. `VECTIS_MODE=prod` starts HTTPS and
 requires TLS certificate and key paths.
 
@@ -169,6 +190,28 @@ The normal protected endpoint flow is:
 10. Middleware records HTTP metrics.
 11. Response includes `X-Request-Id`.
 
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant M as Router and middleware
+    participant H as Handler
+    participant O as ops
+    participant K as core, crypto, storage
+    C->>M: Request with X-API-Key
+    M->>M: Assign request_id, open tracing span
+    M->>H: Dispatch
+    H->>H: Authorize X-API-Key
+    H->>H: Check required permission
+    H->>H: Validate path, query, body
+    H->>O: Delegate business work
+    O->>K: Use primitives, storage, crypto
+    K-->>O: Result
+    O-->>H: Result
+    H-->>M: Map public success or error
+    M->>M: Record HTTP metrics and audit
+    M-->>C: Response with X-Request-Id
+```
+
 Handlers should stay thin. They should deal with transport concerns,
 authentication, permission checks, state access, and error mapping. Protocol and
 business logic belongs in `ops`.
@@ -192,6 +235,30 @@ The flow is:
 7. Store both encrypted blobs in `opskeys`.
 8. Load the created key into local `KeysDbState`.
 9. Return the new `kid`.
+
+```mermaid
+flowchart TD
+    subgraph Create["POST /keys"]
+        A1["Authenticate, require admin"] --> A2["Validate request"]
+        A2 --> A3["Resolve crypto profile and policy"]
+        A3 --> A4["Generate key material"]
+        A4 --> A5["Encrypt keys and properties, bound by AAD"]
+        A5 --> A6["Store blobs in opskeys"]
+        A6 --> A7["Load into KeysDbState"]
+        A7 --> A8["Return kid"]
+    end
+    subgraph Load["Missing-key lazy-load"]
+        B1["Request references missing kid"] --> B2["Single-flight coalesces concurrent loads for that kid"]
+        B2 --> B3["Read and decrypt row from storage"]
+        B3 --> B4["Validate kid, payload, properties binding"]
+        B4 --> B5["Arc of LoadedOpsKey in KeysDbState"]
+    end
+    subgraph BulkLoad["Startup / explicit key reload"]
+        C1["Startup or POST /keys/reload"] --> C2["Read key rows; bounded blocking-pool decryption"]
+        C2 --> C3["Validate entries and report skipped keys"]
+        C3 --> C4["Install node-local KeysDbState"]
+    end
+```
 
 Storage has two encrypted fields:
 
@@ -230,6 +297,25 @@ The flow is:
 11. Sign the envelope with local EdDSA and ML-DSA keys.
 12. Send the envelope to the remote `/message` endpoint.
 
+```mermaid
+sequenceDiagram
+    participant A as Caller
+    participant S as Sender node
+    participant Cfg as Signed config
+    participant R as Remote message endpoint
+    A->>S: POST /message/{sender_kid}
+    S->>S: Authenticate, require message grant
+    S->>S: Validate and load sender key
+    S->>Cfg: Resolve remote route and peer public keys
+    Cfg-->>S: Active route, sender allowed, keys
+    S->>S: Build canonical payload metadata
+    S->>S: Hybrid KEM XECDH and ML-KEM, derive message key
+    S->>S: AEAD encrypt plaintext
+    S->>S: Sign envelope EdDSA and ML-DSA
+    S->>R: Send signed envelope
+    R-->>S: Accepted
+```
+
 The caller does not provide a remote host. Remote addresses and peer public keys
 come from signed config.
 
@@ -241,14 +327,31 @@ The receiver flow is:
 
 1. Parse the envelope.
 2. Load the recipient key.
-3. Resolve sender public keys from signed `remote_routes`.
-4. Verify signatures before decrypting.
-5. Enforce lifecycle for decrypt/verify use.
+3. Enforce lifecycle for decrypt/verify use.
+4. Resolve sender public keys from signed `remote_routes`.
+5. Verify signatures before decrypting.
 6. Decapsulate ML-KEM and compute XECDH shared secret.
 7. Derive the message key.
 8. Decrypt AEAD ciphertext.
 9. Re-encrypt plaintext with the local recipient key's symmetric algorithm.
 10. Deliver the encrypted internal message to the configured final app route.
+
+```mermaid
+sequenceDiagram
+    participant Snd as Sender node
+    participant V as Receiver node
+    participant Cfg as Signed config
+    participant App as Final app route
+    Snd->>V: POST /message with envelope
+    V->>V: Parse envelope, load recipient key
+    V->>V: Enforce decrypt or verify lifecycle
+    V->>Cfg: Resolve sender public keys
+    V->>V: Verify signatures before decrypt
+    V->>V: ML-KEM decapsulate and XECDH, derive message key
+    V->>V: AEAD decrypt ciphertext
+    V->>V: Re-encrypt with local symmetric key
+    V->>App: Deliver re-encrypted payload
+```
 
 Verify-before-decrypt is mandatory. A message must not be decrypted until the
 sender identity and signatures have been validated.

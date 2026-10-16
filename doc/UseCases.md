@@ -26,6 +26,10 @@ control.
 For the exact request/response schema of every endpoint, see
 [doc/API.md](API.md); for the CLI, see [doc/CLI.md](CLI.md).
 
+## Contents
+
+[How to choose](#how-to-choose) · [FPE — Format-Preserving Encryption](#fpe--format-preserving-encryption) · [Tokenization — Reversible Random Tokens](#tokenization--reversible-random-tokens) · [MAC — Keyed Integrity and Authenticity](#mac--keyed-integrity-and-authenticity) · [Blind Index — Equality Search Over Protected Data](#blind-index--equality-search-over-protected-data) · [Commitments — Commit Now, Reveal Later](#commitments--commit-now-reveal-later) · [Masking — Display-Only Redaction](#masking--display-only-redaction) · [Protected Messages — Cross-Service / Cross-Org Exchange](#protected-messages--cross-service--cross-org-exchange) · [Symmetric Encrypt/Decrypt — Local Data at Rest](#symmetric-encryptdecrypt--local-data-at-rest) · [Signatures — Authenticity and Timestamp](#signatures--authenticity-and-timestamp) · [Combining features: protecting a credit-card PAN end-to-end](#combining-features-protecting-a-credit-card-pan-end-to-end)
+
 ## How to choose
 
 | If your problem is… | Use |
@@ -40,6 +44,23 @@ For the exact request/response schema of every endpoint, see
 | Move a record to **another service or organization** | **Protected Messages** |
 | Protect a payload **locally at rest** | **Symmetric encrypt/decrypt** |
 | Prove a document's **authenticity and time** | **Signatures** |
+
+```mermaid
+flowchart TD
+    START["What do you need?"] --> R{"Recover the original value later?"}
+    R -->|"No, just detect tampering"| MAC["MAC"]
+    R -->|"No, search equality only"| BIDX["Blind Index"]
+    R -->|"No, show only part on screen"| MASK["Masking"]
+    R -->|"No, hide now and reveal later"| CMT["Commitments"]
+    R -->|"Yes"| FMT{"Keep the same format and length?"}
+    FMT -->|"Yes"| FPE["FPE"]
+    FMT -->|"No, random surrogate"| TOK["Tokenization"]
+    START --> MOVE{"Moving data between services or orgs?"}
+    MOVE -->|"Yes"| MSG["Protected Messages"]
+    MOVE -->|"Local payload at rest"| SYM["Symmetric encrypt/decrypt"]
+    START --> SPLIT{"Split a secret across holders?"}
+    SPLIT -->|"Yes, threshold"| SSS["Secret Sharing"]
+```
 
 All local data-protection operations (FPE, Tokenization, MAC, Blind Index,
 Commitments, Secret Sharing, Masking) are **profile-driven**: profiles live
