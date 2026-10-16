@@ -16,7 +16,7 @@ struct KeyLoadFlight {
 
 struct KeyLoadLease {
     kid: String,
-    flight: Arc<KeyLoadFlight>,
+    flight: Option<Arc<KeyLoadFlight>>,
     owner: Weak<KeyLoadSingleflight>,
 }
 
@@ -36,6 +36,8 @@ impl KeyLoadSingleflight {
         let mut leader_error: Option<DynError> = None;
         let shared = lease
             .flight
+            .as_ref()
+            .expect("active lease must own its flight")
             .result
             .get_or_init(|| async {
                 match loader().await {
@@ -68,7 +70,7 @@ impl KeyLoadSingleflight {
 
         KeyLoadLease {
             kid: kid.to_string(),
-            flight,
+            flight: Some(flight),
             owner: Arc::downgrade(self),
         }
     }
@@ -103,16 +105,22 @@ impl KeyLoadFlight {
 
 impl Drop for KeyLoadLease {
     fn drop(&mut self) {
+        let Some(flight) = self.flight.take() else {
+            return;
+        };
         let Some(owner) = self.owner.upgrade() else {
             return;
         };
         let mut flights = owner.lock_flights();
-        let own_flight = Arc::downgrade(&self.flight);
-        let is_current = flights
-            .get(&self.kid)
-            .is_some_and(|current| current.ptr_eq(&own_flight));
+        let own_flight = Arc::downgrade(&flight);
 
-        if is_current && Arc::strong_count(&self.flight) == 1 {
+        // Release under the lock so the last participant always removes its entry.
+        drop(flight);
+        let remove = flights
+            .get(&self.kid)
+            .is_some_and(|current| current.ptr_eq(&own_flight) && current.strong_count() == 0);
+
+        if remove {
             flights.remove(&self.kid);
         }
     }
@@ -324,6 +332,48 @@ mod tests {
         let _ = leader.await;
 
         assert_eq!(singleflight.flight_entries(), 0);
+    }
+
+    #[test]
+    fn concurrent_last_leases_remove_flight() {
+        let singleflight = Arc::new(KeyLoadSingleflight::new());
+        let first = singleflight.acquire("kid");
+        let second = singleflight.acquire("kid");
+        let flight = singleflight.lock_flights().get("kid").unwrap().clone();
+        assert_eq!(flight.strong_count(), 2);
+        let release = Arc::new(std::sync::Barrier::new(3));
+        let tasks = [first, second].map(|lease| {
+            let release = Arc::clone(&release);
+            std::thread::spawn(move || {
+                release.wait();
+                drop(lease);
+            })
+        });
+
+        release.wait();
+        for task in tasks {
+            task.join().expect("participant must release its lease");
+        }
+
+        assert_eq!(flight.strong_count(), 0);
+        assert!(flight.upgrade().is_none());
+        assert_eq!(singleflight.flight_entries(), 0);
+    }
+
+    #[test]
+    fn lease_releases_flight_after_owner_is_dropped() {
+        let singleflight = Arc::new(KeyLoadSingleflight::new());
+        let lease = singleflight.acquire("kid");
+        let flight = singleflight.lock_flights().get("kid").unwrap().clone();
+        let owner = Arc::downgrade(&singleflight);
+
+        drop(singleflight);
+        assert!(owner.upgrade().is_none());
+        assert_eq!(flight.strong_count(), 1);
+        drop(lease);
+
+        assert_eq!(flight.strong_count(), 0);
+        assert!(flight.upgrade().is_none());
     }
 
     #[test]
