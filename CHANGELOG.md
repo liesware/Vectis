@@ -36,6 +36,10 @@ Changes staged for v0.9.0, the first official release.
   `token-delete` permission and allowed in any key lifecycle state.
 
 ### Changed
+- Updated core and fuzz dependencies, including Botan 0.14, SQLx 0.9,
+  axum-server 0.8 and reqwest 0.13, with corresponding API adaptations.
+  Outbound HTTPS now uses the system certificate trust store while retaining
+  the explicit ring provider. AES remains on 0.8 for FF1 compatibility.
 - Replaced the generated startup banner with static ASCII text, removing
   `artbox` and its unused transitive dependencies, including `figlet-rs` and `zip`.
 - Breaking: local encryption moves to `POST /symmetric/encrypt/{kid}` and

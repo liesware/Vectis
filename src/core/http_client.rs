@@ -76,7 +76,7 @@ fn build_runtime_http_client(
     crate::core::tls::ensure_crypto_provider();
     Ok(reqwest::Client::builder()
         .timeout(timeout)
-        .danger_accept_invalid_certs(tls_skip_verify)
+        .tls_danger_accept_invalid_certs(tls_skip_verify)
         .build()?)
 }
 
@@ -125,7 +125,7 @@ mod tests {
     use tokio::time::timeout;
 
     async fn start_test_server() -> (
-        axum_server::Handle,
+        axum_server::Handle<SocketAddr>,
         JoinHandle<std::io::Result<()>>,
         SocketAddr,
     ) {
@@ -138,13 +138,16 @@ mod tests {
         );
         let listener =
             std::net::TcpListener::bind("127.0.0.1:0").expect("test server listener must bind");
+        listener
+            .set_nonblocking(true)
+            .expect("test server listener must be nonblocking");
         let addr = listener
             .local_addr()
             .expect("test server listener must report its address");
         let handle = axum_server::Handle::new();
         let server_handle = handle.clone();
         let server_task = tokio::spawn(async move {
-            axum_server::from_tcp(listener)
+            axum_server::from_tcp(listener)?
                 .handle(server_handle)
                 .serve(app.into_make_service())
                 .await
@@ -154,7 +157,7 @@ mod tests {
     }
 
     async fn stop_test_server(
-        handle: axum_server::Handle,
+        handle: axum_server::Handle<SocketAddr>,
         server_task: JoinHandle<std::io::Result<()>>,
     ) {
         handle.shutdown();

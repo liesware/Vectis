@@ -2,8 +2,8 @@ use super::TokenBatchReadBudget;
 use crate::core::storage::{IndexRow, OpsKeyRow, SubjectRow, TokenBatchConsumeError, TokenRow};
 use crate::error::DynError;
 use futures_util::TryStreamExt;
-use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
+use sqlx::{QueryBuilder, Row, Sqlite};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tracing::info;
@@ -221,17 +221,17 @@ impl SqliteStorage {
         if hashids.is_empty() {
             return Ok(HashMap::new());
         }
-        let placeholders = std::iter::repeat_n("?", hashids.len())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let sql = format!(
-            "SELECT hashid, data, subject FROM tokens WHERE kid = ? AND hashid IN ({placeholders})"
-        );
-        let mut query = sqlx::query(&sql).bind(kid);
-        for hashid in hashids {
-            query = query.bind(hashid);
+        let mut query =
+            QueryBuilder::<Sqlite>::new("SELECT hashid, data, subject FROM tokens WHERE kid = ");
+        query.push_bind(kid).push(" AND hashid IN (");
+        {
+            let mut values = query.separated(", ");
+            for hashid in hashids {
+                values.push_bind(hashid);
+            }
         }
-        let mut rows = query.fetch(&self.pool);
+        query.push(")");
+        let mut rows = query.build().fetch(&self.pool);
         let mut budget = TokenBatchReadBudget::new(hashids, max_envelope_bytes);
         let mut found = HashMap::with_capacity(hashids.len());
         while let Some(row) = rows.try_next().await? {
@@ -436,13 +436,11 @@ impl SqliteStorage {
         if records.is_empty() {
             return Ok(());
         }
-        let placeholders = vec!["(?, ?)"; records.len()].join(", ");
-        let sql = format!("INSERT OR IGNORE INTO indexes (kid, digest) VALUES {placeholders}");
-        let mut query = sqlx::query(&sql);
-        for record in records {
-            query = query.bind(&record.kid).bind(&record.digest);
-        }
-        query.execute(&self.pool).await?;
+        let mut query = QueryBuilder::<Sqlite>::new("INSERT OR IGNORE INTO indexes (kid, digest) ");
+        query.push_values(records, |mut values, record| {
+            values.push_bind(&record.kid).push_bind(&record.digest);
+        });
+        query.build().execute(&self.pool).await?;
         info!(items_count = records.len(), "inserted index batch");
 
         Ok(())
@@ -473,14 +471,16 @@ impl SqliteStorage {
         if digests.is_empty() {
             return Ok(HashSet::new());
         }
-        let placeholders = vec!["?"; digests.len()].join(", ");
-        let sql =
-            format!("SELECT digest FROM indexes WHERE kid = ? AND digest IN ({placeholders})");
-        let mut query = sqlx::query(&sql).bind(kid);
-        for digest in digests {
-            query = query.bind(digest);
+        let mut query = QueryBuilder::<Sqlite>::new("SELECT digest FROM indexes WHERE kid = ");
+        query.push_bind(kid).push(" AND digest IN (");
+        {
+            let mut values = query.separated(", ");
+            for digest in digests {
+                values.push_bind(digest);
+            }
         }
-        let rows = query.fetch_all(&self.pool).await?;
+        query.push(")");
+        let rows = query.build().fetch_all(&self.pool).await?;
 
         Ok(rows.into_iter().map(|row| row.get("digest")).collect())
     }
@@ -1516,6 +1516,53 @@ mod tests {
             .await
             .expect("empty membership check must succeed");
         assert!(empty.is_empty());
+
+        cleanup(path).await;
+    }
+
+    #[tokio::test]
+    async fn batch_queries_bind_sql_like_values() {
+        let (storage, path) = test_storage("batch-bound-values").await;
+        let kid = "kid' OR 1=1 --";
+        let value = "value'); DROP TABLE indexes; --";
+        let missing = "missing') OR 1=1 --";
+        let hashid = "a".repeat(64);
+        let other_hashid = "b".repeat(64);
+        let data = "AAAAAAAAAAAAAAAAAAAAAA==.AAAAAAAAAAAAAAAA.AA==";
+        storage
+            .save_token(kid, &hashid, data)
+            .await
+            .expect("SQL-like token identifiers must remain bound data");
+        storage
+            .save_token("other-kid", &other_hashid, data)
+            .await
+            .expect("other KID token must save");
+        let found = storage
+            .get_tokens_batch(kid, &[hashid.clone(), other_hashid], 1024)
+            .await
+            .expect("token batch query must bind its values");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[&hashid].data, data);
+
+        let records = [
+            IndexRow {
+                kid: kid.to_owned(),
+                digest: value.to_owned(),
+            },
+            IndexRow {
+                kid: "other-kid".to_owned(),
+                digest: missing.to_owned(),
+            },
+        ];
+        storage
+            .save_indexes_batch(&records)
+            .await
+            .expect("index batch must bind its values");
+        let matched = storage
+            .indexes_matching(kid, &[value.to_owned(), missing.to_owned()])
+            .await
+            .expect("index membership query must bind its values");
+        assert_eq!(matched, HashSet::from([value.to_owned()]));
 
         cleanup(path).await;
     }

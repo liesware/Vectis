@@ -238,13 +238,25 @@ async fn sqlite_subject_contract_and_legacy_migration() {
     )
     .await
     .unwrap();
-    let schema = include_str!("../../db/sqlite_schema.sql");
-    let legacy = schema
-        .split("CREATE TABLE IF NOT EXISTS subjects")
-        .next()
-        .unwrap()
-        .replace("    subject VARCHAR(128),\n", "");
-    sqlx::raw_sql(&legacy).execute(&pool).await.unwrap();
+    let legacy = "
+        CREATE TABLE opskeys (
+            kid VARCHAR(128) PRIMARY KEY,
+            keys VARCHAR(10240) NOT NULL,
+            properties VARCHAR(10240) NOT NULL
+        );
+        CREATE TABLE tokens (
+            kid VARCHAR(128) NOT NULL,
+            hashid VARCHAR(128) NOT NULL,
+            data VARCHAR(10240) NOT NULL,
+            PRIMARY KEY (kid, hashid)
+        );
+        CREATE TABLE indexes (
+            kid VARCHAR(128) NOT NULL,
+            digest VARCHAR(128) NOT NULL,
+            PRIMARY KEY (kid, digest)
+        );
+    ";
+    sqlx::raw_sql(legacy).execute(&pool).await.unwrap();
     let kid = "a".repeat(64);
     let hashid = "f".repeat(64);
     sqlx::query("INSERT INTO tokens (kid, hashid, data) VALUES (?, ?, ?)")

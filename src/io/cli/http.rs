@@ -1040,7 +1040,7 @@ impl CliHttpClient {
         crate::core::tls::ensure_crypto_provider();
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(timeout_seconds))
-            .danger_accept_invalid_certs(tls_skip_verify)
+            .tls_danger_accept_invalid_certs(tls_skip_verify)
             .build()?;
 
         Ok(Self {
