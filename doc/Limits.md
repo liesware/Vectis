@@ -2,6 +2,9 @@
 
 **Last verified:** 2026-09-30 at commit `0fdd99ce7be8`.
 
+**Targeted update:** 2026-10-17, aligning deterministic decode and symmetric
+plaintext bounds with the current source. Older source-line anchors may move.
+
 This document is the consolidated inventory of externally observable and
 operational limits in Vectis. The code is the source of truth. Source links and
 line numbers are navigation aids; the linked symbol or validator is the stable
@@ -56,7 +59,7 @@ byte. KiB and MiB are binary multiples.
 
 | Aspect | Limit | Unit | Enforcement |
 |---|---:|---|---|
-| Profile plaintext bounds | `1 <= min <= max <= 16384` | Unicode scalar values | `.chars().count()` before encrypt and after authenticated decrypt |
+| Profile plaintext bounds | `1 <= min <= max <= 16384` | Unicode scalar values | `.chars().count()` on encode; decode does not reapply the current profile min/max to authenticated historical plaintext |
 | Signed context | 128 | Unicode scalar values | Existing MAC label validation |
 | Subject policy | `none` or `stored` | enum | Signed profile prohibits or requires subject, respectively; no fallback |
 | Token | 131072 | ASCII characters | Complete two-segment token bounded before decoding |
@@ -67,6 +70,10 @@ The token bound accommodates four-byte Unicode plaintexts and encoded context.
 No storage envelope budget applies; ciphertexts are retained outside Vectis.
 There is no additional response-size or exact heap bound. See
 [implementation](../src/core/deterministic_tokenization.rs).
+Lowering max or raising min restricts future encodes, not recovery of previously
+issued tokens whose key/context remains compatible. Decode still validates the
+token cap, canonical encoding/context, SIV authentication and UTF-8; a ciphertext
+containing only the 16-byte SIV tag is rejected as empty plaintext.
 
 ## Common Fields
 
@@ -227,9 +234,11 @@ commitments to add limits:
 
 - `token_len` has a minimum of 32 bytes but no explicit maximum.
 - HTTP responses have no global size limit.
-- Protected-message, internal-message, MAC, and blind-index plaintext have no
+- Protected-message, MAC, and blind-index plaintext have no
   capability-specific maximum; their HTTP use is enclosed by the 2 MiB request
   limit.
+- Local symmetric plaintext has the explicit `1,047,552` UTF-8 byte encode
+  limit documented above, including subject-bound operations.
 - Operational keys, tokens, indexes, routes, permissions, and profiles have no
   dedicated maximum element count.
 - `keys reload` has no row or time budget and processes the stored operational

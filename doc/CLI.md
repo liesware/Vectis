@@ -34,7 +34,7 @@ interfaces, and stay easy to inspect.
 - `vectis slh-dsa create|sign|verify`
 - `vectis config init|validate|sign|list`
 - `vectis config routes|remote-routes|permissions`
-- `vectis config fpe|token|mac|masking|commitment|sharing|time`
+- `vectis config fpe|token|token-deterministic|mac|masking|commitment|sharing|time`
 
 Config edit commands modify the local signed-config source. They do not apply
 changes to a running node until the config is signed and reloaded. Remote-route
@@ -63,6 +63,8 @@ reload` mutate keys, key lifecycle, or the loaded config.
 - `vectis symmetric`
 - `vectis fpe`
 - `vectis token`
+- `vectis token deterministic`
+- `vectis subject`
 - `vectis mac`
 - `vectis index`
 - `vectis mask`
@@ -75,8 +77,9 @@ reload` mutate keys, key lifecycle, or the loaded config.
 - `vectis message`
 - `vectis time`
 
-The CLI exposes representative single-operation workflows. Batch data
-workflows are intended for direct HTTP API integration.
+The CLI exposes single-operation workflows and random/deterministic token
+encode/decode batches. FPE, MAC, index, masking and commitment batch operations
+remain HTTP API-only; there are no symmetric or sharing batch endpoints.
 
 Time attestation is a protected runtime command:
 
@@ -255,7 +258,11 @@ It writes:
   "remote_routes": [],
   "permissions": [],
   "fpe_profiles": [],
-  "tokenization_profiles": []
+  "tokenization_profiles": [],
+  "mac_profiles": [],
+  "masking_profiles": [],
+  "commitment_profiles": [],
+  "sharing_profiles": []
 }
 ```
 
@@ -268,13 +275,36 @@ Example:
 vectis config init
 ```
 
+The skeleton omits `deterministic_tokenization_profiles` and `time_attestation`.
+Add deterministic profiles with their local editor; time attestation uses
+compiled defaults unless signed overrides are configured.
+
+### `vectis config validate`
+
+Validates `VECTIS_CONFIG_PATH` against the local node. It opens encrypted init
+material using the normal unseal resolution, connects to configured SQLite or
+PostgreSQL storage, loads operational keys and checks profile derivations and
+KID bindings. It does not require a running HTTP server or make an HTTP call.
+
+```sh
+vectis config validate
+vectis config validate --output json
+```
+
+Unavailable storage, invalid init/unseal material, invalid profile fields or
+references to unavailable operational keys cause a nonzero exit code. Validation
+does not write a signature or reload the service. This is different from the
+structural validation using placeholder keys performed by local editors before
+writing an edit.
+
 ### `vectis config sign`
 
 Signs `VECTIS_CONFIG_PATH` using the init keys and writes
 `VECTIS_CONFIG_SIGN_PATH`.
 
-The config file must already exist and must be valid JSON. The CLI does not
-render YAML to JSON here.
+The config file must already exist. Sign performs the same local-node validation
+as `config validate`, requiring init/unseal material, storage and compatible
+operational keys, before signing. The CLI does not render YAML to JSON here.
 
 Example:
 
@@ -418,8 +448,9 @@ overlap. Total length includes separators, but only variable characters count
 toward the minimum million-value domain.
 For num with minimum six and preserved `-`, `001-234` is accepted, while
 `001-23` meets total length but fails the domain check: only five symbols are
-encrypted. This validation is per value. Inputs and formatting are not normalized
-or authenticated. Use a new profile to adopt another format; requests still
+encrypted. This validation is per value. Inputs and formatting are not normalized.
+They are authenticated only when the signed profile enables `authenticated: true`;
+legacy profiles do not authenticate them. Use a new profile to adopt another format; requests still
 select only the profile. Invalid edits leave configuration unchanged.
 
 `fpe_version` defaults to `fpe-ff1-2025`; that is the only accepted version in
@@ -454,6 +485,46 @@ the token. This policy is evaluated from the currently loaded signed profile.
 The CLI
 validates field shape but does not check whether the KID is loaded in a running
 server. That check happens when Vectis loads the signed config.
+
+### `vectis config token-deterministic`
+
+Edits `deterministic_tokenization_profiles` in `VECTIS_CONFIG_PATH`, using the
+unique profile `name`. These profiles select fixed AES-256-SIV without storing
+tokens. The signed `context` uses ordered `key=value` labels, with a maximum of
+128 Unicode characters. Plaintext bounds count Unicode scalar values and must
+satisfy `1 <= min <= max <= 16384`.
+
+Configure separate profiles for operations without a subject and with a subject:
+
+```sh
+vectis config token-deterministic list
+vectis config token-deterministic add --name customer-email-v1 --kid <kid> --context 'tenant=acme;field=email;version=1' --min-plaintext-len 1 --max-plaintext-len 16384
+vectis config token-deterministic add --name customer-email-subject-v1 --kid <kid> --context 'tenant=acme;field=email;version=1' --min-plaintext-len 1 --max-plaintext-len 16384 --subject-mode stored
+vectis config token-deterministic get customer-email-subject-v1
+vectis config token-deterministic update customer-email-subject-v1 --max-plaintext-len 8192
+vectis config sign
+vectis config reload
+```
+
+Add requires `--name`, `--kid`, `--context`, `--min-plaintext-len` and
+`--max-plaintext-len`. `--subject-mode none|stored` is optional: `none` is the
+default and omitted from config, while `stored` requires an existing subject
+seed for each runtime operation. Stored refers to the seed, not token storage.
+None profiles prohibit subject; requests cannot override this policy.
+
+Update preserves omitted fields. An explicit `--subject-mode none` removes
+the field; `--subject-mode stored` writes it explicitly. Invalid modes, duplicate
+flags and invalid edits fail before writing. The editor checks field constraints;
+sign/validate also check the local node and real operational keys.
+
+`vectis config token-deterministic delete <name>` removes the profile, not
+individual tokens. Retain profiles while their tokens must remain recoverable.
+Changing mode does not change HKDF or AAD, but a profile cannot accept both
+modalities simultaneously. Existing profiles without the field remain `none`;
+previously issued subject tokens require marking their same profile `stored`,
+signing and reloading. No automatic conversion is performed.
+
+See [runtime examples](#vectis-token-deterministic) for single/batch requests.
 
 ### `vectis config mac`
 
@@ -759,34 +830,167 @@ the response.
 
 ### `vectis token deterministic`
 
+Uses AES-256-SIV for deterministic authenticated tokens without per-token
+storage. Configure the two signed profiles shown in
+[the local editor section](#vectis-config-token-deterministic), sign and reload
+before these examples. `customer-email-v1` uses `none`;
+`customer-email-subject-v1` uses `stored`.
+
+Encode requires `token-deterministic-encode` and an active KID. Decode requires
+`token-deterministic-decode` and permits active or retired keys. Random token
+grants do not grant these operations. Subjects must already exist under the same
+KID; see [subject commands](#vectis-subject). Using a seed does not require token
+or subject-create permissions in addition to the deterministic operation grant.
+
+All commands accept exactly one of `--json` or `--file`, and support
+`--output json|yaml`. Replace `<kid>`, `<subject>` and token placeholders with
+actual values. The identifiers and token fragments below are illustrative,
+not executable cryptographic vectors.
+
+#### Single Without Subject
+
 ```sh
-vectis config token-deterministic add --name customer-email-v1 --kid <kid> --context 'tenant=acme;field=email;version=1' --min-plaintext-len 1 --max-plaintext-len 16384
-vectis config token-deterministic add --name customer-email-subject-v1 --kid <kid> --context 'tenant=acme;field=email;version=1' --min-plaintext-len 1 --max-plaintext-len 16384 --subject-mode stored
-vectis config sign
-vectis config reload
-vectis token deterministic encode <kid> --json '{"ref":"e1","profile":"customer-email-v1","plaintext":"synthetic data"}'
-vectis token deterministic encode <kid> --subject <subject> --file encode.json
-vectis token deterministic decode --file decode.json
-vectis token deterministic encode-batch <kid> --subject <subject> --file batch.json
-vectis token deterministic decode-batch --file decode-batch.json
+vectis token deterministic encode <kid> --json '{"ref":"e1","profile":"customer-email-v1","plaintext":"synthetic data"}' --output json
 ```
 
-All runtime commands accept exactly one of `--json` or `--file` and
-`--output json|yaml`. Decode receives KID, profile, token and profile-controlled subject in
-JSON. Batch uses common KID/profile/subject and ordered items with ref/token;
-encode batch uses common profile and items with ref/plaintext. No metadata/delete.
+Successful output:
 
-The local `config token-deterministic` editor supports `list`, `get <name>`,
-`add`, `update <name>` and `delete <name>`. Add requires name, KID, context and
-both plaintext bounds; update preserves omitted fields and validates before
-writing. Sign/reload remains explicit. Delete removes a profile, not tokens.
-`--subject-mode none|stored` is accepted by add/update. Add defaults to `none`
-and omits the field; update without the flag preserves it, while explicit `none`
-removes it. Stored profiles require `--subject` on encode and a subject in decode
-JSON, including batch. None profiles prohibit both. The subject examples above
-use `customer-email-subject-v1` inside their input files; unscoped examples use
-`customer-email-v1`. Runtime CLI selects routes; the server enforces signed policy.
-Bounds count Unicode characters. See [API](API.md#deterministic-tokenization).
+```json
+{
+  "ref": "e1",
+  "kid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "profile": "customer-email-v1",
+  "token": "<context-none>.<siv-one>"
+}
+```
+
+Decode sends KID in JSON, not as a positional argument. Use the complete token
+returned by encode:
+
+```sh
+vectis token deterministic decode --json '{"ref":"d1","kid":"<kid>","profile":"customer-email-v1","token":"<token-returned-by-encode>"}' --output json
+```
+
+The output contains `ref`, `kid`, `profile` and `plaintext: "synthetic data"`.
+Neither request nor response contains subject for a `none` profile.
+
+#### Single With Subject
+
+`encode.json`:
+
+```json
+{
+  "ref": "subject-e1",
+  "profile": "customer-email-subject-v1",
+  "plaintext": "synthetic data"
+}
+```
+
+```sh
+vectis token deterministic encode <kid> --subject <subject> --file encode.json --output json
+```
+
+Successful output:
+
+```json
+{
+  "ref": "subject-e1",
+  "kid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "profile": "customer-email-subject-v1",
+  "subject": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "token": "<context-subject>.<siv-one>"
+}
+```
+
+`decode.json`, using that returned token and subject:
+
+```json
+{
+  "ref": "subject-d1",
+  "kid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "profile": "customer-email-subject-v1",
+  "subject": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "token": "<context-subject>.<siv-one>"
+}
+```
+
+```sh
+vectis token deterministic decode --file decode.json --output json
+```
+
+Decode returns `ref`, `kid`, `profile`, `subject` and the exact plaintext.
+There is no decode `--subject` flag: subject belongs in JSON.
+
+#### Batch With Subject
+
+`batch.json`:
+
+```json
+{
+  "profile": "customer-email-subject-v1",
+  "items": [
+    {"ref":"b1","plaintext":"synthetic data"},
+    {"ref":"b2","plaintext":"second value"}
+  ]
+}
+```
+
+```sh
+vectis token deterministic encode-batch <kid> --subject <subject> --file batch.json --output json
+```
+
+Successful output:
+
+```json
+{
+  "kid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "profile": "customer-email-subject-v1",
+  "subject": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "items": [
+    {"ref":"b1","token":"<context-subject>.<siv-one>"},
+    {"ref":"b2","token":"<context-subject>.<siv-two>"}
+  ]
+}
+```
+
+`decode-batch.json`, using the complete tokens from that response:
+
+```json
+{
+  "kid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "profile": "customer-email-subject-v1",
+  "subject": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "items": [
+    {"ref":"b1","token":"<context-subject>.<siv-one>"},
+    {"ref":"b2","token":"<context-subject>.<siv-two>"}
+  ]
+}
+```
+
+```sh
+vectis token deterministic decode-batch --file decode-batch.json --output json
+```
+
+The result retains KID/profile/subject and ordered items with `ref` and
+`plaintext`. To use batch without subject, select `customer-email-v1` in both
+input files, omit `--subject` on encode-batch and omit subject from decode JSON;
+use tokens returned by that unscoped encode, not the subject-bound examples.
+
+#### Policy and Failures
+
+Stored profiles require subject; none profiles prohibit it. The runtime CLI
+selects the route and the server enforces the signed policy. Null or malformed
+subjects, incompatible modes, malformed tokens and authentication failures cause
+nonzero exit codes; a required but missing seed returns HTTP `404`. There is no
+fallback to unscoped keys.
+
+Batches contain 1..128 unique refs and return no partial items on failure.
+There is no metadata, one-time consumption or deterministic token delete.
+The same plaintext under the same KID/profile/context and subject generation
+produces the same token regardless of `ref`, revealing equality. Deleting a
+subject blocks subsequent seed opens across all dependent capabilities, but does
+not erase external tokens or cancel operations already holding keys. See
+[API](API.md#deterministic-tokenization) for limits, errors and compatibility.
 
 ### `vectis token`
 

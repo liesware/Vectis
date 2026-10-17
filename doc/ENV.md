@@ -65,7 +65,7 @@ These variables are used by CLI commands that call the HTTP API. `serve` and `in
 | --- | --- | --- | --- |
 | `VECTIS_FINAL_APP_ADDR` | `localhost:3999` | Valid host:port | Default final app destination used when no manual route exists for a `kid`. |
 | `VECTIS_FINAL_APP_PATH` | `/message` | HTTP path beginning with `/`, no spaces | Default final app path. |
-| `VECTIS_CONFIG_PATH` | `config.json` | Non-empty file path | Unified signed config file with `routes`, `remote_routes`, `permissions`, optional `fpe_profiles`, optional `tokenization_profiles`, optional `mac_profiles`, optional `commitment_profiles`, optional `sharing_profiles`, and optional `masking_profiles` sections. Startup uses empty sections only when the config file is missing. If the file exists but is invalid, startup fails. Runtime reload keeps the previous config if the file exists but is invalid. |
+| `VECTIS_CONFIG_PATH` | `config.json` | Non-empty file path | Unified signed config file with `routes`, `remote_routes`, `permissions`, optional capability profile arrays (including `deterministic_tokenization_profiles`) and optional `time_attestation` overrides. Startup uses empty sections only when the config file is missing. If the file exists but is invalid, startup fails. Runtime reload keeps the previous config if the file exists but is invalid. |
 | `VECTIS_CONFIG_SIGN_PATH` | `config_sign.json` | Non-empty file path | Signature token for `VECTIS_CONFIG_PATH`, created by `vectis config sign`. |
 
 `routes` section shape inside `config.json`:
@@ -92,7 +92,10 @@ These variables are used by CLI commands that call the HTTP API. `serve` and `in
 }
 ```
 
-The `routes`/`remote_routes`/`permissions`/`fpe_profiles`/`tokenization_profiles`/`mac_profiles`/`commitment_profiles`/`sharing_profiles`/`masking_profiles` sections live in the unified signed `config.json`.
+The `routes`/`remote_routes`/`permissions`/`fpe_profiles`/`tokenization_profiles`/`deterministic_tokenization_profiles`/`mac_profiles`/`commitment_profiles`/`sharing_profiles`/`masking_profiles` sections live in the unified signed `config.json`, along with optional `time_attestation` overrides.
+The example above omits the optional deterministic profile array and time overrides.
+No new environment variable enables AES-SIV or subject mode: these are signed
+profile policies. See [configuration fields](API.md#configuration-file-configjson).
 Vectis does not create it and `POST /keys` does not modify it.
 If `config.json` exists, `config_sign.json` must exist and verify before the config is loaded.
 Vectis rejects `config.json` above 8 MiB and `config_sign.json` above 1 MiB before parsing or verifying.
@@ -107,8 +110,8 @@ Runtime route operations:
 - `GET /remote-routes` lists authorized remote Vectis routes currently loaded in memory and requires `VECTIS_APIKEY`.
 - `POST /config/reload` reloads the unified config and requires root or an admin `VECTIS_APIKEY`.
 - `vectis config sign` signs `VECTIS_CONFIG_PATH` locally with init keys and updates `VECTIS_CONFIG_SIGN_PATH`.
-- `vectis config routes`, `vectis config remote-routes`, `vectis config permissions`, `vectis config fpe`, `vectis config token`, `vectis config mac`, `vectis config commitment`, `vectis config sharing`, and `vectis config masking` list or edit local `config.json` sections; they do not sign or reload.
-- `routes[].name`, `remote_routes[].name`, `permissions[].client`, `fpe_profiles[].name`, `tokenization_profiles[].name`, `mac_profiles[].name`, `commitment_profiles[].name`, `sharing_profiles[].name`, and `masking_profiles[].name` are unique operator-facing indexes used by the CLI config editor.
+- `vectis config routes`, `vectis config remote-routes`, `vectis config permissions`, `vectis config fpe`, `vectis config token`, `vectis config token-deterministic`, `vectis config mac`, `vectis config commitment`, `vectis config sharing`, `vectis config masking`, and `vectis config time` view or edit local `config.json` sections; they do not sign or reload.
+- `routes[].name`, `remote_routes[].name`, `permissions[].client`, `fpe_profiles[].name`, `tokenization_profiles[].name`, `deterministic_tokenization_profiles[].name`, `mac_profiles[].name`, `commitment_profiles[].name`, `sharing_profiles[].name`, and `masking_profiles[].name` are unique operator-facing indexes used by the CLI config editor.
 - Every route `kid` must exist in the keys currently loaded in memory.
 - A missing file reloads to an empty manual route list.
 - An invalid existing file, or a route with an unloaded `kid`, returns an error and keeps the previous in-memory routes.
@@ -221,10 +224,16 @@ Allowed actions:
 - `self-test`
 - `sign`
 - `message`
+- `symmetric`
 - `fpe-encrypt`
 - `fpe-decrypt`
 - `token-encode`
 - `token-decode`
+- `token-delete`
+- `token-deterministic-encode`
+- `token-deterministic-decode`
+- `subject-create`
+- `subject-delete`
 - `mac-create`
 - `mac-verify`
 - `commit-create`
@@ -244,11 +253,17 @@ Permission mapping summary:
 - `lifecycle`: `POST /lifecycle/{kid}`.
 - `self-test`: `GET /self-test/keys/{kid}`.
 - `sign`: `POST /sign/{kid}`.
-- `message`: protected message endpoints.
-- `fpe-encrypt`: `POST /fpe/encrypt/{kid}`.
-- `fpe-decrypt`: `POST /fpe/decrypt`.
-- `token-encode`: `POST /token/encode/{kid}`.
-- `token-decode`: `POST /token/decode`.
+- `message`: protected send (`POST /message/{sender_kid}`) and decrypt (`POST /message/decrypt`); receive authenticates peer signatures rather than an API key.
+- `symmetric`: local encrypt/decrypt, including subject-bound encryption.
+- `fpe-encrypt`: single/batch encrypt routes, with and without subject.
+- `fpe-decrypt`: single/batch decrypt routes.
+- `token-encode`: random-token single/batch encode routes, with and without subject.
+- `token-decode`: random-token single/batch decode routes.
+- `token-delete`: `POST /token/delete`, independently of encode/decode grants.
+- `token-deterministic-encode`: deterministic single/batch encode routes, with and without subject.
+- `token-deterministic-decode`: deterministic single/batch decode routes.
+- `subject-create`: `POST /subject/{kid}`.
+- `subject-delete`: `DELETE /subject/{kid}/{subject}`, including transactional purge of associated token rows.
 - `mac-create`: `POST /mac/{kid}`, `POST /mac/batch/{kid}`.
 - `mac-verify`: `POST /mac/verify`, `POST /mac/verify/batch`.
 - `commit-create`: `POST /commit/{kid}`, `POST /commit/batch/{kid}`.
@@ -263,12 +278,12 @@ Permission mapping summary:
 
 Routes operations require root or `admin`; there is no granular `routes` action.
 
-Permissions file shape:
+Permissions section in signed `config.json` (other sections omitted):
 
 ```json
 {
   "version": "v1",
-  "clients": [
+  "permissions": [
     {
       "client": "client-a",
       "apikey_hash": "<VECTIS_APIKEY_HASH>",

@@ -713,8 +713,8 @@ and key-file wrappers. Its Botan round-trip test still confirms the compiled
 variant and randomized signing mode. Audit JSONL and init artifacts likewise
 have structural fuzz coverage without loading private material.
 
-These targets intentionally avoid invoking Botan, SQLite, PostgreSQL,
-networking, and server startup inside the fuzz loop. They focus on parser
+These targets avoid real key loading, SQLite, PostgreSQL, networking, and server
+startup inside the fuzz loop. They focus on parser
 safety, complete semantic validation at the `ops` contract boundary, canonical
 JSON determinism, config parsing robustness, compact signature encoding, audit
 JSONL shape, key-file wrappers, and share-envelope encoding. Message inputs are
@@ -722,9 +722,12 @@ checked for KID, host, timestamp, algorithm, nonce, hex, AAD, and envelope
 consistency. Key creation inputs are resolved under both `profile-only` and
 `allow-overrides` policy.
 
-The targets do not resolve loaded-key state, enforce runtime lifecycle, load
-profiles from signed config, execute cryptographic operations, access storage,
-or exercise HTTP. Compact signatures, audit checkpoints, init artifacts,
+The targets do not resolve real loaded-key state, enforce runtime lifecycle,
+authenticate signed configuration, access storage, or exercise HTTP.
+`fuzz_config_file` supplies dummy profile-derivation hooks, but profile validation
+can still invoke Botan: HMAC MAC/index, commitment and sharing preparation can
+derive keyed-tag subkeys through HKDF. These are not universally crypto-free
+targets. Compact signatures, audit checkpoints, init artifacts,
 SLH-DSA files, and share envelopes stop before cryptographic authentication.
 Hash algorithm output sizes are validated without invoking Botan in the fuzz
 loop and separately checked against Botan by Rust unit and integration tests.

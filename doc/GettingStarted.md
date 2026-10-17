@@ -146,13 +146,16 @@ chmod 700 db logs tls
 Vectis does not own your database — you create it, Vectis uses it. This is
 deliberate: the operator stays in control of the schema, backups, and
 migrations. The schema is also worth reading, because it is a map of
-everything Vectis ever persists — three tables, nothing more:
+the four capability-storage tables used by the current schema:
 
 - `opskeys` — the operational keys, stored encrypted, one row per `kid`;
 - `tokens` — the encrypted plaintext behind each token you create;
 - `indexes` — the digests that record blind-index membership.
+- `subjects` — authenticated encrypted seeds shared by subject-bound capabilities.
 
-Notice what is *not* there: no plaintext sensitive data, ever.
+No plaintext sensitive payload is stored in these tables. Identifiers, subject
+associations and envelope context remain visible. Signed config and audit logs
+are separate files, not additional tables. See [the database model](BD.md).
 
 ```sh
 sqlite3 db/data.db <<'SQL'

@@ -806,9 +806,10 @@ and whitespace; two semantically equal documents verify differently.
 **How**: use RFC 8785 when standard cross-language JSON interoperability is
 required. Otherwise define a deterministic encoding with explicit ordering,
 number, string, and whitespace rules, give it a protocol version, and prove
-byte-for-byte stability before hashing or signing. Put the protocol version
-**inside** the signed payload and require it to match the envelope version —
-this closes version-downgrade splits.
+byte-for-byte stability before hashing or signing. Bind protocol versions in
+authenticated material and validate every version identifier against its format.
+Require envelope/payload equality only where the format defines the same version
+at both levels; different layers can legitimately use different identifiers.
 
 **Rust note**: `serde_json::to_value` + `to_vec` can implement a project-defined
 sorted-key compact encoding for restricted data types; it must not be described
@@ -816,7 +817,11 @@ as RFC 8785 without implementing and testing the complete standard.
 
 **In Vectis**: `core/canonical.rs` defines the project-specific,
 versioned `canonical_json_v1` encoding; `core/protocol.rs` and `ops/sign.rs`
-enforce protocol and signed-payload version binding. Vectis does not claim that
+enforce protocol and signed-payload version binding. Protected-message envelope
+and payload versions are both `v1` and must match. Compact timestamp/config
+signatures instead authenticate `header_b64.payload_b64`, with header
+`vectis-signature-v1` and payload `v1`; those identifiers are validated
+independently, not equated. Vectis does not claim that
 `canonical_json_v1` implements RFC 8785.
 
 ### Rule 30 — Verify before decrypt, bind the context

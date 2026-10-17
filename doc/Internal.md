@@ -55,8 +55,9 @@ Important `core` responsibilities:
 - cryptographic helper functions;
 - external input validators;
 - signed config loading;
-- routes, remote routes, permissions, FPE profiles, tokenization profiles, MAC
-  profiles, commitment profiles, sharing profiles, and masking profiles;
+- routes, remote routes, permissions, FPE profiles, random and deterministic
+  tokenization profiles, MAC profiles, commitment profiles, sharing profiles,
+  masking profiles, and time-attestation configuration;
 - storage abstraction and SQLite/PostgreSQL backends;
 - HTTP client construction;
 - operational logs, audit logs, and metrics;
@@ -71,7 +72,8 @@ Important `ops` responsibilities:
 - hybrid timestamp signing and verification;
 - local SLH-DSA artifact key handling, compact signatures, and offline verification;
 - protected message send, receive, decrypt, and symmetric encryption;
-- FPE, tokenization, MAC/index, commitment, sharing, and masking operations;
+- FPE, random and deterministic tokenization, subjects, MAC/index, commitment,
+  sharing, and masking operations;
 - API key generation.
 
 Important `io/http` responsibilities:
@@ -165,8 +167,8 @@ Reload boundaries are explicit:
 
 - `POST /keys/reload` refreshes loaded key state from storage.
 - `POST /config/reload` refreshes signed routes, remote routes, permissions,
-  FPE profiles, tokenization profiles, MAC profiles, commitment profiles,
-  sharing profiles, and masking profiles.
+  FPE profiles, random and deterministic tokenization profiles, MAC profiles,
+  commitment profiles, sharing profiles, masking profiles and time attestation.
 - missing-key lazy-load loads one key from storage if a request references a
   valid `kid` not present in memory.
 
@@ -364,7 +366,12 @@ local symmetric key for `kid`.
 `POST /symmetric/decrypt` decrypts that symmetric envelope.
 
 These local operations require the per-KID `symmetric` grant, independently of
-protected messaging's `message` grant. The AAD retains `type=internal-message`.
+protected messaging's `message` grant. Without subject, the AAD retains
+`type=internal-message`. The subject encrypt route appends `/subject/{subject}`;
+decrypt selects that context through its `subject` field, never by fallback.
+This context derives a temporary key from the operational key and authenticated
+subject seed, uses the KID's cipher, and binds `type=subject-symmetric`, KID,
+subject, timestamp and cipher in AAD. It stores no ciphertext in Vectis.
 Audit action is `symmetric`; the metrics are preserved and the event names are:
 
 - `symmetric.encrypt.*`;
@@ -392,6 +399,12 @@ does not authenticate data in legacy profiles and is not part of the remote
 message protocol. Authenticated profiles use an independent MAC key and verify
 the separate tag before FF1; batch authenticates every item before decryption.
 
+The signed profile also controls presets, case, preserved characters and
+`subject_mode`. For `stored`, encrypt requires the subject route and decrypt
+requires subject in JSON; `none` prohibits it. A stored context derives temporary
+FF1 and, when authenticated, MAC keys from their profile parents and the opened
+seed. Seed opening and context preparation happen once per batch.
+
 ### Tokenization Flow
 
 `POST /token/encode/{kid}` and `POST /token/decode` are local reversible
@@ -409,9 +422,57 @@ key's symmetric key. The derivation binds profile name, KID, and the fixed
 internal tokenization scheme `token-random-v1`; `tokens.data` AAD also binds
 that scheme.
 
+Encode generates a random visible token, hashes it to a storage `hashid`,
+encrypts plaintext plus optional metadata, and stores the row in `tokens`.
+Decode hashes the presented token, loads `tokens.data`, decrypts the payload,
+validates that the stored profile matches the request, and returns plaintext
+plus optional metadata. Encode metadata must be a JSON object capped at 128
+characters after compact JSON serialization. The database stores `kid`,
+`hashid`, encrypted `data`, and nullable `subject`, not the visible token,
+plaintext, metadata or profile as separate columns. Envelope context is public.
+
 For an one-time profile, Vectis decrypts the token before deleting its storage
 row, then returns plaintext only after that delete commits. Batch consumption is
 transactional: every token is consumed or none are consumed.
+
+Random-token profiles enforce the same `none|stored` policy. Subject-bound
+inserts check the seed generation inside the storage transaction so a concurrent
+delete/recreate cannot persist tokens under an obsolete seed. Explicit token
+deletion requires `token-delete`, does not decrypt token data, and permits any
+lifecycle state after key existence and profile binding checks.
+
+### Deterministic Tokenization Flow
+
+`/token/deterministic/` uses signed deterministic profiles and AES-256-SIV,
+independent of the operational key's selected cipher. It returns a self-contained
+`Base64URL(canonical context).Base64URL(SIV result)` token; no token row is stored.
+The canonical context is authenticated and reconstructed from trusted profile
+policy and request identity. Equal inputs in the same context reveal equality.
+
+HTTP performs fail-fast checks; `ops::prepare` authoritatively enforces
+profile/KID binding, lifecycle and subject mode and returns an opaque prepared
+operation. Workers consume that prepared context, authenticate before returning
+plaintext, and preserve batch order and all-or-nothing responses. Encode applies
+the current profile's plaintext bounds; decode does not reapply those bounds to
+previously issued authenticated plaintext.
+
+### Shared Subject Seed Resolution
+
+Random tokens, FPE, deterministic tokens and symmetric can use the same stored
+seed. Authorization and applicable lifecycle/profile checks precede seed lookup.
+The stored envelope's creator-profile name is only a lookup hint: the resolver
+requires the original signed tokenization profile for the same KID and verifies
+the full expected AAD before opening the seed. No capability may trust stored
+AAD as policy or fall back to its general key when seed resolution fails.
+
+Each capability derives purpose-separated temporary keys from the authenticated,
+zeroizing seed. Shared configuration is held through `Arc`; seeds and temporary
+keys are request-scoped, not cached. See [Cryptography](Cryptography.md) for exact
+derivations. Subject deletion uses its administrative permission without loading
+the operational key or imposing lifecycle restrictions; it atomically purges
+associated random-token rows and the seed. It blocks future seed lookups for all
+four capabilities, not operations that already opened the seed, and does not
+delete externally held ciphertexts. Backups can restore that seed and access.
 
 ### MAC Flow
 
@@ -472,18 +533,6 @@ decrypt/verify lifecycle, then apply the display transformation in memory. The
 operation does not derive keys, encrypt, tokenize, authenticate, persist data,
 or log plaintext/masked values.
 
-Encode generates a random visible token, hashes it to a storage `hashid`,
-encrypts plaintext plus optional metadata, and stores the row in `tokens`.
-Decode hashes the presented token, loads `tokens.data`, decrypts the payload,
-validates that the stored profile matches the request, and returns plaintext
-plus optional metadata.
-
-Encode metadata must be a JSON object and is capped at 128 characters after
-compact JSON serialization before it is encrypted into `tokens.data`.
-
-The database never receives the visible token, plaintext, metadata, or profile
-as separate columns. It stores only `kid`, `hashid`, and encrypted `data`.
-
 ## Signed Config Flow
 
 Runtime policy is stored in `config.json` and signed in `config_sign.json`.
@@ -495,8 +544,11 @@ The signed config contains:
 - API key permission clients.
 - FPE field profiles.
 - tokenization profiles.
+- deterministic tokenization profiles.
 - MAC profiles.
 - masking profiles.
+- commitment and sharing profiles.
+- time-attestation configuration.
 
 The signing flow uses canonical JSON. Vectis signs the canonical config hash in
 a compact hybrid signature using init keys. `config_sign.json` wraps the four
@@ -654,7 +706,10 @@ These invariants are part of the implementation contract:
 - Enforce lifecycle through centralized helpers.
 - `retired` keys can decrypt/verify but must not be used for new operations or
   public key exposure.
-- `compromised` and `destroyed` keys must not be usable.
+- `compromised` and `destroyed` keys must not be usable for cryptographic
+  production or recovery. Explicit token deletion permits any lifecycle state;
+  subject deletion does not load the key or enforce lifecycle. These cleanup
+  operations still require their independent grants.
 - Terminal lifecycle states must remain terminal under concurrent writes.
 - Signed config is the source of runtime route, remote peer, and permission
   policy.

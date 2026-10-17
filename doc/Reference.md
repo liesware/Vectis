@@ -513,7 +513,6 @@ Supported actions:
 - `sign`;
 - `message`;
 - `symmetric`;
-- `metrics`.
 - `fpe-encrypt`;
 - `fpe-decrypt`;
 - `token-encode`;
@@ -521,11 +520,18 @@ Supported actions:
 - `token-deterministic-encode`;
 - `token-deterministic-decode`;
 - `token-delete` (explicit token deletion; permitted in any lifecycle state);
+- `subject-create`;
+- `subject-delete`;
 - `mac-create`;
 - `mac-verify`;
 - `index-create`;
 - `index-verify`;
 - `mask`;
+- `commit-create`;
+- `commit-verify`;
+- `share-split`;
+- `share-combine`;
+- `time-attest`;
 - `metrics`.
 
 `admin` grants access to all protected endpoints and ignores kid-scoped grants.
@@ -945,18 +951,26 @@ Vectis exposes these major endpoint groups:
 
 - health: `/healthz/startup`, `/healthz/live`, `/healthz/ready`;
 - metrics: `/metrics`;
-- keys: `/keys`, `/keys/reload`, `/keys/properties`;
+- keys: `/keys`, `/keys/reload`, `/keys/properties`, `/keys/properties/{kid}`;
 - lifecycle: `/lifecycle/{kid}`;
 - config: `/config/reload`;
 - routes: `/routes`;
 - remote routes: `/remote-routes`;
+- permissions: `/permissions`;
+- time attestation: `/time/attest`;
 - public keys: `/pub/{kid}`;
 - signing: `/sign/{kid}`, `/sign/verification`;
 - messaging: `/message/{sender_kid}`, `/message`, `/message/decrypt`;
 - symmetric encryption: `/symmetric/encrypt/{kid}`,
-  `/symmetric/decrypt`;
+  `/symmetric/encrypt/{kid}/subject/{subject}`, `/symmetric/decrypt`;
 - FPE: `/fpe/encrypt/{kid}`, `/fpe/encrypt/batch/{kid}`, their `/subject/{subject}` variants, `/fpe/decrypt`, `/fpe/decrypt/batch`;
-- tokenization: `/token/encode/{kid}`, `/token/decode`;
+- random tokenization: `/token/encode/{kid}`, `/token/encode/batch/{kid}`,
+  their `/subject/{subject}` variants, `/token/decode`, `/token/decode/batch`,
+  `/token/delete`;
+- deterministic tokenization: `/token/deterministic/encode/{kid}`,
+  `/token/deterministic/encode/batch/{kid}`, their `/subject/{subject}` variants,
+  `/token/deterministic/decode`, `/token/deterministic/decode/batch`;
+- subjects: `/subject/{kid}`, `/subject/{kid}/{subject}`;
 - MAC: `/mac/{kid}`, `/mac/batch/{kid}`, `/mac/verify`,
   `/mac/verify/batch`;
 - commitments: `/commit/{kid}`, `/commit/batch/{kid}`,
@@ -980,7 +994,9 @@ Local commands:
 - `vectis serve`;
 - `vectis apikey create`;
 - `vectis config sign`;
-- `vectis config list`.
+- `vectis config validate` and `vectis config list`;
+- signed-config editors for routes, remote routes, permissions, FPE, random and
+  deterministic tokenization, MAC, masking, commitments, sharing and time.
 
 HTTP client commands:
 
@@ -990,12 +1006,23 @@ HTTP client commands:
 - routes;
 - remote routes;
 - config reload;
-- public key lookup (`GET /pub`);
+- permissions list;
+- public key lookup (`GET /pub/{kid}`);
 - sign;
-- message send/decrypt;
+- message send/receive/decrypt;
+- symmetric encrypt/decrypt;
 - FPE encrypt/decrypt;
-- token encode/decode;
+- token encode/decode, encode-batch/decode-batch and delete;
+- token deterministic encode/decode and encode-batch/decode-batch;
+- subject create/delete;
+- MAC create/verify, index create/verify and mask;
+- commitment create/verify and shares split/combine;
+- time attest;
 - self-test.
+
+Subject-aware encrypt/encode commands select their subject route with
+`--subject`; decode requests carry subject in JSON. See [CLI](CLI.md) for exact
+syntax and supported options; not every HTTP batch operation has a CLI command.
 
 The CLI defaults to YAML output for readability, with JSON available for HTTP
 client commands.

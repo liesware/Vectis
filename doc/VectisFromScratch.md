@@ -96,7 +96,10 @@ shape; only the primitive changes.
 | Capability | What it gives you | Reversible |
 |---|---|---|
 | **FPE** | encryption that preserves the format (same alphabet and length) | yes, with the key |
-| **Tokenization** | a token that replaces the value, reversible under policy | yes, under policy |
+| **Random tokenization** | an opaque random token backed by an encrypted vault row | yes, under policy |
+| **Deterministic tokenization** | authenticated AES-256-SIV tokens without per-token storage; equality is visible | yes, under policy |
+| **Symmetric encryption** | local AEAD envelopes retained by the client | yes, under policy |
+| **Subject keys** | stored random seeds shared across tokenization, FPE and symmetric, with purpose-separated child keys | seed-dependent recovery |
 | **Masking** | a partial view (e.g. `****1111`) | no |
 | **MAC** | a tag that proves integrity/authenticity | verification |
 | **Blind index** | a deterministic digest searchable without revealing the value | no |
@@ -192,10 +195,10 @@ Each stage and its protection:
 | **unseal** | The 32-byte unseal key is read from `VECTIS_UNSEAL_KEY` → the `.unseal_key` file → a hidden prompt (`core/unseal.rs`). The file's permissions are checked (no group write/execute, no access for others). | The key gates the whole node. It lives in `Zeroizing`, and Vectis never writes it to disk — the operator custodies it. Without it, boot fails. |
 | **init decrypt** | `ops::init::load_validated_init_state` decrypts the encrypted `init.json` with the unseal key (AEAD), then validates the plaintext against its AAD (`ValidatedInitState`, in `Zeroizing`). | `init.json` on disk is only ciphertext; a stolen file without the unseal key is noise. AAD binding means a swapped or wrong-context envelope fails closed. |
 | **key derivation** | `InternalDerivedKeysState::from_init_state` derives `db_key`, `properties_key`, and `api_auth_key` from the init root key, each with a distinct purpose label (`ops/internal_keys.rs`). | Key separation: a leak of one derived key does not expose the others or the root. All held in `Zeroizing`. |
-| **bd (database)** | Operational keys, tokens, and index digests are persisted as encrypted Base64 envelopes. `StorageState` validates KIDs, hash-ids, digests, and envelope shape on **every read and write** before decrypting with `db_key` (`core/storage/`). | The DB never holds anything it could read on its own; a database backup without the matching init material decrypts nothing (Rule 14, Rule 26). |
+| **bd (database)** | Operational bundles and properties use internal wrapping keys; random-token payloads and subject seeds use their capability-specific keys. Blind-index digests are stored as keyed digests, not encrypted envelopes. `StorageState` validates persisted identifiers and envelopes before operations open sensitive contents. | Encryption protects stored secrets, not identifiers, public AAD or equality of index digests. Recovery needs matching keys, signed profiles and any subject seeds (Rule 14, Rule 26). |
 | **load config** | `config_file::load_config_state` reads `config.json`, **verifies its signature** against the init keys before trusting any of it, then resolves the profiles. | Verify before trust: unsigned or tampered config is rejected. Lenient at startup (invalid → empty state + warning), strict at reload (invalid → keep the previous good state) — Rule 15. |
-| **state** | The decrypted keys and the signed config live as `Arc<RwLock<Zeroizing<…>>>` in the HTTP state (`io/http/mod.rs`); `init_state` and `internal_keys` are shared `Arc<…Zeroizing…>`. | `RwLock` for safe concurrent access with a short critical section (Rule 3); `Arc` for sharing across handlers; a reload swaps state atomically under the write lock. |
-| **zeroizing** | Every secret above — unseal key, init material, derived keys, decrypted keys, config — is wrapped in `Zeroizing`/`SensitiveString`; 180+ uses across the tree. Credential matching uses constant-time comparison. | Secret memory is overwritten on drop, never logged, and never placed in metrics labels (Rule 33). |
+| **state** | HTTP state shares loaded keys and immutable signed-config snapshots through `Arc`, with locks around replaceable state (`io/http/mod.rs`). Secret key buffers use zeroizing wrappers; configuration itself is not universally secret. | Short lock sections protect state replacement (Rule 3); in-flight requests keep their snapshot instead of deep-copying keys. |
+| **zeroizing** | Sensitive Rust buffers use `Zeroizing`/`SensitiveString`; credential matching uses constant-time comparison. Native crypto objects have their own ownership and cleanup. | Reduce the lifetime of secret buffers, never log them or place them in metric labels; this is not a guarantee of erasing every allocator, OS or external copy (Rule 33). |
 
 Why the design is shaped this way: the unseal key is the **single gate** — one
 secret the operator holds, outside Vectis, unlocks everything and nothing works
@@ -209,17 +212,16 @@ kept in locked memory while live, and zeroized on the way out.
 
 The previous section followed the chain of custody. This one answers the two
 questions a contributor asks next: **exactly which keys exist, and how many?**
-Vectis never stores a key it can avoid storing — almost every key is *derived*
-on demand with HKDF from a parent, using a **domain salt** (which capability)
-and an **info context** (which profile / KID / version). Two rules make the tree
-safe: **domain separation** (a different salt per purpose means the same parent
-never yields the same child twice) and **context binding** (the info ties a
-subkey to one exact profile and KID, so it is useless anywhere else).
+Vectis generates root and operational material independently, wraps stored
+secrets, and derives internal/profile keys using purpose-separated HKDF. A
+**domain salt** and **info context** distinguish intended uses. The same inputs
+deterministically derive the same key; different purposes and contexts separate
+keys. This hierarchy describes custody as well as derivation, not one HKDF tree.
 
-There are four levels.
+The diagram labels five levels, from 0 through 4.
 
 ```
-Level 0   unseal key          1   operator-held, 32 bytes, never derived, never stored
+Level 0   unseal key          1   independently generated, 32 bytes, supplied externally
                               │    decrypts init.json (AEAD)
 Level 1   node root key       1   the init symmetric key ("master key")
                               │    HKDF salt: vectis/internal-keys/v1
@@ -227,24 +229,25 @@ Level 1   node root key       1   the init symmetric key ("master key")
 Level 2   internal keys       3   ├──► properties_key    info: vectis/properties-key/v1
           (admin side)        │    └──► api_auth_key      info: vectis/api-key-auth/v1
                               │
-                              │    (a separate, per-KID tree lives under each operational key)
+                                   (operational bundles are generated independently, then wrapped by db_key)
 Level 3   per-KID bundle      5   symmetric · eddsa · xecdh · ml-dsa · ml-kem   (+ hash variant)
           (one KID)          │    the "symmetric" member is the parent for capability subkeys
                               │    HKDF, per-capability salt + info(profile, kid, version)
                               ├──► FPE key
-Level 4   per-operation       ├──► MAC key → HMAC subkey        (blind index reuses this)
-          subkeys             ├──► tokenization: hash_key + data_key
-                              ├──► commitment key → HMAC subkey
-                              └──► sharing key → HMAC subkey
+Level 4   profile parents     ├──► MAC key → HMAC subkey only for HMAC (index reuses this)
+          and child keys      ├──► random tokenization: hash_key + data_key
+                              ├──► deterministic tokenization: AES-256-SIV parent
+                              ├──► commitment/share authentication keys
+                              └──► subject children: profile parent + authenticated random seed
 ```
 
 ### Level 1 — the master key (one)
 
 There is exactly **one** master key: the node **root symmetric key**, carried
-inside the decrypted `init` material (`ValidatedInitState`). Everything else is
-derived from it or from an operational key; nothing above it exists at runtime
-except the unseal key that decrypted it. Losing the root (by losing the unseal
-key) loses the node — by design, there is no recovery path.
+inside the decrypted `init` material (`ValidatedInitState`). It derives internal
+wrapping/authentication keys, not the independently generated operational keys
+or subject seeds. Losing access to this root prevents opening stored operational
+material unless compatible init/unseal material can be restored from backup.
 
 ### Level 2 — the internal / admin keys (three)
 
@@ -284,33 +287,39 @@ The two signing schemes and the two messaging schemes are used **together**
 (hybrid), so one broken assumption — classical *or* post-quantum — does not break
 the guarantee.
 
-### Level 4 — the per-operation subkeys (derived on demand)
+### Level 4 — profile parents and request-scoped child keys
 
-The symmetric capabilities never use the KID's `symmetric` key directly. Each one
-derives its own subkey with HKDF, using a capability-specific salt and an info
-that binds the profile, the KID, and a version. This is why the same KID can back
-FPE **and** MAC **and** tokenization without any of them sharing key bytes:
+Profile-backed capabilities derive purpose-separated keys from the operational
+KID's independently generated symmetric key. Profile parents are prepared during
+startup/reload; subject child keys are derived per request from an authenticated,
+independently generated seed. Unscoped local symmetric encryption is an exception:
+it uses the operational symmetric key directly. See [Cryptography](Cryptography.md)
+for the exact salts, info strings, key lengths and subject opening contract.
 
 | capability | domain salt | subkeys | note |
 |---|---|---|---|
-| **FPE** | `vectis:fpe:ff1:v1` | 1 (the FF1 key) | info binds `(profile, kid, fpe_version)` |
-| **MAC** | `vectis/mac/v1` → `vectis/mac/hmac/v1` | 2 levels (key, then HMAC subkey) | keyed tag via `derive_keyed_tag_subkey` |
+| **FPE** | `vectis:fpe:ff1:v1`, plus `vectis:fpe:mac:v1` when authenticated | FF1 parent; optional MAC parent | stored profiles derive separate subject child keys |
+| **MAC** | `vectis/mac/v1` → `vectis/mac/hmac/v1` for HMAC only | base key; second HKDF for HMAC | KMAC uses the base key and customization directly |
 | **Blind index** | *(reuses the MAC derivation)* | — | the digest is `mac::compute_digest`; that is why a blind index selects a MAC profile |
 | **Tokenization** | `vectis/tokenization/v1` | 2 (`hash_key` + `data_key`) | one to derive the lookup hashid, one to encrypt the token payload |
-| **Commitments** | `vectis/commitment/v1` → `vectis/commitment/hmac/v1` | 2 levels | context-bound like MAC |
-| **Secret sharing** | `vectis/sharing/v1` → `vectis/sharing/hmac/v1` | 2 levels | authenticates each share |
+| **Deterministic tokenization** | `vectis/tokenization/deterministic/v1` | 64-byte AES-256-SIV parent; optional subject child | signed none/stored policy; no per-token storage |
+| **Commitments** | `vectis/commitment/v1` → `vectis/commitment/hmac/v1` for HMAC only | base key; second HKDF for HMAC | context-bound like MAC; KMAC skips the second HKDF |
+| **Secret sharing** | `vectis/sharing/v1` → `vectis/sharing/hmac/v1` for HMAC only | base key; second HKDF for HMAC | authenticates shares; Shamir randomness is independent |
+| **Local symmetric** | direct KID key without subject; authenticated seed as salt with subject | one subject-derived key when scoped | AEAD follows the KID algorithm; no ciphertext storage |
 | **Masking** | *(none)* | 0 | masking is a policy view, not a keyed operation |
-| **Signing / Messaging** | *(none — asymmetric)* | 0 | these use the `eddsa`/`ml-dsa` (sign) and `xecdh`/`ml-kem` (messaging) keypairs directly |
+| **Signing / Messaging** | no signing-key HKDF; messaging uses a random HKDF salt | hybrid signing keys; per-message AEAD key | messaging combines XECDH and ML-KEM secrets before HKDF |
 
-The payoff of doing it this way: no capability's key is ever the same as
-another's, a subkey cannot be replayed under a different profile or KID, and every
-symmetric secret in the system traces back through exactly one derivation path to
-the single master key — which itself never leaves the node in the clear.
+Purpose and context separation keep derived capability keys distinct without
+turning the root into a deterministic generator of every secret. Operational
+keys, subject seeds, unseal/API credentials, nonces and other randomness are
+generated independently. The init root derives wrapping/authentication keys that
+protect stored material; it is not the ancestor used to generate all that material.
+Binding a key to context is not, by itself, replay prevention.
 
 ## The Database And Its Tables
 
-Vectis stores almost nothing, and what it stores is ciphertext. The schema is
-**three tables** ([`src/db/sqlite_schema.sql`](../src/db/sqlite_schema.sql),
+Vectis encrypts sensitive stored payloads, but identifiers and index digests remain
+visible. The schema has **four tables** ([`src/db/sqlite_schema.sql`](../src/db/sqlite_schema.sql),
 [`src/db/postgres_schema.sql`](../src/db/postgres_schema.sql)) — and, importantly,
 Vectis does **not** create or migrate them: the operator applies the DDL and
 Vectis validates the shape at startup, failing closed if a table is missing
@@ -320,23 +329,31 @@ before anything is decrypted (Rule 14).
 | table | columns | what it holds | protected by |
 |---|---|---|---|
 | **`opskeys`** | `kid` (PK), `keys`, `properties` | one row per operational key. `keys` is the encrypted Level-3 bundle (the five keys); `properties` is the encrypted metadata (lifecycle state, profile bindings, timestamps). | `keys` ← `db_key`, `properties` ← `properties_key` |
-| **`tokens`** | `(kid, hashid)` (PK), `data` | the tokenization vault: one row per tokenized value. `hashid` is the deterministic lookup handle (from the token `hash_key`); `data` is the encrypted original payload (under the token `data_key`). | per-KID tokenization subkeys (Level 4) |
+| **`tokens`** | `(kid, hashid)` (PK), `data`, nullable `subject` | random-token vault rows: a keyed lookup handle and encrypted payload, optionally associated with a subject | profile or subject-derived token keys |
 | **`indexes`** | `(kid, digest)` (PK), — | the blind-index set: the mere **presence** of a `(kid, digest)` row is the searchable fact. The digest is a MAC of the value; the value itself is never stored. | per-KID MAC subkey (Level 4) |
+| **`subjects`** | `(kid, subject)` (PK), `seed` | independently random, authenticated encrypted seeds shared by compatible capabilities | wrapping key derived from the original creator token profile |
 
 Three things about this schema are the whole design in miniature:
 
-- **The composite primary keys are the security model, not just an index.**
-  `(kid, hashid)` and `(kid, digest)` mean a token or index entry is only ever
-  meaningful *within its KID* — you cannot mix rows across keys, and idempotent
-  creation falls out for free (creating the same blind index twice is a no-op by
-  the primary key, Rule 24).
+- **Composite primary keys scope storage identity.** `(kid, hashid)`,
+  `(kid, digest)` and `(kid, subject)` avoid cross-KID collisions. Cryptographic
+  bindings and application validation, not primary keys alone, reject row
+  substitution. No SQL foreign keys are declared. Repeated index creation does
+  not add another identical row (Rule 24).
 - **A blind index stores no value at all** — only a keyed digest. You can ask "is
   there a record whose value MACs to this digest?" and get yes/no, without the
   database ever holding the value or anything reversible to it.
-- **A stolen database is inert.** `opskeys.keys` is encrypted under `db_key`,
+- **Encryption does not hide every database fact.** `opskeys.keys` is encrypted under `db_key`,
   which is derived from the root, which is decrypted by the unseal key the
-  operator holds outside Vectis. Without that key the three tables are noise —
-  which is exactly what the recovery boundary in `HA_DR.md` depends on.
+  operator holds outside Vectis. Theft without compatible keys does not reveal
+  plaintext payloads, but reveals identifiers, associations, sizes, readable AAD
+  and repeated blind-index digests. See [BD](BD.md) and [HA/DR](HA_DR.md).
+
+Subjects add a recovery dependency: deleting a seed atomically purges its token
+rows and blocks future derivation for external FPE, deterministic-token and
+symmetric ciphertexts. It does not cancel requests already holding child keys
+or erase backups. Deterministic tokens, FPE and symmetric outputs create no
+per-value database rows.
 
 ## The Three Layers And The Dependency Graph
 
@@ -375,7 +392,7 @@ level, not the function level; for the internal detail, each file has its own
 |---|---|---|
 | `validation.rs` | validators for names, refs, labels, hex, host/port, keys; `build_validated_aad` | The trust boundary; *parse, don't validate* (Rules 9-13) |
 | `crypto.rs` | crypto helpers over the Botan backend (AEAD, derivation, etc.) | The primitives every operation uses |
-| `canonical.rs` | deterministic versioned encoding `canonical_json_v1` | Sign canonical bytes; two equal documents sign identically (Rule 29) |
+| `canonical.rs` | deterministic versioned encoding `canonical_json_v1` | Equal supported values canonicalize to identical bytes; signatures can still differ because of randomized signing or timestamp/serial fields (Rule 29) |
 | `protocol.rs` | protocol version and its binding | Closes version downgrades inside the signed payload (Rule 29) |
 | `unseal.rs` | handles the unseal key that decrypts the `init` material | The most sensitive point: without the key, nothing starts |
 | `sensitive.rs` | `SensitiveString` (a `Zeroizing` wrapper) | Secrets are wiped from memory on drop (Rule 33) |

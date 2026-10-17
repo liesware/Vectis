@@ -5,7 +5,10 @@ Vectis protects data throughout its lifecycle. The HTTP API exposes operations t
 For a consolidated inventory of request, field, batch, profile, storage, and
 runtime bounds, see [Limits](Limits.md).
 
-The `vectis` CLI is an HTTP client for the runtime API, except for `vectis init`, `vectis serve`, `vectis apikey create`, `vectis config sign`, and `vectis config list`, which are local commands.
+The `vectis` CLI uses HTTP for runtime operations. Bootstrap commands (`init`,
+`serve`, `apikey create`) and config administration other than `config reload`
+run locally. Remote-route edits can fetch peer public keys over HTTP; see
+[CLI Mapping](#cli-mapping) for the command-specific behavior.
 
 ## Contents
 
@@ -22,7 +25,10 @@ The `vectis` CLI is an HTTP client for the runtime API, except for `vectis init`
   authentication, authorization, storage, or cryptographic processing.
 - Timestamps are encoded as Unix epoch seconds in a string.
 - `kid` values are hex strings derived with Vectis' internal hash (`INTERNAL_KEYS_HASH`, currently `BLAKE2b(256)`), so they are normally 64 hex characters.
-- Binary fields (`ctx`, `nonce`, signatures, public keys) are encoded as hex.
+- Encoding is field-specific: symmetric `ctx`/`nonce` and exported public keys
+  are hex; compact signatures and deterministic tokens use unpadded Base64URL
+  segments. Random tokens, commitment openings and share envelopes also use
+  Base64URL as described in their capability sections. AAD is not universally hex.
 - Every HTTP response includes `X-Request-Id`, a 32-character hex request id also present in operational logs.
 
 Creation operations select the operational KID in the path. Inverse and
@@ -64,40 +70,28 @@ Media Type`:
 }
 ```
 
-Any endpoint with a body requires `Content-Type: application/json` (parameters
-such as `application/json; charset=utf-8` are accepted). A missing header or a
-non-JSON content type returns `415 Unsupported Media Type`:
-
-```json
-{
-  "error": "request content type must be application/json"
-}
-```
-
 A correct content type with an empty or invalid JSON body returns `400 Bad
 Request`.
 
 ## Protocol Versioning
 
-Only `v1` is supported. Any other version is rejected explicitly; there is no silent downgrade.
+Version identifiers belong to different formats; they are not interchangeable.
+Unsupported versions are rejected explicitly, without silent downgrade.
 
-The signed config file (`config.json`, with `routes`, `remote_routes`, and `permissions`
-and optional `fpe_profiles` sections) carries a single top-level `version` that is part of the signed content.
+- Signed `config.json` has one top-level `version: "v1"` in its signed content.
+- Timestamp signatures (`POST /sign/{kid}`) and config signatures use four
+  unpadded Base64URL segments: `header.payload.eddsa.ml-dsa`. The canonical
+  header is `{"version":"vectis-signature-v1"}`; the canonical payload carries
+  `version: "v1"`. Both signatures cover the exact ASCII bytes
+  `header_b64.payload_b64`, not the raw payload JSON alone. Header and payload
+  version identifiers are validated independently, not compared for equality.
+- Protected messages retain a JSON envelope with `version: "v1"` and
+  `payload.version: "v1"`. These two values must match. EdDSA and ML-DSA cover
+  canonical JSON (sorted keys, compact, UTF-8) of that payload.
 
-Signed tokens and protected messages intentionally carry `version` at **two** levels:
-
-- **Envelope** (`version`): used for dispatch — it lets a receiver decide how to interpret the
-  `payload` before parsing or trusting it, which keeps room for future versions whose payload
-  shape may differ.
-- **Payload** (`payload.version`): used for integrity — it is inside the signed bytes, so signed
-  content cannot be reinterpreted under a different version.
-
-Verification requires `version == payload.version`; a mismatch is rejected. This binds the two
-copies and defends against version-confusion / downgrade attempts. This is not accidental
-duplication: the envelope copy negotiates, the payload copy authenticates.
-
-Signatures cover the canonical JSON (sorted keys, compact, UTF-8) of the `payload`, so
-`payload.version` is protected by the signature.
+Deterministic token contexts, subject contexts and storage envelopes have their
+own versioned encodings, documented in their respective sections. The compact
+signature header version does not select an algorithm for those capabilities.
 
 ## Authentication
 
@@ -133,12 +127,19 @@ Endpoints requiring auth:
 - `POST /symmetric/decrypt`
 - `POST /fpe/encrypt/{kid}`
 - `POST /fpe/encrypt/batch/{kid}`
+- `POST /fpe/encrypt/{kid}/subject/{subject}`
+- `POST /fpe/encrypt/batch/{kid}/subject/{subject}`
 - `POST /fpe/decrypt`
 - `POST /fpe/decrypt/batch`
 - `POST /token/encode/{kid}`
 - `POST /token/encode/batch/{kid}`
+- `POST /token/encode/{kid}/subject/{subject}`
+- `POST /token/encode/batch/{kid}/subject/{subject}`
 - `POST /token/decode`
 - `POST /token/decode/batch`
+- `POST /token/delete`
+- `POST /subject/{kid}`
+- `DELETE /subject/{kid}/{subject}`
 - `POST /token/deterministic/encode/{kid}`
 - `POST /token/deterministic/encode/{kid}/subject/{subject}`
 - `POST /token/deterministic/encode/batch/{kid}`
@@ -292,7 +293,12 @@ Exposed metrics:
 - `vectis_key_load_failures_total{reason}` (`decrypt_or_validate`, `task_panic`, `task_cancelled`, or `task_join`)
 - `vectis_keys_load_skipped` (keys omitted by the most recently completed key-set load attempt)
 - `vectis_message_total{operation,result}` (`send`, `receive`, or `decrypt`; `success`, `denied`, or `failed`)
-- `vectis_crypto_operation_total{operation,result}` (`sign`, `verify`, `encrypt`, `decrypt`, `fpe_encrypt`, `fpe_decrypt`, `fpe_encrypt_batch`, `fpe_decrypt_batch`, `token_encode`, `token_decode`, `token_encode_batch`, `token_decode_batch`, `subject_create`, `subject_delete`, `mac_create`, `mac_verify`, `mac_create_batch`, `mac_verify_batch`, `commit_create`, `commit_verify`, `commit_create_batch`, `commit_verify_batch`, `share_split`, `share_combine`, `index_create`, `index_verify`, `index_create_batch`, `index_verify_batch`, `mask`, or `mask_batch`; `success` or `failed`)
+- `vectis_crypto_operation_total{operation,result}` (`sign`, `verify`, `encrypt`, `decrypt`, `fpe_encrypt`, `fpe_decrypt`, `fpe_encrypt_batch`, `fpe_decrypt_batch`, `token_encode`, `token_decode`, `token_encode_batch`, `token_decode_batch`, `token_delete`, `token_deterministic_encode`, `token_deterministic_decode`, `token_deterministic_encode_batch`, `token_deterministic_decode_batch`, `subject_create`, `subject_delete`, `mac_create`, `mac_verify`, `mac_create_batch`, `mac_verify_batch`, `commit_create`, `commit_verify`, `commit_create_batch`, `commit_verify_batch`, `share_split`, `share_combine`, `index_create`, `index_verify`, `index_create_batch`, `index_verify_batch`, `mask`, `mask_batch`, or `time_attest`)
+
+Crypto operation results are normally `success` or `failed`. Time attestation
+uses `acceptable` or `unacceptable` for completed measurements, `throttled` for
+its rate limit, and `failed` for failures. Not every operation/result combination
+is emitted.
 
 ### GET /self-test/init
 
@@ -624,6 +630,7 @@ Response:
   "clients_loaded": 1,
   "fpe_profiles_loaded": 1,
   "tokenization_profiles_loaded": 1,
+  "deterministic_tokenization_profiles_loaded": 1,
   "mac_profiles_loaded": 1,
   "commitment_profiles_loaded": 1,
   "sharing_profiles_loaded": 1,
@@ -720,6 +727,10 @@ Allowed actions:
 - `subject-delete`
 - `mac-create`
 - `mac-verify`
+- `commit-create`
+- `commit-verify`
+- `share-split`
+- `share-combine`
 - `index-create`
 - `index-verify`
 - `mask`
@@ -737,7 +748,7 @@ Permission mapping:
 | `sign` | `POST /sign/{kid}` |
 | `message` | `POST /message/{sender_kid}`, `POST /message/decrypt` |
 | `symmetric` | `POST /symmetric/encrypt/{kid}`, its `/subject/{subject}` variant, `POST /symmetric/decrypt` |
-| `fpe-encrypt` | `POST /fpe/encrypt/{kid}`, `POST /fpe/encrypt/batch/{kid}` |
+| `fpe-encrypt` | `POST /fpe/encrypt/{kid}`, `POST /fpe/encrypt/batch/{kid}`, and their `/subject/{subject}` variants |
 | `fpe-decrypt` | `POST /fpe/decrypt`, `POST /fpe/decrypt/batch` |
 | `token-encode` | `POST /token/encode/{kid}`, `POST /token/encode/batch/{kid}`, and their `/subject/{subject}` variants |
 | `token-decode` | `POST /token/decode`, `POST /token/decode/batch` |
@@ -773,12 +784,12 @@ Example time-attestation grant:
 }
 ```
 
-Permissions file shape:
+Permissions in signed `config.json` (other sections omitted here):
 
 ```json
 {
   "version": "v1",
-  "clients": [
+  "permissions": [
     {
       "client": "client-a",
       "apikey_hash": "<VECTIS_APIKEY_HASH>",
@@ -1503,7 +1514,25 @@ it is not replay protection or a replacement for application authorization.
 Configure `deterministic_tokenization_profiles`, sign and reload:
 
 ```json
-{"name":"customer-email-v1","kid":"<kid>","context":"tenant=acme;field=email;version=1","min_plaintext_len":1,"max_plaintext_len":16384}
+{
+  "deterministic_tokenization_profiles": [
+    {
+      "name": "customer-email-v1",
+      "kid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "context": "tenant=acme;field=email;version=1",
+      "min_plaintext_len": 1,
+      "max_plaintext_len": 16384
+    },
+    {
+      "name": "customer-email-subject-v1",
+      "kid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "context": "tenant=acme;field=email;version=1",
+      "min_plaintext_len": 1,
+      "max_plaintext_len": 16384,
+      "subject_mode": "stored"
+    }
+  ]
+}
 ```
 
 Context is mandatory, follows existing ordered `key=value` label rules and is
@@ -1569,6 +1598,342 @@ but does not erase external tokens or cancel in-flight requests. Recreating the
 same ID generates another seed that cannot unlock old tokens. Unscoped tokens
 remain usable; backups may restore access. Individual deterministic tokens cannot
 be deleted or consumed in Vectis. No plaintext or token ciphertext is persisted.
+
+### Endpoint Examples and Errors
+
+The KID and subject identifiers below are illustrative. Replace `<kid>`,
+`<subject>` and `<apikey>` with actual values. Tokens such as
+`<context-none>.<siv-one>` are schematic placeholders, not executable tokens;
+use the complete token returned by encode when calling decode. The two profiles
+above are separate: `customer-email-v1` is `none`, and
+`customer-email-subject-v1` is `stored`. Subject examples require an existing
+subject under the same KID, created through [Subject Keys](#subject-keys).
+
+These common error statuses apply to all six endpoints:
+
+| Status | Meaning |
+| --- | --- |
+| `400` | Invalid input, unknown profile, incompatible subject policy, invalid token/context or failed authentication |
+| `401` | Missing or invalid API key |
+| `403` | Missing operation permission, profile belongs to another KID, or lifecycle forbids the operation |
+| `404` | Operational key not found, or required subject seed not found |
+| `413` / `415` | HTTP body limit exceeded / JSON content type required |
+| `429` | Service rate or concurrency limit reached; existing overload contract applies |
+| `500` | Internal cryptographic/storage failure, including corrupt seed or unavailable/incompatible creator profile; sanitized error |
+
+Errors use a JSON `error` field and never include partial plaintext or `items`.
+Item-specific batch failures are prefixed with `batch item N failed`, where N
+is zero-based; top-level policy and batch-shape errors are not item-indexed.
+
+### POST /token/deterministic/encode/{kid}
+
+Encode using a signed `none` profile. Requires `token-deterministic-encode`
+for the KID and an `active` key. No subject, metadata or formatting options are
+accepted in the body.
+
+Request:
+
+```http
+POST /token/deterministic/encode/<kid>
+X-API-Key: <apikey>
+Content-Type: application/json
+```
+
+```json
+{
+  "ref": "encode-001",
+  "profile": "customer-email-v1",
+  "plaintext": "synthetic data"
+}
+```
+
+Response `200 OK`:
+
+```json
+{
+  "ref": "encode-001",
+  "kid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "profile": "customer-email-v1",
+  "token": "<context-none>.<siv-one>"
+}
+```
+
+Repeating the same plaintext under the same profile/context produces the same
+token, even with a different `ref`. A `stored` profile on this route returns
+`400`:
+
+```json
+{"error":"subject is required for stored deterministic token profiles"}
+```
+
+### POST /token/deterministic/encode/{kid}/subject/{subject}
+
+Encode using a signed `stored` profile and the existing subject seed. Requires
+`token-deterministic-encode` and an `active` key; tokenization or subject-create
+permissions are not required to use the seed through this endpoint.
+
+Request (subject is supplied in the path, not the body):
+
+```http
+POST /token/deterministic/encode/<kid>/subject/<subject>
+X-API-Key: <apikey>
+Content-Type: application/json
+```
+
+```json
+{
+  "ref": "subject-encode-001",
+  "profile": "customer-email-subject-v1",
+  "plaintext": "synthetic data"
+}
+```
+
+Response `200 OK`:
+
+```json
+{
+  "ref": "subject-encode-001",
+  "kid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "profile": "customer-email-subject-v1",
+  "subject": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "token": "<context-subject>.<siv-subject-one>"
+}
+```
+
+A `none` profile returns `400` before seed lookup:
+
+```json
+{"error":"subject is prohibited for none deterministic token profiles"}
+```
+
+A valid `stored` request whose subject does not exist returns `404` with
+`{"error":"subject not found"}`. No unscoped fallback is attempted.
+
+### POST /token/deterministic/decode
+
+Decode requires `token-deterministic-decode` for the body KID and allows `active`
+or `retired` keys. Supply the profile used to encode the token. For `none`, omit
+subject entirely; for `stored`, supply the same subject ID in the body.
+
+Request without subject:
+
+```http
+POST /token/deterministic/decode
+X-API-Key: <apikey>
+Content-Type: application/json
+```
+
+```json
+{
+  "ref": "decode-001",
+  "kid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "profile": "customer-email-v1",
+  "token": "<context-none>.<siv-one>"
+}
+```
+
+Response `200 OK`:
+
+```json
+{
+  "ref": "decode-001",
+  "kid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "profile": "customer-email-v1",
+  "plaintext": "synthetic data"
+}
+```
+
+Request with subject (same HTTP method, path and headers):
+
+```json
+{
+  "ref": "subject-decode-001",
+  "kid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "profile": "customer-email-subject-v1",
+  "subject": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "token": "<context-subject>.<siv-subject-one>"
+}
+```
+
+Response `200 OK`:
+
+```json
+{
+  "ref": "subject-decode-001",
+  "kid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "profile": "customer-email-subject-v1",
+  "subject": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "plaintext": "synthetic data"
+}
+```
+
+Missing subject for `stored`, or any subject for `none`, returns the corresponding
+policy error shown above. Null and malformed IDs return `400`; a required but
+missing seed returns `404`. A well-formed token with the expected context but an
+invalid SIV authentication result returns `400`, without plaintext:
+
+```json
+{"error":"deterministic token authentication failed"}
+```
+
+### POST /token/deterministic/encode/batch/{kid}
+
+Encode up to 128 items under one `none` profile. Requires
+`token-deterministic-encode` and an `active` key. Refs must be unique; output
+items retain request order. The batch succeeds completely or returns one error.
+
+Request:
+
+```http
+POST /token/deterministic/encode/batch/<kid>
+X-API-Key: <apikey>
+Content-Type: application/json
+```
+
+```json
+{
+  "profile": "customer-email-v1",
+  "items": [
+    {"ref":"batch-001","plaintext":"synthetic data"},
+    {"ref":"batch-002","plaintext":"second value"}
+  ]
+}
+```
+
+Response `200 OK`:
+
+```json
+{
+  "kid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "profile": "customer-email-v1",
+  "items": [
+    {"ref":"batch-001","token":"<context-none>.<siv-one>"},
+    {"ref":"batch-002","token":"<context-none>.<siv-two>"}
+  ]
+}
+```
+
+An empty/oversized batch, duplicate refs or invalid item returns `400` without
+`items`. Using a `stored` profile returns the subject-required policy error.
+
+### POST /token/deterministic/encode/batch/{kid}/subject/{subject}
+
+Encode up to 128 items using one `stored` profile and one existing subject for
+the entire batch. Requires `token-deterministic-encode` and an `active` key.
+The subject is not an item field; its seed is opened once for the batch.
+
+Request:
+
+```http
+POST /token/deterministic/encode/batch/<kid>/subject/<subject>
+X-API-Key: <apikey>
+Content-Type: application/json
+```
+
+```json
+{
+  "profile": "customer-email-subject-v1",
+  "items": [
+    {"ref":"subject-batch-001","plaintext":"synthetic data"},
+    {"ref":"subject-batch-002","plaintext":"second value"}
+  ]
+}
+```
+
+Response `200 OK`:
+
+```json
+{
+  "kid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "profile": "customer-email-subject-v1",
+  "subject": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "items": [
+    {"ref":"subject-batch-001","token":"<context-subject>.<siv-subject-one>"},
+    {"ref":"subject-batch-002","token":"<context-subject>.<siv-subject-two>"}
+  ]
+}
+```
+
+The same batch validation and ordering rules apply. A `none` profile returns
+the subject-prohibited `400`; a missing required seed returns `404`. Neither
+error includes partial `items`.
+
+### POST /token/deterministic/decode/batch
+
+Decode up to 128 items under one KID/profile. Requires
+`token-deterministic-decode` and allows `active` or `retired` keys. Subject is
+prohibited for `none` and required for `stored`, at the top level for all items.
+
+Request without subject:
+
+```http
+POST /token/deterministic/decode/batch
+X-API-Key: <apikey>
+Content-Type: application/json
+```
+
+```json
+{
+  "kid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "profile": "customer-email-v1",
+  "items": [
+    {"ref":"batch-001","token":"<context-none>.<siv-one>"},
+    {"ref":"batch-002","token":"<context-none>.<siv-two>"}
+  ]
+}
+```
+
+Response `200 OK`:
+
+```json
+{
+  "kid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "profile": "customer-email-v1",
+  "items": [
+    {"ref":"batch-001","plaintext":"synthetic data"},
+    {"ref":"batch-002","plaintext":"second value"}
+  ]
+}
+```
+
+Request with subject (same HTTP method, path and headers):
+
+```json
+{
+  "kid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "profile": "customer-email-subject-v1",
+  "subject": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "items": [
+    {"ref":"subject-batch-001","token":"<context-subject>.<siv-subject-one>"},
+    {"ref":"subject-batch-002","token":"<context-subject>.<siv-subject-two>"}
+  ]
+}
+```
+
+Response `200 OK`:
+
+```json
+{
+  "kid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "profile": "customer-email-subject-v1",
+  "subject": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "items": [
+    {"ref":"subject-batch-001","plaintext":"synthetic data"},
+    {"ref":"subject-batch-002","plaintext":"second value"}
+  ]
+}
+```
+
+A failure on the second token returns `400`, without any recovered items:
+
+```json
+{"error":"batch item 1 failed: deterministic token authentication failed"}
+```
+
+This example assumes the token is well formed and reaches authentication.
+Encoding/context errors can have different diagnostics. Duplicate refs, empty
+or oversized batches and incompatible subject policy also return `400`; a
+required but absent seed returns `404`. No rejection contains partial results.
 
 ## Tokenization
 
@@ -2008,6 +2373,10 @@ Encode `metadata` is optional, must be a JSON object when present, and its compa
 
 Batch tokenization preserves item order and is all-or-nothing. If any item fails validation, lookup, encryption, decryption, or storage insert, the response is a single error and no partial `items` are returned. `POST /token/encode/batch/{kid}` writes all token rows in one storage transaction. When `one_time` is true, decode consumes all batch tokens in one storage transaction only after every item decrypts successfully. A token lost to a concurrent consume returns `batch item N failed: token not found`, using its original input position. The maximum batch size is `INTERNAL_TOKEN_BATCH` (`128`).
 
+The random-token examples below assume `token_len: 32`. Their Base64URL suffixes
+each decode to 32 bytes, but the values are illustrative, not live stored tokens.
+Use the actual returned token when calling decode or delete.
+
 ### POST /token/encode/{kid}
 
 Requires auth and `token-encode` permission for the path `kid`. The key must be `active`.
@@ -2030,7 +2399,7 @@ Response:
   "ref": "reg1",
   "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
   "profile": "patient-id-token-v1",
-  "token": "tok_patient_vGqyEeXKcKz5QK1jwBQTyQ"
+  "token": "tok_patient_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
 }
 ```
 
@@ -2045,7 +2414,7 @@ Request:
   "ref": "reg1",
   "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
   "profile": "patient-id-token-v1",
-  "token": "tok_patient_vGqyEeXKcKz5QK1jwBQTyQ"
+  "token": "tok_patient_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
 }
 ```
 
@@ -2114,8 +2483,8 @@ Response:
   "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
   "profile": "patient-id-token-v1",
   "items": [
-    { "ref": "reg1", "token": "tok_patient_vGqyEeXKcKz5QK1jwBQTyQ" },
-    { "ref": "reg2", "token": "tok_patient_j43sAUddCPYAaHwvA6Yoww" }
+    { "ref": "reg1", "token": "tok_patient_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8" },
+    { "ref": "reg2", "token": "tok_patient_ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8" }
   ]
 }
 ```
@@ -2133,8 +2502,8 @@ Request:
   "kid": "f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed",
   "profile": "patient-id-token-v1",
   "items": [
-    { "ref": "reg1", "token": "tok_patient_vGqyEeXKcKz5QK1jwBQTyQ" },
-    { "ref": "reg2", "token": "tok_patient_j43sAUddCPYAaHwvA6Yoww" }
+    { "ref": "reg1", "token": "tok_patient_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8" },
+    { "ref": "reg2", "token": "tok_patient_ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8" }
   ]
 }
 ```
@@ -2789,9 +3158,9 @@ Top level:
 | Field | Required | Value | Meaning |
 | --- | --- | --- | --- |
 | `version` | yes | `"v1"` | Config schema version; unknown versions are rejected. |
-| `routes` | yes (may be `[]`) | array | Final app delivery routes per local `kid`. |
-| `remote_routes` | yes (may be `[]`) | array | Authorized remote Vectis peers. |
-| `permissions` | yes (may be `[]`) | array | Non-root API key clients and their allowed actions. |
+| `routes` | no (defaults to `[]`) | array | Final app delivery routes per local `kid`. |
+| `remote_routes` | no (defaults to `[]`) | array | Authorized remote Vectis peers. |
+| `permissions` | no (defaults to `[]`) | array | Non-root API key clients and their allowed actions. |
 | `fpe_profiles` | no (defaults to `[]`) | array | Signed local FPE field profiles. |
 | `tokenization_profiles` | no (defaults to `[]`) | array | Signed local reversible tokenization profiles. |
 | `deterministic_tokenization_profiles` | no (defaults to omitted) | array | Signed AES-256-SIV profiles; empty arrays are omitted during canonical serialization. See [Deterministic Tokenization](#deterministic-tokenization). |
@@ -2799,6 +3168,7 @@ Top level:
 | `commitment_profiles` | no (defaults to `[]`) | array | Signed local keyed commitment profiles. |
 | `sharing_profiles` | no (defaults to `[]`) | array | Signed local authenticated Shamir secret sharing profiles. |
 | `masking_profiles` | no (defaults to `[]`) | array | Signed local display masking profiles. |
+| `time_attestation` | no (compiled defaults when absent) | object | Signed NTS/Roughtime source and acceptance-policy overrides described above. |
 
 `routes[]` entries:
 
@@ -2829,7 +3199,7 @@ Top level:
 | `client` | yes | text, unique | Client label. |
 | `apikey_hash` | yes | 64 hex (32 bytes) | Server-side verifier for this client's `X-API-Key`. |
 | `status` | yes | `active` \| `disabled` \| `revoked` | Only `active` clients are authorized. |
-| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `symmetric`, `fpe-encrypt`, `fpe-decrypt`, `token-encode`, `token-decode`, `token-delete`, `subject-create`, `subject-delete`, `mac-create`, `mac-verify`, `commit-create`, `commit-verify`, `share-split`, `share-combine`, `index-create`, `index-verify`, `mask`, `metrics`, `time-attest`. `kid: "*"` is required for global actions `admin`, `metrics`, and `time-attest`; crypto profile actions require explicit KIDs. An `admin` action grants all endpoints and ignores kid-scoped grants. |
+| `permissions` | yes | array of `{ "kid", "actions" }` | Per-kid grants. `actions` ⊆ `admin`, `keys`, `lifecycle`, `self-test`, `sign`, `message`, `symmetric`, `fpe-encrypt`, `fpe-decrypt`, `token-encode`, `token-decode`, `token-delete`, `token-deterministic-encode`, `token-deterministic-decode`, `subject-create`, `subject-delete`, `mac-create`, `mac-verify`, `commit-create`, `commit-verify`, `share-split`, `share-combine`, `index-create`, `index-verify`, `mask`, `metrics`, `time-attest`. `kid: "*"` is required for global actions `metrics` and `time-attest`; crypto profile actions require explicit KIDs. An `admin` action grants all endpoints and ignores kid-scoped grants; `kid: "*"` is recommended for clarity. |
 
 `fpe_profiles[]` entries:
 
@@ -2998,6 +3368,7 @@ CLI output defaults to YAML for readability. Add `--output json` to HTTP client 
 | `vectis config permissions ...` | Lists or edits local `config.json` permissions | No HTTP |
 | `vectis config fpe ...` | Lists or edits local `config.json` FPE profiles | No HTTP |
 | `vectis config token ...` | Lists or edits local `config.json` tokenization profiles | No HTTP |
+| `vectis config token-deterministic ...` | Lists or edits local `config.json` deterministic tokenization profiles | No HTTP |
 | `vectis config mac ...` | Lists or edits local `config.json` MAC profiles | No HTTP |
 | `vectis config masking ...` | Lists or edits local `config.json` masking profiles | No HTTP |
 | `vectis config commitment ...` | Lists or edits local `config.json` commitment profiles | No HTTP |
@@ -3014,9 +3385,16 @@ CLI output defaults to YAML for readability. Add `--output json` to HTTP client 
 | `vectis symmetric encrypt <kid> --subject <subject>` | `POST /symmetric/encrypt/{kid}/subject/{subject}` | Yes |
 | `vectis symmetric decrypt` | `POST /symmetric/decrypt` | Yes |
 | `vectis fpe encrypt <kid>` | `POST /fpe/encrypt/{kid}` | Yes |
+| `vectis fpe encrypt <kid> --subject <subject>` | `POST /fpe/encrypt/{kid}/subject/{subject}` | Yes |
 | `vectis fpe decrypt` | `POST /fpe/decrypt` | Yes |
 | `vectis token encode <kid>` | `POST /token/encode/{kid}` | Yes |
+| `vectis token encode <kid> --subject <subject>` | `POST /token/encode/{kid}/subject/{subject}` | Yes |
 | `vectis token decode` | `POST /token/decode` | Yes |
+| `vectis token encode-batch <kid> [--subject <subject>]` | `POST /token/encode/batch/{kid}[/subject/{subject}]` | Yes |
+| `vectis token decode-batch` | `POST /token/decode/batch` | Yes |
+| `vectis token delete` | `POST /token/delete` | Yes |
+| `vectis subject create <kid>` | `POST /subject/{kid}` | Yes |
+| `vectis subject delete <kid> <subject>` | `DELETE /subject/{kid}/{subject}` | Yes |
 | `vectis token deterministic encode <kid> [--subject <subject>]` | `POST /token/deterministic/encode/{kid}[/subject/{subject}]` | Yes |
 | `vectis token deterministic decode` | `POST /token/deterministic/decode` | Yes |
 | `vectis token deterministic encode-batch <kid> [--subject <subject>]` | `POST /token/deterministic/encode/batch/{kid}[/subject/{subject}]` | Yes |
@@ -3032,8 +3410,9 @@ CLI output defaults to YAML for readability. Add `--output json` to HTTP client 
 | `vectis shares combine` | `POST /shares/combine` | Yes |
 | `vectis time attest` | `POST /time/attest` | Yes |
 
-Batch endpoints are API-only. They are intended for application workflows and
-do not currently have dedicated CLI commands.
+Random and deterministic tokenization expose batch encode/decode through the
+CLI as listed above. FPE, MAC, blind-index, masking and commitment batch routes
+remain API-only; they do not have dedicated CLI batch commands.
 
 Local commands:
 
@@ -3041,7 +3420,7 @@ Local commands:
 - `vectis apikey create`: decrypts `VECTIS_INIT_KEYS_FILE`, derives the internal API auth key, prints a new `VECTIS_APIKEY` and matching `VECTIS_APIKEY_HASH`, and does not write files.
 - `vectis serve`: validates `VECTIS_INIT_KEYS_FILE`, loads storage/config into memory, and starts the HTTP service. Unseal key resolution order is `VECTIS_UNSEAL_KEY`, `VECTIS_UNSEAL_KEY_FILE` with default `.unseal_key`, then hidden prompt.
 - `vectis config init`: writes an empty `VECTIS_CONFIG_PATH` (default `config.json`) after checking its structure. It refuses to overwrite an existing config file; delete it manually before reinitializing. It does not sign, reload, or make any HTTP call.
-- `vectis config validate`: validates the structure and profile field constraints of the local `VECTIS_CONFIG_PATH` using placeholder key material. It does not contact storage or a running node and makes no HTTP call.
+- `vectis config validate`: opens the local init material (requiring unseal), connects to the configured storage and loads operational keys to validate `VECTIS_CONFIG_PATH` against the local node, including profile derivation and KID bindings. It does not require a running HTTP server and makes no HTTP call. Local editor validation before writing is a separate structural check using placeholder key material.
 - `vectis config sign`: reads `VECTIS_CONFIG_PATH`, signs its canonical JSON with init EdDSA and init ML-DSA, and writes `VECTIS_CONFIG_SIGN_PATH`.
 - `vectis config list`: prints `VECTIS_CONFIG_PATH` locally.
 

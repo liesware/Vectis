@@ -40,7 +40,7 @@ These items must match. Vectis stores operational keys encrypted. A database
 backup that cannot be decrypted is not useful recovery data.
 
 The `subjects.seed` envelopes are essential recovery material. Without them,
-subject-bound tokens and externally stored FPE or symmetric ciphertexts cannot
+subject-bound random and deterministic tokens, and externally stored FPE or symmetric ciphertexts, cannot
 be recovered, even with the matching operational keys and signed configuration.
 
 > A PostgreSQL backup without the matching init material is not a Vectis recovery backup.
@@ -67,8 +67,8 @@ Each Vectis node keeps its own in-memory state:
 
 - loaded operational keys in `KeysDbState`;
 - signed config state for routes, remote routes, and permissions;
-- signed config state for FPE, tokenization, MAC, commitment, sharing, and
-  masking profiles;
+- signed config state for FPE, random and deterministic tokenization, MAC,
+  commitment, sharing, masking, and time attestation;
 - local HTTP runtime state.
 
 If one node creates or updates a key, PostgreSQL stores the durable row. Other
@@ -230,9 +230,10 @@ Recovery:
 
 ### Audit Logs Lost
 
-Expected behavior: Vectis fails closed for HTTP operations after audit-chain
-persistence fails; it does not return successful protected operations without
-an audit record.
+Expected behavior: audit-chain persistence failures fail closed at the HTTP
+boundary. File persistence and stdout collection are different guarantees:
+stdout delivery does not acknowledge durable storage by an external collector.
+Loss after emission must be detected and handled by that collection system.
 
 Recovery:
 
@@ -241,11 +242,10 @@ Recovery:
 - confirm current logging target and collector behavior.
 
 When `VECTIS_LOG_TARGET=stdout`, audit events are mixed with operational logs in
-the container stream and are distinguished by:
-
-```json
-"version": "audit-chain-v1"
-```
+the container stream. Retain both JSON record types, identified by
+`version: "audit-chain-v1"` and `version: "audit-checkpoint-v1"`. Checkpoints are
+needed for offline verification; retaining only ordinary chain records loses
+that evidence.
 
 ## RPO And RTO
 
@@ -287,7 +287,7 @@ If using HTTP directly:
 
 ```sh
 curl -sS http://127.0.0.1:3000/healthz/ready
-curl -sS http://127.0.0.1:3000/metrics
+curl -sS -H "X-API-Key: $VECTIS_APIKEY" http://127.0.0.1:3000/metrics
 ```
 
 For functional smoke tests, validate:

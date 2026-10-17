@@ -207,8 +207,9 @@ The trimmed value must be one 64-character hex string.
   invalid `remote_addr`.
 - A permissions client has an invalid API key hash or references an unloaded
   KID.
-- An FPE, tokenization, MAC, commitment, sharing, or masking profile references
+- An FPE, random or deterministic tokenization, MAC, commitment, sharing, or masking profile references
   an unloaded KID or has invalid profile fields.
+- Time-attestation configuration is invalid.
 
 ### Checks
 
@@ -438,6 +439,28 @@ vectis keys properties <kid>
 - Do not force terminal lifecycle states back to active.
 - Do not expose `/pub/{kid}` for retired, compromised, or destroyed keys.
 
+## Subject Or Deterministic Token Failure
+
+Check the effective signed profile and KID before investigating encrypted data:
+
+- `subject_mode: none` prohibits subject; `stored` requires it for random tokens,
+  deterministic tokens and FPE. An incompatible request returns `400`.
+- A required subject that no longer exists returns `404`. Check whether it was
+  deliberately deleted; do not recreate it expecting to recover old ciphertexts.
+- A missing/incompatible original tokenization creator profile or corrupt seed
+  envelope produces a sanitized internal error. Restore the matching signed
+  profile and keys from trusted recovery material, not fields copied from an
+  untrusted envelope.
+- `deterministic token authentication failed` indicates a failed SIV check.
+  Confirm the original KID, profile, context, subject and token were preserved.
+  Never bypass authentication or retry using a general key as fallback.
+
+Subject deletion affects every capability sharing its seed. Restoring backups
+can restore access; requests that already opened the seed may finish. Inspect
+request IDs and public errors only; do not log tokens, plaintexts, seed envelopes
+or derived keys. See [Cryptography](../Cryptography.md) and
+[recovery guidance](../HA_DR.md).
+
 ## Remote Route Not Found Or Sender Not Allowed
 
 ### Problem
@@ -615,6 +638,7 @@ vectis_remote_routes_loaded
 vectis_permission_clients
 vectis_fpe_profiles_loaded
 vectis_tokenization_profiles_loaded
+vectis_deterministic_tokenization_profiles_loaded
 vectis_mac_profiles_loaded
 vectis_commitment_profiles_loaded
 vectis_sharing_profiles_loaded

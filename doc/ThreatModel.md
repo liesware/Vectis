@@ -55,7 +55,8 @@ decrypt it.
 The diagram above covers only the inter-instance path. Vectis also provides
 **local, single-instance field protection** that never involves a peer or a
 protected message: format-preserving encryption (FPE) over field values,
-reversible random tokenization, MAC create/verify, blind indexes, display
+reversible random tokenization, deterministic AES-SIV tokenization, local
+symmetric encryption, MAC create/verify, blind indexes, display
 masking, keyed commitments, and authenticated Shamir secret sharing. These
 operations are governed by the same signed config, `kid` binding, permission,
 and lifecycle enforcement as the messaging path.
@@ -67,7 +68,8 @@ In order of importance:
 1. **Protected payloads**: the sensitive records moving between instances.
 2. **Token vault and blind-index store**: the `tokens` table holds the reversible mapping from a
    token to its original plaintext (plus optional metadata), AEAD-encrypted at
-   rest. The database only ever sees `kid`, `hashid`, and encrypted `data`.
+   rest. The database also exposes `kid`, `hashid`, nullable `subject`, and
+   public envelope context; it is not a metadata-confidential store.
    The `indexes` table holds only deterministic `(kid, digest)` membership
    entries; it contains no plaintext or profile data.
 3. **Key material**: encrypted init keys (`init.json`), public init verification keys (`init_pub.json`), operational keys
@@ -75,13 +77,19 @@ In order of importance:
    keys derived from an operational key for FPE (the field key), tokenization
    (the `hash_key` and `data_key`), MAC/indexes (the MAC key), commitments
    (the commitment key), and secret sharing (share-authentication key material).
+   Deterministic profiles have separate AES-256-SIV parents. Authenticated
+   `subjects.seed` envelopes protect the seeds shared across random tokens,
+   deterministic tokens, FPE and symmetric; their creator profiles and keys are
+   required to open them.
 4. **Signed configuration**: routes, remote routes, peer public keys, API-key
-   permissions, and `fpe_profiles`, `tokenization_profiles`, `mac_profiles`,
+   permissions, and `fpe_profiles`, `tokenization_profiles`,
+   `deterministic_tokenization_profiles`, `mac_profiles`,
    `commitment_profiles`, `sharing_profiles`, and `masking_profiles` in
-   `config.json`.
+   `config.json`, plus time-attestation policy.
 5. **Transient sensitive outputs**: commitment openings and plaintext secrets
    returned by share combination, plus self-contained authenticated shares held
-   by callers. Vectis does not persist these values.
+   by callers. Client-held deterministic tokens and symmetric/FPE ciphertexts
+   are also assets; Vectis does not persist these outputs.
 6. **Credentials**: the root API key and per-client API keys.
 
 ## Trust Model
@@ -196,7 +204,7 @@ satisfy them need compensating controls.
    HMAC-BLAKE2b-256 tag over ciphertext and profile context before FF1, including
    preserved separators. This does not hide equality, prevent replay or replace
    authorization or AEAD message encryption. Use FPE where equality leakage is acceptable
-   (for example, values that are already unique), and prefer tokenization when
+   (for example, values that are already unique), and prefer random tokenization when
    unlinkability is required.
 8. **Blind indexes deliberately reveal deterministic membership.** The same
    profile/context/plaintext produces the same digest, so an observer with
@@ -228,6 +236,27 @@ satisfy them need compensating controls.
     covered by a signature. Preserve verified checkpoints outside the node when
     stronger truncation or tail-authenticity evidence is required.
 
+### Deterministic Tokens And Shared Subjects
+
+AES-256-SIV authenticates deterministic tokens but deliberately reveals equality
+and frequency within a key/profile/context/subject domain. An authorized encode
+oracle can test guesses from a small plaintext space; authentication does not
+prevent dictionary attacks through that oracle or replay of an authentic token.
+Use random tokenization when a stable equality signal is not acceptable.
+
+Signed `subject_mode` controls whether FPE and random/deterministic token
+profiles require or prohibit a stored seed. A subject ID is not an independent
+authorization principal: the existing KID-scoped grants still apply. Symmetric
+uses its explicit subject route/body context. Missing or unauthentic seeds never
+fall back to general profile keys.
+
+Deleting a shared seed blocks future openings for all dependent capabilities
+and purges its random-token rows, but does not erase caller-held outputs or
+cancel requests that already opened the seed. Restoring a seed backup can restore
+access. Recreating its ID generates a different seed and cannot recover old
+outputs. Deterministic tokens have no individual server-side deletion or
+one-time-consumption mechanism.
+
 ## Out Of Scope / Non-Goals
 
 Vectis is not, and does not replace:
@@ -237,11 +266,12 @@ Vectis is not, and does not replace:
 - protection against a malicious operator (the operator is the root of trust);
 - protection against compromise of the host or the process memory;
 - a secure channel or a message-encryption substitute for the local field
-  operations: FPE, reversible tokenization, MAC, blind indexes, masking,
+  operations: FPE, random and deterministic tokenization, MAC, blind indexes, masking,
   commitments, and secret sharing protect or transform values within a single
   instance, not data in transit between instances.
-  Tokenization additionally persists a reversible token-to-plaintext mapping
-  (FPE, MAC, masking, commitments, and sharing store nothing; blind indexes
+  Random tokenization additionally persists a reversible token-to-plaintext mapping
+  (deterministic tokenization, FPE, symmetric, MAC, masking, commitments, and sharing
+  do not store per-value ciphertexts; blind indexes
   store deterministic digests), so an attacker holding both the `tokens` table
   and the operational key could recover plaintexts — the host and operator
   boundary above applies;
@@ -261,7 +291,7 @@ Vectis is not, and does not replace:
 | Config rollback (assumption 3) | Accepted for v1 | Version-control the signed config; alert on unexpected reloads via the audit log |
 | Client-side API key storage | Known gap | Restrict file permissions; use per-client keys for applications; rotate keys when exposure is suspected |
 | No key rotation flow | Known gap | Create a successor key, update routes, retire the old key manually |
-| FPE equality and frequency leakage (assumption 7) | Accepted for v1 | Apply FPE only where equality leakage is acceptable, such as already-unique identifiers; use reversible tokenization when unlinkability is required |
+| FPE equality and frequency leakage (assumption 7) | Accepted for v1 | Apply FPE only where equality leakage is acceptable, such as already-unique identifiers; use random tokenization when unlinkability is required |
 | Blind-index equality and membership leakage (assumption 8) | Accepted for v1 | Use a narrowly scoped signed MAC profile/context; do not expose the index table or treat its digests as encrypted values |
 | Commitment opening exposure (assumption 9) | Caller responsibility | Store and disclose openings only through the intended evidence workflow |
 | Threshold share custody or combine misuse (assumption 10) | Caller responsibility | Distribute shares through independent protected channels; restrict `share-combine` to the minimum trusted clients |

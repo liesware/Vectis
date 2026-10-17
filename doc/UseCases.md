@@ -28,7 +28,7 @@ For the exact request/response schema of every endpoint, see
 
 ## Contents
 
-[How to choose](#how-to-choose) · [FPE — Format-Preserving Encryption](#fpe--format-preserving-encryption) · [Tokenization — Reversible Random Tokens](#tokenization--reversible-random-tokens) · [MAC — Keyed Integrity and Authenticity](#mac--keyed-integrity-and-authenticity) · [Blind Index — Equality Search Over Protected Data](#blind-index--equality-search-over-protected-data) · [Commitments — Commit Now, Reveal Later](#commitments--commit-now-reveal-later) · [Masking — Display-Only Redaction](#masking--display-only-redaction) · [Protected Messages — Cross-Service / Cross-Org Exchange](#protected-messages--cross-service--cross-org-exchange) · [Symmetric Encrypt/Decrypt — Local Data at Rest](#symmetric-encryptdecrypt--local-data-at-rest) · [Signatures — Authenticity and Timestamp](#signatures--authenticity-and-timestamp) · [Combining features: protecting a credit-card PAN end-to-end](#combining-features-protecting-a-credit-card-pan-end-to-end)
+[How to choose](#how-to-choose) · [FPE — Format-Preserving Encryption](#fpe--format-preserving-encryption) · [Tokenization — Reversible Random Tokens](#tokenization--reversible-random-tokens) · [Deterministic Tokenization](#deterministic-tokenization) · [MAC — Keyed Integrity and Authenticity](#mac--keyed-integrity-and-authenticity) · [Blind Index — Equality Search Over Protected Data](#blind-index--equality-search-over-protected-data) · [Commitments — Commit Now, Reveal Later](#commitments--commit-now-reveal-later) · [Masking — Display-Only Redaction](#masking--display-only-redaction) · [Protected Messages — Cross-Service / Cross-Org Exchange](#protected-messages--cross-service--cross-org-exchange) · [Symmetric Encrypt/Decrypt — Local Data at Rest](#symmetric-encryptdecrypt--local-data-at-rest) · [Signatures — Authenticity and Timestamp](#signatures--authenticity-and-timestamp) · [Combining features: protecting a credit-card PAN end-to-end](#combining-features-protecting-a-credit-card-pan-end-to-end)
 
 ## How to choose
 
@@ -36,6 +36,7 @@ For the exact request/response schema of every endpoint, see
 | --- | --- |
 | Encrypt a value but keep its **format and length** (reversible) | **FPE** |
 | Replace a value with a **random surrogate** you can reverse later | **Tokenization** |
+| Return the same authenticated token for the same value/context, without a per-token vault | **Deterministic Tokenization (AES-256-SIV)** |
 | Detect **tampering** of a value (integrity + authenticity) | **MAC** |
 | **Search** protected data by equality without storing plaintext | **Blind Index** |
 | **Commit** to a value now and reveal it later (hiding + binding) | **Commitments** |
@@ -55,6 +56,7 @@ flowchart TD
     R -->|"Yes"| FMT{"Keep the same format and length?"}
     FMT -->|"Yes"| FPE["FPE"]
     FMT -->|"No, random surrogate"| TOK["Tokenization"]
+    FMT -->|"No, stable authenticated token; equality acceptable"| DTOK["Deterministic AES-256-SIV tokenization"]
     START --> MOVE{"Moving data between services or orgs?"}
     MOVE -->|"Yes"| MSG["Protected Messages"]
     MOVE -->|"Local payload at rest"| SYM["Symmetric encrypt/decrypt"]
@@ -62,10 +64,13 @@ flowchart TD
     SPLIT -->|"Yes, threshold"| SSS["Secret Sharing"]
 ```
 
-All local data-protection operations (FPE, Tokenization, MAC, Blind Index,
+Profile-backed data-protection operations (FPE, random/deterministic Tokenization, MAC, Blind Index,
 Commitments, Secret Sharing, Masking) are **profile-driven**: profiles live
 only in the operator-signed `config.json` and requests select one by name. The
 request cannot smuggle in algorithm parameters — those come from signed config.
+Local symmetric encryption has no separate capability profile and follows its
+KID's AEAD algorithm. Shared subjects add a stored seed dependency, not per-value
+storage for FPE, symmetric or deterministic-token outputs.
 
 ---
 
@@ -79,8 +84,9 @@ turns `4111111111111111` into a long binary blob that breaks those systems.
 **Solution.** FPE (FF1) encrypts within an alphabet and length range defined by a
 signed profile, so the ciphertext keeps the same format as the plaintext
 (digits stay digits, length is preserved). It is reversible and **deterministic**
-for the same key, profile, tweak, and plaintext. It does **not** authenticate the
-data and does not replace message encryption.
+for the same key, profile, tweak, and plaintext. Legacy profiles do not authenticate
+data. A new signed `authenticated: true` profile adds a separate HMAC tag over
+ciphertext and context, verified before FF1. Neither mode replaces AEAD messaging.
 
 **Use cases.**
 
@@ -98,7 +104,9 @@ vectis fpe encrypt <kid> --json '{"ref":"reg1","profile":"patient-id-decimal-v1"
 **When not to use it.** If you don't need the original format preserved and would
 rather keep the value out of the record entirely, use **Tokenization**. If you only
 need to *display* a partial value, use **Masking**. FPE alone provides no tamper
-detection — pair with a **MAC** if you need integrity.
+detection in legacy mode; use the built-in authenticated profile policy and keep
+the returned tag with its ciphertext when integrity is required. Presets and
+preserved separators remain subject to the signed profile's domain constraints.
 
 ---
 
@@ -124,13 +132,47 @@ different token each time**. Detokenization happens only through Vectis.
 
 ```sh
 vectis token encode <kid> --json '{"ref":"reg1","profile":"patient-id-token-v1","plaintext":"123456","metadata":{}}'
-# -> "token":"tok_patient_vGqyEeXKcKz5QK1jwBQTyQ"
-vectis token decode --json '{"ref":"reg1","kid":"<kid>","profile":"patient-id-token-v1","token":"tok_patient_vGqyEeXKcKz5QK1jwBQTyQ"}'
+# -> "token":"tok_patient_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+vectis token decode --json '{"ref":"reg1","kid":"<kid>","profile":"patient-id-token-v1","token":"<token-returned-by-encode>"}'
 ```
+
+The illustrative suffix above contains 32 decoded bytes; use the actual random
+token returned by encode, not that fixed example.
 
 **When not to use it.** If downstream systems require the original *format*, use
 **FPE**. If you never need to reverse the value and only want equality lookups, use
-a **Blind Index**. Tokenization requires a datastore; FPE and MAC do not.
+a **Blind Index**. Random-token vault rows require a datastore; FPE and MAC
+do not create per-value rows. Deterministic tokens are another reversible option
+when equality leakage is acceptable.
+
+---
+
+## Deterministic Tokenization
+
+**Problem.** You need a stable, reversible and authenticated token without a
+stored mapping for every value, and exposing equality within a context is acceptable.
+
+**Solution.** Signed `deterministic_tokenization_profiles` fix AES-256-SIV.
+The same plaintext, KID, profile/context and subject generation produce the same
+token. The format is not FPE: the token is two Base64URL segments containing
+public authenticated context and SIV ciphertext. It is not a random surrogate.
+
+```sh
+vectis token deterministic encode <kid> --json '{"ref":"reg1","profile":"customer-email-v1","plaintext":"synthetic data"}'
+vectis token deterministic decode --file deterministic-decode.json
+```
+
+The decode file supplies `ref`, `kid`, `profile` and the complete returned token.
+Single and batch operations have independent `token-deterministic-encode` /
+`token-deterministic-decode` grants. Signed `subject_mode: none` prohibits a
+subject; `stored` requires an existing shared seed. Tokens are retained outside
+Vectis; subject seeds still require storage. See [API examples](API.md#deterministic-tokenization).
+
+**When not to use it.** Equality and authorized dictionary testing remain
+possible; this does not prevent replay or give unlinkability. There is no
+individual delete or one-time consumption for deterministic tokens. Deleting a
+subject blocks future opens for every capability sharing its seed, not just one
+token; backups and already-open requests remain outside that erasure guarantee.
 
 ---
 

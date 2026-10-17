@@ -136,9 +136,18 @@ Config controls:
 
 - local final app routes;
 - remote Vectis routes;
-- API key permissions.
+- API key permissions;
 - FPE profiles;
-- tokenization profiles.
+- random and deterministic tokenization profiles;
+- MAC/index, commitment, sharing and masking profiles;
+- time-attestation configuration.
+
+Subject seeds live in shared PostgreSQL and are resolved per operation, not in
+the operational-key cache. Every node needs the signed tokenization creator
+profile required to authenticate each seed envelope. A subject deletion blocks
+subsequent seed lookups across nodes; requests that already opened a seed may
+finish. Distribute compatible creator profiles and their keys along with the
+FPE, symmetric or deterministic-token configuration that depends on them.
 
 `POST /config/reload` reloads config only on the node that receives the request.
 There is no cluster-wide config reload.
