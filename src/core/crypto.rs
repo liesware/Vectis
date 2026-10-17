@@ -8,6 +8,37 @@ use botan::{
 use std::io::Read;
 use zeroize::Zeroizing;
 
+pub fn encrypt_aes256_siv(key: &[u8], aad: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, DynError> {
+    let mut cipher = Cipher::new("AES-256/SIV", CipherDirection::Encrypt)?;
+    cipher.set_key(key)?;
+    cipher.set_associated_data(aad)?;
+    Ok(cipher.process(&[], plaintext)?)
+}
+
+pub fn decrypt_aes256_siv(
+    key: &[u8],
+    aad: &[u8],
+    ciphertext: &[u8],
+) -> Result<Zeroizing<Vec<u8>>, DynError> {
+    let mut cipher = Cipher::new("AES-256/SIV", CipherDirection::Decrypt)?;
+    cipher.set_key(key)?;
+    cipher.set_associated_data(aad)?;
+    cipher.start(&[])?;
+    // Keep even a failed-authentication output buffer under zeroizing ownership.
+    let mut output = Zeroizing::new(vec![0; ciphertext.len()]);
+    let written = cipher
+        .finish_into(ciphertext, &mut output)
+        .map_err(|error| {
+            if error.error_type() == botan::ErrorType::BadAuthCode {
+                crate::error::invalid_input("deterministic token authentication failed")
+            } else {
+                crate::error::internal("deterministic token decryption failed")
+            }
+        })?;
+    output.truncate(written);
+    Ok(output)
+}
+
 pub type CryptoRng = RandomNumberGenerator;
 
 pub fn new_rng() -> Result<CryptoRng, botan::Error> {

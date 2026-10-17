@@ -27,6 +27,7 @@ tags:
   - name: Symmetric Encryption
   - name: FPE
   - name: Tokenization
+  - name: Deterministic Tokenization
   - name: MAC
   - name: Commitments
   - name: Secret Sharing
@@ -979,6 +980,220 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
+  /token/deterministic/encode/{kid}:
+    post:
+      tags: ["Deterministic Tokenization"]
+      summary: "Encode deterministic authenticated token"
+      description: "Requires token-deterministic-encode for the KID. Active keys only. Signed subject_mode must be none on this route. No per-token storage."
+      security: [{"ApiKeyAuth":[]}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeterministicTokenEncodeInput"
+      responses:
+        "200":
+          description: "Complete authenticated result"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeterministicTokenEncodeOutput"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/RequestBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          $ref: "#/components/responses/Error"
+      parameters: [{"$ref":"#/components/parameters/Kid"}]
+  /token/deterministic/encode/{kid}/subject/{subject}:
+    post:
+      tags: ["Deterministic Tokenization"]
+      summary: "Encode deterministic authenticated token"
+      description: "Requires token-deterministic-encode for the KID. Active keys only. Signed subject_mode must be stored on this route; the subject seed must exist. No fallback or per-token storage."
+      security: [{"ApiKeyAuth":[]}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeterministicTokenEncodeInput"
+      responses:
+        "200":
+          description: "Complete authenticated result"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeterministicTokenEncodeOutput"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/RequestBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          $ref: "#/components/responses/Error"
+      parameters: [{"$ref":"#/components/parameters/Kid"},{"$ref":"#/components/parameters/Subject"}]
+  /token/deterministic/encode/batch/{kid}:
+    post:
+      tags: ["Deterministic Tokenization"]
+      summary: "Encode deterministic authenticated tokens in order"
+      description: "Requires token-deterministic-encode for the KID. Active keys only. Signed subject_mode must be none on this route. No per-token storage. At most 128 unique refs; no partial results."
+      security: [{"ApiKeyAuth":[]}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeterministicTokenEncodeBatchInput"
+      responses:
+        "200":
+          description: "Complete authenticated result"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeterministicTokenEncodeBatchOutput"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/RequestBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          $ref: "#/components/responses/Error"
+      parameters: [{"$ref":"#/components/parameters/Kid"}]
+  /token/deterministic/encode/batch/{kid}/subject/{subject}:
+    post:
+      tags: ["Deterministic Tokenization"]
+      summary: "Encode deterministic authenticated tokens in order"
+      description: "Requires token-deterministic-encode for the KID. Active keys only. Signed subject_mode must be stored; the subject seed must exist. No fallback or per-token storage. At most 128 unique refs; no partial results."
+      security: [{"ApiKeyAuth":[]}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeterministicTokenEncodeBatchInput"
+      responses:
+        "200":
+          description: "Complete authenticated result"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeterministicTokenEncodeBatchOutput"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/RequestBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          $ref: "#/components/responses/Error"
+      parameters: [{"$ref":"#/components/parameters/Kid"},{"$ref":"#/components/parameters/Subject"}]
+  /token/deterministic/decode:
+    post:
+      tags: ["Deterministic Tokenization"]
+      summary: "Decode deterministic authenticated token"
+      description: "Requires token-deterministic-decode for the KID. Active or retired keys only. Signed subject_mode requires subject for stored and prohibits it for none; violations return 400 before seed lookup. Missing required seed returns 404. No fallback or per-token storage."
+      security: [{"ApiKeyAuth":[]}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeterministicTokenDecodeInput"
+      responses:
+        "200":
+          description: "Complete authenticated result"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeterministicTokenDecodeOutput"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/RequestBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          $ref: "#/components/responses/Error"
+  /token/deterministic/decode/batch:
+    post:
+      tags: ["Deterministic Tokenization"]
+      summary: "Decode deterministic authenticated tokens in order"
+      description: "Requires token-deterministic-decode for the KID. Active or retired keys only. Signed subject_mode requires the common subject for stored and prohibits it for none. Missing required seed returns 404. No fallback or per-token storage. At most 128 unique refs; no partial results."
+      security: [{"ApiKeyAuth":[]}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeterministicTokenDecodeBatchInput"
+      responses:
+        "200":
+          description: "Complete authenticated result"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeterministicTokenDecodeBatchOutput"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/RequestBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          $ref: "#/components/responses/Error"
   /token/encode/{kid}:
     post:
       tags: [Tokenization]
@@ -2077,13 +2292,13 @@ components:
           type: array
           items:
             type: string
-            enum: [admin, keys, lifecycle, self-test, sign, message, fpe-encrypt, fpe-decrypt, token-encode, token-decode, mac-create, mac-verify, commit-create, commit-verify, share-split, share-combine, index-create, index-verify, mask, metrics]
+            enum: [admin, keys, lifecycle, self-test, sign, message, symmetric, fpe-encrypt, fpe-decrypt, token-encode, token-decode, token-delete, token-deterministic-encode, token-deterministic-decode, subject-create, subject-delete, mac-create, mac-verify, commit-create, commit-verify, share-split, share-combine, index-create, index-verify, mask, time-attest, metrics]
           example:
             - message
 
     ReloadConfigResponse:
       type: object
-      required: [status, routes_loaded, remote_routes_loaded, clients_loaded, fpe_profiles_loaded, tokenization_profiles_loaded, mac_profiles_loaded, commitment_profiles_loaded, masking_profiles_loaded, sharing_profiles_loaded]
+      required: [status, routes_loaded, remote_routes_loaded, clients_loaded, fpe_profiles_loaded, tokenization_profiles_loaded, deterministic_tokenization_profiles_loaded, mac_profiles_loaded, commitment_profiles_loaded, masking_profiles_loaded, sharing_profiles_loaded]
       properties:
         status:
           const: reloaded
@@ -2103,6 +2318,9 @@ components:
           type: integer
           minimum: 0
         tokenization_profiles_loaded:
+          type: integer
+          minimum: 0
+        deterministic_tokenization_profiles_loaded:
           type: integer
           minimum: 0
         mac_profiles_loaded:
@@ -2879,6 +3097,234 @@ components:
         - type: object
           required: [subject]
 
+    DeterministicTokenEncodeInput:
+      type: "object"
+      additionalProperties: false
+      required: ["ref","profile","plaintext"]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        profile:
+          type: "string"
+          minLength: 1
+          maxLength: 128
+        plaintext:
+          type: "string"
+          minLength: 1
+          maxLength: 16384
+          description: "Unicode scalar count, also bounded by the signed profile."
+    DeterministicTokenEncodeOutput:
+      type: "object"
+      additionalProperties: false
+      required: ["ref","kid","profile","token"]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          type: "string"
+          minLength: 1
+          maxLength: 128
+        token:
+          type: "string"
+          maxLength: 131072
+          pattern: "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+          description: "Canonical context and complete AES-256-SIV output, Base64URL without padding."
+        subject:
+          $ref: "#/components/schemas/Subject"
+    DeterministicTokenEncodeBatchItemInput:
+      type: "object"
+      additionalProperties: false
+      required: ["ref","plaintext"]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        plaintext:
+          type: "string"
+          minLength: 1
+          maxLength: 16384
+          description: "Unicode scalar count, also bounded by the signed profile."
+    DeterministicTokenEncodeBatchInput:
+      type: "object"
+      additionalProperties: false
+      required: ["profile","items"]
+      properties:
+        profile:
+          type: "string"
+          minLength: 1
+          maxLength: 128
+        items:
+          type: "array"
+          minItems: 1
+          maxItems: 128
+          items:
+            $ref: "#/components/schemas/DeterministicTokenEncodeBatchItemInput"
+    DeterministicTokenEncodeBatchItemOutput:
+      type: "object"
+      additionalProperties: false
+      required: ["ref","token"]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        token:
+          type: "string"
+          maxLength: 131072
+          pattern: "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+          description: "Canonical context and complete AES-256-SIV output, Base64URL without padding."
+    DeterministicTokenEncodeBatchOutput:
+      type: "object"
+      additionalProperties: false
+      required: ["kid","profile","items"]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          type: "string"
+          minLength: 1
+          maxLength: 128
+        subject:
+          $ref: "#/components/schemas/Subject"
+        items:
+          type: "array"
+          minItems: 1
+          maxItems: 128
+          items:
+            $ref: "#/components/schemas/DeterministicTokenEncodeBatchItemOutput"
+    DeterministicTokenDecodeInput:
+      type: "object"
+      additionalProperties: false
+      description: "Subject is required for stored profiles and prohibited for none profiles. Null is invalid."
+      required: ["ref","kid","profile","token"]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          type: "string"
+          minLength: 1
+          maxLength: 128
+        token:
+          type: "string"
+          maxLength: 131072
+          pattern: "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+          description: "Canonical context and complete AES-256-SIV output, Base64URL without padding."
+        subject:
+          $ref: "#/components/schemas/Subject"
+    DeterministicTokenDecodeOutput:
+      type: "object"
+      additionalProperties: false
+      required: ["ref","kid","profile","plaintext"]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          type: "string"
+          minLength: 1
+          maxLength: 128
+        plaintext:
+          type: "string"
+          minLength: 1
+          maxLength: 16384
+          description: "Unicode scalar count, also bounded by the signed profile."
+        subject:
+          $ref: "#/components/schemas/Subject"
+    DeterministicTokenDecodeBatchItemInput:
+      type: "object"
+      additionalProperties: false
+      required: ["ref","token"]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        token:
+          type: "string"
+          maxLength: 131072
+          pattern: "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+          description: "Canonical context and complete AES-256-SIV output, Base64URL without padding."
+    DeterministicTokenDecodeBatchInput:
+      type: "object"
+      additionalProperties: false
+      description: "One common subject for all items, required for stored profiles and prohibited for none profiles. Null is invalid."
+      required: ["kid","profile","items"]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          type: "string"
+          minLength: 1
+          maxLength: 128
+        subject:
+          $ref: "#/components/schemas/Subject"
+        items:
+          type: "array"
+          minItems: 1
+          maxItems: 128
+          items:
+            $ref: "#/components/schemas/DeterministicTokenDecodeBatchItemInput"
+    DeterministicTokenDecodeBatchItemOutput:
+      type: "object"
+      additionalProperties: false
+      required: ["ref","plaintext"]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ClientRef"
+        plaintext:
+          type: "string"
+          minLength: 1
+          maxLength: 16384
+          description: "Unicode scalar count, also bounded by the signed profile."
+    DeterministicTokenDecodeBatchOutput:
+      type: "object"
+      additionalProperties: false
+      required: ["kid","profile","items"]
+      properties:
+        kid:
+          $ref: "#/components/schemas/Kid"
+        profile:
+          type: "string"
+          minLength: 1
+          maxLength: 128
+        subject:
+          $ref: "#/components/schemas/Subject"
+        items:
+          type: "array"
+          minItems: 1
+          maxItems: 128
+          items:
+            $ref: "#/components/schemas/DeterministicTokenDecodeBatchItemOutput"
+    DeterministicTokenProfileConfig:
+      type: "object"
+      additionalProperties: false
+      required: ["name","kid","context","min_plaintext_len","max_plaintext_len"]
+      description: "Signed profile; 1 <= min_plaintext_len <= max_plaintext_len <= 16384. Subject policy is mandatory per profile: default none prohibits subject; stored requires its existing seed, not token storage."
+      properties:
+        name:
+          type: "string"
+          minLength: 1
+          maxLength: 128
+        kid:
+          $ref: "#/components/schemas/Kid"
+        context:
+          type: "string"
+          minLength: 1
+          maxLength: 128
+          description: "Validated ordered key=value labels; bound to HKDF and AAD."
+        subject_mode:
+          type: "string"
+          enum: [none, stored]
+          default: none
+          description: "None is omitted when serialized; stored requires subject in route or decode body. Null is invalid. Policy only, not part of HKDF or AAD."
+        min_plaintext_len:
+          type: "integer"
+          minimum: 1
+          maximum: 16384
+        max_plaintext_len:
+          type: "integer"
+          minimum: 1
+          maximum: 16384
     TokenEncodeInput:
       type: object
       additionalProperties: false

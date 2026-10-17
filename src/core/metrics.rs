@@ -78,6 +78,7 @@ pub struct LoadedGaugeCounts {
     pub permission_clients: usize,
     pub fpe_profiles: usize,
     pub tokenization_profiles: usize,
+    pub deterministic_tokenization_profiles: usize,
     pub mac_profiles: usize,
     pub masking_profiles: usize,
     pub commitment_profiles: usize,
@@ -91,6 +92,8 @@ pub fn set_loaded_gauges(counts: LoadedGaugeCounts) {
     gauge!("vectis_permission_clients").set(counts.permission_clients as f64);
     gauge!("vectis_fpe_profiles_loaded").set(counts.fpe_profiles as f64);
     gauge!("vectis_tokenization_profiles_loaded").set(counts.tokenization_profiles as f64);
+    gauge!("vectis_deterministic_tokenization_profiles_loaded")
+        .set(counts.deterministic_tokenization_profiles as f64);
     gauge!("vectis_mac_profiles_loaded").set(counts.mac_profiles as f64);
     gauge!("vectis_masking_profiles_loaded").set(counts.masking_profiles as f64);
     gauge!("vectis_commitment_profiles_loaded").set(counts.commitment_profiles as f64);

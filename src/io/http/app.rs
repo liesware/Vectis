@@ -135,6 +135,15 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
                 request,
             )
         },
+        |request| {
+            let key = keys_db_state.get(request.kid).ok_or_else(|| {
+                crate::error::invalid_input("deterministic token profile kid is not loaded")
+            })?;
+            crate::core::deterministic_tokenization::derive_profile_key(
+                key.keys().symmetric().key_hex(),
+                request,
+            )
+        },
     )?;
     let started_at = validation::current_timestamp()?;
     info!(

@@ -757,6 +757,37 @@ keys. The CLI does not print or accept `fpe_version`; that value is part of the
 signed profile. `ref` is a required client correlation value and is echoed in
 the response.
 
+### `vectis token deterministic`
+
+```sh
+vectis config token-deterministic add --name customer-email-v1 --kid <kid> --context 'tenant=acme;field=email;version=1' --min-plaintext-len 1 --max-plaintext-len 16384
+vectis config token-deterministic add --name customer-email-subject-v1 --kid <kid> --context 'tenant=acme;field=email;version=1' --min-plaintext-len 1 --max-plaintext-len 16384 --subject-mode stored
+vectis config sign
+vectis config reload
+vectis token deterministic encode <kid> --json '{"ref":"e1","profile":"customer-email-v1","plaintext":"synthetic data"}'
+vectis token deterministic encode <kid> --subject <subject> --file encode.json
+vectis token deterministic decode --file decode.json
+vectis token deterministic encode-batch <kid> --subject <subject> --file batch.json
+vectis token deterministic decode-batch --file decode-batch.json
+```
+
+All runtime commands accept exactly one of `--json` or `--file` and
+`--output json|yaml`. Decode receives KID, profile, token and profile-controlled subject in
+JSON. Batch uses common KID/profile/subject and ordered items with ref/token;
+encode batch uses common profile and items with ref/plaintext. No metadata/delete.
+
+The local `config token-deterministic` editor supports `list`, `get <name>`,
+`add`, `update <name>` and `delete <name>`. Add requires name, KID, context and
+both plaintext bounds; update preserves omitted fields and validates before
+writing. Sign/reload remains explicit. Delete removes a profile, not tokens.
+`--subject-mode none|stored` is accepted by add/update. Add defaults to `none`
+and omits the field; update without the flag preserves it, while explicit `none`
+removes it. Stored profiles require `--subject` on encode and a subject in decode
+JSON, including batch. None profiles prohibit both. The subject examples above
+use `customer-email-subject-v1` inside their input files; unscoped examples use
+`customer-email-v1`. Runtime CLI selects routes; the server enforces signed policy.
+Bounds count Unicode characters. See [API](API.md#deterministic-tokenization).
+
 ### `vectis token`
 
 Calls local reversible tokenization endpoints. Tokenization profiles are not

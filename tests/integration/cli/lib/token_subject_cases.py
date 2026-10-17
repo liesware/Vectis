@@ -118,3 +118,5 @@ def _runtime_contracts(env, configuration, directory):
     symmetric_runtime_contracts(env, configuration, directory)
     from .fpe_cases import fpe_runtime_contracts
     fpe_runtime_contracts(env, directory)
+    from .deterministic_cases import deterministic_runtime_contracts
+    deterministic_runtime_contracts(env, directory)

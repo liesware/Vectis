@@ -68,6 +68,7 @@ pub(crate) const CONFIG_COMMANDS: &[&str] = &[
     "permissions",
     "fpe",
     "token",
+    "token-deterministic",
     "mac",
     "masking",
     "commitment",
@@ -804,6 +805,7 @@ const CONFIG_HELP: CommandHelp = CommandHelp {
                 "  permissions           Edits local config permissions by unique client",
                 "  fpe                   Edits local config FPE profiles by unique name",
                 "  token                 Edits local config tokenization profiles by unique name",
+                "  token-deterministic   Edits AES-256-SIV token profiles by unique name",
                 "  mac                   Edits local config MAC profiles by unique name",
                 "  masking               Edits local config masking profiles by unique name",
                 "  commitment            Edits local config commitment profiles by unique name",
@@ -1251,6 +1253,39 @@ const FPE_HELP: CommandHelp = CommandHelp {
     output: true,
 };
 
+const CONFIG_TOKEN_DETERMINISTIC_HELP: CommandHelp = CommandHelp {
+    key: "config token-deterministic",
+    heading: "Usage:",
+    usage: &[
+        "vectis config token-deterministic list",
+        "vectis config token-deterministic get <name>",
+        "vectis config token-deterministic add --name <name> --kid <kid> --context <labels> --min-plaintext-len <n> --max-plaintext-len <n> [--subject-mode none|stored]",
+        "vectis config token-deterministic update <name> [--kid <kid>] [--context <labels>] [--min-plaintext-len <n>] [--max-plaintext-len <n>] [--subject-mode none|stored]",
+        "vectis config token-deterministic delete <name>",
+    ],
+    summary: Some(
+        "Edits signed deterministic token profiles; plaintext limits count Unicode characters, up to 16384.",
+    ),
+    sections: &[],
+    output: true,
+};
+
+const TOKEN_DETERMINISTIC_HELP: CommandHelp = CommandHelp {
+    key: "token deterministic",
+    heading: "Usage:",
+    usage: &[
+        "vectis token deterministic encode <kid> [--subject <subject>] --json '<json>'",
+        "vectis token deterministic decode --json '<json>'",
+        "vectis token deterministic encode-batch <kid> [--subject <subject>] --file batch.json",
+        "vectis token deterministic decode-batch --file batch.json",
+    ],
+    summary: Some(
+        "AES-256-SIV deterministic authenticated tokens without per-token storage. All commands accept --json or --file and --output json|yaml. Decode receives kid, profile and token in JSON. Signed subject_mode requires subject for stored profiles and prohibits it for none profiles.",
+    ),
+    sections: &[],
+    output: true,
+};
+
 const TOKEN_HELP: CommandHelp = CommandHelp {
     key: "token",
     heading: "Usage:",
@@ -1264,6 +1299,10 @@ const TOKEN_HELP: CommandHelp = CommandHelp {
         "vectis token encode <kid> --subject <subject> --json '<json>'",
         "vectis token encode-batch <kid> [--subject <subject>] --json '<json>'",
         "vectis token decode-batch --json '<json>'",
+        "vectis token deterministic encode <kid> [--subject <subject>] --json '<json>'",
+        "vectis token deterministic decode --json '<json>'",
+        "vectis token deterministic encode-batch <kid> [--subject <subject>] --file batch.json",
+        "vectis token deterministic decode-batch --file batch.json",
     ],
     summary: Some(
         "Encodes, decodes or deletes reversible tokens with signed-config profiles; all commands accept --json or --file.",
@@ -1629,6 +1668,7 @@ const COMMAND_HELPS: &[CommandHelp] = &[
     CONFIG_PERMISSIONS_HELP,
     CONFIG_FPE_HELP,
     CONFIG_TOKEN_HELP,
+    CONFIG_TOKEN_DETERMINISTIC_HELP,
     CONFIG_MAC_HELP,
     CONFIG_MASKING_HELP,
     CONFIG_COMMITMENT_HELP,
@@ -1638,6 +1678,7 @@ const COMMAND_HELPS: &[CommandHelp] = &[
     SIGN_HELP,
     FPE_HELP,
     TOKEN_HELP,
+    TOKEN_DETERMINISTIC_HELP,
     SUBJECT_HELP,
     MAC_HELP,
     INDEX_HELP,

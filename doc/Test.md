@@ -9,6 +9,15 @@ and how to run the tests consistently.
 
 ## Testing Strategy
 
+Deterministic token coverage includes a 512-bit combined-key Wycheproof AES-SIV
+known-answer vector, exact HKDF contexts, Unicode maxima, tampering and strict
+parsers. HTTP/CLI isolated cases exercise single/batch flows, independent grants,
+subjects and lifecycle. The signed none/stored policy matrix is tested in single
+and batch operations, including constructor guards, editor preservation/removal,
+and unchanged derivation for previously issued subject tokens. Existing native `fuzz_tokenization_inputs`,
+`fuzz_tokenization_roundtrip` and `fuzz_config_file` also cover the new family;
+no separate workflow is required.
+
 Vectis uses several test layers because each one protects a different part of
 the system:
 

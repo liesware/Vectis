@@ -74,6 +74,7 @@ const CONFIG_COMMANDS: &[ConfigCommand] = &[
     ConfigCommand::new("permissions", config_command_permissions),
     ConfigCommand::new("fpe", config_command_fpe),
     ConfigCommand::new("token", config_command_token),
+    ConfigCommand::new("token-deterministic", config_command_token_deterministic),
     ConfigCommand::new("mac", config_command_mac),
     ConfigCommand::new("masking", config_command_masking),
     ConfigCommand::new("commitment", config_command_commitment),
@@ -218,6 +219,10 @@ boxed_command!(
 boxed_command!(config_command_permissions, config_editor::run_permissions);
 boxed_command!(config_command_fpe, config_editor::run_config_fpe);
 boxed_command!(config_command_token, config_editor::run_config_token);
+boxed_command!(
+    config_command_token_deterministic,
+    config_editor::run_config_token_deterministic
+);
 boxed_command!(config_command_mac, config_editor::run_config_mac);
 boxed_command!(config_command_masking, config_editor::run_config_masking);
 boxed_command!(
@@ -488,6 +493,15 @@ async fn validate_config_for_local_node() -> Result<
                 request,
             )
         },
+        |request| {
+            let key = keys_db_state.get(request.kid).ok_or_else(|| {
+                crate::error::invalid_input("deterministic token profile kid is not loaded")
+            })?;
+            crate::core::deterministic_tokenization::derive_profile_key(
+                key.keys().symmetric().key_hex(),
+                request,
+            )
+        },
     )?;
     let output = ConfigValidationOutput {
         status: "valid",
@@ -677,6 +691,21 @@ async fn run_token(args: Vec<String>, output: OutputFormat) -> Result<(), DynErr
 
 fn token_request(args: Vec<String>) -> Result<(Method, String, Option<Value>), DynError> {
     let (subcommand, rest) = split_subcommand(args, "token command")?;
+    if subcommand == "deterministic" {
+        let (command, rest) = split_subcommand(rest, "token deterministic command")?;
+        if !matches!(
+            command.as_str(),
+            "encode" | "encode-batch" | "decode" | "decode-batch"
+        ) {
+            return Err(invalid_input("unknown token deterministic command"));
+        }
+        let (method, path, body) = token_request([vec![command], rest].concat())?;
+        return Ok((
+            method,
+            path.replacen("/token/", "/token/deterministic/", 1),
+            body,
+        ));
+    }
     match subcommand.as_str() {
         "encode" | "encode-batch" => {
             let command = format!("token {subcommand}");
@@ -712,6 +741,54 @@ fn token_request(args: Vec<String>) -> Result<(Method, String, Option<Value>), D
         _ => Err(invalid_input(format!(
             "unknown token command: {subcommand}"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod deterministic_token_tests {
+    use super::*;
+    #[test]
+    fn routes_and_invalid_commands() {
+        let kid = "a".repeat(64);
+        let subject = "b".repeat(64);
+        for (command, suffix) in [("encode", "encode"), ("encode-batch", "encode/batch")] {
+            let args = vec![
+                "deterministic".to_owned(),
+                command.to_owned(),
+                kid.clone(),
+                "--subject".to_owned(),
+                subject.clone(),
+                "--json".to_owned(),
+                "{}".to_owned(),
+            ];
+            let (_, path, _) = token_request(args).unwrap();
+            assert_eq!(
+                path,
+                format!("/token/deterministic/{suffix}/{kid}/subject/{subject}")
+            );
+        }
+        for (command, path) in [
+            ("decode", "/token/deterministic/decode"),
+            ("decode-batch", "/token/deterministic/decode/batch"),
+        ] {
+            let (_, actual, _) = token_request(vec![
+                "deterministic".into(),
+                command.into(),
+                "--json".into(),
+                "{}".into(),
+            ])
+            .unwrap();
+            assert_eq!(actual, path);
+        }
+        assert!(
+            token_request(vec![
+                "deterministic".into(),
+                "delete".into(),
+                "--json".into(),
+                "{}".into()
+            ])
+            .is_err()
+        );
     }
 }
 

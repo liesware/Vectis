@@ -235,6 +235,8 @@ def self_check():
     empty_body = '{"status":"reloaded","routes_loaded":0,"remote_routes_loaded":0,"clients_loaded":0,"fpe_profiles_loaded":0,"tokenization_profiles_loaded":0,"mac_profiles_loaded":0,"masking_profiles_loaded":0,"commitment_profiles_loaded":0,"sharing_profiles_loaded":0}'
     expect(config_semantic(200, loaded_body), "config flags integrity bypass")
     expect(not config_semantic(200, empty_body), "config ignores empty reload")
+    deterministic_loaded = dict(json.loads(empty_body), deterministic_tokenization_profiles_loaded=1)
+    expect(config_semantic(200, json.dumps(deterministic_loaded)), "config flags deterministic profile integrity bypass")
     expect(not config_semantic(400, '{"error":"x"}'), "config ignores rejected")
 
     fpe_encrypt_seed = {"ref": "fpe-self", "profile": FPE_PROFILE, "plaintext": FPE_PLAINTEXT}

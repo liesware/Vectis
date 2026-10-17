@@ -6,6 +6,7 @@ pub mod commitments;
 pub mod config;
 pub mod config_file;
 pub mod crypto;
+pub mod deterministic_tokenization;
 pub mod files;
 pub mod fpe;
 pub mod http_client;

@@ -1,6 +1,6 @@
 use crate::core::{
-    canonical, commitments, config, files, fpe, mac, masking, permissions, protocol, remote_routes,
-    routes, sharing, time_attestation, tokenization,
+    canonical, commitments, config, deterministic_tokenization, files, fpe, mac, masking,
+    permissions, protocol, remote_routes, routes, sharing, time_attestation, tokenization,
 };
 use crate::error::DynError;
 use serde::{Deserialize, Serialize};
@@ -21,6 +21,9 @@ pub struct ConfigFile {
     fpe_profiles: Vec<fpe::FpeProfileInput>,
     #[serde(default)]
     tokenization_profiles: Vec<tokenization::TokenizationProfileInput>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    deterministic_tokenization_profiles:
+        Vec<deterministic_tokenization::DeterministicTokenProfileInput>,
     #[serde(default)]
     mac_profiles: Vec<mac::MacProfileInput>,
     #[serde(default)]
@@ -39,6 +42,8 @@ pub struct ConfigState {
     pub permissions: permissions::PermissionsState,
     pub fpe_profiles: fpe::FpeProfilesState,
     pub tokenization_profiles: tokenization::TokenizationProfilesState,
+    pub deterministic_tokenization_profiles:
+        deterministic_tokenization::DeterministicTokenProfilesState,
     pub mac_profiles: mac::MacProfilesState,
     pub masking_profiles: masking::MaskingProfilesState,
     pub commitment_profiles: commitments::CommitmentProfilesState,
@@ -51,6 +56,7 @@ impl Zeroize for ConfigState {
         self.permissions.zeroize();
         self.fpe_profiles.zeroize();
         self.tokenization_profiles.zeroize();
+        self.deterministic_tokenization_profiles.zeroize();
         self.mac_profiles.zeroize();
         self.masking_profiles.zeroize();
         self.commitment_profiles.zeroize();
@@ -80,6 +86,7 @@ struct ConfigValidationHooks<
     DeriveCommitmentKey,
     DeriveSharingKey,
     DeriveFpeAuthKey,
+    DeriveDeterministicKey,
 > {
     is_loaded_kid: &'a IsLoadedKid,
     derive_fpe_key: &'a DeriveFpeKey,
@@ -89,6 +96,7 @@ struct ConfigValidationHooks<
     derive_commitment_key: &'a DeriveCommitmentKey,
     derive_sharing_key: &'a DeriveSharingKey,
     derive_fpe_auth_key: &'a DeriveFpeAuthKey,
+    derive_deterministic_key: &'a DeriveDeterministicKey,
 }
 
 pub fn canonical_config_json(content: &str) -> Result<String, DynError> {
@@ -120,6 +128,9 @@ pub fn validate_config_content(
     derive_fpe_auth_key: impl Fn(
         fpe::FpeKeyDerivationRequest<'_>,
     ) -> Result<Zeroizing<Vec<u8>>, DynError>,
+    derive_deterministic_key: impl Fn(
+        deterministic_tokenization::DeterministicTokenKeyDerivationRequest<'_>,
+    ) -> Result<Zeroizing<Vec<u8>>, DynError>,
 ) -> Result<ConfigState, DynError> {
     let config_file = parse_config_json(content)?;
     let hooks = ConfigValidationHooks {
@@ -131,6 +142,7 @@ pub fn validate_config_content(
         derive_commitment_key: &derive_commitment_key,
         derive_sharing_key: &derive_sharing_key,
         derive_fpe_auth_key: &derive_fpe_auth_key,
+        derive_deterministic_key: &derive_deterministic_key,
     };
     validate_config_file(config_file, config, &hooks)
 }
@@ -167,6 +179,9 @@ pub fn load_config_state(
     derive_fpe_auth_key: impl Fn(
         fpe::FpeKeyDerivationRequest<'_>,
     ) -> Result<Zeroizing<Vec<u8>>, DynError>,
+    derive_deterministic_key: impl Fn(
+        deterministic_tokenization::DeterministicTokenKeyDerivationRequest<'_>,
+    ) -> Result<Zeroizing<Vec<u8>>, DynError>,
 ) -> Result<ConfigState, DynError> {
     let hooks = ConfigValidationHooks {
         is_loaded_kid: &is_loaded_kid,
@@ -177,6 +192,7 @@ pub fn load_config_state(
         derive_commitment_key: &derive_commitment_key,
         derive_sharing_key: &derive_sharing_key,
         derive_fpe_auth_key: &derive_fpe_auth_key,
+        derive_deterministic_key: &derive_deterministic_key,
     };
     match load_config_file(&config.config_path, verify_config, config, &hooks) {
         Ok(state) => {
@@ -221,6 +237,9 @@ pub fn reload_config_state(
     derive_fpe_auth_key: impl Fn(
         fpe::FpeKeyDerivationRequest<'_>,
     ) -> Result<Zeroizing<Vec<u8>>, DynError>,
+    derive_deterministic_key: impl Fn(
+        deterministic_tokenization::DeterministicTokenKeyDerivationRequest<'_>,
+    ) -> Result<Zeroizing<Vec<u8>>, DynError>,
 ) -> Result<ConfigState, DynError> {
     let hooks = ConfigValidationHooks {
         is_loaded_kid: &is_loaded_kid,
@@ -231,6 +250,7 @@ pub fn reload_config_state(
         derive_commitment_key: &derive_commitment_key,
         derive_sharing_key: &derive_sharing_key,
         derive_fpe_auth_key: &derive_fpe_auth_key,
+        derive_deterministic_key: &derive_deterministic_key,
     };
     match load_config_file(&config.config_path, verify_config, config, &hooks) {
         Ok(state) => Ok(state),
@@ -259,6 +279,9 @@ fn load_config_file(
             sharing::SharingKeyDerivationRequest<'_>,
         ) -> Result<sharing::DerivedSharingKey, DynError>,
         impl Fn(fpe::FpeKeyDerivationRequest<'_>) -> Result<Zeroizing<Vec<u8>>, DynError>,
+        impl Fn(
+            deterministic_tokenization::DeterministicTokenKeyDerivationRequest<'_>,
+        ) -> Result<Zeroizing<Vec<u8>>, DynError>,
     >,
 ) -> Result<ConfigState, DynError> {
     let content = read_config_file(path)?;
@@ -291,6 +314,9 @@ fn validate_config_file(
             sharing::SharingKeyDerivationRequest<'_>,
         ) -> Result<sharing::DerivedSharingKey, DynError>,
         impl Fn(fpe::FpeKeyDerivationRequest<'_>) -> Result<Zeroizing<Vec<u8>>, DynError>,
+        impl Fn(
+            deterministic_tokenization::DeterministicTokenKeyDerivationRequest<'_>,
+        ) -> Result<Zeroizing<Vec<u8>>, DynError>,
     >,
 ) -> Result<ConfigState, DynError> {
     protocol::validate_protocol_version("config.version", &config_file.version)?;
@@ -310,6 +336,11 @@ fn validate_config_file(
         config_file.tokenization_profiles,
         hooks.is_loaded_kid,
         hooks.derive_tokenization_keys,
+    )?;
+    let validated_deterministic_profiles = deterministic_tokenization::validate_profiles(
+        config_file.deterministic_tokenization_profiles,
+        hooks.is_loaded_kid,
+        hooks.derive_deterministic_key,
     )?;
     let validated_mac_profiles = mac::validate_mac_profiles(
         config_file.mac_profiles,
@@ -344,6 +375,7 @@ fn validate_config_file(
         permissions: validated_permissions,
         fpe_profiles: validated_fpe_profiles,
         tokenization_profiles: validated_tokenization_profiles,
+        deterministic_tokenization_profiles: validated_deterministic_profiles,
         mac_profiles: validated_mac_profiles,
         masking_profiles: validated_masking_profiles,
         commitment_profiles: validated_commitment_profiles,
@@ -363,6 +395,8 @@ fn empty_config_state(config: &config::AppConfig) -> ConfigState {
         permissions: permissions::PermissionsState::default(),
         fpe_profiles: fpe::FpeProfilesState::default(),
         tokenization_profiles: tokenization::TokenizationProfilesState::default(),
+        deterministic_tokenization_profiles:
+            deterministic_tokenization::DeterministicTokenProfilesState::default(),
         mac_profiles: mac::MacProfilesState::default(),
         masking_profiles: masking::MaskingProfilesState::default(),
         commitment_profiles: commitments::CommitmentProfilesState::default(),
@@ -387,6 +421,38 @@ fn read_bounded_required_file(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn deterministic_profiles_preserve_legacy_canonical_config() {
+        let legacy = r#"{"version":"v1"}"#;
+        let empty = r#"{"version":"v1","deterministic_tokenization_profiles":[]}"#;
+        let canonical = super::canonical_config_json(legacy).unwrap();
+        assert_eq!(canonical, super::canonical_config_json(empty).unwrap());
+        assert!(!canonical.contains("deterministic_tokenization_profiles"));
+        let mut definition = serde_json::json!({"version":"v1", "deterministic_tokenization_profiles":[{
+            "name":"legacy-deterministic", "kid":"a".repeat(64), "context":"tenant=test",
+            "min_plaintext_len":1, "max_plaintext_len":128
+        }]});
+        let absent_mode = super::canonical_config_json(&definition.to_string()).unwrap();
+        definition["deterministic_tokenization_profiles"][0]["subject_mode"] =
+            serde_json::json!("none");
+        assert_eq!(
+            absent_mode,
+            super::canonical_config_json(&definition.to_string()).unwrap()
+        );
+        definition["deterministic_tokenization_profiles"][0]["subject_mode"] =
+            serde_json::json!("stored");
+        assert!(
+            super::canonical_config_json(&definition.to_string())
+                .unwrap()
+                .contains("\"subject_mode\":\"stored\"")
+        );
+        assert!(
+            super::canonical_config_json(
+                r#"{"version":"v1","deterministic_tokenization_profiles":null}"#
+            )
+            .is_err()
+        );
+    }
     use super::*;
     use proptest::prelude::*;
     use serde_json::json;
@@ -526,6 +592,7 @@ mod tests {
                     vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
                 ))
             },
+            |_| Ok(zeroize::Zeroizing::new(vec![7; 64])),
         )
         .unwrap();
         assert_eq!(state.routes.len(), 0);
@@ -557,6 +624,7 @@ mod tests {
                     vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
                 ))
             },
+            |_| Ok(zeroize::Zeroizing::new(vec![7; 64])),
         );
         let _ = fs::remove_file(&path);
         assert!(result.is_err());
@@ -582,6 +650,7 @@ mod tests {
                     vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
                 ))
             },
+            |_| Ok(zeroize::Zeroizing::new(vec![7; 64])),
         );
         let _ = fs::remove_file(&path);
         let err = match result {
@@ -615,6 +684,7 @@ mod tests {
                     vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
                 ))
             },
+            |_| Ok(zeroize::Zeroizing::new(vec![7; 64])),
         );
 
         let _ = fs::remove_file(&path);
@@ -643,6 +713,7 @@ mod tests {
                     vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
                 ))
             },
+            |_| Ok(zeroize::Zeroizing::new(vec![7; 64])),
         )
         .unwrap();
         assert_eq!(state.routes.len(), 0);
@@ -672,6 +743,7 @@ mod tests {
                     vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
                 ))
             },
+            |_| Ok(zeroize::Zeroizing::new(vec![7; 64])),
         );
         let _ = fs::remove_file(&path);
         assert!(result.is_err());
@@ -701,6 +773,7 @@ mod tests {
                     vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
                 ))
             },
+            |_| Ok(zeroize::Zeroizing::new(vec![7; 64])),
         );
 
         let _ = fs::remove_file(&path);
@@ -802,6 +875,7 @@ mod tests {
                     vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
                 ))
             },
+            |_| Ok(zeroize::Zeroizing::new(vec![7; 64])),
         )
         .unwrap();
 
@@ -828,6 +902,7 @@ mod tests {
                     vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
                 ))
             },
+            |_| Ok(zeroize::Zeroizing::new(vec![7; 64])),
         )
         .expect("time overrides must validate");
         assert_eq!(state.time_attestation.max_clock_skew_ms(), 250);
@@ -852,6 +927,7 @@ mod tests {
                     vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
                 ))
             },
+            |_| Ok(zeroize::Zeroizing::new(vec![7; 64])),
         );
         let err = match result {
             Ok(_) => panic!("unsupported time providers must not validate"),
@@ -881,6 +957,7 @@ mod tests {
                 |_| Ok(zeroize::Zeroizing::new(
                     vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES]
                 )),
+                |_| Ok(zeroize::Zeroizing::new(vec![7; 64])),
             )
             .is_err()
         );
@@ -898,6 +975,7 @@ mod tests {
                 |_| Ok(zeroize::Zeroizing::new(
                     vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES]
                 )),
+                |_| Ok(zeroize::Zeroizing::new(vec![7; 64])),
             )
             .is_err()
         );
@@ -915,6 +993,7 @@ mod tests {
                 |_| Ok(zeroize::Zeroizing::new(
                     vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES]
                 )),
+                |_| Ok(zeroize::Zeroizing::new(vec![7; 64])),
             )
             .is_err()
         );
@@ -932,6 +1011,7 @@ mod tests {
                 |_| Ok(zeroize::Zeroizing::new(
                     vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES]
                 )),
+                |_| Ok(zeroize::Zeroizing::new(vec![7; 64])),
             )
             .is_err()
         );
@@ -971,6 +1051,7 @@ mod tests {
                     vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
                 ))
             },
+            |_| Ok(zeroize::Zeroizing::new(vec![7; 64])),
         ) {
             Ok(_) => panic!("tokenization_version must be rejected as an unknown field"),
             Err(err) => err,
@@ -1014,6 +1095,7 @@ mod tests {
                     vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
                 ))
             },
+            |_| Ok(zeroize::Zeroizing::new(vec![7; 64])),
         ) {
             Ok(_) => panic!("tokenization profiles must declare one_time"),
             Err(err) => err,

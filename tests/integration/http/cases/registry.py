@@ -31,6 +31,7 @@ from . import (
     positive_tokenization,
     positive_token_delete,
     positive_subjects,
+    positive_deterministic_tokenization,
     positive_token_budget,
 )
 
@@ -46,6 +47,7 @@ POSITIVE_CASES = (
     *positive_tokenization.CASES,  # tokenization, tokenization.one-time
     *positive_token_delete.CASES,
     *positive_subjects.CASES,
+    *positive_deterministic_tokenization.CASES,
     *positive_fpe_subjects.CASES,
     *positive_symmetric_subjects.CASES,
     *positive_token_budget.CASES,

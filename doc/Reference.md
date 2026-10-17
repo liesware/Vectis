@@ -518,6 +518,8 @@ Supported actions:
 - `fpe-decrypt`;
 - `token-encode`;
 - `token-decode`;
+- `token-deterministic-encode`;
+- `token-deterministic-decode`;
 - `token-delete` (explicit token deletion; permitted in any lifecycle state);
 - `mac-create`;
 - `mac-verify`;
@@ -636,6 +638,21 @@ come from signed config. FPE is deterministic for the same key/profile/tweak and
 plaintext. Legacy profiles do not authenticate data; authenticated profiles require
 the separately returned tag. Neither mode replaces AEAD message encryption or
 prevents replay. See [optional authentication](API.md#optional-fpe-authentication).
+
+## Deterministic Tokenization
+
+`deterministic_tokenization_profiles` fixes AES-256-SIV with mandatory signed
+context and Unicode plaintext bounds of 1..=16384. Signed `subject_mode` defaults
+to `none` (subject prohibited); `stored` requires an existing subject seed without
+storing tokens. None is omitted when serialized. Per-KID actions `token-deterministic-encode` and
+`token-deterministic-decode` are independent of random-token grants; root/admin
+retain usual access. Encode requires active; decode allows active or retired.
+There is no per-token storage, one-time consumption or individual delete.
+
+Routes live under `/token/deterministic/`; runtime CLI under `vectis token
+deterministic`, and local editor under `vectis config token-deterministic`.
+See [API](API.md#deterministic-tokenization), [CLI](CLI.md#vectis-token-deterministic)
+and [Cryptography](Cryptography.md#deterministic-tokenization).
 
 ## Reversible Tokenization
 

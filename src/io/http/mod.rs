@@ -12,6 +12,7 @@ mod app;
 mod auth;
 mod commitments;
 mod config;
+mod deterministic_tokenization;
 mod error;
 mod extract;
 mod fpe;
@@ -138,6 +139,7 @@ struct ConfigLoadedCounts {
     permission_clients: usize,
     fpe_profiles: usize,
     tokenization_profiles: usize,
+    deterministic_tokenization_profiles: usize,
     mac_profiles: usize,
     masking_profiles: usize,
     commitment_profiles: usize,
@@ -152,6 +154,7 @@ impl ConfigLoadedCounts {
             permission_clients: config.permissions.len(),
             fpe_profiles: config.fpe_profiles.len(),
             tokenization_profiles: config.tokenization_profiles.len(),
+            deterministic_tokenization_profiles: config.deterministic_tokenization_profiles.len(),
             mac_profiles: config.mac_profiles.len(),
             masking_profiles: config.masking_profiles.len(),
             commitment_profiles: config.commitment_profiles.len(),
@@ -419,6 +422,15 @@ impl HttpState {
                         request,
                     )
                 },
+                |request| {
+                    let key = config_key_sources.by_kid.get(request.kid).ok_or_else(|| {
+                        crate::error::invalid_input("deterministic token profile kid is not loaded")
+                    })?;
+                    crate::core::deterministic_tokenization::derive_profile_key(
+                        &key.symmetric_key_hex,
+                        request,
+                    )
+                },
             )
         })
         .await;
@@ -454,6 +466,7 @@ impl HttpState {
             permission_clients: counts.permission_clients,
             fpe_profiles: counts.fpe_profiles,
             tokenization_profiles: counts.tokenization_profiles,
+            deterministic_tokenization_profiles: counts.deterministic_tokenization_profiles,
             mac_profiles: counts.mac_profiles,
             masking_profiles: counts.masking_profiles,
             commitment_profiles: counts.commitment_profiles,
@@ -541,6 +554,14 @@ fn record_operation_denied_metric(event_name: &str) {
         "token.decode.denied" => core_metrics::record_crypto_operation("token_decode", "failed"),
         "token.encode.batch.denied" => record_crypto_failed("token_encode_batch"),
         "token.decode.batch.denied" => record_crypto_failed("token_decode_batch"),
+        "token.deterministic.encode.denied" => record_crypto_failed("token_deterministic_encode"),
+        "token.deterministic.decode.denied" => record_crypto_failed("token_deterministic_decode"),
+        "token.deterministic.encode.batch.denied" => {
+            record_crypto_failed("token_deterministic_encode_batch")
+        }
+        "token.deterministic.decode.batch.denied" => {
+            record_crypto_failed("token_deterministic_decode_batch")
+        }
         "mac.create.denied" => record_crypto_failed("mac_create"),
         "mac.verify.denied" => record_crypto_failed("mac_verify"),
         "mac.create.batch.denied" => record_crypto_failed("mac_create_batch"),
@@ -624,6 +645,30 @@ pub fn router(state: HttpState) -> Router {
         )
         .route("/token/decode", post(token::decode_endpoint))
         .route("/token/delete", post(token::delete_endpoint))
+        .route(
+            "/token/deterministic/encode/{kid}",
+            post(deterministic_tokenization::encode_endpoint),
+        )
+        .route(
+            "/token/deterministic/encode/{kid}/subject/{subject}",
+            post(deterministic_tokenization::encode_subject_endpoint),
+        )
+        .route(
+            "/token/deterministic/encode/batch/{kid}",
+            post(deterministic_tokenization::encode_batch_endpoint),
+        )
+        .route(
+            "/token/deterministic/encode/batch/{kid}/subject/{subject}",
+            post(deterministic_tokenization::encode_batch_subject_endpoint),
+        )
+        .route(
+            "/token/deterministic/decode",
+            post(deterministic_tokenization::decode_endpoint),
+        )
+        .route(
+            "/token/deterministic/decode/batch",
+            post(deterministic_tokenization::decode_batch_endpoint),
+        )
         .route("/mac/batch/{kid}", post(mac::create_batch_endpoint))
         .route("/mac/verify/batch", post(mac::verify_batch_endpoint))
         .route("/mac/verify", post(mac::verify_endpoint))
@@ -687,6 +732,8 @@ mod tests {
             permissions,
             fpe_profiles: crate::core::fpe::FpeProfilesState::default(),
             tokenization_profiles: crate::core::tokenization::TokenizationProfilesState::default(),
+            deterministic_tokenization_profiles:
+                crate::core::deterministic_tokenization::DeterministicTokenProfilesState::default(),
             mac_profiles: crate::core::mac::MacProfilesState::default(),
             masking_profiles: crate::core::masking::MaskingProfilesState::default(),
             commitment_profiles: crate::core::commitments::CommitmentProfilesState::default(),

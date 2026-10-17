@@ -8,6 +8,10 @@ manually for releases; the Git history remains the detailed engineering record.
 Changes staged for v0.9.0, the first official release.
 
 ### Added
+- Deterministic authenticated AES-256-SIV tokens without per-token storage, with
+  signed contexts, profile-controlled `subject_mode: none|stored` for shared subject
+  seeds, single/batch HTTP and CLI,
+  independent permissions and Unicode plaintexts up to 16,384 characters.
 - Subject-bound symmetric encryption reuses existing authenticated subject seeds
   with purpose-separated keys and subject-bound AEAD context. Adds an encrypt
   route and CLI `--subject`; decrypt accepts the full subject envelope. Legacy
@@ -36,6 +40,10 @@ Changes staged for v0.9.0, the first official release.
   `token-delete` permission and allowed in any key lifecycle state.
 
 ### Changed
+- Deterministic token subjects now follow signed `subject_mode` like FPE:
+  `none` forbids subject and `stored` requires it. Profiles without the field
+  remain `none`; previously issued subject tokens require marking the same
+  profile `stored`, signing and reloading. Keys and token formats are unchanged.
 - Updated core and fuzz dependencies, including Botan 0.14, SQLx 0.9,
   axum-server 0.8 and reqwest 0.13, with corresponding API adaptations.
   Outbound HTTPS now uses the system certificate trust store while retaining

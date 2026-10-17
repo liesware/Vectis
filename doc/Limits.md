@@ -52,6 +52,22 @@ byte. KiB and MiB are binary multiples.
 | SLH-DSA | Signature file | `131,072` (128 KiB) | bytes | Explicit | Signature text is bounded before parsing | [`SLH_DSA_SIGNATURE_FILE_MAX_SIZE_BYTES`](../src/core/config.rs#L64), [`split_compact_signature`](../src/ops/slh_dsa.rs#L503) |
 | Config | Routes, remote routes, permissions, and capability profiles | No element-count maximum; the 8 MiB config-file bound is the enclosing limit | items | Effective | The complete signed config is bounded, then each element is validated | [`CONFIG_FILE_MAX_SIZE_BYTES`](../src/core/config.rs#L56), [`validate_config_content`](../src/core/config_file.rs#L102) |
 
+## Deterministic Tokens
+
+| Aspect | Limit | Unit | Enforcement |
+|---|---:|---|---|
+| Profile plaintext bounds | `1 <= min <= max <= 16384` | Unicode scalar values | `.chars().count()` before encrypt and after authenticated decrypt |
+| Signed context | 128 | Unicode scalar values | Existing MAC label validation |
+| Subject policy | `none` or `stored` | enum | Signed profile prohibits or requires subject, respectively; no fallback |
+| Token | 131072 | ASCII characters | Complete two-segment token bounded before decoding |
+| Batch | 128, unique refs | items | Ordered all-or-nothing validation |
+| Request | 2 MiB | bytes | Existing global HTTP body limit |
+
+The token bound accommodates four-byte Unicode plaintexts and encoded context.
+No storage envelope budget applies; ciphertexts are retained outside Vectis.
+There is no additional response-size or exact heap bound. See
+[implementation](../src/core/deterministic_tokenization.rs).
+
 ## Common Fields
 
 | Area | Aspect | Current limit | Unit | Kind | Enforcement | Source |

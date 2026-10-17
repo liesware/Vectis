@@ -498,6 +498,72 @@ const MAC_PROFILES_SECTION: SectionSpec = SectionSpec {
     parsed_validator: None,
 };
 
+const DETERMINISTIC_PROFILES_SECTION: SectionSpec = SectionSpec {
+    cli_name: "token-deterministic",
+    json_section: "deterministic_tokenization_profiles",
+    key_field: "name",
+    item_name: "deterministic token profile name",
+    command_context: "config token-deterministic",
+    fields: &[
+        FieldSpec {
+            flag: "--subject-mode",
+            json_field: "subject_mode",
+            kind: FieldKind::SubjectMode,
+            cardinality: FieldCardinality::One,
+            required_on_add: false,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--name",
+            json_field: "name",
+            kind: FieldKind::TokenProfileName,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: false,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--kid",
+            json_field: "kid",
+            kind: FieldKind::Kid,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--context",
+            json_field: "context",
+            kind: FieldKind::MacContext,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--min-plaintext-len",
+            json_field: "min_plaintext_len",
+            kind: FieldKind::Usize,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+        FieldSpec {
+            flag: "--max-plaintext-len",
+            json_field: "max_plaintext_len",
+            kind: FieldKind::Usize,
+            cardinality: FieldCardinality::One,
+            required_on_add: true,
+            mutable_on_update: true,
+            default_on_add: None,
+        },
+    ],
+    add_defaults: &[],
+    parsed_validator: None,
+};
+
 const MASKING_PROFILES_SECTION: SectionSpec = SectionSpec {
     cli_name: "masking",
     json_section: "masking_profiles",
@@ -761,6 +827,14 @@ pub async fn run_config_token(args: Vec<String>, output: OutputFormat) -> Result
     run_basic_section_command(&TOKENIZATION_PROFILES_SECTION, &command, rest, output).await
 }
 
+pub async fn run_config_token_deterministic(
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
+    let (command, rest) = split_command(args, "config token-deterministic command")?;
+    run_basic_section_command(&DETERMINISTIC_PROFILES_SECTION, &command, rest, output).await
+}
+
 pub async fn run_config_mac(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
     let (command, rest) = split_command(args, "config mac command")?;
     run_basic_section_command(&MAC_PROFILES_SECTION, &command, rest, output).await
@@ -996,8 +1070,13 @@ fn section_list(local: &LocalConfig, spec: &SectionSpec) -> Result<Value, DynErr
 fn section_add_value(
     local: &mut LocalConfig,
     spec: &SectionSpec,
-    value: Value,
+    mut value: Value,
 ) -> Result<Value, DynError> {
+    if spec.json_section == "deterministic_tokenization_profiles"
+        && value.get("subject_mode").and_then(Value::as_str) == Some("none")
+    {
+        object_mut(&mut value)?.remove("subject_mode");
+    }
     let key = required_string(&value, spec.key_field)?.to_string();
     ensure_unique_field(
         array_mut(&mut local.value, spec.json_section)?,
@@ -1057,6 +1136,11 @@ fn section_update(
         *item = candidate;
     } else {
         object_mut(item)?.extend(update);
+    }
+    if spec.json_section == "deterministic_tokenization_profiles"
+        && item.get("subject_mode").and_then(Value::as_str) == Some("none")
+    {
+        object_mut(item)?.remove("subject_mode");
     }
 
     Ok(section_response("updated", spec, item.clone()))
@@ -1671,6 +1755,7 @@ fn ensure_config_shape(value: &mut Value) -> Result<(), DynError> {
     ensure_section_array(object, "permissions")?;
     ensure_section_array(object, "fpe_profiles")?;
     ensure_section_array(object, "tokenization_profiles")?;
+    ensure_section_array(object, "deterministic_tokenization_profiles")?;
     ensure_section_array(object, "mac_profiles")?;
     ensure_section_array(object, "masking_profiles")?;
     ensure_section_array(object, "commitment_profiles")?;
@@ -1747,6 +1832,7 @@ fn validate_local_config(local: &LocalConfig) -> Result<(), DynError> {
                 vec![9; crate::core::fpe::FPE_AUTH_KEY_SIZE_BYTES],
             ))
         },
+        |_| Ok(zeroize::Zeroizing::new(vec![7; 64])),
     )?;
     Ok(())
 }
@@ -2630,6 +2716,75 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn deterministic_subject_mode_editor_preserves_and_removes_policy() {
+        let spec = &DETERMINISTIC_PROFILES_SECTION;
+        let mut local = local_config();
+        ensure_config_shape(&mut local.value).unwrap();
+        for (name, mode) in [
+            ("default", None),
+            ("explicit", Some("none")),
+            ("scoped", Some("stored")),
+        ] {
+            let mut args = vec![
+                "--name".into(),
+                name.into(),
+                "--kid".into(),
+                "a".repeat(64),
+                "--context".into(),
+                "tenant=test".into(),
+                "--min-plaintext-len".into(),
+                "1".into(),
+                "--max-plaintext-len".into(),
+                "128".into(),
+            ];
+            if let Some(mode) = mode {
+                args.extend(["--subject-mode".into(), mode.into()]);
+            }
+            let value = parse_section_add(spec, args).unwrap();
+            section_add_value(&mut local, spec, value).unwrap();
+            let value = section_get(&local, spec, vec![name.into()]).unwrap();
+            assert_eq!(
+                value.get("subject_mode").and_then(Value::as_str),
+                mode.filter(|m| *m != "none")
+            );
+        }
+        section_update(
+            &mut local,
+            spec,
+            vec!["scoped".into(), "--max-plaintext-len".into(), "256".into()],
+        )
+        .unwrap();
+        assert_eq!(
+            section_get(&local, spec, vec!["scoped".into()]).unwrap()["subject_mode"],
+            "stored"
+        );
+        section_update(
+            &mut local,
+            spec,
+            vec!["scoped".into(), "--subject-mode".into(), "none".into()],
+        )
+        .unwrap();
+        assert!(
+            section_get(&local, spec, vec!["scoped".into()])
+                .unwrap()
+                .get("subject_mode")
+                .is_none()
+        );
+        let before = local.value.clone();
+        for mode in ["null", "true", "optional", "STORED"] {
+            assert!(
+                section_update(
+                    &mut local,
+                    spec,
+                    vec!["scoped".into(), "--subject-mode".into(), mode.into()]
+                )
+                .is_err()
+            );
+            assert_eq!(local.value, before);
+        }
     }
 
     #[test]

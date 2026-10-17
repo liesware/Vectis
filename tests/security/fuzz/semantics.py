@@ -137,6 +137,7 @@ CONFIG_LOADED_COUNTS = (
     "clients_loaded",
     "fpe_profiles_loaded",
     "tokenization_profiles_loaded",
+    "deterministic_tokenization_profiles_loaded",
     "mac_profiles_loaded",
     "masking_profiles_loaded",
     "commitment_profiles_loaded",

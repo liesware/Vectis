@@ -1,0 +1,1 @@
+{"version":"v1","deterministic_tokenization_profiles":[{"name":"deterministic-seed-v1","kid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","context":"tenant=fuzz","min_plaintext_len":0,"max_plaintext_len":16385}]}

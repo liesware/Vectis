@@ -10,6 +10,12 @@ impl From<String> for SensitiveString {
     }
 }
 
+impl From<Zeroizing<String>> for SensitiveString {
+    fn from(value: Zeroizing<String>) -> Self {
+        Self(value)
+    }
+}
+
 impl fmt::Debug for SensitiveString {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("<redacted>")

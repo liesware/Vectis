@@ -27,6 +27,44 @@ strings joined by semicolons, without a trailing semicolon or newline.
 of a particular encrypted object. Some flows deliberately use AAD bytes as
 part of info, but these are still different roles.
 
+## Deterministic Tokenization
+
+This capability fixes Botan `AES-256/SIV` with a combined 64-byte key, independently
+of the KID's randomized AEAD selection. It creates no token rows or lookup hash.
+
+| Key | IKM | Salt | Exact info | Output |
+|---|---|---|---|---|
+| Profile parent | `K_kid` | `vectis/tokenization/deterministic/v1` | `purpose=token-deterministic-data;profile=<profile>;kid=<kid>;tokenization_version=token-deterministic-v1;<context-fields>` | 64 bytes |
+| Subject child | Profile parent | Authenticated seed `S` | `purpose=subject-token-deterministic-data;kid=<kid>;profile=<profile>;version=v1` | 64 bytes |
+
+Context fields follow the MAC convention: ordered signed labels contribute
+`context.<name>=<value>`. Signed `subject_mode: none` prohibits subject and uses
+the parent directly; `stored` requires subject. With subject,
+authenticate/open its seed using the original creator profile and derive the child.
+There is no fallback or secret cache. Seeds and temporary keys use zeroizing
+ownership; parents live with their shared signed-config snapshot.
+The mode is policy only: it is not added to HKDF or AAD and does not change keys
+or token formats. Stored means the seed is stored, not the deterministic token.
+
+```mermaid
+flowchart TD
+    K["Operational symmetric key"] --> P["HKDF: deterministic profile and context, 64 bytes"]
+    P --> DIRECT["Without subject: AES-256-SIV"]
+    S["Authenticate and open existing seed"] --> CHILD["HKDF: parent, seed and exclusive subject purpose"]
+    P --> CHILD
+    CHILD --> SCOPED["With subject: AES-256-SIV"]
+```
+
+AAD is `canonical_json_v1` of purpose `token-deterministic`, version `v1`, KID,
+profile, signed context and optional subject, omitted when absent. The token is
+`Base64URL(AAD).Base64URL(complete SIV output)`, without padding or a random nonce.
+Decode reconstructs and compares exact canonical AAD before authenticated decrypt.
+Ref never participates; public context cannot choose authorization or policy.
+
+Determinism exposes equality and does not prevent replay or authorized dictionary
+testing. Changing context or recreating a subject changes keys. Deletion blocks
+future seed opens, not requests in flight, backups or external ciphertext copies.
+
 ## Initialization and Unseal
 
 ```mermaid

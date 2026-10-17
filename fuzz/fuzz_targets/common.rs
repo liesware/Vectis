@@ -97,5 +97,6 @@ pub fn validate_fuzz_config_content(content: &str) -> Result<config_file::Config
         dummy_commitment_key,
         dummy_sharing_key,
         |_| Ok(Zeroizing::new(vec![9; fpe::FPE_AUTH_KEY_SIZE_BYTES])),
+        |_| Ok(zeroize::Zeroizing::new(vec![7; 64])),
     )
 }

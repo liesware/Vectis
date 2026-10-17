@@ -24,6 +24,7 @@ pub const INTERNAL_SLH_DSA_SIGN_MODE: &str = "Randomized";
 pub const SLH_DSA_FILE_KEY_INFO: &[u8] = b"vectis/slh-dsa-file-key/v1";
 pub const INTERNAL_FPE_BATCH: usize = 128;
 pub const INTERNAL_TOKEN_BATCH: usize = 128;
+pub const INTERNAL_TOKEN_DETERMINISTIC_BATCH: usize = 128;
 pub const INTERNAL_MAC_BATCH: usize = 128;
 pub const INTERNAL_INDEX_BATCH: usize = 128;
 pub const INTERNAL_MASK_BATCH: usize = 128;

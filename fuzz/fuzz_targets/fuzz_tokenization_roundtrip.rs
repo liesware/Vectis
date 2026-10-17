@@ -51,6 +51,19 @@ static SUBJECT_STATE: LazyLock<ConfigState> = LazyLock::new(|| {
         .expect("stored fuzz profile must validate")
 });
 
+static DETERMINISTIC_STATE: LazyLock<ConfigState> = LazyLock::new(|| {
+    let mut config: serde_json::Value = serde_json::from_str(CONFIG).unwrap();
+    config["deterministic_tokenization_profiles"] = json!([{
+        "name": "fuzz-deterministic", "kid": config["tokenization_profiles"][0]["kid"],
+        "context": "tenant=fuzz;field=synthetic", "min_plaintext_len": 1, "max_plaintext_len": 16384
+    }, {
+        "name": "fuzz-deterministic-stored", "kid": config["tokenization_profiles"][0]["kid"],
+        "context": "tenant=fuzz;field=synthetic", "min_plaintext_len": 1, "max_plaintext_len": 16384,
+        "subject_mode": "stored"
+    }]);
+    common::validate_fuzz_config_content(&config.to_string()).unwrap()
+});
+
 fuzz_target!(|data: &[u8]| {
     let profile = STATE
         .tokenization_profiles
@@ -64,6 +77,48 @@ fuzz_target!(|data: &[u8]| {
     let (head, body) = data.split_first().unwrap_or((&0, &[]));
     let plaintext =
         String::from_utf8_lossy(&body[..body.len().min(profile.max_plaintext_len())]).into_owned();
+    if !plaintext.is_empty() {
+        use vectis::core::deterministic_tokenization::DeterministicTokenContext;
+        let profile = DETERMINISTIC_STATE
+            .deterministic_tokenization_profiles
+            .get(if head & 4 == 4 {
+                "fuzz-deterministic-stored"
+            } else {
+                "fuzz-deterministic"
+            })
+            .unwrap();
+        let context = if head & 4 == 4 {
+            assert!(DeterministicTokenContext::new(profile.clone()).is_err());
+            let origin = SUBJECT_STATE
+                .tokenization_profiles
+                .get(PROFILE_NAME)
+                .unwrap();
+            let subject =
+                vectis::core::subjects::subject_id(&origin, "synthetic-fuzz-user").unwrap();
+            let envelope = vectis::core::subjects::create_seed(&origin, &subject).unwrap();
+            DeterministicTokenContext::from_subject_envelope(profile, &origin, &subject, &envelope).unwrap()
+        } else {
+            assert!(
+                vectis::core::deterministic_tokenization::validate_subject_mode(
+                    &profile,
+                    Some(&"b".repeat(64))
+                )
+                .is_err()
+            );
+            DeterministicTokenContext::new(profile).unwrap()
+        };
+        let token = context.encode(&plaintext).unwrap();
+        assert_eq!(token, context.encode(&plaintext).unwrap());
+        assert_eq!(*context.decode(&token).unwrap(), plaintext);
+        let (aad, ct) = token.split_once('.').unwrap();
+        let mut changed = ct.as_bytes().to_vec();
+        changed[0] = if changed[0] == b'A' { b'B' } else { b'A' };
+        assert!(
+            context
+                .decode(&format!("{aad}.{}", String::from_utf8(changed).unwrap()))
+                .is_err()
+        );
+    }
     let metadata = if head & 1 == 1 {
         Some(json!({ "len": plaintext.len() }))
     } else {

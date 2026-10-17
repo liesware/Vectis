@@ -34,7 +34,20 @@ fuzz_target!(|data: &[u8]| {
             .and_then(tokenization::validate_delete_input),
     );
     assert_public_error_is_clean(
-        vectis::ops::subjects::parse_create_input(value)
+        vectis::ops::subjects::parse_create_input(value.clone())
             .and_then(vectis::ops::subjects::validate_create_input),
     );
+    for batch in [false, true] {
+        for path in [
+            None,
+            Some(("a".repeat(64), None)),
+            Some(("a".repeat(64), Some("b".repeat(64)))),
+        ] {
+            assert_public_error_is_clean(vectis::ops::deterministic_tokenization::parse_request(
+                value.clone(),
+                path,
+                batch,
+            ));
+        }
+    }
 });

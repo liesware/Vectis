@@ -211,11 +211,13 @@ def configure_fpe_profile(client, kid):
     atexit.register(restore)
 
 
-def _configure_tokenization_profiles(client, profiles, context):
+def _configure_tokenization_profiles(client, profiles, context, deterministic_profiles=None):
     original_cfg = CONFIG_PATH.read_bytes() if CONFIG_PATH.exists() else None
     original_sig = CONFIG_SIGN_PATH.read_bytes() if CONFIG_SIGN_PATH.exists() else None
     config = read_config_or_empty()
     config["tokenization_profiles"] = profiles
+    if deterministic_profiles is not None:
+        config["deterministic_tokenization_profiles"] = deterministic_profiles
     CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
     sign_config_file()
     status, body = client.post_json("/config/reload", {}, auth=True)
@@ -249,6 +251,11 @@ def configure_tokenization_profile(client, kid, max_plaintext_len=1024):
             }
         ],
         "tokenization seed",
+        deterministic_profiles=[{
+            "name": "fuzz-token-deterministic-v1", "kid": kid,
+            "context": "tenant=fuzz;field=token;version=1",
+            "min_plaintext_len": 1, "max_plaintext_len": max_plaintext_len,
+        }],
     )
 
 

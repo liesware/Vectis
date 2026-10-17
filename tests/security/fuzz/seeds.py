@@ -384,9 +384,18 @@ def tokenization_seeds(client):
         raise RuntimeError(f"could not encode token seed: HTTP {status}: {body}")
     token = json.loads(body)["token"]
     decode_seed = {"ref": "token-fuzz", "kid": kid, "profile": TOKENIZATION_PROFILE, "token": token}
+    deterministic_encode = {"ref": "det-fuzz", "profile": "fuzz-token-deterministic-v1", "plaintext": TOKEN_PLAINTEXT}
+    status, body = client.post_json(f"/token/deterministic/encode/{kid}", deterministic_encode, auth=True)
+    if status != 200:
+        raise RuntimeError(f"could not encode deterministic seed: HTTP {status}")
+    deterministic_token = json.loads(body)["token"]
+    client.declared_secrets = (*client.declared_secrets, deterministic_token, TOKEN_PLAINTEXT)
+    deterministic_decode = {"ref": "det-fuzz", "kid": kid, "profile": "fuzz-token-deterministic-v1", "token": deterministic_token}
     return [
         (f"/token/encode/{kid}", encode_seed),
         ("/token/decode", decode_seed),
+        (f"/token/deterministic/encode/{kid}", deterministic_encode),
+        ("/token/deterministic/decode", deterministic_decode),
     ]
 
 
@@ -440,9 +449,19 @@ def tokenization_batch_seeds(client):
         "profile": TOKENIZATION_PROFILE,
         "items": [{"ref": item["ref"], "token": item["token"]} for item in parsed["items"]],
     }
+    deterministic_encode = {"profile": "fuzz-token-deterministic-v1", "items": [
+        {"ref": item["ref"], "plaintext": item["plaintext"]} for item in encode_seed["items"]]}
+    status, body = client.post_json(f"/token/deterministic/encode/batch/{kid}", deterministic_encode, auth=True)
+    if status != 200:
+        raise RuntimeError(f"could not encode deterministic batch seed: HTTP {status}")
+    deterministic_items = json.loads(body)["items"]
+    client.declared_secrets = (*client.declared_secrets, *(i["token"] for i in deterministic_items), *TOKEN_BATCH_PLAINTEXTS)
+    deterministic_decode = {"kid": kid, "profile": "fuzz-token-deterministic-v1", "items": deterministic_items}
     return [
         (f"/token/encode/batch/{kid}", encode_seed),
         ("/token/decode/batch", decode_seed),
+        (f"/token/deterministic/encode/batch/{kid}", deterministic_encode),
+        ("/token/deterministic/decode/batch", deterministic_decode),
     ]
 
 
