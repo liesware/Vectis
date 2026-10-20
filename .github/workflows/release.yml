@@ -189,13 +189,11 @@ jobs:
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             dist/SHA256SUMS
 
-      - name: Create GitHub release
+      - name: Upload GitHub release assets
         shell: bash
         run: |
-          gh release create "$RELEASE_TAG" \
+          gh release upload "$RELEASE_TAG" \
             dist/*.tar.gz \
             dist/SHA256SUMS \
             dist/SHA256SUMS.sigstore.json \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "Vectis $RELEASE_TAG" \
-            --generate-notes
+            --repo "$GITHUB_REPOSITORY"
