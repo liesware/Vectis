@@ -5,7 +5,81 @@ manually for releases; the Git history remains the detailed engineering record.
 
 ## Unreleased
 
-Changes staged for v0.9.0, the first official release.
+Future changes will be recorded here. v0.9.0 remains the first official release.
+
+## v0.8.6 - 2026-10-19
+
+Pre-release of Vectis with the changes below. API and configuration contracts
+remain experimental; v0.9.0 will be the first official release.
+
+### Upgrading From v0.8.5
+
+Back up the database, matching init/unseal material, and the signed
+`config.json`/`config_sign.json` pair before upgrading. Stop all Vectis nodes
+using the database before applying the schema change; do not mix old and new
+binaries during this upgrade.
+
+#### Database Migration
+
+Existing databases without `tokens.subject` and the `subjects` table require
+the backend-specific migration **once**, even if subject features will not be
+used. Vectis validates the schema but does not apply migrations automatically.
+Run the appropriate command with schema-owner credentials:
+
+```sh
+# SQLite: path to the existing database being upgraded.
+sqlite3 "$VECTIS_SQLITE_PATH" < src/db/migrations/sqlite_subject_keys.sql
+
+# PostgreSQL: DSN for a schema owner, not the restricted runtime role.
+psql "$SCHEMA_OWNER_DSN" -v ON_ERROR_STOP=1 -f src/db/migrations/postgres_subject_keys.sql
+```
+
+On PostgreSQL, also grant the runtime role subject access, including the
+`UPDATE(seed)` privilege required for row locking. Replace `vectis_usr` with
+your runtime role:
+
+```sql
+GRANT SELECT, INSERT, DELETE, UPDATE(seed) ON TABLE public.subjects TO vectis_usr;
+```
+
+Do not reapply these scripts to an already migrated database. New installations
+use the full current schema instead. See [database operations](doc/BD.md#schemas-limits-and-operations)
+and the [PostgreSQL tutorial](doc/tutorials/PostgreSQL.md) for schema and role setup.
+
+#### Local Encryption Interfaces And Grants
+
+Update clients from `POST /message/internal/encrypt/{kid}` and
+`POST /message/internal/decrypt` to `POST /symmetric/encrypt/{kid}` and
+`POST /symmetric/decrypt`. Replace `vectis message internal encrypt|decrypt`
+with `vectis symmetric encrypt|decrypt`. There are no aliases or redirects.
+
+Grant `symmetric` explicitly for the affected KIDs in signed client permissions.
+`message` no longer authorizes local encryption; retain it only for protected
+messaging. No grants are converted automatically. Existing local envelopes and
+their AAD remain compatible with the new routes; no re-encryption is required.
+
+#### Subject Policy And Activation
+
+For random tokenization, deterministic tokenization and FPE, signed
+`subject_mode` defaults to `none`: subject is prohibited. `stored` requires an
+existing subject for encrypt/encode and decrypt/decode, in single and batch.
+Use the subject encrypt/encode route and include subject in decrypt/decode JSON;
+there is no fallback to general profile keys. Symmetric has no profile or
+`subject_mode`; its subject route/body selects the subject context.
+
+Keep existing unscoped profiles in `none` mode and create separate `stored`
+profiles for subject-bound use; this is not an automatic ciphertext migration.
+Retain the original signed tokenization creator profile and its compatible keys
+to open shared seeds. Subject deletion purges associated random-token rows and
+blocks future seed openings across dependent capabilities, including externally
+held FPE, symmetric and deterministic outputs. Backups can restore that access.
+
+Validate and sign the updated configuration with the new binary before starting
+the upgraded nodes. Start each node with its matching signed files, confirm
+`/healthz/ready`, and perform an authorized round trip before restoring traffic.
+Subsequent config changes require signing and `POST /config/reload` on each
+node; editing files alone does not update runtime state. See the
+[API](doc/API.md#subject-keys) and [CLI](doc/CLI.md) for the exact contracts.
 
 ### Added
 - Deterministic authenticated AES-256-SIV tokens without per-token storage, with
@@ -34,12 +108,14 @@ Changes staged for v0.9.0, the first official release.
   authenticated per-subject seeds, independent create/delete permissions and
   request-scoped key derivation. Existing profiles default to legacy `none` mode.
   Existing databases require the explicit subject keys SQL migration before
-  upgrading; deleting a subject leaves its token rows but removes their seed.
+  upgrading; deleting a subject atomically removes its seed and associated
+  token rows.
 - `POST /token/delete`: explicit, single-use deletion of a stored token by its
   HMAC hashid without decrypting the envelope, gated by a new independent
   `token-delete` permission and allowed in any key lifecycle state.
 
 ### Changed
+- Rust toolchain updated from 1.97.1 to 1.98.
 - Deterministic token subjects now follow signed `subject_mode` like FPE:
   `none` forbids subject and `stored` requires it. Profiles without the field
   remain `none`; previously issued subject tokens require marking the same
@@ -47,7 +123,8 @@ Changes staged for v0.9.0, the first official release.
 - Updated core and fuzz dependencies, including Botan 0.14, SQLx 0.9,
   axum-server 0.8 and reqwest 0.13, with corresponding API adaptations.
   Outbound HTTPS now uses the system certificate trust store while retaining
-  the explicit ring provider. AES remains on 0.8 for FF1 compatibility.
+  the explicit ring provider. AES is updated to 0.9 alongside the compatible
+  `vectis_fpe` fork tagged v0.2.0.
 - Replaced the generated startup banner with static ASCII text, removing
   `artbox` and its unused transitive dependencies, including `figlet-rs` and `zip`.
 - Breaking: local encryption moves to `POST /symmetric/encrypt/{kid}` and
@@ -106,11 +183,6 @@ Changes staged for v0.9.0, the first official release.
 - The reload response, key count, gauges, and audit event are now derived from a single
   consistent snapshot of the just-loaded key set (fixes a read-after-write race under
   concurrent reloads).
-
-## Main
-- Update from 1.97.1 to 1.98
-- fuzz testing improvements
-- cargo fuzz improvements
 
 ## v0.8.5 - 2026-08-21
 

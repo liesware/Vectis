@@ -491,6 +491,14 @@ It validates a complete authenticated NTS and verified Roughtime response, but
 does not require `server_clock.acceptable: true`. It is not part of `tests.sh`,
 CI, release workflows, or normal HTTP fuzzing.
 
+For a disposable SQLite walkthrough that prints real HTTP requests and responses
+as it runs, use `python3 tests/manual/http_happy_path.py`. It creates one API key,
+one KID and one shared subject, chains local happy paths, and uses exactly three
+items per batch. Protected messaging is excluded; live time attestation requires
+external connectivity. This tool is also manual-only. See
+[the manual walkthrough guide](../tests/manual/README.md) for cleanup, retained
+debug labs and offline tests.
+
 ## Schemathesis OpenAPI Tests
 
 Install/sync the fuzz dependency group:
