@@ -5,7 +5,16 @@ manually for releases; the Git history remains the detailed engineering record.
 
 ## Unreleased
 
-Future changes will be recorded here. v0.9.0 remains the first official release.
+Future changes will be recorded here. v1.0.0 remains the first official release.
+
+### Changed
+- Updated Tokio to 1.54.0 in the main and fuzz lockfiles, and refreshed main
+  transitive dependencies, including `inout` 0.2.5 and `libsqlite3-sys` 0.37.0.
+
+### Security
+- Updated the main lockfile to `rustls-webpki` 0.103.16 and
+  `webpki-root-certs`/`webpki-roots` 1.0.10 to address RUSTSEC-2026-0382,
+  RUSTSEC-2026-0383 and RUSTSEC-2026-0381.
 
 ### Fixed
 - Updated the `vectis version` capability inventory: `symmetric-encryption`
