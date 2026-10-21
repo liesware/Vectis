@@ -106,19 +106,31 @@ def version_case(env):
     )
     for capability in [
         "hybrid-signatures",
-        "internal-encryption",
+        "symmetric-encryption",
         "fpe",
         "tokenization",
+        "deterministic-tokenization",
+        "subject-keys",
         "mac",
         "blind-indexes",
         "masking",
         "commitments",
         "secret-sharing",
+        "time-attestation",
+        "slh-dsa-artifact-signing",
     ]:
         require(
             capability in response["capabilities"],
             f"version must include {capability}",
         )
+    require(
+        "internal-encryption" not in response["capabilities"],
+        "version must not advertise the retired internal-encryption name",
+    )
+    require(
+        len(response["capabilities"]) == len(set(response["capabilities"])),
+        "version capabilities must not contain duplicates",
+    )
 
 
 def route_cases(env):

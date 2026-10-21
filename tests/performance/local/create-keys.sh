@@ -2,13 +2,31 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SITE_DIR="${SCRIPT_DIR}/site"
+SITE_DIR="${K6_SITE_DIR:-${SCRIPT_DIR}/site}"
 VECTIS="${SITE_DIR}/bin/vectis"
 
 if [[ ! -x "${VECTIS}" ]]; then
   echo "Missing ${VECTIS}. Run: bash tests/performance/local/setup.sh" >&2
   exit 1
 fi
+
+if [[ -z "${K6_PROFILE:-}" ]]; then
+  echo "K6_PROFILE must name the crypto profile this laboratory measures" >&2
+  exit 1
+fi
+
+# A plain command substitution (unlike a process substitution) stops the script
+# under set -e, before any init or key material is created.
+kid_env="$(python3 - "${SCRIPT_DIR}" "${K6_PROFILE}" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from catalog import PROFILE_SPECS
+matches = [spec["kid_env"] for spec in PROFILE_SPECS if spec["name"] == sys.argv[2]]
+if not matches:
+    sys.exit("unknown performance crypto profile")
+print(matches[0])
+PY
+)"
 
 set_env_value() {
   local file="$1"
@@ -60,6 +78,7 @@ stop_vectis() {
 }
 
 cd "${SITE_DIR}"
+umask 077
 init_output="$(./bin/vectis init)"
 unseal_key="$(printf '%s\n' "${init_output}" | extract_value VECTIS_UNSEAL_KEY)"
 root_apikey="$(printf '%s\n' "${init_output}" | extract_value VECTIS_APIKEY)"
@@ -78,30 +97,24 @@ set_env_value .env VECTIS_APIKEY_HASH "${root_apikey_hash}"
 ./bin/vectis serve > logs/bootstrap.log 2>&1 &
 server_pid="$!"
 trap 'stop_vectis "${server_pid}"' EXIT
-wait_ready http://127.0.0.1:3020/healthz/ready
+wait_ready "http://127.0.0.1:${K6_PORT:-3020}/healthz/ready"
 
 create_kid() {
   local profile="$1"
   ./bin/vectis keys create --tag "k6-${profile}" --profile "${profile}" --output json | json_field kid
 }
 
-performance_kid="$(create_kid hybrid-performance-v1)"
-standard_kid="$(create_kid hybrid-standard-v1)"
-high_assurance_kid="$(create_kid hybrid-high-assurance-v1)"
-long_term_kid="$(create_kid hybrid-long-term-v1)"
+kid="$(create_kid "${K6_PROFILE}")"
+printf '%s=%s\n' "${kid_env}" "${kid}" >> app.env
 app_key_output="$(./bin/vectis apikey create --output json)"
 app_apikey="$(printf '%s\n' "${app_key_output}" | json_field VECTIS_APIKEY)"
 app_apikey_hash="$(printf '%s\n' "${app_key_output}" | json_field VECTIS_APIKEY_HASH)"
 
-cat > app.env <<ENV
-K6_BASE_URL=http://127.0.0.1:3020
+cat >> app.env <<ENV
+K6_BASE_URL=http://127.0.0.1:${K6_PORT:-3020}
 K6_APIKEY=${app_apikey}
 K6_APIKEY_HASH=${app_apikey_hash}
 K6_CLIENT=k6-performance
-K6_KID_PERFORMANCE=${performance_kid}
-K6_KID_STANDARD=${standard_kid}
-K6_KID_HIGH_ASSURANCE=${high_assurance_kid}
-K6_KID_LONG_TERM=${long_term_kid}
 ENV
 
-echo "Created four performance KIDs."
+echo "Created performance KID for ${K6_PROFILE}."

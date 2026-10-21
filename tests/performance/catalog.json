@@ -1,0 +1,212 @@
+{
+  "version": 1,
+  "profiles": [
+    {
+      "name": "hybrid-performance-v1",
+      "slug": "performance",
+      "kid_env": "K6_KID_PERFORMANCE"
+    },
+    {
+      "name": "hybrid-standard-v1",
+      "slug": "standard",
+      "kid_env": "K6_KID_STANDARD"
+    },
+    {
+      "name": "hybrid-high-assurance-v1",
+      "slug": "high-assurance",
+      "kid_env": "K6_KID_HIGH_ASSURANCE"
+    },
+    {
+      "name": "hybrid-long-term-v1",
+      "slug": "long-term",
+      "kid_env": "K6_KID_LONG_TERM"
+    }
+  ],
+  "targets": [
+    {
+      "name": "fpe",
+      "family": "fpe",
+      "batch": false,
+      "subject": true,
+      "authenticated": true,
+      "operations": [
+        "encrypt",
+        "decrypt"
+      ]
+    },
+    {
+      "name": "fpe-batch",
+      "family": "fpe",
+      "batch": true,
+      "subject": true,
+      "authenticated": true,
+      "operations": [
+        "encrypt",
+        "decrypt"
+      ]
+    },
+    {
+      "name": "token",
+      "family": "token",
+      "batch": false,
+      "subject": true,
+      "authenticated": false,
+      "operations": [
+        "encode",
+        "decode"
+      ]
+    },
+    {
+      "name": "token-batch",
+      "family": "token",
+      "batch": true,
+      "subject": true,
+      "authenticated": false,
+      "operations": [
+        "encode",
+        "decode"
+      ]
+    },
+    {
+      "name": "token-deterministic",
+      "family": "token-deterministic",
+      "batch": false,
+      "subject": true,
+      "authenticated": false,
+      "operations": [
+        "encode",
+        "decode"
+      ]
+    },
+    {
+      "name": "token-deterministic-batch",
+      "family": "token-deterministic",
+      "batch": true,
+      "subject": true,
+      "authenticated": false,
+      "operations": [
+        "encode",
+        "decode"
+      ]
+    },
+    {
+      "name": "symmetric",
+      "family": "symmetric",
+      "batch": false,
+      "subject": true,
+      "authenticated": false,
+      "operations": [
+        "encrypt",
+        "decrypt"
+      ]
+    },
+    {
+      "name": "sign",
+      "family": "sign",
+      "batch": false,
+      "subject": false,
+      "authenticated": false,
+      "operations": [
+        "create",
+        "verify"
+      ]
+    },
+    {
+      "name": "mac",
+      "family": "mac",
+      "batch": false,
+      "subject": false,
+      "authenticated": false,
+      "operations": [
+        "create",
+        "verify"
+      ]
+    },
+    {
+      "name": "mac-batch",
+      "family": "mac",
+      "batch": true,
+      "subject": false,
+      "authenticated": false,
+      "operations": [
+        "create",
+        "verify"
+      ]
+    },
+    {
+      "name": "index",
+      "family": "index",
+      "batch": false,
+      "subject": false,
+      "authenticated": false,
+      "operations": [
+        "create",
+        "verify"
+      ]
+    },
+    {
+      "name": "index-batch",
+      "family": "index",
+      "batch": true,
+      "subject": false,
+      "authenticated": false,
+      "operations": [
+        "create",
+        "verify"
+      ]
+    },
+    {
+      "name": "commitment",
+      "family": "commitment",
+      "batch": false,
+      "subject": false,
+      "authenticated": false,
+      "operations": [
+        "create",
+        "verify"
+      ]
+    },
+    {
+      "name": "commitment-batch",
+      "family": "commitment",
+      "batch": true,
+      "subject": false,
+      "authenticated": false,
+      "operations": [
+        "create",
+        "verify"
+      ]
+    },
+    {
+      "name": "masking",
+      "family": "masking",
+      "batch": false,
+      "subject": false,
+      "authenticated": false,
+      "operations": [
+        "apply"
+      ]
+    },
+    {
+      "name": "masking-batch",
+      "family": "masking",
+      "batch": true,
+      "subject": false,
+      "authenticated": false,
+      "operations": [
+        "apply"
+      ]
+    },
+    {
+      "name": "sharing",
+      "family": "sharing",
+      "batch": false,
+      "subject": false,
+      "authenticated": false,
+      "operations": [
+        "split",
+        "combine"
+      ]
+    }
+  ]
+}

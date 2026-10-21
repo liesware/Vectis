@@ -28,6 +28,7 @@ fuzz/corpus/
 fuzz/target/
 proptest-regressions/
 tests/performance/local/site/
+tests/performance/local/results/
 /zap-results/
 logs/
 

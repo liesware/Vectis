@@ -7,6 +7,11 @@ manually for releases; the Git history remains the detailed engineering record.
 
 Future changes will be recorded here. v0.9.0 remains the first official release.
 
+### Fixed
+- Updated the `vectis version` capability inventory: `symmetric-encryption`
+  replaces the retired `internal-encryption` name, and deterministic tokenization,
+  shared subject keys and time attestation are now listed.
+
 ## v0.8.6 - 2026-10-19
 
 Pre-release of Vectis with the changes below. API and configuration contracts

@@ -3,15 +3,24 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
-SITE_DIR="${SCRIPT_DIR}/site"
+SITE_DIR="${K6_SITE_DIR:-${SCRIPT_DIR}/site}"
 BIN_DIR="${SITE_DIR}/bin"
+PORT="${K6_PORT:-3020}"
 
-rm -rf "${SITE_DIR}"
+# The runner owns the release build; this script only installs its binary.
+if [[ -z "${K6_BINARY:-}" || ! -x "${K6_BINARY}" ]]; then
+  echo "K6_BINARY must point to the vectis binary built by runner.py" >&2
+  exit 1
+fi
+
+if [[ -e "${SITE_DIR}" ]]; then
+  echo "Refusing to overwrite an existing performance workspace: ${SITE_DIR}" >&2
+  exit 1
+fi
+umask 077
 mkdir -p "${BIN_DIR}" "${SITE_DIR}/db" "${SITE_DIR}/logs"
 
-echo "Building vectis performance binary..."
-(cd "${ROOT_DIR}" && cargo build)
-cp "${ROOT_DIR}/target/debug/vectis" "${BIN_DIR}/vectis"
+cp "${K6_BINARY}" "${BIN_DIR}/vectis"
 
 python3 - "${SITE_DIR}/db/data.db" "${ROOT_DIR}/src/db/sqlite_schema.sql" <<'PY'
 import pathlib
@@ -26,13 +35,13 @@ connection.commit()
 connection.close()
 PY
 
-cat > "${SITE_DIR}/.env" <<'ENV'
-VECTIS_HTTP_BIND_ADDR=127.0.0.1:3020
+cat > "${SITE_DIR}/.env" <<ENV
+VECTIS_HTTP_BIND_ADDR=127.0.0.1:${PORT}
 VECTIS_MODE=dev
 VECTIS_TLS_SKIP_VERIFY=false
-VECTIS_API_URL=http://127.0.0.1:3020
+VECTIS_API_URL=http://127.0.0.1:${PORT}
 VECTIS_TIMEOUT_SECONDS=30
-VECTIS_PUBLIC_ADDR=127.0.0.1:3020
+VECTIS_PUBLIC_ADDR=127.0.0.1:${PORT}
 VECTIS_CONFIG_PATH=config.json
 VECTIS_CONFIG_SIGN_PATH=config_sign.json
 VECTIS_LOG_TARGET=file

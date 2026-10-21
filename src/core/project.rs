@@ -11,14 +11,17 @@ pub const BUILD_STATUS: &str = "Experimental Build";
 pub const CAPABILITIES: &[&str] = &[
     "protected-messages",
     "hybrid-signatures",
-    "internal-encryption",
+    "symmetric-encryption",
     "fpe",
     "tokenization",
+    "deterministic-tokenization",
+    "subject-keys",
     "mac",
     "blind-indexes",
     "masking",
     "commitments",
     "secret-sharing",
+    "time-attestation",
     "slh-dsa-artifact-signing",
 ];
 
@@ -38,5 +41,31 @@ mod tests {
         assert!(CAPABILITIES.contains(&"fpe"));
         assert!(CAPABILITIES.contains(&"secret-sharing"));
         assert!(CAPABILITIES.contains(&"slh-dsa-artifact-signing"));
+    }
+
+    #[test]
+    fn public_capabilities_match_current_feature_families() {
+        assert_eq!(
+            CAPABILITIES,
+            &[
+                "protected-messages",
+                "hybrid-signatures",
+                "symmetric-encryption",
+                "fpe",
+                "tokenization",
+                "deterministic-tokenization",
+                "subject-keys",
+                "mac",
+                "blind-indexes",
+                "masking",
+                "commitments",
+                "secret-sharing",
+                "time-attestation",
+                "slh-dsa-artifact-signing",
+            ]
+        );
+        let unique: std::collections::HashSet<_> = CAPABILITIES.iter().collect();
+        assert_eq!(unique.len(), CAPABILITIES.len());
+        assert!(!CAPABILITIES.contains(&"internal-encryption"));
     }
 }

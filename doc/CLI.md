@@ -117,6 +117,22 @@ vectis health ready --output json
 `vectis init` is the exception. It prints shell-style values because those values
 are usually copied into files, environment, or secret managers.
 
+### `vectis version`
+
+Reports build metadata, protocol version, supported crypto profiles and the
+implemented capability families, without contacting a server:
+
+```sh
+vectis version
+vectis version --output json
+```
+
+The capability inventory includes `symmetric-encryption`,
+`deterministic-tokenization`, `subject-keys` and `time-attestation`. It describes
+the compiled implementation, not the current client's grants, configured
+profiles, or availability of external time sources. `internal-encryption` is no
+longer advertised; local encryption uses the `symmetric` command family.
+
 ## SLH-DSA Artifact Signing
 
 `vectis slh-dsa` is a local, offline artifact-signing command. `create` and

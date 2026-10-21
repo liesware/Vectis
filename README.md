@@ -26,9 +26,10 @@ prove later, shares no single holder can read, a protected message only the
 registered peer can open.
 
 **Vaulted and vaultless tokenization.** Choose opaque random tokens backed by
-encrypted storage, or format-preserving tokens powered by FF1 without a
-per-value token vault. Symmetric encryption also protects data without storing
-its ciphertexts in Vectis. Vaultless does not mean stateless: keys and
+encrypted storage, deterministic authenticated tokens powered by AES-256-SIV,
+or format-preserving tokens powered by FF1. AES-SIV and FF1 need no per-value
+token vault. Symmetric encryption also protects data without storing its
+ciphertexts in Vectis. Vaultless does not mean stateless: keys and
 configuration remain, and subject-aware operations also depend on stored
 subject seeds.
 
@@ -165,8 +166,8 @@ protection primitives and workflows.
 
 - protected messages between Vectis instances, verified before decryption;
 - one operator-signed config file (routes, remote routes, permissions, FPE
-  profiles, tokenization profiles, MAC profiles, commitment profiles, sharing
-  profiles, and masking profiles); its registered
+  profiles, random and deterministic tokenization profiles, MAC profiles,
+  commitment profiles, sharing profiles, and masking profiles); its registered
   `remote_routes` are the only source of peer public keys — no trust-on-first-use
   path;
 - local re-encryption before final app delivery: the receiving application
@@ -179,8 +180,10 @@ protection primitives and workflows.
   authentication tags, and subject-derived keys;
 - local reversible random tokenization for signed token profiles, with
   reusable or one-time tokens and explicit token deletion;
-- shared subject seeds for tokenization, FPE, and symmetric encryption, with
-  independent purpose-derived keys for each capability;
+- local deterministic authenticated AES-256-SIV tokenization for signed profiles,
+  with single/batch HTTP and CLI operations and no per-token storage;
+- shared subject seeds for random and deterministic tokenization, FPE, and
+  symmetric encryption, with independent purpose-derived keys for each capability;
 - batch operations where supported, preserving item order and all-or-nothing
   contracts, including transactional one-time token consumption;
 - local MAC create/verify for signed MAC profiles;
@@ -202,15 +205,34 @@ protection primitives and workflows.
 - idempotent subject creation and transactional deletion of the subject seed
   and its associated token rows;
 - SQLite/PostgreSQL-backed storage for encrypted operational keys, encrypted
-  tokenization payloads, encrypted subject seeds, and blind index digests behind
+  random-token payloads, encrypted subject seeds, and blind index digests behind
   a storage abstraction.
 
-Deleting a shared subject blocks future seed openings for tokens, FPE, and
-symmetric, but does not erase external ciphertexts or cancel requests that
-already opened the seed. Backups can restore access. See the
+Deleting a shared subject blocks future seed openings for random and
+deterministic tokens, FPE, and symmetric, but does not erase external ciphertexts
+or cancel requests that already opened the seed. Backups can restore access. See the
 [API contracts](doc/API.md), [database model](doc/BD.md), and
 [cryptographic flows](doc/Cryptography.md) for the exact guarantees and
 key/configuration dependencies.
+
+**Choosing reversible data protection**
+
+| Option | Choose it when | Per-value storage in Vectis | Authentication |
+| --- | --- | --- | --- |
+| Random token | You need an opaque random surrogate, individual deletion or one-time consumption | Yes, encrypted payload | Always, AEAD-protected payload |
+| Deterministic token (AES-256-SIV) | The same value and context must produce the same authenticated token | No | Always, AES-SIV |
+| FPE (FF1) | You must preserve the configured alphabet, length and separator positions | No | Optional, enabled by the signed profile |
+| Symmetric | You need general payload encryption without preserving format or stable equality | No | Always, AEAD |
+
+FPE and deterministic tokens reveal equality within the same cryptographic
+context; authentication does not hide that equality or prevent replay.
+Deterministic tokens have no individual server-side deletion or one-time
+consumption. For random tokens, FPE and deterministic tokens, signed
+`subject_mode` requires or prohibits a subject; symmetric uses its explicit
+subject route/body. Subject-bound operations still depend on a stored seed,
+even when their outputs have no per-value vault. See
+[use cases](doc/UseCases.md#how-to-choose) and
+[cryptographic flows](doc/Cryptography.md) for the tradeoffs and derivations.
 
 **Operations and observability**
 
@@ -259,7 +281,7 @@ Application / CLI
         v
 Cryptographic capability
         |
-        +-- FPE / tokenization / masking
+        +-- FPE / random and deterministic tokenization / masking
         +-- MAC / blind indexes / commitments
         +-- secret sharing / signatures
         +-- symmetric encryption / protected messages
@@ -267,9 +289,10 @@ Cryptographic capability
 Protected output / verification result / shares / peer delivery
 ```
 
-FPE, symmetric encryption, masking, MAC, commitments, and secret sharing return
-their results directly; Vectis does not persist FPE or symmetric ciphertexts.
-Tokenization stores the plaintext in encrypted form, while blind indexes persist
+FPE, deterministic tokenization, symmetric encryption, masking, MAC, commitments,
+and secret sharing return their results directly; Vectis does not persist FPE,
+deterministic-token or symmetric ciphertexts. Random tokenization stores the
+plaintext in encrypted form, while blind indexes persist
 deterministic digests for membership checks. Subject-aware operations first
 authenticate and open an existing encrypted seed, then derive independent
 capability keys; sharing a seed does not mean sharing a derived key.

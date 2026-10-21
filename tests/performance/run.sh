@@ -3,4 +3,4 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-exec bash "${SCRIPT_DIR}/local/run.sh"
+exec bash "${SCRIPT_DIR}/local/run.sh" "$@"

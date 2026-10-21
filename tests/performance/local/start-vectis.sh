@@ -2,5 +2,5 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "${SCRIPT_DIR}/site"
+cd "${K6_SITE_DIR:-${SCRIPT_DIR}/site}"
 exec ./bin/vectis serve

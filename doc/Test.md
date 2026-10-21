@@ -588,12 +588,11 @@ Prerequisites:
 
 - `k6` must be installed locally.
 - Rust, Python 3, and the Vectis build dependencies must be available.
-- Port `3020` must be free. The runner creates and removes its own SQLite,
-  init artifacts, signed config, audit stream, four KIDs, and API client below
-  `tests/performance/local/site/`.
+- The runner selects a free loopback port and creates private SQLite, init,
+  signed config, audit, one KID per measured profile and client fixtures below
+  `tests/performance/local/site/<run-id>/<profile>/`.
 
-Run the default four-iteration smoke (one full pass through the four crypto
-profiles):
+Run the default four-iteration smoke for each of the four crypto profiles:
 
 ```sh
 bash tests/performance/run.sh
@@ -602,43 +601,56 @@ bash tests/performance/run.sh
 Run a small load test:
 
 ```sh
-K6_VUS=20 K6_DURATION=2m bash tests/performance/run.sh
+bash tests/performance/run.sh --target fpe --subject --authenticated --vusr 10 --duration 1m
 ```
 
-Override the target explicitly:
+Select deterministic tokenization batch with a specific hybrid profile:
 
 ```sh
-K6_VUS=20 K6_DURATION=2m K6_P95_MS=1000 \
-  bash tests/performance/run.sh
+bash tests/performance/run.sh --target token-deterministic-batch --subject \
+  --batch-size 3 --crypto-profile hybrid-standard-v1 --vusr 2 --duration 30s
 ```
 
 The runner provisions one KID for each built-in crypto profile:
 
 - `hybrid-performance-v1`;
 - `hybrid-standard-v1`;
-- `hybrid-high-assurance-v1` with a one-time token profile;
+- `hybrid-high-assurance-v1`;
 - `hybrid-long-term-v1`.
 
-Each iteration rotates between those suites and exercises local operations:
+Profiles run sequentially in fresh SQLite laboratories, not by random VU
+rotation. Random-token profiles are reusable across all four hybrids. Targets
+select single or batch FPE, random/AES-SIV tokenization, MAC, indexes, commitments
+or masking; symmetric, sign and sharing also have dedicated targets. Subject
+variants and authenticated FPE are explicit. `all` runs every compatible variant
+in fixed order each iteration, with three items per batch by default.
 
-- health probes: `/healthz/startup`, `/healthz/live`, `/healthz/ready`;
-- `GET /pub/{kid}`;
-- `GET /self-test/keys/{kid}`;
-- FPE, tokenization, MAC, blind indexes, masking, commitments and their batch
-  endpoints where available;
-- secret sharing split/combine;
-- symmetric encrypt/decrypt;
-- compact sign/verification;
-- `/metrics` during teardown.
+Warmup, health, public-key/self-test checks, subject preparation, final metrics
+checks and audit verification are outside measured HTTP/flow statistics. The
+runner stops Vectis after k6 exits and verifies the audit log. Messaging and
+`/time/attest` remain excluded. No production behavior or secret caches change.
 
-The runner stops Vectis after k6 exits and verifies the generated hash-chained
-audit log offline. It intentionally excludes remote message delivery and
-`/time/attest`: they depend on a second service or external time sources and
-would not be a local crypto baseline. Provisioning and audit verification are
-outside the measured k6 window. k6 tags every request by operation and crypto
-profile; its summary reports throughput, average, p95, and p99 for each
-operation/profile combination. `K6_P95_MS` optionally turns the aggregate p95
-into a threshold. The scripts do not print API keys or cryptographic payloads.
+The measured process shows native k6 progress directly in the terminal, followed
+by one aligned operation/flow table and CPU/RSS aggregates per profile. No
+reports are saved by default, even on failure. Add `--save-results` to retain
+sanitized manifests, k6 JSON, per-operation/flow TSV and Vectis CPU/RSS CSV in
+`tests/performance/local/results/<run-id>/`, ignored by Git.
+The summaries include sample counts, average, p95/p99, requests/values per second, HTTP
+and transport failures, `429` and contract failures. Few iterations are a smoke
+test, not evidence for p99 or capacity. CPU/RSS for `all` belong to its mixed
+workload, not individual operations. SQLite and load-generator contention affect
+results; PostgreSQL performance must be measured separately.
+Successful campaigns remove their private laboratory after audit verification;
+failed/interrupted campaigns retain it and print its location for debugging.
+Previous laboratories and reports are left untouched.
+
+`K6_VUS`, `K6_DURATION`, `K6_ITERATIONS` and `K6_P95_MS` remain supported; explicit
+CLI options take precedence. See the [performance guide](../tests/performance/README.md)
+for the complete target/options matrix, measurement boundaries and offline tests.
+The performance suite owns a shared JSON target catalog and a private versioned
+fixture file. Laboratory lifecycle, per-capability flows and reporting are
+separate; the performance guide also documents how to add a target without
+changing the campaign coordinator.
 
 ## Native Fuzzing With cargo-fuzz
 
@@ -862,6 +874,6 @@ uses sanitizer builds, and is heavier than the normal HTTP test suite.
 - `tests/integration/http/lib/test_lib.py`: harness unit tests and structural guards that keep the case split from regressing.
 - `tests/performance/run.sh`: single entry point for the isolated local k6
   harness.
-- `tests/performance/k6.js`: local mixed-workload k6 scenario.
+- `tests/performance/k6.js`: selective local k6 flows, with an explicit mixed `all` target.
 - Each HTTP, fuzzing, OpenAPI and manual suite owns its API-key loading helper.
 - `tests_cargo-fuzz.sh`: native fuzz runner for all cargo-fuzz targets.

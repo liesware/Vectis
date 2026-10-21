@@ -1,0 +1,361 @@
+{
+  "profiles": [
+    "hybrid-performance-v1",
+    "hybrid-standard-v1",
+    "hybrid-high-assurance-v1",
+    "hybrid-long-term-v1"
+  ],
+  "targets": [
+    "fpe",
+    "fpe-batch",
+    "token",
+    "token-batch",
+    "token-deterministic",
+    "token-deterministic-batch",
+    "symmetric",
+    "sign",
+    "mac",
+    "mac-batch",
+    "index",
+    "index-batch",
+    "commitment",
+    "commitment-batch",
+    "masking",
+    "masking-batch",
+    "sharing"
+  ],
+  "cases": [
+    {
+      "target": "fpe",
+      "subject": false,
+      "authenticated": false,
+      "batchSize": 1,
+      "id": "fpe_none_legacy"
+    },
+    {
+      "target": "fpe",
+      "subject": false,
+      "authenticated": true,
+      "batchSize": 1,
+      "id": "fpe_none_auth"
+    },
+    {
+      "target": "fpe",
+      "subject": true,
+      "authenticated": false,
+      "batchSize": 1,
+      "id": "fpe_stored_legacy"
+    },
+    {
+      "target": "fpe",
+      "subject": true,
+      "authenticated": true,
+      "batchSize": 1,
+      "id": "fpe_stored_auth"
+    },
+    {
+      "target": "fpe-batch",
+      "subject": false,
+      "authenticated": false,
+      "batchSize": 3,
+      "id": "fpe_batch_none_legacy"
+    },
+    {
+      "target": "fpe-batch",
+      "subject": false,
+      "authenticated": true,
+      "batchSize": 3,
+      "id": "fpe_batch_none_auth"
+    },
+    {
+      "target": "fpe-batch",
+      "subject": true,
+      "authenticated": false,
+      "batchSize": 3,
+      "id": "fpe_batch_stored_legacy"
+    },
+    {
+      "target": "fpe-batch",
+      "subject": true,
+      "authenticated": true,
+      "batchSize": 3,
+      "id": "fpe_batch_stored_auth"
+    },
+    {
+      "target": "token",
+      "subject": false,
+      "authenticated": false,
+      "batchSize": 1,
+      "id": "token_none_legacy"
+    },
+    {
+      "target": "token",
+      "subject": true,
+      "authenticated": false,
+      "batchSize": 1,
+      "id": "token_stored_legacy"
+    },
+    {
+      "target": "token-batch",
+      "subject": false,
+      "authenticated": false,
+      "batchSize": 3,
+      "id": "token_batch_none_legacy"
+    },
+    {
+      "target": "token-batch",
+      "subject": true,
+      "authenticated": false,
+      "batchSize": 3,
+      "id": "token_batch_stored_legacy"
+    },
+    {
+      "target": "token-deterministic",
+      "subject": false,
+      "authenticated": false,
+      "batchSize": 1,
+      "id": "token_deterministic_none_legacy"
+    },
+    {
+      "target": "token-deterministic",
+      "subject": true,
+      "authenticated": false,
+      "batchSize": 1,
+      "id": "token_deterministic_stored_legacy"
+    },
+    {
+      "target": "token-deterministic-batch",
+      "subject": false,
+      "authenticated": false,
+      "batchSize": 3,
+      "id": "token_deterministic_batch_none_legacy"
+    },
+    {
+      "target": "token-deterministic-batch",
+      "subject": true,
+      "authenticated": false,
+      "batchSize": 3,
+      "id": "token_deterministic_batch_stored_legacy"
+    },
+    {
+      "target": "symmetric",
+      "subject": false,
+      "authenticated": false,
+      "batchSize": 1,
+      "id": "symmetric_none_legacy"
+    },
+    {
+      "target": "symmetric",
+      "subject": true,
+      "authenticated": false,
+      "batchSize": 1,
+      "id": "symmetric_stored_legacy"
+    },
+    {
+      "target": "sign",
+      "subject": false,
+      "authenticated": false,
+      "batchSize": 1,
+      "id": "sign_none_legacy"
+    },
+    {
+      "target": "mac",
+      "subject": false,
+      "authenticated": false,
+      "batchSize": 1,
+      "id": "mac_none_legacy"
+    },
+    {
+      "target": "mac-batch",
+      "subject": false,
+      "authenticated": false,
+      "batchSize": 3,
+      "id": "mac_batch_none_legacy"
+    },
+    {
+      "target": "index",
+      "subject": false,
+      "authenticated": false,
+      "batchSize": 1,
+      "id": "index_none_legacy"
+    },
+    {
+      "target": "index-batch",
+      "subject": false,
+      "authenticated": false,
+      "batchSize": 3,
+      "id": "index_batch_none_legacy"
+    },
+    {
+      "target": "commitment",
+      "subject": false,
+      "authenticated": false,
+      "batchSize": 1,
+      "id": "commitment_none_legacy"
+    },
+    {
+      "target": "commitment-batch",
+      "subject": false,
+      "authenticated": false,
+      "batchSize": 3,
+      "id": "commitment_batch_none_legacy"
+    },
+    {
+      "target": "masking",
+      "subject": false,
+      "authenticated": false,
+      "batchSize": 1,
+      "id": "masking_none_legacy"
+    },
+    {
+      "target": "masking-batch",
+      "subject": false,
+      "authenticated": false,
+      "batchSize": 3,
+      "id": "masking_batch_none_legacy"
+    },
+    {
+      "target": "sharing",
+      "subject": false,
+      "authenticated": false,
+      "batchSize": 1,
+      "id": "sharing_none_legacy"
+    }
+  ],
+  "metrics": [
+    "vectis_fpe_none_legacy_fpe_encrypt",
+    "vectis_fpe_none_legacy_fpe_decrypt",
+    "vectis_fpe_none_legacy_flow",
+    "vectis_fpe_none_auth_fpe_encrypt",
+    "vectis_fpe_none_auth_fpe_decrypt",
+    "vectis_fpe_none_auth_flow",
+    "vectis_fpe_stored_legacy_fpe_encrypt",
+    "vectis_fpe_stored_legacy_fpe_decrypt",
+    "vectis_fpe_stored_legacy_flow",
+    "vectis_fpe_stored_auth_fpe_encrypt",
+    "vectis_fpe_stored_auth_fpe_decrypt",
+    "vectis_fpe_stored_auth_flow",
+    "vectis_fpe_batch_none_legacy_fpe_encrypt_batch",
+    "vectis_fpe_batch_none_legacy_fpe_decrypt_batch",
+    "vectis_fpe_batch_none_legacy_flow",
+    "vectis_fpe_batch_none_auth_fpe_encrypt_batch",
+    "vectis_fpe_batch_none_auth_fpe_decrypt_batch",
+    "vectis_fpe_batch_none_auth_flow",
+    "vectis_fpe_batch_stored_legacy_fpe_encrypt_batch",
+    "vectis_fpe_batch_stored_legacy_fpe_decrypt_batch",
+    "vectis_fpe_batch_stored_legacy_flow",
+    "vectis_fpe_batch_stored_auth_fpe_encrypt_batch",
+    "vectis_fpe_batch_stored_auth_fpe_decrypt_batch",
+    "vectis_fpe_batch_stored_auth_flow",
+    "vectis_token_none_legacy_token_encode",
+    "vectis_token_none_legacy_token_decode",
+    "vectis_token_none_legacy_flow",
+    "vectis_token_stored_legacy_token_encode",
+    "vectis_token_stored_legacy_token_decode",
+    "vectis_token_stored_legacy_flow",
+    "vectis_token_batch_none_legacy_token_encode_batch",
+    "vectis_token_batch_none_legacy_token_decode_batch",
+    "vectis_token_batch_none_legacy_flow",
+    "vectis_token_batch_stored_legacy_token_encode_batch",
+    "vectis_token_batch_stored_legacy_token_decode_batch",
+    "vectis_token_batch_stored_legacy_flow",
+    "vectis_token_deterministic_none_legacy_token_deterministic_encode",
+    "vectis_token_deterministic_none_legacy_token_deterministic_decode",
+    "vectis_token_deterministic_none_legacy_flow",
+    "vectis_token_deterministic_stored_legacy_token_deterministic_encode",
+    "vectis_token_deterministic_stored_legacy_token_deterministic_decode",
+    "vectis_token_deterministic_stored_legacy_flow",
+    "vectis_token_deterministic_batch_none_legacy_token_deterministic_encode_batch",
+    "vectis_token_deterministic_batch_none_legacy_token_deterministic_decode_batch",
+    "vectis_token_deterministic_batch_none_legacy_flow",
+    "vectis_token_deterministic_batch_stored_legacy_token_deterministic_encode_batch",
+    "vectis_token_deterministic_batch_stored_legacy_token_deterministic_decode_batch",
+    "vectis_token_deterministic_batch_stored_legacy_flow",
+    "vectis_symmetric_none_legacy_symmetric_encrypt",
+    "vectis_symmetric_none_legacy_symmetric_decrypt",
+    "vectis_symmetric_none_legacy_flow",
+    "vectis_symmetric_stored_legacy_symmetric_encrypt",
+    "vectis_symmetric_stored_legacy_symmetric_decrypt",
+    "vectis_symmetric_stored_legacy_flow",
+    "vectis_sign_none_legacy_sign_create",
+    "vectis_sign_none_legacy_sign_verify",
+    "vectis_sign_none_legacy_flow",
+    "vectis_mac_none_legacy_mac_create",
+    "vectis_mac_none_legacy_mac_verify",
+    "vectis_mac_none_legacy_flow",
+    "vectis_mac_batch_none_legacy_mac_create_batch",
+    "vectis_mac_batch_none_legacy_mac_verify_batch",
+    "vectis_mac_batch_none_legacy_flow",
+    "vectis_index_none_legacy_index_create",
+    "vectis_index_none_legacy_index_verify",
+    "vectis_index_none_legacy_flow",
+    "vectis_index_batch_none_legacy_index_create_batch",
+    "vectis_index_batch_none_legacy_index_verify_batch",
+    "vectis_index_batch_none_legacy_flow",
+    "vectis_commitment_none_legacy_commitment_create",
+    "vectis_commitment_none_legacy_commitment_verify",
+    "vectis_commitment_none_legacy_flow",
+    "vectis_commitment_batch_none_legacy_commitment_create_batch",
+    "vectis_commitment_batch_none_legacy_commitment_verify_batch",
+    "vectis_commitment_batch_none_legacy_flow",
+    "vectis_masking_none_legacy_masking_apply",
+    "vectis_masking_none_legacy_flow",
+    "vectis_masking_batch_none_legacy_masking_apply_batch",
+    "vectis_masking_batch_none_legacy_flow",
+    "vectis_sharing_none_legacy_sharing_split",
+    "vectis_sharing_none_legacy_sharing_combine",
+    "vectis_sharing_none_legacy_flow"
+  ],
+  "tsv_columns": [
+    "kind",
+    "target",
+    "crypto_profile",
+    "subject",
+    "fpe_authenticated",
+    "batch_size",
+    "operation",
+    "samples",
+    "avg_ms",
+    "p95_ms",
+    "p99_ms",
+    "requests_or_flows_per_s",
+    "values_per_s",
+    "http_errors",
+    "transport_errors",
+    "429",
+    "contract_errors"
+  ],
+  "summary_fields": [
+    "metrics",
+    "state"
+  ],
+  "campaign_fields": [
+    "status",
+    "parameters",
+    "build",
+    "backend",
+    "mode",
+    "load_model",
+    "hardware",
+    "fixture",
+    "profiles",
+    "commit",
+    "dirty_tree",
+    "k6_version",
+    "vectis_version"
+  ],
+  "profile_fields": [
+    "crypto_profile",
+    "status",
+    "laboratory",
+    "warmup",
+    "k6_exit",
+    "audit_exit",
+    "db_initial",
+    "server_pid",
+    "wall_seconds",
+    "resource_errors",
+    "resources",
+    "db_final"
+  ]
+}
