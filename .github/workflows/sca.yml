@@ -1,0 +1,283 @@
+name: SCA
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  branch_protection_rule:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      validation-context:
+        description: Findings policy context (ci or release)
+        type: string
+        default: ci
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sca-validation-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scorecard:
+    name: Scorecard analysis
+    if: >-
+      github.event.repository.default_branch == github.ref_name &&
+      (github.event_name == 'push' || github.event_name == 'branch_protection_rule' ||
+      github.event_name == 'schedule')
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: SARIF file
+          path: results.sarif
+          retention-days: 5
+
+      - name: Upload to code-scanning
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
+        with:
+          sarif_file: results.sarif
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Dependency Review
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          comment-summary-in-pr: always
+
+  rust-audit:
+    if: github.event_name != 'branch_protection_rule'
+    name: Rust audit (${{ matrix.label }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: main
+            lockfile: Cargo.lock
+          - label: fuzz
+            lockfile: fuzz/Cargo.lock
+    env:
+      SCA_INPUTS: ${{ toJSON(inputs) }}
+      EVIDENCE: .ci/sca/rust-${{ matrix.label }}
+      LOCKFILE: ${{ matrix.lockfile }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Prepare scan evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE"
+          git rev-parse HEAD > "$EVIDENCE/commit.txt"
+          test "$(cat "$EVIDENCE/commit.txt")" = "$GITHUB_SHA"
+          printf 'Rust SCA (%s) commit: `%s`\n' "$LOCKFILE" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          jq -er 'if has("validation-context") then .["validation-context"] else "ci" end |
+            if . == "ci" or . == "release" then . else error("validation-context must be ci or release") end' <<< "$SCA_INPUTS" \
+            > "$EVIDENCE/context.txt" 2> "$EVIDENCE/context-error.txt"
+          cp .cargo/audit.toml "$EVIDENCE/audit.toml"
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        with:
+          tool: cargo-audit@0.22.2
+
+      - name: Audit lockfile and enforce Rust policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo audit --version > "$EVIDENCE/version.txt"
+          grep -Eq '^cargo-audit(-audit)? 0\.22\.2$' "$EVIDENCE/version.txt"
+          if cargo audit --file "$LOCKFILE" --json > "$EVIDENCE/report.json" 2> "$EVIDENCE/scanner.log"; then
+            status=0
+          else
+            status=$?
+          fi
+          printf '%s\n' "$status" > "$EVIDENCE/scanner-exit.txt"
+          cat "$EVIDENCE/scanner.log"
+          if ! jq -e -s '
+            length == 1 and (.[0] | type == "object" and
+            (.lockfile["dependency-count"] | type == "number" and . > 0) and
+            (.database["advisory-count"] | type == "number" and . > 0) and
+            (.vulnerabilities.found | type == "boolean") and
+            (.vulnerabilities.list | type == "array"))
+          ' "$EVIDENCE/report.json" > /dev/null; then
+            echo "::error::cargo-audit did not produce a valid dependency report"
+            exit 2
+          fi
+          printf 'Rust SCA (%s): scanner exit %s; context %s.\n' \
+            "$LOCKFILE" "$status" "$(cat "$EVIDENCE/context.txt")" >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Upload Rust SCA evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sca-rust-${{ matrix.label }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci/sca/rust-${{ matrix.label }}/
+          retention-days: 30
+          if-no-files-found: error
+
+  python-sca:
+    if: github.event_name != 'branch_protection_rule'
+    name: Python lockfile audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SCA_INPUTS: ${{ toJSON(inputs) }}
+      EVIDENCE: .ci/sca/python
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Prepare scan evidence and lockfile input
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE/input"
+          git rev-parse HEAD > "$EVIDENCE/commit.txt"
+          test "$(cat "$EVIDENCE/commit.txt")" = "$GITHUB_SHA"
+          printf 'Python SCA commit: `%s`\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          jq -er 'if has("validation-context") then .["validation-context"] else "ci" end |
+            if . == "ci" or . == "release" then . else error("validation-context must be ci or release") end' <<< "$SCA_INPUTS" \
+            > "$EVIDENCE/context.txt" 2> "$EVIDENCE/context-error.txt"
+          cp uv.lock pyproject.toml "$EVIDENCE/input/"
+          touch "$EVIDENCE/empty.trivyignore"
+          printf 'Trivy v0.70.0\nDevelopment dependencies: included\nScanner: vuln\nSeverities: all\nUnfixed: included\n' > "$EVIDENCE/settings.txt"
+
+      - name: Scan Python lockfile with Trivy
+        id: scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_INCLUDE_DEV_DEPS: "true"
+          TRIVY_IGNOREFILE: .ci/sca/python/empty.trivyignore
+        with:
+          version: v0.70.0
+          scan-type: fs
+          scan-ref: .ci/sca/python/input
+          scanners: vuln
+          format: json
+          output: .ci/sca/python/report.json
+          list-all-pkgs: "true"
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: "0"
+
+      - name: Verify coverage and enforce Python policy
+        if: always()
+        env:
+          SCAN_OUTCOME: ${{ steps.scan.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE"
+          printf '%s\n' "$SCAN_OUTCOME" > "$EVIDENCE/scanner-outcome.txt"
+          if [[ "$SCAN_OUTCOME" != success ]]; then
+            echo "::error::Trivy did not complete successfully ($SCAN_OUTCOME)"
+            exit 2
+          fi
+          trivy --version > "$EVIDENCE/version.txt"
+          grep -Eq '^Version: 0\.70\.0$' "$EVIDENCE/version.txt"
+          python3 - <<'PY'
+          import json, os, re, sys, tomllib
+          from pathlib import Path
+
+          evidence = Path(os.environ["EVIDENCE"])
+          try:
+              context = (evidence / "context.txt").read_text().strip()
+              if context not in ("ci", "release"):
+                  raise ValueError("invalid validation-context")
+              report = json.loads((evidence / "report.json").read_text())
+              if report.get("SchemaVersion") != 2 or report.get("ArtifactType") != "filesystem":
+                  raise ValueError("invalid Trivy filesystem report")
+              results = [r for r in report["Results"] if r["Type"] == "uv" and Path(r["Target"]).name == "uv.lock"]
+              packages = [p for r in results for p in r["Packages"]]
+              if not packages or any(not isinstance(p[k], str) or not p[k] for p in packages for k in ("Name", "Version")):
+                  raise ValueError("missing or invalid package inventory")
+              canonical = lambda name: re.sub(r"[-_.]+", "-", name).lower()
+              inventory = {(canonical(p["Name"]), p["Version"]) for p in packages}
+              lock = tomllib.loads((evidence / "input/uv.lock").read_text())
+              project = tomllib.loads((evidence / "input/pyproject.toml").read_text())
+              roots = [p for p in lock["package"] if p["name"] == project["project"]["name"]]
+              if len(roots) != 1:
+                  raise ValueError("missing or ambiguous lockfile project root")
+              for group, name in (("fuzz", "schemathesis"), ("dast", "pyyaml")):
+                  if not project["dependency-groups"].get(group) or name not in {
+                      p["name"] for p in roots[0]["dev-dependencies"].get(group, [])
+                  }:
+                      raise ValueError(f"missing {group} dependency group or {name}")
+              expected = {(canonical(p["name"]), p["version"]) for p in lock["package"] if "virtual" not in p["source"]}
+              if not {"schemathesis", "pyyaml"} <= {name for name, _ in expected}:
+                  raise ValueError("required dependencies are not resolved in uv.lock")
+              missing = expected - inventory
+              if missing:
+                  raise ValueError(f"incomplete lockfile coverage: {sorted(missing)}")
+              findings = []
+              for result in results:
+                  issues = result.get("Vulnerabilities")
+                  if issues is None:
+                      issues = []
+                  if not isinstance(issues, list):
+                      raise ValueError("invalid vulnerability inventory")
+                  for issue in issues:
+                      if (issue["Severity"] not in {"UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL"}
+                          or not all(isinstance(issue[k], str) and issue[k] for k in ("VulnerabilityID", "PkgName", "InstalledVersion"))
+                          or not isinstance(issue.get("FixedVersion", ""), str)):
+                          raise ValueError("invalid vulnerability entry")
+                      if issue["Severity"] in ("HIGH", "CRITICAL") and issue.get("FixedVersion", "").strip():
+                          findings.append(issue)
+          except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+              sys.exit(f"SCA technical failure: {error}")
+          message = f"Python SCA ({context}): {len(inventory)} packages; {len(expected)} required; {len(findings)} HIGH/CRITICAL findings with fix."
+          print(message)
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as output:
+              output.write(message + "\n")
+          sys.exit(1 if context == "ci" and findings else 0)
+          PY
+
+      - name: Upload Python SCA evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sca-python-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci/sca/python/
+          retention-days: 30
+          if-no-files-found: error

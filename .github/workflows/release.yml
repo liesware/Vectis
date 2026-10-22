@@ -13,6 +13,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate-rust:
+    name: Validate release commit
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  validate-sca:
+    name: Audit release dependencies
+    uses: ./.github/workflows/sca.yml
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
+      id-token: write
+    with:
+      validation-context: release
+
   metadata:
     name: Validate release metadata
     runs-on: ubuntu-latest
@@ -23,6 +40,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Cache Rust dependencies
@@ -33,6 +51,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          commit="$(git rev-parse HEAD)"
+          test "$commit" = "$GITHUB_SHA"
+          printf 'Release metadata commit: `%s`\n' "$commit" >> "$GITHUB_STEP_SUMMARY"
           version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "vectis") | .version')"
           test -n "$version"
           test "$version" != "null"
@@ -59,25 +80,98 @@ jobs:
         include:
           - runner: ubuntu-latest
             archive: vectis-linux-amd64
+            platform: linux/amd64
           - runner: ubuntu-24.04-arm
             archive: vectis-linux-arm64
+            platform: linux/arm64
           - runner: macos-14
             archive: vectis-macos-arm64
+            platform: darwin/arm64
     env:
       CARGO_TERM_COLOR: always
+      CARGO_AUDITABLE_VERSION: "0.7.7"
       RELEASE_TAG: ${{ needs.metadata.outputs.release_tag }}
       PACKAGE_FILES: vectis LICENSE NOTICE README.md SECURITY.md
+      SBOM_BASE: dist/${{ matrix.archive }}-${{ needs.metadata.outputs.release_tag }}
+      SBOM_REPORT: .ci/sbom/inventory.json
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
+
+      - name: Record build commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse HEAD)"
+          test "$commit" = "$GITHUB_SHA"
+          printf 'Release build commit: `%s`\n' "$commit" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
 
+      - name: Install cargo-auditable
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        with:
+          tool: cargo-auditable@${{ env.CARGO_AUDITABLE_VERSION }}
+
+      - name: Install uv for build metadata
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+
       - name: Build release binary
-        run: cargo build --release --locked
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${BOTAN_SRC_DIR+x}" != x
+          test "${BOTAN_SRC_TARBALL+x}" != x
+          printf 'cargo-auditable: %s (pinned installation)\n' "$CARGO_AUDITABLE_VERSION"
+          cargo auditable build --release --locked
+
+      - name: Prepare SBOM output
+        shell: bash
+        run: |
+          mkdir -p .ci/sbom dist
+          touch .ci/sbom/empty.trivyignore
+
+      - name: Inventory release executable
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_IGNOREFILE: .ci/sbom/empty.trivyignore
+        with:
+          version: v0.70.0
+          scan-type: rootfs
+          scan-ref: target/release/vectis
+          scanners: vuln
+          format: json
+          output: ${{ env.SBOM_REPORT }}
+          list-all-pkgs: "true"
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: "0"
+
+      - name: Convert and validate executable SBOM
+        shell: bash
+        run: |
+          set -euo pipefail
+          trivy --version | grep -Eq '^Version: 0\.70\.0$'
+          jq -e '
+            .SchemaVersion == 2 and
+            ([.Results[]? | select(.Type == "rustbinary") | .Packages[]?] | length > 0) and
+            ([.Results[]? | select(.Type == "rustbinary") | .Packages[]?.Name] |
+              (index("botan") != null and index("botan-sys") != null))
+          ' "$SBOM_REPORT" > /dev/null
+          trivy convert --format cyclonedx --output "$SBOM_BASE.cdx.json" "$SBOM_REPORT"
+          trivy convert --format spdx-json --output "$SBOM_BASE.spdx.json" "$SBOM_REPORT"
+          jq -e '.bomFormat == "CycloneDX" and .specVersion == "1.6" and (.components | length > 0)' "$SBOM_BASE.cdx.json" > /dev/null
+          jq -e '.spdxVersion == "SPDX-2.3" and (.packages | length > 0)' "$SBOM_BASE.spdx.json" > /dev/null
+          jq -r '[.components[]? | .purl // empty] | unique[]' "$SBOM_BASE.cdx.json" > "$SBOM_REPORT.cdx-purls"
+          jq -r '[.packages[]? | .externalRefs[]? | select(.referenceType == "purl") | .referenceLocator] | unique[]' "$SBOM_BASE.spdx.json" > "$SBOM_REPORT.spdx-purls"
+          jq -r '[.Results[]? | .Packages[]? | .Identifier.PURL // empty] | unique[]' "$SBOM_REPORT" > "$SBOM_REPORT.source-purls"
+          test -s "$SBOM_REPORT.cdx-purls"
+          diff -u "$SBOM_REPORT.source-purls" "$SBOM_REPORT.cdx-purls"
+          diff -u "$SBOM_REPORT.cdx-purls" "$SBOM_REPORT.spdx-purls"
 
       - name: Smoke test release binary
         run: target/release/vectis version
@@ -117,6 +211,82 @@ jobs:
           tar -tzf "$asset" | LC_ALL=C sort > "$actual"
           diff -u "$expected" "$actual"
 
+      - name: Record build and native source evidence
+        env:
+          BUILD_COMMIT: ${{ github.sha }}
+          BUILD_PLATFORM: ${{ matrix.platform }}
+          SBOM_BINARY: target/release/vectis
+          SBOM_ARCHIVE: ${{ env.SBOM_BASE }}.tar.gz
+          SBOM_INFO: ${{ env.SBOM_BASE }}.build-info.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-project --python 3.12 python - <<'PY'
+          import hashlib, json, os, re, subprocess, tomllib
+          from pathlib import Path
+
+          for name in ("BOTAN_SRC_DIR", "BOTAN_SRC_TARBALL"):
+              if name in os.environ:
+                  raise SystemExit(f"{name} overrides are prohibited for release builds")
+          def sha256(path):
+              with Path(path).open("rb") as source:
+                  return hashlib.file_digest(source, "sha256").hexdigest()
+          metadata = json.loads(subprocess.check_output(["cargo", "metadata", "--locked", "--format-version", "1"]))
+          packages = metadata["packages"]
+          def package(name):
+              matches = [p for p in packages if p["name"] == name]
+              if len(matches) != 1:
+                  raise SystemExit(f"expected exactly one resolved {name} package")
+              return matches[0]
+          botan = {name: package(name) for name in ("botan", "botan-sys", "botan-src")}
+          source_dir = Path(botan["botan-src"]["manifest_path"]).parent
+          release = tomllib.loads((source_dir / "release.toml").read_text())
+          version, checksum = release["version"], release["sha256"]
+          if not re.fullmatch(r"[0-9a-f]{64}", checksum):
+              raise SystemExit("invalid Botan source checksum")
+          tarball = source_dir / "vendor" / f"Botan-{version}.tar.xz"
+          if sha256(tarball) != checksum:
+              raise SystemExit("Botan source checksum mismatch")
+          binary = Path(os.environ["SBOM_BINARY"])
+          info = {
+              "schema_version": 1, "commit": os.environ["BUILD_COMMIT"],
+              "platform": os.environ["BUILD_PLATFORM"], "version": package("vectis")["version"],
+              "tools": {tool: subprocess.check_output(command, text=True).strip() for tool, command in {
+                  "rustc": ["rustc", "--version"], "cargo": ["cargo", "--version"]}.items()},
+              "cargo_auditable_version_source": "pinned installation",
+              "binary": {"name": "vectis", "sha256": sha256(binary)},
+              "botan": {"crates": {name: p["version"] for name, p in botan.items()},
+                  "native_version": version, "source_url": release["url"].replace("{version}", version),
+                  "source_sha256": checksum},
+              "coverage": "Rust dependency metadata; native Botan evidence recorded separately, not an exhaustive native inventory"
+          }
+          info["tools"]["cargo-auditable"] = os.environ["CARGO_AUDITABLE_VERSION"]
+          if os.environ.get("SBOM_ARCHIVE"):
+              archive = Path(os.environ["SBOM_ARCHIVE"])
+              info["archive"] = {"name": archive.name, "sha256": sha256(archive)}
+          if os.environ.get("SBOM_BASE"):
+              info["sbom"] = {kind: {"name": path.name, "sha256": sha256(path)}
+                  for kind, path in ((kind, Path(os.environ["SBOM_BASE"] + suffix))
+                      for kind, suffix in (("cyclonedx", ".cdx.json"), ("spdx", ".spdx.json")))}
+          Path(os.environ["SBOM_INFO"]).write_text(json.dumps(info, indent=2) + "\n")
+          PY
+          jq --arg trivy "$(trivy --version | head -n 1)" '.tools.trivy = $trivy' "$SBOM_INFO" > "$SBOM_INFO.tmp"
+          mv "$SBOM_INFO.tmp" "$SBOM_INFO"
+
+      - name: Preserve SBOM diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          include-hidden-files: true
+          name: sbom-binary-${{ matrix.archive }}
+          path: |
+            .ci/sbom/
+            dist/*.cdx.json
+            dist/*.spdx.json
+            dist/*.build-info.json
+          if-no-files-found: warn
+          retention-days: 30
+
       - name: Attest binary provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
@@ -126,14 +296,30 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-${{ matrix.archive }}
-          path: dist/${{ matrix.archive }}-${{ env.RELEASE_TAG }}.tar.gz
+          path: |
+            dist/${{ matrix.archive }}-${{ env.RELEASE_TAG }}.tar.gz
+            dist/${{ matrix.archive }}-${{ env.RELEASE_TAG }}.cdx.json
+            dist/${{ matrix.archive }}-${{ env.RELEASE_TAG }}.spdx.json
+            dist/${{ matrix.archive }}-${{ env.RELEASE_TAG }}.build-info.json
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
+
+  release-ready:
+    name: Release gates passed (no publication)
+    needs: [metadata, build-binary, validate-rust, validate-sca]
+    if: success()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Record release readiness
+        shell: bash
+        run: |
+          printf 'All release gates passed for `%s`. This job does not publish.\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
 
   publish:
     name: Publish GitHub release
-    needs: [metadata, build-binary]
-    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [metadata, build-binary, validate-rust, validate-sca, release-ready]
+    if: success() && github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -165,7 +351,23 @@ jobs:
           set -euo pipefail
           (
             cd dist
-            LC_ALL=C sha256sum *.tar.gz | LC_ALL=C sort -k2 > SHA256SUMS
+            for platform in vectis-linux-amd64 vectis-linux-arm64 vectis-macos-arm64; do
+              base="$platform-$RELEASE_TAG"
+              for extension in tar.gz cdx.json spdx.json build-info.json; do
+                test -s "$base.$extension"
+              done
+              jq -e --arg archive "$base.tar.gz" --arg hash "$(sha256sum "$base.tar.gz" | cut -d' ' -f1)" \
+                --arg commit "$GITHUB_SHA" --arg version "${RELEASE_TAG#v}" \
+                '.archive.name == $archive and .archive.sha256 == $hash and .commit == $commit and .version == $version' \
+                "$base.build-info.json" > /dev/null
+              for format in cdx spdx; do
+                if [[ "$format" == cdx ]]; then kind=cyclonedx; else kind=spdx; fi
+                jq -e --arg kind "$kind" --arg name "$base.$format.json" \
+                  --arg hash "$(sha256sum "$base.$format.json" | cut -d' ' -f1)" \
+                  '.sbom[$kind].name == $name and .sbom[$kind].sha256 == $hash' "$base.build-info.json" > /dev/null
+              done
+            done
+            LC_ALL=C sha256sum *.tar.gz *.cdx.json *.spdx.json *.build-info.json | LC_ALL=C sort -k2 > SHA256SUMS
             sha256sum -c SHA256SUMS
           )
 
@@ -194,6 +396,9 @@ jobs:
         run: |
           gh release upload "$RELEASE_TAG" \
             dist/*.tar.gz \
+            dist/*.cdx.json \
+            dist/*.spdx.json \
+            dist/*.build-info.json \
             dist/SHA256SUMS \
             dist/SHA256SUMS.sigstore.json \
             --repo "$GITHUB_REPOSITORY"

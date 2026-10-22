@@ -5,7 +5,7 @@ and how to run the tests consistently.
 
 ## Contents
 
-[Testing Strategy](#testing-strategy) · [Prerequisites](#prerequisites) · [Rust Checks](#rust-checks) · [Rust Crypto Integration Tests](#rust-crypto-integration-tests) · [PostgreSQL Storage Smoke Test](#postgresql-storage-smoke-test) · [Python HTTP Tests](#python-http-tests) · [Python CLI Tests](#python-cli-tests) · [Schemathesis OpenAPI Tests](#schemathesis-openapi-tests) · [Dynamic API Scanning With OWASP ZAP](#dynamic-api-scanning-with-owasp-zap) · [Performance Testing With k6](#performance-testing-with-k6) · [Native Fuzzing With cargo-fuzz](#native-fuzzing-with-cargo-fuzz) · [Aggregate Workflow](#aggregate-workflow) · [Test File Reference](#test-file-reference)
+[Testing Strategy](#testing-strategy) · [Release Validation and SCA](#release-validation-and-sca) · [Prerequisites](#prerequisites) · [Rust Checks](#rust-checks) · [Rust Crypto Integration Tests](#rust-crypto-integration-tests) · [PostgreSQL Storage Smoke Test](#postgresql-storage-smoke-test) · [Python HTTP Tests](#python-http-tests) · [Python CLI Tests](#python-cli-tests) · [Schemathesis OpenAPI Tests](#schemathesis-openapi-tests) · [Dynamic API Scanning With OWASP ZAP](#dynamic-api-scanning-with-owasp-zap) · [Performance Testing With k6](#performance-testing-with-k6) · [Native Fuzzing With cargo-fuzz](#native-fuzzing-with-cargo-fuzz) · [Aggregate Workflow](#aggregate-workflow) · [Test File Reference](#test-file-reference)
 
 ## Testing Strategy
 
@@ -40,6 +40,162 @@ The layers are complementary. A passing HTTP workflow does not prove the OpenAPI
 contract is accurate, and OpenAPI fuzzing or DAST does not replace
 cryptographically valid happy-path tests. k6 does not prove correctness; it
 measures how a known valid flow behaves under load.
+
+## Release Validation and SCA
+
+`Release Binaries` runs on `v*` tag pushes and manual dispatch. It calls the
+local reusable CI and SCA workflows, and builds release packages in parallel
+with validation. Every checkout explicitly selects the event SHA and records
+the effective commit in the run summary. Nothing checks out `main` implicitly.
+
+Publication requires successful metadata, all platform builds, both reusable
+validations, and the non-publishing `release-ready` job. A failed, cancelled or
+skipped prerequisite prevents publication. Manual dispatch exercises the gates
+and readiness job but never uploads assets to a GitHub release. Cosign signing,
+provenance and package verification retain their existing behavior.
+
+Binary and image release workflows generate CycloneDX/SPDX inventories of the
+actual executable or image, not a substitute scan of `Cargo.lock`. Missing or
+invalid inventories, inconsistent components and failed image SBOM attestation
+verification block publication or tag promotion. Manual runs without publication
+retain evidence for 30 days. See [Build.md](Build.md#release-sboms) for scope,
+Botan's separate native evidence, downloads and verification. SCA does not
+generate these documents.
+
+This establishes that the compiled commit passed the configured validation. It
+does not establish reproducible builds or full test-suite execution against
+every packaged platform binary; platform packages receive their smoke test and
+the reusable CI suite runs on Linux.
+
+`CI` (`ci.yml`) also runs directly on main pushes/PRs, manual dispatch and
+reusable calls. Renaming the workflow preserves the `verify` and `integration`
+job IDs, suites, budgets, caches and artifacts. Confirm displayed check names
+in a real run before coordinating required-check changes; no remote protection
+is updated by this rename.
+
+### SCA policy and evidence
+
+The SCA workflow runs on main pushes/PRs, daily at **04:17 UTC**, manual dispatch,
+and reusable calls. Its three scans are independent: `Rust audit (main)`,
+`Rust audit (fuzz)` and `Python lockfile audit`. The Rust matrix uses
+`fail-fast: false`, so one lockfile failure does not cancel the other scan.
+
+Dependency Review is an additional independent `dependency-review` job in
+`sca.yml`, running only on pull requests. It retains the pinned Action, its
+default findings policy and `comment-summary-in-pr: always`. Only this job
+receives `pull-requests: write`; lockfile audits remain read-only. The reusable
+release caller allows that permission to satisfy the workflow contract, but
+Dependency Review is skipped on tag pushes and manual release runs.
+
+Scorecard is an independent `Scorecard analysis` job in `sca.yml`, retaining
+the pinned Action, `publish_results: true`, SARIF upload and five-day artifact
+retention. It runs on main pushes, branch-protection-rule events on the default
+branch, and daily at **04:17 UTC** alongside the lockfile audits, using SCA's
+single cron. It does not run on PRs, manual dispatch or release tags.
+Branch-protection events run only Scorecard, not the lockfile audits.
+
+To preserve Scorecard publication, SCA has no workflow-level environment,
+defaults or write permissions. Only the Scorecard job has `id-token: write`,
+and its steps use only approved Actions, without shell steps or job environment.
+The release caller permits `security-events: write` and `id-token: write` for
+the reusable contract, but the audits do not receive them and Scorecard is
+skipped there. The README badge URL remains unchanged. Verify a successful
+publication and updated results on the default branch after migration; local
+lint cannot validate OpenSSF's publication service.
+
+| Context | Rust findings | Python findings |
+| --- | --- | --- |
+| Autonomous PR, push, schedule or manual (`ci`) | Blocking under current repository policy | HIGH/CRITICAL with a fix block |
+| Called by Release Binaries (`release`) | Same blocking policy | Informational |
+
+Only `ci` and `release` are valid reusable input values. Missing autonomous
+inputs default to `ci`; explicitly invalid values fail. Technical failures,
+timeouts, malformed reports, missing inventory and incomplete coverage block
+in **both** contexts. Report-only is not permission to skip a scan.
+
+Rust uses **cargo-audit 0.22.2**, executed from the checkout root with
+`--file Cargo.lock` or `--file fuzz/Cargo.lock` and JSON output. It retains
+`.cargo/audit.toml`, including existing ignores and nonblocking warnings; no
+new exceptions or warning-denial flags are introduced. The workflow checks for
+a valid dependency report and propagates cargo-audit's original exit status,
+without recalculating its policy. The CI workflow no longer duplicates this
+audit; the local `tests.sh` audit remains unchanged.
+
+Python uses the SHA-pinned Trivy Action and **Trivy 0.70.0**, filesystem mode,
+`--include-dev-deps`, all-package JSON inventory, all severities and unfixed
+vulnerabilities. Its input directory contains only copies of `uv.lock` and
+`pyproject.toml`, excluding installed packages, caches, build targets and corpora
+by construction. A short Python-standard-library block inside the workflow
+compares the inventory against all externally resolved names/versions in
+`uv.lock`, excluding the virtual project; it does not reconstruct a dependency
+graph. Both `fuzz` and `dast` groups must be present, including locked
+Schemathesis and PyYAML. Zero vulnerabilities alone do not demonstrate coverage.
+The Python scan uses its own empty ignore file, independent of image exceptions.
+
+Each scan attempts evidence upload with `if: always()`, retaining JSON reports,
+available diagnostics, commit/context and version information for **30 days**.
+Artifacts have distinct scan/run/attempt names. A job stopped before scanning
+may have only partial evidence; its missing report is not considered success.
+Raw Python reports retain unfixed and lower-severity findings even when they
+do not block. Neither findings policy changes the image scanner's thresholds.
+
+### SAST workflow
+
+`SAST` (`sast.yml`) consolidates CodeQL, Semgrep CE, Gitleaks and zizmor as
+independent jobs, without dependencies between scanners. Action pins, scanner
+versions, findings policies, artifacts and SARIF categories remain unchanged.
+Permissions and concurrency are scoped per job; one scanner does not cancel
+another. CodeQL retains its Actions/Rust matrix with `fail-fast: false`.
+
+CodeQL, Semgrep and Gitleaks run on main pushes/PRs and manual dispatch.
+SAST has no scheduled runs. zizmor retains main pushes and PRs against any
+branch, without manual execution. Other scanners
+are skipped for PRs targeting branches other than main. Existing fork-PR upload
+handling remains unchanged.
+
+Confirm required checks and code-scanning tool status in a real PR after
+migration, including a fork PR when available. Workflow-specific ruleset
+references may need owner updates; this change does not edit remote protections.
+
+### Verification before merge
+
+Run workflow linting:
+
+```sh
+actionlint .github/workflows/ci.yml .github/workflows/sca.yml \
+  .github/workflows/release.yml .github/workflows/sast.yml
+git diff --check
+```
+
+Validate the inline gate blocks using temporary fixtures for both contexts,
+fix/no-fix severities, invalid reports, missing coverage and technical failures.
+There are no external SCA helper scripts or permanent gate-test harness.
+Verify shell selection against a disposable fixture with a syntax error in a
+script other than the first, including a name
+with spaces. The workflow checks each selected file separately and logs its
+count and name.
+
+Before merge, verify the real Trivy report's group coverage and compare both
+cargo-audit lockfile invocations with an isolated no-policy run against the same
+advisory database. If current lockfiles do not exercise ignored advisories, use
+a temporary synthetic lockfile containing affected packages; do not edit the
+repository policy or lockfiles for that experiment.
+
+After the changes are available on a review branch, use manual Release Binaries
+dispatch to verify a single SHA across builds/scans and successful readiness
+without publication. Repeat on a disposable branch with a deliberately failed
+gate: readiness and publication must remain skipped, and independent SCA scans
+must retain evidence. Local lint/tests do not replace this remote acceptance
+check. Do not mark acceptance complete until these runs have been inspected.
+
+For rulesets, retain the existing CI checks and require the three standalone
+SCA check names above after confirming their displayed names in a real PR run.
+If Dependency Review is already required, confirm its check under SCA and
+update any workflow-specific ruleset reference before retiring the old check.
+Reusable release runs may display caller prefixes. Updating remote protections
+requires separate owner authorization; these workflow changes do not update
+rulesets automatically. The added CI repetition during release is intentional;
+measure its duration rather than assuming a fixed cost.
 
 ## Prerequisites
 
@@ -92,7 +248,7 @@ invocations on nightly when the system default comes from Homebrew or another
 package manager.
 
 GitHub Actions also runs all native fuzz targets weekly and on manual dispatch
-through `.github/workflows/cargo-fuzz.yml`. The automated run uses the pinned
+through `.github/workflows/fuzz.yml` (FUZZ). The automated run uses the pinned
 `nightly-2026-08-01` toolchain and `cargo-fuzz` 0.13.2.
 
 ## Rust Checks
@@ -113,7 +269,7 @@ by the normal suite because it requires external network access:
 cargo test cloudflare_nts_smoke_test -- --ignored
 ```
 
-`tests/integration/tls/tls.sh` is the canonical local TLS happy-path test; Rust CI runs it
+`tests/integration/tls/tls.sh` is the canonical local TLS happy-path test; CI runs it
 through `tests/ci/test-tls.sh` using the built artifact. It starts Vectis in
 production HTTPS mode with a temporary self-signed certificate, drives the CLI
 through health checks, creates signed config and profiles, exercises local
@@ -540,7 +696,7 @@ of cryptographically valid happy paths.
 ## Dynamic API Scanning With OWASP ZAP
 
 GitHub Actions runs an OWASP ZAP API Scan every Tuesday and on manual dispatch
-through `.github/workflows/zap-api-scan.yml`. This is an active DAST scan: ZAP
+through `.github/workflows/dast.yml` (DAST). This is an active DAST scan: ZAP
 imports the OpenAPI contract and sends attack payloads to the described API.
 Run it only against systems that you own and are explicitly authorized to test.
 

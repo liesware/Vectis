@@ -1,4 +1,4 @@
-name: Weekly cargo-fuzz
+name: FUZZ
 
 on:
   schedule:
@@ -102,7 +102,7 @@ jobs:
           target_count="${target_count:-unknown}"
           if [[ "$MINIMIZE" == "1" ]]; then mode="minimize (cmin)"; else mode="fuzz"; fi
           {
-            echo "## Weekly cargo-fuzz"
+            echo "## FUZZ"
             echo
             echo "- Outcome: \`$FUZZ_OUTCOME\`"
             echo "- Mode: \`$mode\`"

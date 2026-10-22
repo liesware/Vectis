@@ -97,6 +97,71 @@ git diff --check
 The full testing strategy, including Python integration tests, Schemathesis,
 coverage, and cargo-fuzz, is documented in [Test.md](Test.md).
 
+## Release SBOMs
+
+Official binary and image builds use **cargo-auditable 0.7.7** with
+`cargo auditable build --release --locked`. It embeds Rust dependency metadata
+in the executable; normal development builds do not need this tool. **Trivy
+0.70.0** inventories that executable or the final image and converts one complete
+JSON inventory to **CycloneDX 1.6 JSON** and **SPDX 2.3 JSON**. SBOM generation
+is part of release workflows only, not SCA.
+
+Executable inventories use Trivy's `rootfs` mode on the single binary: `fs`
+mode disables its individual-binary analyzers. The cargo-auditable version is
+recorded from the pinned installation, since `cargo auditable --version`
+forwards to Cargo and reports Cargo's version rather than its own.
+
+Each binary archive has three sibling release assets, using the same basename:
+
+```text
+vectis-linux-amd64-v<VERSION>.tar.gz
+vectis-linux-amd64-v<VERSION>.cdx.json
+vectis-linux-amd64-v<VERSION>.spdx.json
+vectis-linux-amd64-v<VERSION>.build-info.json
+```
+
+The same set is produced for Linux ARM64 and macOS ARM64. The signed
+`SHA256SUMS` covers all four files per platform. Verify its existing Cosign
+identity as described in [GettingStarted.md](GettingStarted.md), then download
+the desired assets and verify their checksums. Build metadata records the
+commit, platform, tool versions, executable hash and archive hash. Archive
+contents and existing provenance remain unchanged.
+
+For images, inventories include detected operating-system packages and Rust
+dependencies, separately for AMD64 and ARM64. Published candidates are scanned
+by immutable digest. Both SBOMs are attached as Cosign attestations and verified
+before the multiarch tag is promoted. Attestations are separate registry objects,
+not additional platforms in the two-platform manifest. Existing provenance of
+the published manifest is retained.
+
+To verify an image SBOM, use the platform digest, not a mutable tag:
+
+```sh
+cosign verify-attestation --type cyclonedx \
+  --certificate-identity 'https://github.com/liesware/Vectis/.github/workflows/release-image.yml@refs/tags/v<VERSION>' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  docker.io/liesware/vectis@sha256:<PLATFORM_DIGEST>
+```
+
+Use `--type spdxjson` for SPDX. The manual test-image identity ends in
+`@refs/heads/main` instead. The verified DSSE payload contains the subject digest
+and SBOM predicate; check that the subject matches the image you intend to use.
+The workflows also compare the verified predicate with the generated document.
+
+Botan is vendored C++, so Rust metadata is not an exhaustive native-library
+inventory. Separate build evidence records the `botan`, `botan-sys` and
+`botan-src` crate versions and the native version, source URL and verified
+tarball SHA-256 from the resolved `botan-src/release.toml`. Source overrides are
+rejected. Images include this evidence at `/opt/vectis/share/build-info.json`;
+external image evidence associates it with the immutable image reference.
+
+Manual binary builds and non-publishing image runs produce downloadable Actions
+artifacts; SBOM evidence is retained for **30 days**, including available partial
+diagnostics on failure. The non-publishing image inventory uses the local image
+ID. Neither SBOM existence nor its signature proves absence of vulnerabilities,
+complete native coverage or reproducibility. Existing security gates remain
+separate and unchanged.
+
 ## Run From The Source Tree
 
 Commands may be executed directly with the release binary:

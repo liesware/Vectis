@@ -1,4 +1,4 @@
-name: OWASP ZAP API Scan
+name: DAST
 
 on:
   schedule:
@@ -91,7 +91,7 @@ jobs:
               ("unknown", "Unknown"),
           ]
           lines = [
-              "## OWASP ZAP API Scan",
+              "## DAST: OWASP ZAP API Scan",
               "",
               f"- Workflow outcome: `{os.environ.get('SCAN_OUTCOME', 'unknown')}`",
               f"- ZAP version: `{os.environ.get('ZAP_VERSION', 'unknown')}`",

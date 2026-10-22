@@ -1,6 +1,8 @@
-name: Rust
+name: CI
 
 on:
+  workflow_dispatch:
+  workflow_call:
   push:
     branches: ["main"]
   pull_request:
@@ -10,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: rust-validation-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -25,7 +27,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
+
+      - name: Record validated commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse HEAD)"
+          test "$commit" = "$GITHUB_SHA"
+          printf 'Rust validation commit: `%s`\n' "$commit" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
@@ -49,23 +60,19 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Validate shell scripts
+        shell: bash
         run: |
-          bash -n tests.sh
-          bash -n tests_cargo-fuzz.sh
-          bash -n demo/local/*.sh
-          bash -n tests/ci/*.sh
-          bash -n tests/integration/tls/*.sh
-          bash -n tests/security/zap/*.sh
-          bash -n tests/performance/*.sh
-          bash -n tests/performance/local/*.sh
-
-      - name: Install cargo-audit
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
-        with:
-          tool: cargo-audit
-
-      - name: Audit dependencies
-        run: cargo audit
+          set -euo pipefail
+          shopt -s nullglob
+          scripts=(tests.sh tests_cargo-fuzz.sh demo/local/*.sh tests/ci/*.sh
+                   tests/integration/tls/*.sh tests/security/zap/*.sh
+                   tests/performance/*.sh tests/performance/local/*.sh)
+          printf 'Validating %d shell scripts\n' "${#scripts[@]}"
+          (( ${#scripts[@]} > 0 ))
+          for script in "${scripts[@]}"; do
+            printf 'Checking %s\n' "$script"
+            bash -n "$script"
+          done
 
       - name: Build vectis binary
         run: cargo build --locked --all-features
@@ -85,7 +92,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
+
+      - name: Record integration commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse HEAD)"
+          test "$commit" = "$GITHUB_SHA"
+          printf 'Integration validation commit: `%s`\n' "$commit" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Download vectis binary
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
