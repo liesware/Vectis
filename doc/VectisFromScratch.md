@@ -137,10 +137,10 @@ file each step lives in.
 
 | step Nº | action | result |
 |---|---|---|
-| 1 | `main.rs` → `real_main`: `tokio::main` starts; logging and the crypto provider (`core::tls::ensure_crypto_provider`) are initialized. | The process is ready to dispatch. |
+| 1 | `main.rs` → `real_main`: captures one `ConfigLoader` snapshot, checks file policy, validates logging before opening files, and initializes the crypto provider. | The process is ready to dispatch. |
 | 2 | `main.rs` recognizes the `serve` command in its `ROOT_COMMANDS` table and calls `run_serve`. | The server path begins. |
-| 3 | `run_serve` → `io::cli::init::load_init_state()`: **validates and decrypts the encrypted `init` file** before starting. | `ValidatedInitState`; if the unseal fails, it aborts (nothing starts without the key). |
-| 4 | `io::http::run(init_state)` (in `io/http/app.rs`) → `config::app_config()`: loads the environment config (env → `.env` → defaults). | The app `Config` (Rule 8). |
+| 3 | `run_serve` → `io::cli::init::load_init_state(loader)`: **validates and decrypts the encrypted `init` file** using the captured sources. | `ValidatedInitState`; if the unseal fails, it aborts (nothing starts without the key). |
+| 4 | `io::http::run(loader, init_state)` → `config::app_config(loader)`: validates server settings from the same snapshot (env → `.env` → defaults), without rereading sources. | The app `Config` (Rule 8). |
 | 5 | `app.rs`: initializes metrics (if enabled) and `HttpAuthState::from_config` for API-key auth. | Metrics handle and auth state. |
 | 6 | `app.rs` → `audit_chain::initialize`: prepares the hash-chained, signed audit log. | The audit chain is ready (Rule 42). |
 | 7 | `app.rs` → `StorageState::new`: connects to storage (SQLite/PostgreSQL) and **validates the expected schema**. | Storage state; a missing table fails closed with a named error (Rule 25). |

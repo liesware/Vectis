@@ -85,7 +85,8 @@ fn profiles_create_valid_key_material() {
 
 #[test]
 fn generated_key_material_validates_end_to_end() {
-    let config = config::app_config().expect("test config must load");
+    let config = config::app_config(&vectis::core::config_loader::ConfigLoader::capture().unwrap())
+        .expect("test config must load");
     let aad = "version=v1;type=crypto-integration-test";
     let message = "Vectis crypto integration smoke test";
 

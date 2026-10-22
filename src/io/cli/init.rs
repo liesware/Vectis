@@ -1,3 +1,4 @@
+use crate::core::config_loader::ConfigLoader;
 use crate::core::{config, files, unseal};
 use crate::error::DynError;
 use crate::io::cli::sensitive;
@@ -13,9 +14,9 @@ const INIT_PUBLIC_KEYS_FILE_PERMISSION_ERROR: &str =
 #[cfg(test)]
 static INIT_WRITE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-pub fn run_init() -> Result<String, DynError> {
-    let init_keys_path = config::init_keys_file_path()?;
-    let init_public_keys_path = config::init_public_keys_file_path()?;
+pub fn run_init(loader: &ConfigLoader) -> Result<String, DynError> {
+    let init_keys_path = config::init_keys_file_path(loader)?;
+    let init_public_keys_path = config::init_public_keys_file_path(loader)?;
     if init_keys_path == init_public_keys_path {
         return Err(crate::error::invalid_input(
             "VECTIS_INIT_KEYS_FILE and VECTIS_INIT_PUBLIC_KEYS_FILE must use different paths",
@@ -27,7 +28,7 @@ pub fn run_init() -> Result<String, DynError> {
         ));
     }
 
-    let output = ops::init::create_encrypted_init_output_json()?;
+    let output = ops::init::create_encrypted_init_output_json(&config::bootstrap_config(loader)?)?;
     write_init_files(
         &init_keys_path,
         &output.json,
@@ -52,9 +53,9 @@ pub fn run_init() -> Result<String, DynError> {
     Ok(init_keys_path.display().to_string())
 }
 
-pub fn run_init_public() -> Result<String, DynError> {
-    let init_keys_path = config::init_keys_file_path()?;
-    let init_public_keys_path = config::init_public_keys_file_path()?;
+pub fn run_init_public(loader: &ConfigLoader) -> Result<String, DynError> {
+    let init_keys_path = config::init_keys_file_path(loader)?;
+    let init_public_keys_path = config::init_public_keys_file_path(loader)?;
     if init_keys_path == init_public_keys_path {
         return Err(crate::error::invalid_input(
             "VECTIS_INIT_KEYS_FILE and VECTIS_INIT_PUBLIC_KEYS_FILE must use different paths",
@@ -66,7 +67,7 @@ pub fn run_init_public() -> Result<String, DynError> {
         ));
     }
 
-    let init_state = load_init_state()?;
+    let init_state = load_init_state(loader)?;
     let public_json = ops::init::init_public_keys_json(&init_state)?;
     write_new_file_atomically(&init_public_keys_path, &public_json, 0o644)?;
     info!(path = %init_public_keys_path.display(), "init public keys regenerated");
@@ -105,20 +106,26 @@ fn with_rollback_result(operation_error: DynError, rollback: Result<(), DynError
     }
 }
 
-pub fn load_init_state() -> Result<ops::init::ValidatedInitState, DynError> {
-    let init_keys_path = config::init_keys_file_path()?;
-    let key_hex = unseal::read_unseal_key("VECTIS_UNSEAL_KEY:")?;
+pub fn load_init_state(loader: &ConfigLoader) -> Result<ops::init::ValidatedInitState, DynError> {
+    let init_keys_path = config::init_keys_file_path(loader)?;
+    let key_hex = unseal::read_unseal_key(loader, "VECTIS_UNSEAL_KEY:")?;
     validate_init_keys_file_permissions(&init_keys_path)?;
     let encrypted_json = read_init_keys_file(&init_keys_path)?;
-    let init_state = ops::init::load_validated_init_state(&encrypted_json, &key_hex)?;
+    let init_state = ops::init::load_validated_init_state(
+        &config::bootstrap_config(loader)?,
+        &encrypted_json,
+        &key_hex,
+    )?;
 
     info!(path = %init_keys_path.display(), "init keys validated");
 
     Ok(init_state)
 }
 
-pub fn load_init_public_state() -> Result<ops::init::ValidatedInitPublicState, DynError> {
-    let init_public_keys_path = config::init_public_keys_file_path()?;
+pub fn load_init_public_state(
+    loader: &ConfigLoader,
+) -> Result<ops::init::ValidatedInitPublicState, DynError> {
+    let init_public_keys_path = config::init_public_keys_file_path(loader)?;
     validate_init_public_keys_file_permissions(&init_public_keys_path)?;
     let public_json = read_init_public_keys_file(&init_public_keys_path)?;
     let init_state = ops::init::load_validated_init_public_state(&public_json)?;

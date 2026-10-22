@@ -22,20 +22,22 @@ pub fn fuzz_config() -> config::AppConfig {
         tls_skip_verify: false,
         config_path: PathBuf::from("config.json"),
         config_sign_path: PathBuf::from("config_sign.json"),
-        api_key_hash: String::new(),
+        api_key_hash: String::new().into(),
         protocol_version: String::from("v1"),
         storage_type: String::from("sqlite"),
         sqlite_path: PathBuf::from("data.db"),
-        postgres_dsn: String::new(),
+        postgres_dsn: String::new().into(),
         sender_hostname: String::from("sender.local"),
         receiver_hostname: String::from("receiver.local"),
         default_crypto_profile: String::from("hybrid-performance-v1"),
         crypto_policy: String::from("profile-only"),
-        plaintext_message: String::new(),
+        plaintext_message: String::new().into(),
         metrics_enabled: true,
         max_concurrent_crypto: 8,
         max_queued_crypto: config::DEFAULT_MAX_QUEUED_CRYPTO,
-        crypto_queue_timeout: std::time::Duration::from_millis(config::DEFAULT_CRYPTO_QUEUE_TIMEOUT_MS),
+        crypto_queue_timeout: std::time::Duration::from_millis(
+            config::DEFAULT_CRYPTO_QUEUE_TIMEOUT_MS,
+        ),
     }
 }
 

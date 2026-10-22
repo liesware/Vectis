@@ -2,11 +2,13 @@
 
 Vectis reads configuration from process environment variables first and then from `.env`. If neither source provides a value, the built-in default is used.
 
-Do not store secrets in `.env` for production. In particular, `VECTIS_UNSEAL_KEY` is intentionally not listed in `env.dist`.
+Do not store secrets in `.env` for production. `VECTIS_UNSEAL_KEY` is prohibited
+in that file, including when a process override exists; use the environment,
+protected key file or hidden prompt instead.
 
 ## Contents
 
-[Local File Limits](#local-file-limits) · [Resolution Order](#resolution-order) · [HTTP](#http) · [CLI Client](#cli-client) · [Final App Delivery](#final-app-delivery) · [Authentication and Unsealing](#authentication-and-unsealing) · [API Key Permissions](#api-key-permissions) · [Storage](#storage) · [Logging](#logging) · [Observability](#observability) · [Hostnames](#hostnames) · [Crypto Profiles And Algorithm Settings](#crypto-profiles-and-algorithm-settings) · [Validation Message](#validation-message) · [Internal Constants](#internal-constants) · [Example `.env`](#example-env)
+[Local File Limits](#local-file-limits) · [.env File Format](#env-file-format) · [Resolution Order](#resolution-order) · [HTTP](#http) · [CLI Client](#cli-client) · [Final App Delivery](#final-app-delivery) · [Authentication and Unsealing](#authentication-and-unsealing) · [API Key Permissions](#api-key-permissions) · [Storage](#storage) · [Logging](#logging) · [Observability](#observability) · [Hostnames](#hostnames) · [Crypto Profiles And Algorithm Settings](#crypto-profiles-and-algorithm-settings) · [Validation Message](#validation-message) · [Internal Constants](#internal-constants) · [Example `.env`](#example-env)
 
 ## Local File Limits
 
@@ -15,6 +17,51 @@ limits are 64 KiB for `init.json`, 64 KiB for `init_pub.json`, 1 KiB for `.unsea
 and 2 MiB for CLI `--file` JSON input. `config.json` and `config_sign.json`
 retain their separate 8 MiB and 1 MiB limits.
 
+## .env File Format
+
+`.env` is a dedicated Vectis configuration file, not a shell script. A missing
+file is optional; an existing unreadable or invalid file fails the command before
+logging initializes, even if process environment variables override its values.
+No partial configuration is accepted. Errors report `.env`, the line number and
+the reason without printing values or complete lines. File-level errors such as
+invalid UTF-8 or excessive size identify the file without a line number.
+
+- One `NAME=VALUE` assignment per line; LF and CRLF are supported, with or without
+  a final newline. Empty lines and full-line `#` comments are allowed.
+- Names must match `^VECTIS_[A-Z][A-Z0-9_]*$`, with at most 128 ASCII bytes.
+  Duplicate names are errors, including identical definitions; both line numbers
+  are reported. The parser accepts syntactically valid names; the loader then
+  rejects names outside the productive variable catalog and prohibited sources.
+- Only ASCII spaces and tabs are removed around names and values. An empty value
+  is valid syntax, but its particular setting may reject it later.
+- A value beginning with a single or double quote must close at the first
+  matching quote; only spaces or tabs may follow. Contents inside are preserved.
+  In unquoted values, interior quotes, `#`, spaces and additional `=` are literal.
+- Values are limited to 4,096 UTF-8 bytes after removing outer whitespace and
+  delimiters, before copying into the parsed configuration. Quoted spaces count.
+  The same 4,096-byte cap applies to effective process values when consumed.
+  File limits apply even to assignments overridden by the process.
+- There are no escapes, interpolation, command execution, multiline values or
+  `export` declarations. Backslashes, `${NAME}` and `$(command)` remain literal.
+  Inline comments are not supported: `#` in a value is retained. NUL and isolated
+  carriage returns are rejected everywhere, including comments.
+
+```dotenv
+# Full-line comment
+VECTIS_TLS_CERT_PATH=
+VECTIS_LOG_DIR="logs with spaces"
+VECTIS_PLAINTEXT_MESSAGE='  literal ${NAME} # text=a=b  '
+```
+
+Previously ignored malformed lines, non-Vectis names, duplicate definitions and
+invalid quoting now prevent startup. Separate shell/application settings into
+their own files; remove duplicates instead of relying on first-occurrence wins.
+Process precedence and per-variable semantic validation remain unchanged.
+
+Unknown variables and prohibited sources in `.env` are also errors, even for
+commands such as `version`. Auxiliary process variables, including test settings,
+`PATH`, `HOME` and `VECTIS_BIN`, are not rejected or captured by the loader.
+
 ## Resolution Order
 
 For most configuration values:
@@ -22,6 +69,27 @@ For most configuration values:
 1. Process environment variable.
 2. `.env` file in the working directory.
 3. Built-in default.
+
+One invocation captures the recognized process variables and reads `.env` once.
+Consumers share that snapshot; changing sources afterward does not change it.
+Capture is not atomic against concurrent environment changes while it is built.
+
+Presence is distinct from absence: an explicit empty, invalid or non-Unicode
+process value never falls back to `.env` or a default. Empty-value policy remains
+specific to each variable. Non-Unicode and oversized process values fail only
+when consumed. No new trimming or normalization is applied by resolution.
+
+Semantic validation is consumer-specific: logging is validated before files are
+opened, the HTTP client does not require server certificates or storage, and
+only the selected storage backend is interpreted. `version` still validates
+logging and file policy but does not consume server, storage or unseal settings.
+Invalid logging values now fail instead of silently selecting a default; existing
+case/whitespace handling and the `warning` alias remain supported.
+
+Errors identify the variable, source (`process`, `env_file` with line, or
+`default`) and a sanitized reason, never the value. Captured values, controlled
+parser buffers and sensitive typed results use zeroizing ownership. This does
+not erase the original process environment or all OS/library copies.
 
 Example:
 

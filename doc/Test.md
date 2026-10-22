@@ -714,7 +714,7 @@ the (git-ignored) `fuzz/corpus/<target>/` before each run to bootstrap coverage
 from realistic examples. Existing corpus entries discovered by libFuzzer are
 preserved.
 
-The script runs:
+The script runs 27 targets: 23 structural/fast and four bounded crypto targets.
 
 - `fuzz_canonical_json`
 - `fuzz_sign_input`
@@ -722,6 +722,8 @@ The script runs:
 - `fuzz_timestamp_token` (the compact `{kid, signature}` verification request)
 - `fuzz_message_inputs`
 - `fuzz_config_file`
+- `fuzz_env_file`
+- `fuzz_config_loader`
 - `fuzz_keys_inputs`
 - `fuzz_validation`
 - `fuzz_routes_permissions`
@@ -735,6 +737,47 @@ The script runs:
 - `fuzz_slh_dsa_signature`
 - `fuzz_slh_dsa_key_files`
 - `fuzz_init_artifacts`
+- `fuzz_protected_message_artifact`
+- `fuzz_time_attestation_evaluate`
+
+The slow group adds `fuzz_fpe_roundtrip`, `fuzz_tokenization_roundtrip`,
+`fuzz_commitment_verify` and `fuzz_internal_encryption_roundtrip`.
+
+### Configuration fuzzing
+
+`fuzz_config_file` covers only signed-config JSON canonicalization and profile
+validation. `fuzz_env_file` covers the existing file grammar, including valid
+unknown names; recognition and source policy belong to `fuzz_config_loader`.
+Non-UTF-8 files remain covered by file-reader tests, not the UTF-8 parser wrapper.
+
+The loader input is one scenario byte, four little-endian bytes for file length,
+then file bytes and process bytes. Short headers are zero-filled; excessive file
+lengths consume only the available payload. Process bytes become native Unix
+values without UTF-8 conversion. Scenarios check precedence/source metadata,
+invalid overrides, empty/absent values, unused settings, unconditional file
+policy, admission limits/defaults and snapshot stability. Constructor errors
+are checked too. Fixed canaries check error redaction in addition to the shared
+control-character assertion.
+
+Both targets use synthetic sources only: no filesystem, actual environment,
+storage, networking, unseal, logging installation or crypto scheduling. Synthetic
+admission defaults use four execution slots; production retains its CPU-based
+calculation. Cancellation and permit ownership remain in deterministic Rust tests.
+
+Versioned seeds include 128/129-byte names, 4096/4097-byte values and
+65536/65537-byte files; loader file seeds include the five-byte header. The
+generator never touches accumulated corpora:
+
+```sh
+python3 fuzz/tools/config_seeds.py
+cargo test --locked --manifest-path fuzz/Cargo.toml --test config_harness
+cargo +nightly fuzz run fuzz_env_file -- -runs=10000 -max_len=65537 -timeout=5
+cargo +nightly fuzz run fuzz_config_loader -- -runs=10000 -max_len=131072 -timeout=5
+```
+
+Use `python3 fuzz/tools/config_seeds.py --write` only to regenerate those
+synthetic fixtures. These short runs are smoke/regression, not exhaustive
+coverage or a replacement for prolonged fuzzing campaigns.
 
 SLH-DSA artifact signing has structural fuzz coverage for compact signatures
 and key-file wrappers. Its Botan round-trip test still confirms the compiled

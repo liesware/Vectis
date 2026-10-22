@@ -1,0 +1,4 @@
+# Fixture bytes are part of the parser/framing contract.
+seeds/fuzz_env_file/*.env -text
+seeds/fuzz_env_file/crlf.env whitespace=cr-at-eol
+seeds/fuzz_config_loader/*.bin binary

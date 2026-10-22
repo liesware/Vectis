@@ -1,9 +1,10 @@
+use crate::core::config_loader::ConfigLoader;
 use crate::core::{audit_chain, validation};
 use crate::error::DynError;
 use crate::io::cli::{help_catalog, http, init};
 use std::path::PathBuf;
 
-pub fn run(args: Vec<String>) -> Result<(), DynError> {
+pub fn run(loader: &ConfigLoader, args: Vec<String>) -> Result<(), DynError> {
     let (output, command, file) = parse_args(args)?;
     if command == "help" {
         print!("{}", help_catalog::render_help_path(&["audit"]));
@@ -16,7 +17,7 @@ pub fn run(args: Vec<String>) -> Result<(), DynError> {
     }
     let file =
         file.ok_or_else(|| crate::error::invalid_input("audit verify requires --file <path>"))?;
-    let init_public_state = init::load_init_public_state()?;
+    let init_public_state = init::load_init_public_state(loader)?;
     let result = audit_chain::verify_file(&file, &init_public_state)?;
     http::print_serializable_response(&result, output)
 }
@@ -86,8 +87,18 @@ mod tests {
 
     #[test]
     fn parser_requires_verify_file_and_rejects_unknown_options() {
-        assert!(run(vec![String::from("verify")]).is_err());
-        let err = run(vec![String::from("verify"), String::from("--bogus")]).unwrap_err();
+        assert!(
+            run(
+                &ConfigLoader::from_sources("", |_| None).unwrap(),
+                vec![String::from("verify")]
+            )
+            .is_err()
+        );
+        let err = run(
+            &ConfigLoader::from_sources("", |_| None).unwrap(),
+            vec![String::from("verify"), String::from("--bogus")],
+        )
+        .unwrap_err();
         assert_eq!(err.to_string(), "unknown audit option: --bogus");
     }
 }

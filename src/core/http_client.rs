@@ -48,11 +48,12 @@ where
 }
 
 fn client_state() -> Result<&'static HttpClientState, DynError> {
-    if let Some(state) = HTTP_CLIENT.get() {
-        return Ok(state);
-    }
+    HTTP_CLIENT
+        .get()
+        .ok_or_else(|| crate::error::internal("HTTP client not initialized"))
+}
 
-    let config = config::http_client_config()?;
+pub fn init(config: config::HttpClientConfig) -> Result<(), DynError> {
     if config.mode == "prod" && config.tls_skip_verify {
         warn!("VECTIS_TLS_SKIP_VERIFY=true; outbound TLS certificate verification is disabled");
     }
@@ -60,9 +61,7 @@ fn client_state() -> Result<&'static HttpClientState, DynError> {
     let client = build_runtime_http_client(runtime_http_timeout(), config.tls_skip_verify)?;
     let _ = HTTP_CLIENT.set(HttpClientState { client, config });
 
-    HTTP_CLIENT
-        .get()
-        .ok_or_else(|| crate::error::internal("HTTP client could not be initialized"))
+    Ok(())
 }
 
 fn runtime_http_timeout() -> Duration {

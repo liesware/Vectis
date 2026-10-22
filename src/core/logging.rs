@@ -1,17 +1,12 @@
-use crate::core::config;
-use std::collections::HashMap;
-use std::env;
+use crate::core::{config_loader::ConfigLoader, validation};
 use std::fs;
-use tracing::{Level, info, warn};
+use tracing::{Level, info};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
 
-const DEFAULT_LOG_LEVEL: &str = "info";
-const DEFAULT_LOG_DIR: &str = "logs";
-const DEFAULT_LOG_FILE: &str = "vectis.log";
-const DEFAULT_AUDIT_LOG_FILE: &str = "audit.log";
+#[cfg(test)]
 const DEFAULT_LOG_TARGET: &str = "file";
 
 pub struct LoggingConfig {
@@ -41,14 +36,19 @@ pub struct LoggingGuards {
     _operational: WorkerGuard,
 }
 
-pub fn init_logging() -> LoggingGuards {
-    let config = logging_config();
+pub fn init_logging(loader: &ConfigLoader) -> Result<LoggingGuards, crate::error::DynError> {
+    let config = logging_config(loader)?;
 
     let (operational_writer, operational_guard) = match config.target {
         LogTarget::File => {
-            fs::create_dir_all(&config.dir).expect("failed to create log directory");
+            fs::create_dir_all(&config.dir)
+                .map_err(|_| crate::error::internal("could not create log directory"))?;
 
-            let operational_appender = tracing_appender::rolling::daily(&config.dir, &config.file);
+            let operational_appender = tracing_appender::rolling::RollingFileAppender::builder()
+                .rotation(tracing_appender::rolling::Rotation::DAILY)
+                .filename_prefix(&config.file)
+                .build(&config.dir)
+                .map_err(|_| loader.error("VECTIS_LOG_FILE", "could not open operational log"))?;
             let (operational_writer, operational_guard) =
                 tracing_appender::non_blocking(operational_appender);
 
@@ -72,7 +72,8 @@ pub fn init_logging() -> LoggingGuards {
 
     let subscriber = tracing_subscriber::registry().with(operational_layer);
 
-    tracing::subscriber::set_global_default(subscriber).expect("failed to set tracing subscriber");
+    tracing::subscriber::set_global_default(subscriber)
+        .map_err(|_| crate::error::internal("could not initialize logging"))?;
     info!(
         log_level = %config.level,
         log_target = %config.target,
@@ -82,69 +83,50 @@ pub fn init_logging() -> LoggingGuards {
         "logging initialized"
     );
 
-    LoggingGuards {
+    Ok(LoggingGuards {
         _operational: operational_guard,
-    }
+    })
 }
 
-pub fn logging_config() -> LoggingConfig {
-    // Runs during logging bootstrap, before the tracing subscriber exists, so a
-    // rejected .env (oversized or invalid UTF-8) is reported to stderr rather
-    // than silently falling back to default logging.
-    let env_file = config::load_env_file(".env").unwrap_or_else(|err| {
-        eprintln!("warning: failed to read .env for logging configuration, using defaults: {err}");
-        HashMap::new()
-    });
-    let level_text = config_value(&env_file, "VECTIS_LOG_LEVEL", DEFAULT_LOG_LEVEL);
-    let level = parse_log_level(&level_text);
-    let dir = config_value(&env_file, "VECTIS_LOG_DIR", DEFAULT_LOG_DIR);
-    let file = config_value(&env_file, "VECTIS_LOG_FILE", DEFAULT_LOG_FILE);
-    let audit_file = config_value(&env_file, "VECTIS_AUDIT_LOG_FILE", DEFAULT_AUDIT_LOG_FILE);
-    let target = parse_log_target(&config_value(
-        &env_file,
+pub fn logging_config(loader: &ConfigLoader) -> Result<LoggingConfig, crate::error::DynError> {
+    let level = loader.parse("VECTIS_LOG_LEVEL", "unsupported log level", parse_log_level)?;
+    let target = loader.parse(
         "VECTIS_LOG_TARGET",
-        DEFAULT_LOG_TARGET,
-    ));
-
-    LoggingConfig {
+        "unsupported log target",
+        parse_log_target,
+    )?;
+    let text = |name| {
+        loader.parse(name, "must be nonempty text without controls", |v| {
+            validation::validate_text_field(name, v)?;
+            Ok(v.to_owned())
+        })
+    };
+    Ok(LoggingConfig {
         level,
-        dir,
-        file,
-        audit_file,
         target,
-    }
+        dir: text("VECTIS_LOG_DIR")?,
+        file: text("VECTIS_LOG_FILE")?,
+        audit_file: text("VECTIS_AUDIT_LOG_FILE")?,
+    })
 }
 
-fn parse_log_level(value: &str) -> Level {
+fn parse_log_level(value: &str) -> Result<Level, crate::error::DynError> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "trace" => Level::TRACE,
-        "debug" => Level::DEBUG,
-        "info" => Level::INFO,
-        "warn" | "warning" => Level::WARN,
-        "error" => Level::ERROR,
-        _ => {
-            warn!(value, "invalid VECTIS_LOG_LEVEL, falling back to info");
-            Level::INFO
-        }
+        "trace" => Ok(Level::TRACE),
+        "debug" => Ok(Level::DEBUG),
+        "info" => Ok(Level::INFO),
+        "warn" | "warning" => Ok(Level::WARN),
+        "error" => Ok(Level::ERROR),
+        _ => Err(crate::error::invalid_input("unsupported log level")),
     }
 }
 
-fn parse_log_target(value: &str) -> LogTarget {
+fn parse_log_target(value: &str) -> Result<LogTarget, crate::error::DynError> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "file" => LogTarget::File,
-        "stdout" => LogTarget::Stdout,
-        _ => {
-            warn!(value, "invalid VECTIS_LOG_TARGET, falling back to file");
-            LogTarget::File
-        }
+        "file" => Ok(LogTarget::File),
+        "stdout" => Ok(LogTarget::Stdout),
+        _ => Err(crate::error::invalid_input("unsupported log target")),
     }
-}
-
-fn config_value(env_file: &HashMap<String, String>, key: &str, default: &str) -> String {
-    env::var(key)
-        .ok()
-        .or_else(|| env_file.get(key).cloned())
-        .unwrap_or_else(|| default.to_string())
 }
 
 #[cfg(test)]
@@ -153,21 +135,24 @@ mod tests {
 
     #[test]
     fn log_target_defaults_to_file() {
-        assert_eq!(parse_log_target(DEFAULT_LOG_TARGET), LogTarget::File);
+        assert_eq!(
+            parse_log_target(DEFAULT_LOG_TARGET).unwrap(),
+            LogTarget::File
+        );
     }
 
     #[test]
     fn log_target_accepts_file() {
-        assert_eq!(parse_log_target("file"), LogTarget::File);
+        assert_eq!(parse_log_target("file").unwrap(), LogTarget::File);
     }
 
     #[test]
     fn log_target_accepts_stdout() {
-        assert_eq!(parse_log_target("stdout"), LogTarget::Stdout);
+        assert_eq!(parse_log_target("stdout").unwrap(), LogTarget::Stdout);
     }
 
     #[test]
-    fn log_target_invalid_value_falls_back_to_file() {
-        assert_eq!(parse_log_target("journald"), LogTarget::File);
+    fn log_target_invalid_value_is_rejected() {
+        assert!(parse_log_target("journald").is_err());
     }
 }

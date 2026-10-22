@@ -11,7 +11,7 @@ const API_KEY_HEADER: HeaderName = HeaderName::from_static("x-api-key");
 
 #[derive(Clone)]
 pub struct HttpAuthState {
-    root_api_key_hash_hex: Option<String>,
+    root_api_key_hash_hex: Option<Zeroizing<String>>,
     root_api_key_hash_bytes: Option<Zeroizing<Vec<u8>>>,
 }
 
@@ -35,7 +35,7 @@ impl HttpAuthState {
     }
 
     fn root_api_key_hash_hex(&self) -> Option<&str> {
-        self.root_api_key_hash_hex.as_deref()
+        self.root_api_key_hash_hex.as_ref().map(|v| v.as_str())
     }
 
     fn root_api_key_hash_bytes(&self) -> Option<&[u8]> {

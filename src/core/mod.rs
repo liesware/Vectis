@@ -5,6 +5,7 @@ pub mod canonical;
 pub mod commitments;
 pub mod config;
 pub mod config_file;
+pub mod config_loader;
 pub mod crypto;
 pub mod deterministic_tokenization;
 pub mod files;

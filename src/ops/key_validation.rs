@@ -1,4 +1,23 @@
-use crate::core::{config, crypto, validation};
+/// Hostnames used by the local key-material self-test.
+pub trait KeyValidationSettings {
+    fn validation_hosts(&self) -> (&str, &str);
+}
+
+impl KeyValidationSettings for crate::core::config::AppConfig {
+    fn validation_hosts(&self) -> (&str, &str) {
+        (&self.sender_hostname, &self.receiver_hostname)
+    }
+}
+
+impl KeyValidationSettings for crate::core::config::BootstrapConfig {
+    fn validation_hosts(&self) -> (&str, &str) {
+        (&self.sender_hostname, &self.receiver_hostname)
+    }
+}
+
+#[cfg(test)]
+use crate::core::config;
+use crate::core::{crypto, validation};
 use crate::error::DynError;
 use crate::ops::key_material::{
     KeyMaterialOutput, VariantDerKeyPair, VariantKeyAgreementKeyPair, VariantSymmetricKey,
@@ -43,7 +62,7 @@ struct VariantKeyValidation {
 }
 
 pub fn validate_key_material(
-    config: &config::AppConfig,
+    config: &impl KeyValidationSettings,
     output: &KeyMaterialOutput,
     aad: &str,
     message: &str,
@@ -105,7 +124,7 @@ pub fn validate_key_material(
 }
 
 fn validate_symmetric_encryption(
-    config: &config::AppConfig,
+    config: &impl KeyValidationSettings,
     keys: &VariantSymmetricKey,
     message: &str,
 ) -> Result<bool, DynError> {
@@ -129,13 +148,13 @@ fn validate_symmetric_encryption(
 }
 
 fn key_material_symmetric_validation_aad(
-    config: &config::AppConfig,
+    config: &impl KeyValidationSettings,
     cipher_alg: &str,
 ) -> Result<String, DynError> {
     validation::build_validated_aad(&[
         ("type", "key-material-symmetric-validation"),
-        ("sender_hostname", &config.sender_hostname),
-        ("receiver_hostname", &config.receiver_hostname),
+        ("sender_hostname", config.validation_hosts().0),
+        ("receiver_hostname", config.validation_hosts().1),
         ("cipher", cipher_alg),
     ])
 }

@@ -591,10 +591,16 @@ mod tests {
     }
 
     fn init_state() -> ValidatedInitState {
-        let encrypted =
-            crate::ops::init::create_encrypted_init_output_json().expect("init must be created");
-        crate::ops::init::load_validated_init_state(&encrypted.json, &encrypted.encryption_key_hex)
-            .expect("init must validate")
+        let encrypted = crate::ops::init::create_encrypted_init_output_json(
+            &crate::core::config::test_app_config().bootstrap_settings(),
+        )
+        .expect("init must be created");
+        crate::ops::init::load_validated_init_state(
+            &crate::core::config::test_app_config().bootstrap_settings(),
+            &encrypted.json,
+            &encrypted.encryption_key_hex,
+        )
+        .expect("init must validate")
     }
 
     fn empty_config() -> &'static str {

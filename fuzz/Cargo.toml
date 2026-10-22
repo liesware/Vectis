@@ -67,6 +67,24 @@ doc = false
 bench = false
 
 [[bin]]
+name = "fuzz_env_file"
+path = "fuzz_targets/fuzz_env_file.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_config_loader"
+path = "fuzz_targets/fuzz_config_loader.rs"
+test = false
+doc = false
+bench = false
+
+[[test]]
+name = "config_harness"
+path = "tests/config_harness.rs"
+
+[[bin]]
 name = "fuzz_keys_inputs"
 path = "fuzz_targets/fuzz_keys_inputs.rs"
 test = false

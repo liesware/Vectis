@@ -554,6 +554,8 @@ native `cargo-fuzz` targets.
   sign demo.
 - [charts/vectis/README.md](charts/vectis/README.md): Kubernetes Helm chart.
 
+**[Deepwiki page](https://deepwiki.com/liesware/Vectis)**
+
 ## Security Status
 
 Vectis is under active development. It has not yet completed an external

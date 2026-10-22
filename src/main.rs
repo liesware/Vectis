@@ -73,7 +73,8 @@ async fn main() {
 }
 
 async fn real_main(args: Vec<String>) -> Result<(), DynError> {
-    let _guard = core::logging::init_logging();
+    let loader = core::config_loader::ConfigLoader::capture()?;
+    let _guard = core::logging::init_logging(&loader)?;
     core::tls::ensure_crypto_provider();
 
     let mut args = args.into_iter();
@@ -84,7 +85,7 @@ async fn real_main(args: Vec<String>) -> Result<(), DynError> {
             let Some(root_command) = find_root_command(command) else {
                 return Err(error::invalid_input(format!("unknown command: {command}")));
             };
-            run_root_command(root_command, command, args.collect()).await?;
+            run_root_command(&loader, root_command, command, args.collect()).await?;
         }
         Some("help") => match args.next() {
             Some(command) => {
@@ -138,22 +139,26 @@ fn find_root_command(name: &str) -> Option<&'static RootCommand> {
 }
 
 async fn run_root_command(
+    loader: &core::config_loader::ConfigLoader,
     command: &RootCommand,
     name: &str,
     args: Vec<String>,
 ) -> Result<(), DynError> {
     match command.kind {
-        RootCommandKind::Serve => run_serve_command(args).await,
-        RootCommandKind::Init => run_init(args),
-        RootCommandKind::Apikey => io::cli::apikey::run(args),
-        RootCommandKind::Audit => io::cli::audit::run(args),
-        RootCommandKind::SlhDsa => io::cli::slh_dsa::run(args),
+        RootCommandKind::Serve => run_serve_command(loader, args).await,
+        RootCommandKind::Init => run_init(loader, args),
+        RootCommandKind::Apikey => io::cli::apikey::run(loader, args),
+        RootCommandKind::Audit => io::cli::audit::run(loader, args),
+        RootCommandKind::SlhDsa => io::cli::slh_dsa::run(loader, args),
         RootCommandKind::Version => io::cli::version::run(args),
-        RootCommandKind::Http => io::cli::http::run(name, args).await,
+        RootCommandKind::Http => io::cli::http::run(loader, name, args).await,
     }
 }
 
-async fn run_serve_command(args: Vec<String>) -> Result<(), DynError> {
+async fn run_serve_command(
+    loader: &core::config_loader::ConfigLoader,
+    args: Vec<String>,
+) -> Result<(), DynError> {
     if matches!(
         args.first().map(String::as_str),
         Some("help" | "-h" | "--help")
@@ -162,16 +167,16 @@ async fn run_serve_command(args: Vec<String>) -> Result<(), DynError> {
         return Ok(());
     }
 
-    run_serve().await
+    run_serve(loader).await
 }
 
-async fn run_serve() -> Result<(), DynError> {
+async fn run_serve(loader: &core::config_loader::ConfigLoader) -> Result<(), DynError> {
     info!("validating encrypted init file before starting http service");
-    let init_state = io::cli::init::load_init_state()?;
+    let init_state = io::cli::init::load_init_state(loader)?;
     println!("[OK] Boot");
     info!("starting http service");
 
-    if let Err(err) = io::http::run(init_state).await {
+    if let Err(err) = io::http::run(loader, init_state).await {
         error!(error = %err, "application failed");
         return Err(err);
     }
@@ -180,11 +185,11 @@ async fn run_serve() -> Result<(), DynError> {
     Ok(())
 }
 
-fn run_init(args: Vec<String>) -> Result<(), DynError> {
+fn run_init(loader: &core::config_loader::ConfigLoader, args: Vec<String>) -> Result<(), DynError> {
     match args.as_slice() {
         [] => {
             info!("initializing local key material");
-            let path = io::cli::init::run_init()?;
+            let path = io::cli::init::run_init(loader)?;
 
             println!("created {path}");
             info!(path, "init completed successfully");
@@ -193,7 +198,7 @@ fn run_init(args: Vec<String>) -> Result<(), DynError> {
             io::cli::http::print_help("init");
         }
         [command] if command == "pub" => {
-            let path = io::cli::init::run_init_public()?;
+            let path = io::cli::init::run_init_public(loader)?;
             println!("created {path}");
             info!(path, "init public keys regenerated");
         }
@@ -315,8 +320,11 @@ mod tests {
 
     #[test]
     fn init_pub_extra_argument_reports_known_command_usage_error() {
-        let err = run_init(vec![String::from("pub"), String::from("extra")])
-            .expect_err("init pub extra argument must fail");
+        let err = run_init(
+            &core::config_loader::ConfigLoader::from_sources("", |_| None).unwrap(),
+            vec![String::from("pub"), String::from("extra")],
+        )
+        .expect_err("init pub extra argument must fail");
 
         assert_eq!(
             err.to_string(),
@@ -326,8 +334,11 @@ mod tests {
 
     #[test]
     fn unknown_init_subcommand_keeps_unknown_command_error() {
-        let err =
-            run_init(vec![String::from("unknown")]).expect_err("unknown init subcommand must fail");
+        let err = run_init(
+            &core::config_loader::ConfigLoader::from_sources("", |_| None).unwrap(),
+            vec![String::from("unknown")],
+        )
+        .expect_err("unknown init subcommand must fail");
 
         assert_eq!(
             err.to_string(),

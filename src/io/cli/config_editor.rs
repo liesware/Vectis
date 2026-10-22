@@ -1,4 +1,5 @@
 use super::http::{OutputFormat, invalid_input, print_response, reject_option_like_positional};
+use crate::core::config_loader::ConfigLoader;
 use crate::core::{
     commitments, config, config_file, fpe, mac, masking, permissions, sharing, time_attestation,
     tokenization, validation,
@@ -15,7 +16,7 @@ const DEFAULT_PERMISSION_STATUS: &str = "active";
 const DEFAULT_TIMEOUT_SECONDS: u64 = 30;
 
 struct LocalConfig {
-    app: config::AppConfig,
+    app: config::LocalConfigSettings,
     value: Value,
 }
 
@@ -762,8 +763,8 @@ const SHARING_PROFILES_SECTION: SectionSpec = SectionSpec {
     parsed_validator: Some(validate_sharing_profile_parsed_fields),
 };
 
-pub fn init_config(output: OutputFormat) -> Result<(), DynError> {
-    let app = config::app_config()?;
+pub fn init_config(loader: &ConfigLoader, output: OutputFormat) -> Result<(), DynError> {
+    let app = config::local_config(loader)?;
     match fs::metadata(&app.config_path) {
         Ok(_) => {
             return Err(invalid_input(
@@ -789,83 +790,135 @@ pub fn init_config(output: OutputFormat) -> Result<(), DynError> {
     )
 }
 
-pub async fn run_routes(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+pub async fn run_routes(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (command, rest) = split_command(args, "config routes command")?;
-    run_basic_section_command(&ROUTES_SECTION, &command, rest, output).await
+    run_basic_section_command(loader, &ROUTES_SECTION, &command, rest, output).await
 }
 
-pub async fn run_remote_routes(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+pub async fn run_remote_routes(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (command, rest) = split_command(args, "config remote-routes command")?;
     match command.as_str() {
-        "list" => section_list_command(&REMOTE_ROUTES_SECTION, rest, output).await,
-        "add" => remote_route_add(rest, output).await,
-        "get" => section_get_command(&REMOTE_ROUTES_SECTION, rest, output).await,
-        "update" => remote_route_update(rest, output).await,
-        "delete" => section_delete_command(&REMOTE_ROUTES_SECTION, rest, output).await,
+        "list" => section_list_command(loader, &REMOTE_ROUTES_SECTION, rest, output).await,
+        "add" => remote_route_add(loader, rest, output).await,
+        "get" => section_get_command(loader, &REMOTE_ROUTES_SECTION, rest, output).await,
+        "update" => remote_route_update(loader, rest, output).await,
+        "delete" => section_delete_command(loader, &REMOTE_ROUTES_SECTION, rest, output).await,
         _ => Err(invalid_input(format!(
             "unknown config remote-routes command: {command}"
         ))),
     }
 }
 
-pub async fn run_permissions(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+pub async fn run_permissions(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (command, rest) = split_command(args, "config permissions command")?;
     match command.as_str() {
-        "grant" => mutate_config(output, |local| permission_grant(local, rest)).await,
-        "revoke" => mutate_config(output, |local| permission_revoke(local, rest)).await,
-        _ => run_basic_section_command(&PERMISSIONS_SECTION, &command, rest, output).await,
+        "grant" => mutate_config(loader, output, |local| permission_grant(local, rest)).await,
+        "revoke" => mutate_config(loader, output, |local| permission_revoke(local, rest)).await,
+        _ => run_basic_section_command(loader, &PERMISSIONS_SECTION, &command, rest, output).await,
     }
 }
 
-pub async fn run_config_fpe(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+pub async fn run_config_fpe(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (command, rest) = split_command(args, "config fpe command")?;
-    run_basic_section_command(&FPE_PROFILES_SECTION, &command, rest, output).await
+    run_basic_section_command(loader, &FPE_PROFILES_SECTION, &command, rest, output).await
 }
 
-pub async fn run_config_token(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+pub async fn run_config_token(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (command, rest) = split_command(args, "config token command")?;
-    run_basic_section_command(&TOKENIZATION_PROFILES_SECTION, &command, rest, output).await
+    run_basic_section_command(
+        loader,
+        &TOKENIZATION_PROFILES_SECTION,
+        &command,
+        rest,
+        output,
+    )
+    .await
 }
 
 pub async fn run_config_token_deterministic(
+    loader: &ConfigLoader,
     args: Vec<String>,
     output: OutputFormat,
 ) -> Result<(), DynError> {
     let (command, rest) = split_command(args, "config token-deterministic command")?;
-    run_basic_section_command(&DETERMINISTIC_PROFILES_SECTION, &command, rest, output).await
+    run_basic_section_command(
+        loader,
+        &DETERMINISTIC_PROFILES_SECTION,
+        &command,
+        rest,
+        output,
+    )
+    .await
 }
 
-pub async fn run_config_mac(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+pub async fn run_config_mac(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (command, rest) = split_command(args, "config mac command")?;
-    run_basic_section_command(&MAC_PROFILES_SECTION, &command, rest, output).await
+    run_basic_section_command(loader, &MAC_PROFILES_SECTION, &command, rest, output).await
 }
 
-pub async fn run_config_masking(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+pub async fn run_config_masking(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (command, rest) = split_command(args, "config masking command")?;
-    run_basic_section_command(&MASKING_PROFILES_SECTION, &command, rest, output).await
+    run_basic_section_command(loader, &MASKING_PROFILES_SECTION, &command, rest, output).await
 }
 
 pub async fn run_config_commitment(
+    loader: &ConfigLoader,
     args: Vec<String>,
     output: OutputFormat,
 ) -> Result<(), DynError> {
     let (command, rest) = split_command(args, "config commitment command")?;
-    run_basic_section_command(&COMMITMENT_PROFILES_SECTION, &command, rest, output).await
+    run_basic_section_command(loader, &COMMITMENT_PROFILES_SECTION, &command, rest, output).await
 }
 
-pub async fn run_config_sharing(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+pub async fn run_config_sharing(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (command, rest) = split_command(args, "config sharing command")?;
-    run_basic_section_command(&SHARING_PROFILES_SECTION, &command, rest, output).await
+    run_basic_section_command(loader, &SHARING_PROFILES_SECTION, &command, rest, output).await
 }
 
-pub async fn run_config_time(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+pub async fn run_config_time(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (command, rest) = split_command(args, "config time command")?;
     match command.as_str() {
         "get" => {
             if !rest.is_empty() {
                 return Err(invalid_input("config time get does not accept arguments"));
             }
-            read_config(output, |local| {
+            read_config(loader, output, |local| {
                 let overrides = local.value.get("time_attestation").cloned();
                 let parsed = overrides
                     .clone()
@@ -882,7 +935,7 @@ pub async fn run_config_time(args: Vec<String>, output: OutputFormat) -> Result<
             if !rest.is_empty() {
                 return Err(invalid_input("config time clear does not accept arguments"));
             }
-            mutate_config(output, |local| {
+            mutate_config(loader, output, |local| {
                 let object = object_mut(&mut local.value)?;
                 object.remove("time_attestation");
                 Ok(json!({"status":"cleared","section":"time_attestation"}))
@@ -891,7 +944,7 @@ pub async fn run_config_time(args: Vec<String>, output: OutputFormat) -> Result<
         }
         "set" => {
             let values = parse_time_options(rest)?;
-            mutate_config(output, |local| {
+            mutate_config(loader, output, |local| {
                 let object = object_mut(&mut local.value)?;
                 let current = object
                     .get("time_attestation")
@@ -978,19 +1031,21 @@ fn merge_and_validate_time_overrides(
 }
 
 async fn read_config(
+    loader: &ConfigLoader,
     output: OutputFormat,
     action: impl FnOnce(&LocalConfig) -> Result<Value, DynError>,
 ) -> Result<(), DynError> {
-    let local = load_local_config()?;
+    let local = load_local_config(loader)?;
     let response = action(&local)?;
     print_json_value(&response, output)
 }
 
 async fn mutate_config(
+    loader: &ConfigLoader,
     output: OutputFormat,
     action: impl FnOnce(&mut LocalConfig) -> Result<Value, DynError>,
 ) -> Result<(), DynError> {
-    let mut local = load_local_config()?;
+    let mut local = load_local_config(loader)?;
     let response = action(&mut local)?;
     validate_local_config(&local)?;
     write_local_config(&local)?;
@@ -998,17 +1053,18 @@ async fn mutate_config(
 }
 
 async fn run_basic_section_command(
+    loader: &ConfigLoader,
     spec: &'static SectionSpec,
     command: &str,
     rest: Vec<String>,
     output: OutputFormat,
 ) -> Result<(), DynError> {
     match command {
-        "list" => section_list_command(spec, rest, output).await,
-        "add" => section_add_command(spec, rest, output).await,
-        "get" => section_get_command(spec, rest, output).await,
-        "update" => section_update_command(spec, rest, output).await,
-        "delete" => section_delete_command(spec, rest, output).await,
+        "list" => section_list_command(loader, spec, rest, output).await,
+        "add" => section_add_command(loader, spec, rest, output).await,
+        "get" => section_get_command(loader, spec, rest, output).await,
+        "update" => section_update_command(loader, spec, rest, output).await,
+        "delete" => section_delete_command(loader, spec, rest, output).await,
         _ => Err(invalid_input(format!(
             "unknown config {} command: {command}",
             spec.cli_name
@@ -1017,20 +1073,22 @@ async fn run_basic_section_command(
 }
 
 async fn section_list_command(
+    loader: &ConfigLoader,
     spec: &'static SectionSpec,
     args: Vec<String>,
     output: OutputFormat,
 ) -> Result<(), DynError> {
     expect_no_args(args, &format!("config {} list", spec.cli_name))?;
-    read_config(output, |local| section_list(local, spec)).await
+    read_config(loader, output, |local| section_list(local, spec)).await
 }
 
 async fn section_add_command(
+    loader: &ConfigLoader,
     spec: &'static SectionSpec,
     args: Vec<String>,
     output: OutputFormat,
 ) -> Result<(), DynError> {
-    mutate_config(output, |local| {
+    mutate_config(loader, output, |local| {
         let value = parse_section_add(spec, args)?;
         section_add_value(local, spec, value)
     })
@@ -1038,27 +1096,30 @@ async fn section_add_command(
 }
 
 async fn section_get_command(
+    loader: &ConfigLoader,
     spec: &'static SectionSpec,
     args: Vec<String>,
     output: OutputFormat,
 ) -> Result<(), DynError> {
-    read_config(output, |local| section_get(local, spec, args)).await
+    read_config(loader, output, |local| section_get(local, spec, args)).await
 }
 
 async fn section_update_command(
+    loader: &ConfigLoader,
     spec: &'static SectionSpec,
     args: Vec<String>,
     output: OutputFormat,
 ) -> Result<(), DynError> {
-    mutate_config(output, |local| section_update(local, spec, args)).await
+    mutate_config(loader, output, |local| section_update(local, spec, args)).await
 }
 
 async fn section_delete_command(
+    loader: &ConfigLoader,
     spec: &'static SectionSpec,
     args: Vec<String>,
     output: OutputFormat,
 ) -> Result<(), DynError> {
-    mutate_config(output, |local| section_delete(local, spec, args)).await
+    mutate_config(loader, output, |local| section_delete(local, spec, args)).await
 }
 
 fn section_list(local: &LocalConfig, spec: &SectionSpec) -> Result<Value, DynError> {
@@ -1546,8 +1607,12 @@ impl DefaultValue {
     }
 }
 
-async fn remote_route_add(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
-    let mut local = load_local_config()?;
+async fn remote_route_add(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
+    let mut local = load_local_config(loader)?;
     let mut value = parse_section_add(&REMOTE_ROUTES_SECTION, args)?;
     let route = value
         .as_object_mut()
@@ -1558,7 +1623,7 @@ async fn remote_route_add(args: Vec<String>, output: OutputFormat) -> Result<(),
 
     ensure_unique_field(array_mut(&mut local.value, "remote_routes")?, "name", &name)?;
 
-    let public_keys = fetch_public_keys(&remote_addr, &remote_kid).await?;
+    let public_keys = fetch_public_keys(loader, &remote_addr, &remote_kid).await?;
     route.insert(String::from("public_keys"), public_keys);
     array_mut(&mut local.value, "remote_routes")?.push(value.clone());
 
@@ -1574,13 +1639,17 @@ async fn remote_route_add(args: Vec<String>, output: OutputFormat) -> Result<(),
     )
 }
 
-async fn remote_route_update(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+async fn remote_route_update(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (name, rest) =
         split_name_and_rest(args, "remote route name", "config remote-routes update")?;
     validate_text("name", &name)?;
 
     let update = parse_section_update(&REMOTE_ROUTES_SECTION, rest)?;
-    let mut local = load_local_config()?;
+    let mut local = load_local_config(loader)?;
     let route = find_by_field_mut(array_mut(&mut local.value, "remote_routes")?, "name", &name)?;
     let needs_key_import = update.contains_key("remote_kid") || update.contains_key("remote_addr");
 
@@ -1589,7 +1658,7 @@ async fn remote_route_update(args: Vec<String>, output: OutputFormat) -> Result<
     if needs_key_import {
         let remote_addr = required_string(route, "remote_addr")?.to_string();
         let remote_kid = required_string(route, "remote_kid")?.to_string();
-        let public_keys = fetch_public_keys(&remote_addr, &remote_kid).await?;
+        let public_keys = fetch_public_keys(loader, &remote_addr, &remote_kid).await?;
         set_value(route, "public_keys", public_keys)?;
     }
     let item = route.clone();
@@ -1710,17 +1779,17 @@ fn parse_permission_action_fields(args: Vec<String>) -> Result<Map<String, Value
     Ok(parsed)
 }
 
-fn load_local_config() -> Result<LocalConfig, DynError> {
-    let app = config::app_config()?;
+fn load_local_config(loader: &ConfigLoader) -> Result<LocalConfig, DynError> {
+    let app = config::local_config(loader)?;
     let value = match config_file::read_config_file(&app.config_path) {
         Ok(content) => serde_json::from_str::<Value>(&content).map_err(|error| {
             crate::error::invalid_json_input("config file must be valid JSON", &error)
         })?,
         Err(err) if crate::error::is_not_found(err.as_ref()) => {
-            return Err(invalid_input(format!(
-                "VECTIS_CONFIG_PATH could not be read from {}; run `vectis config init` first",
-                app.config_path.display()
-            )));
+            return Err(loader.error(
+                "VECTIS_CONFIG_PATH",
+                "could not read config file; run `vectis config init` first",
+            ));
         }
         Err(err) => return Err(err),
     };
@@ -1844,11 +1913,15 @@ fn write_local_config(local: &LocalConfig) -> Result<(), DynError> {
     )
 }
 
-async fn fetch_public_keys(remote_addr: &str, remote_kid: &str) -> Result<Value, DynError> {
+async fn fetch_public_keys(
+    loader: &ConfigLoader,
+    remote_addr: &str,
+    remote_kid: &str,
+) -> Result<Value, DynError> {
     validation::validate_host_port("remote_addr", remote_addr)?;
     validate_kid("remote_kid", remote_kid)?;
 
-    let http_config = config::http_client_config()?;
+    let http_config = config::http_client_config(loader)?;
     let url = format!(
         "{}://{}/pub/{}",
         http_config.remote_scheme, remote_addr, remote_kid
@@ -2135,36 +2208,11 @@ mod tests {
 
     fn local_config() -> LocalConfig {
         LocalConfig {
-            app: config::AppConfig {
-                http_bind_addr: "127.0.0.1:3000".parse().unwrap(),
-                mode: String::from("dev"),
-                server_scheme: String::from("http"),
-                remote_scheme: String::from("http"),
-                final_app_scheme: String::from("http"),
-                public_addr: String::from("127.0.0.1:3000"),
-                final_app_addr: String::from("127.0.0.1:3999"),
+            app: config::LocalConfigSettings {
+                config_path: std::path::PathBuf::from("config.json"),
+                config_sign_path: std::path::PathBuf::from("config_sign.json"),
+                final_app_addr: String::from("localhost:3999"),
                 final_app_path: String::from("/message"),
-                tls_cert_path: None,
-                tls_key_path: None,
-                tls_skip_verify: false,
-                config_path: "config.json".into(),
-                config_sign_path: "config_sign.json".into(),
-                api_key_hash: String::new(),
-                protocol_version: String::from("v1"),
-                storage_type: String::from("sqlite"),
-                sqlite_path: "src/db/data.db".into(),
-                postgres_dsn: String::new(),
-                sender_hostname: String::from("localhost.local"),
-                receiver_hostname: String::from("remotehost.local"),
-                default_crypto_profile: String::from("hybrid-performance-v1"),
-                crypto_policy: String::from("profile-only"),
-                plaintext_message: String::from("hello"),
-                metrics_enabled: true,
-                max_concurrent_crypto: 8,
-                max_queued_crypto: config::DEFAULT_MAX_QUEUED_CRYPTO,
-                crypto_queue_timeout: std::time::Duration::from_millis(
-                    config::DEFAULT_CRYPTO_QUEUE_TIMEOUT_MS,
-                ),
             },
             value: empty_config(),
         }

@@ -163,6 +163,19 @@ enum StorageBackend {
 }
 
 impl StorageState {
+    pub async fn from_config(config: &config::StorageConfig) -> Result<Self, DynError> {
+        Ok(Self {
+            backend: match config {
+                config::StorageConfig::Sqlite(path) => {
+                    StorageBackend::Sqlite(sqlite::SqliteStorage::new(path).await?)
+                }
+                config::StorageConfig::Postgres(dsn) => {
+                    StorageBackend::Postgres(postgres::PostgresStorage::new(dsn).await?)
+                }
+            },
+        })
+    }
+
     pub async fn new(config: &config::AppConfig) -> Result<Self, DynError> {
         match config.storage_type.as_str() {
             "sqlite" => Ok(Self {

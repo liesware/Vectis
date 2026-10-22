@@ -1,10 +1,14 @@
-use crate::core::{crypto, files, validation};
+use crate::core::config_loader::ConfigLoader;
+pub use crate::core::config_loader::{
+    ENV_FILE_MAX_SIZE_BYTES, ENV_NAME_MAX_SIZE_BYTES, ENV_VALUE_MAX_SIZE_BYTES,
+};
+use crate::core::{crypto, validation};
 use crate::error::DynError;
 use std::collections::HashMap;
-use std::env;
 use std::fs;
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use zeroize::Zeroizing;
 
 pub const INTERNAL_KEYS_CIPHER: &str = "AES-256/GCM";
 pub const INTERNAL_KEYS_KEY_SIZE_BYTES: usize = 32;
@@ -63,7 +67,6 @@ pub const CONFIG_SIGN_FILE_MAX_SIZE_BYTES: u64 = 1024 * 1024;
 pub const INIT_KEYS_FILE_MAX_SIZE_BYTES: u64 = 64 * 1024;
 pub const INIT_PUBLIC_KEYS_FILE_MAX_SIZE_BYTES: u64 = 64 * 1024;
 pub const UNSEAL_KEY_FILE_MAX_SIZE_BYTES: u64 = 1024;
-pub const ENV_FILE_MAX_SIZE_BYTES: u64 = 64 * 1024;
 pub const SLH_DSA_PRIVATE_FILE_MAX_SIZE_BYTES: u64 = 64 * 1024;
 pub const SLH_DSA_PUBLIC_FILE_MAX_SIZE_BYTES: u64 = 64 * 1024;
 pub const SLH_DSA_SIGNATURE_FILE_MAX_SIZE_BYTES: u64 = 128 * 1024;
@@ -88,16 +91,16 @@ pub struct AppConfig {
     pub tls_skip_verify: bool,
     pub config_path: PathBuf,
     pub config_sign_path: PathBuf,
-    pub api_key_hash: String,
+    pub api_key_hash: Zeroizing<String>,
     pub protocol_version: String,
     pub storage_type: String,
     pub sqlite_path: PathBuf,
-    pub postgres_dsn: String,
+    pub postgres_dsn: Zeroizing<String>,
     pub sender_hostname: String,
     pub receiver_hostname: String,
     pub default_crypto_profile: String,
     pub crypto_policy: String,
-    pub plaintext_message: String,
+    pub plaintext_message: Zeroizing<String>,
     pub metrics_enabled: bool,
     pub max_concurrent_crypto: usize,
     pub max_queued_crypto: usize,
@@ -120,16 +123,16 @@ pub(crate) fn test_app_config() -> AppConfig {
         tls_skip_verify: false,
         config_path: PathBuf::from("config.json"),
         config_sign_path: PathBuf::from("config.json.sig"),
-        api_key_hash: "a".repeat(64),
+        api_key_hash: Zeroizing::new("a".repeat(64)),
         protocol_version: String::from("v1"),
         storage_type: String::from("sqlite"),
         sqlite_path: PathBuf::from("vectis.db"),
-        postgres_dsn: String::new(),
+        postgres_dsn: Zeroizing::new(String::new()),
         sender_hostname: String::from("node-a"),
         receiver_hostname: String::from("node-b"),
         default_crypto_profile: String::from("hybrid-performance-v1"),
         crypto_policy: String::from("profile-only"),
-        plaintext_message: String::from("hello"),
+        plaintext_message: Zeroizing::new(String::from("hello")),
         metrics_enabled: true,
         max_concurrent_crypto: 8,
         max_queued_crypto: DEFAULT_MAX_QUEUED_CRYPTO,
@@ -137,16 +140,18 @@ pub(crate) fn test_app_config() -> AppConfig {
     }
 }
 
-pub(crate) fn default_crypto_concurrency() -> usize {
-    std::thread::available_parallelism()
-        .map(|cores| cores.get().saturating_sub(1).max(1))
-        .unwrap_or(4)
-}
-
-fn parse_max_concurrent_crypto(value: &str) -> Result<usize, DynError> {
+fn parse_max_concurrent_crypto(
+    value: &str,
+    default: impl FnOnce() -> usize,
+) -> Result<usize, DynError> {
     let value = value.trim();
     if value.is_empty() {
-        return Ok(default_crypto_concurrency());
+        return Ok(default());
+    }
+    if !value.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(crate::error::invalid_input(
+            "VECTIS_MAX_CONCURRENT_CRYPTO must be a positive integer",
+        ));
     }
     let parsed: usize = value.parse().map_err(|_| {
         crate::error::invalid_input("VECTIS_MAX_CONCURRENT_CRYPTO must be a positive integer")
@@ -204,165 +209,277 @@ fn parse_crypto_queue_timeout(value: &str) -> Result<std::time::Duration, DynErr
     Ok(duration)
 }
 
-pub fn app_config() -> Result<AppConfig, DynError> {
-    let env_file = load_env_file(".env")?;
-    let http_bind_addr = validation::validate_socket_addr(
-        "VECTIS_HTTP_BIND_ADDR",
-        &config_value(&env_file, "VECTIS_HTTP_BIND_ADDR", "127.0.0.1:3000"),
+/// Only the defaults consumed while validating a signed config file.
+pub struct LocalConfigSettings {
+    pub config_path: PathBuf,
+    pub config_sign_path: PathBuf,
+    pub final_app_addr: String,
+    pub final_app_path: String,
+}
+
+/// Storage selection is typed so an inactive backend cannot be used accidentally.
+pub enum StorageConfig {
+    Sqlite(PathBuf),
+    Postgres(Zeroizing<String>),
+}
+
+pub struct NodeConfigSettings {
+    pub local: LocalConfigSettings,
+    pub storage: StorageConfig,
+}
+
+pub struct BootstrapConfig {
+    pub protocol_version: String,
+    pub sender_hostname: String,
+    pub receiver_hostname: String,
+    pub plaintext_message: Zeroizing<String>,
+}
+
+impl AppConfig {
+    pub fn bootstrap_settings(&self) -> BootstrapConfig {
+        BootstrapConfig {
+            protocol_version: self.protocol_version.clone(),
+            sender_hostname: self.sender_hostname.clone(),
+            receiver_hostname: self.receiver_hostname.clone(),
+            plaintext_message: self.plaintext_message.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CryptoAdmissionConfig {
+    pub max_concurrent_crypto: usize,
+    pub max_queued_crypto: usize,
+    pub crypto_queue_timeout: std::time::Duration,
+}
+
+impl CryptoAdmissionConfig {
+    pub const MAX_PERMITS: usize = tokio::sync::Semaphore::MAX_PERMITS;
+}
+
+pub fn crypto_admission_config(loader: &ConfigLoader) -> Result<CryptoAdmissionConfig, DynError> {
+    let max_concurrent_crypto = loader.parse(
+        "VECTIS_MAX_CONCURRENT_CRYPTO",
+        "must be empty or a positive integer within the semaphore maximum",
+        |value| parse_max_concurrent_crypto(value, || loader.default_crypto_concurrency()),
     )?;
-    let mode = validate_vectis_mode(&config_value(&env_file, "VECTIS_MODE", "dev"))?;
-    let server_scheme = transport_scheme_for_mode(&mode).to_string();
-    let remote_scheme = transport_scheme_for_mode(&mode).to_string();
-    let final_app_scheme = transport_scheme_for_mode(&mode).to_string();
-    let public_addr = validation::validate_host_port(
-        "VECTIS_PUBLIC_ADDR",
-        &config_value(&env_file, "VECTIS_PUBLIC_ADDR", "127.0.0.1:3000"),
-    )?;
-    let final_app_addr = validation::validate_host_port(
-        "VECTIS_FINAL_APP_ADDR",
-        &config_value(&env_file, "VECTIS_FINAL_APP_ADDR", "localhost:3999"),
-    )?;
-    let final_app_path = validate_http_path(&config_value(
-        &env_file,
-        "VECTIS_FINAL_APP_PATH",
-        "/message",
-    ))?;
-    let tls_cert_path = validate_optional_tls_path(
-        "VECTIS_TLS_CERT_PATH",
-        &config_value(&env_file, "VECTIS_TLS_CERT_PATH", ""),
-    )?;
-    let tls_key_path = validate_optional_tls_path(
-        "VECTIS_TLS_KEY_PATH",
-        &config_value(&env_file, "VECTIS_TLS_KEY_PATH", ""),
-    )?;
-    let tls_skip_verify = validate_bool_field(
-        "VECTIS_TLS_SKIP_VERIFY",
-        &config_value(&env_file, "VECTIS_TLS_SKIP_VERIFY", "false"),
-    )?;
-    let config_path = validate_config_path(
-        "VECTIS_CONFIG_PATH",
-        &config_value(&env_file, "VECTIS_CONFIG_PATH", "config.json"),
-    )?;
-    let config_sign_path = validate_config_path(
-        "VECTIS_CONFIG_SIGN_PATH",
-        &config_value(&env_file, "VECTIS_CONFIG_SIGN_PATH", "config_sign.json"),
-    )?;
-    let api_key_hash = config_value(&env_file, "VECTIS_APIKEY_HASH", "");
-    let protocol_version = config_value(&env_file, "VECTIS_PROTOCOL_VERSION", "v1");
-    let storage_type = config_value(&env_file, "VECTIS_STORAGE", "sqlite");
-    let sqlite_path_value = config_value(&env_file, "VECTIS_SQLITE_PATH", &default_sqlite_path());
-    let postgres_dsn = config_value(&env_file, "VECTIS_POSTGRES_DSN", "");
-    let sender_hostname = config_value(&env_file, "VECTIS_SENDER_HOSTNAME", "localhost.local");
-    let receiver_hostname = config_value(&env_file, "VECTIS_RECEIVER_HOSTNAME", "remotehost.local");
-    let hash_algorithm = config_value(&env_file, "VECTIS_HASH", "BLAKE2b(256)");
-    let symmetric_algorithm = config_value(&env_file, "VECTIS_SYMMETRIC", "ChaCha20Poly1305");
-    let eddsa_algorithm = config_value(&env_file, "VECTIS_EDDSA", "Ed25519");
-    let xecdh_algorithm = config_value(&env_file, "VECTIS_XECDH", "X25519");
-    let ml_dsa_variant = config_value(&env_file, "VECTIS_ML_DSA_VARIANT", "ML-DSA-44");
-    let ml_kem_variant = config_value(&env_file, "VECTIS_ML_KEM_VARIANT", "ML-KEM-512");
-    let default_crypto_profile = config_value(
-        &env_file,
-        "VECTIS_DEFAULT_CRYPTO_PROFILE",
-        "hybrid-performance-v1",
-    );
-    let crypto_policy = config_value(&env_file, "VECTIS_CRYPTO_POLICY", "profile-only");
-    let metrics_enabled = validate_bool_field(
-        "VECTIS_METRICS_ENABLED",
-        &config_value(&env_file, "VECTIS_METRICS_ENABLED", "true"),
-    )?;
-    let max_concurrent_crypto =
-        parse_max_concurrent_crypto(&config_value(&env_file, "VECTIS_MAX_CONCURRENT_CRYPTO", ""))?;
-    let max_queued_crypto = parse_max_queued_crypto(&config_value(
-        &env_file,
+    let max_queued_crypto = loader.parse(
         "VECTIS_MAX_QUEUED_CRYPTO",
-        &DEFAULT_MAX_QUEUED_CRYPTO.to_string(),
-    ))?;
-    let crypto_queue_timeout = parse_crypto_queue_timeout(&config_value(
-        &env_file,
+        "must be an integer between 0 and the semaphore maximum",
+        parse_max_queued_crypto,
+    )?;
+    let crypto_queue_timeout = loader.parse(
         "VECTIS_CRYPTO_QUEUE_TIMEOUT_MS",
-        &DEFAULT_CRYPTO_QUEUE_TIMEOUT_MS.to_string(),
-    ))?;
-    let plaintext_message = config_value(
-        &env_file,
-        "VECTIS_PLAINTEXT_MESSAGE",
-        "You are not special. You are not a beautiful and unique snowflake. You're the same decaying organic matter as everything else.",
-    );
-
-    crate::core::protocol::validate_protocol_version("VECTIS_PROTOCOL_VERSION", &protocol_version)?;
-    validate_tls_paths_for_mode(&mode, tls_cert_path.as_ref(), tls_key_path.as_ref())?;
-    validation::validate_allowed_value(
-        "VECTIS_STORAGE",
-        &storage_type,
-        crate::core::storage::STORAGE_TYPES,
+        "must be an integer between 1 and 30000",
+        parse_crypto_queue_timeout,
     )?;
-    let sqlite_path = if storage_type == "sqlite" {
-        validate_sqlite_path(&sqlite_path_value)?
-    } else {
-        validate_storage_path_text("VECTIS_SQLITE_PATH", &sqlite_path_value)?
-    };
-    if storage_type == "postgres" {
-        validate_postgres_dsn(&postgres_dsn)?;
-    }
-    if !api_key_hash.is_empty() {
-        validation::validate_symmetric_key("VECTIS_APIKEY_HASH", &api_key_hash, 32)?;
-    }
-    validation::validate_hostname("VECTIS_SENDER_HOSTNAME", &sender_hostname)?;
-    validation::validate_hostname("VECTIS_RECEIVER_HOSTNAME", &receiver_hostname)?;
-    validation::validate_allowed_value("VECTIS_HASH", &hash_algorithm, crypto::HASH_ALGORITHMS)?;
-    validation::validate_allowed_value(
-        "VECTIS_SYMMETRIC",
-        &symmetric_algorithm,
-        crypto::SYMMETRIC_ALGORITHMS,
-    )?;
-    validation::validate_allowed_value("VECTIS_EDDSA", &eddsa_algorithm, &["Ed25519", "Ed448"])?;
-    validation::validate_allowed_value("VECTIS_XECDH", &xecdh_algorithm, &["X25519", "X448"])?;
-    validation::validate_allowed_value(
-        "VECTIS_ML_DSA_VARIANT",
-        &ml_dsa_variant,
-        &["ML-DSA-44", "ML-DSA-65", "ML-DSA-87"],
-    )?;
-    validation::validate_allowed_value(
-        "VECTIS_ML_KEM_VARIANT",
-        &ml_kem_variant,
-        &["ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"],
-    )?;
-    validation::validate_allowed_value(
-        "VECTIS_DEFAULT_CRYPTO_PROFILE",
-        &default_crypto_profile,
-        CRYPTO_PROFILES,
-    )?;
-    validation::validate_allowed_value("VECTIS_CRYPTO_POLICY", &crypto_policy, CRYPTO_POLICIES)?;
-    validation::validate_text_field("VECTIS_PLAINTEXT_MESSAGE", &plaintext_message)?;
-
-    Ok(AppConfig {
-        http_bind_addr,
-        mode,
-        server_scheme,
-        remote_scheme,
-        final_app_scheme,
-        public_addr,
-        final_app_addr,
-        final_app_path,
-        tls_cert_path,
-        tls_key_path,
-        tls_skip_verify,
-        config_path,
-        config_sign_path,
-        api_key_hash,
-        protocol_version,
-        storage_type,
-        sqlite_path,
-        postgres_dsn,
-        sender_hostname,
-        receiver_hostname,
-        default_crypto_profile,
-        crypto_policy,
-        plaintext_message,
-        metrics_enabled,
+    Ok(CryptoAdmissionConfig {
         max_concurrent_crypto,
         max_queued_crypto,
         crypto_queue_timeout,
     })
+}
+
+pub fn app_config(loader: &ConfigLoader) -> Result<AppConfig, DynError> {
+    let local = local_config(loader)?;
+    let bootstrap = bootstrap_config(loader)?;
+    let http_bind_addr =
+        loader.parse("VECTIS_HTTP_BIND_ADDR", "must be a socket address", |v| {
+            validation::validate_socket_addr("VECTIS_HTTP_BIND_ADDR", v)
+        })?;
+    let mode = loader.parse("VECTIS_MODE", "must be dev or prod", validate_vectis_mode)?;
+    let server_scheme = transport_scheme_for_mode(&mode).to_owned();
+    let tls_cert_path = loader.parse(
+        "VECTIS_TLS_CERT_PATH",
+        "must be an optional readable certificate file",
+        |v| validate_optional_tls_path("VECTIS_TLS_CERT_PATH", v),
+    )?;
+    let tls_key_path = loader.parse(
+        "VECTIS_TLS_KEY_PATH",
+        "must be an optional readable key file",
+        |v| validate_optional_tls_path("VECTIS_TLS_KEY_PATH", v),
+    )?;
+    validate_tls_paths_for_mode(&mode, tls_cert_path.as_ref(), tls_key_path.as_ref()).map_err(
+        |_| {
+            loader.error(
+                if tls_cert_path.is_none() {
+                    "VECTIS_TLS_CERT_PATH"
+                } else {
+                    "VECTIS_TLS_KEY_PATH"
+                },
+                "required in prod",
+            )
+        },
+    )?;
+    let tls_skip_verify = loader.parse("VECTIS_TLS_SKIP_VERIFY", "must be true or false", |v| {
+        validate_bool_field("VECTIS_TLS_SKIP_VERIFY", v)
+    })?;
+    let (storage_type, sqlite_path, postgres_dsn) = match storage_config(loader)? {
+        StorageConfig::Sqlite(path) => ("sqlite".into(), path, Zeroizing::new(String::new())),
+        StorageConfig::Postgres(dsn) => ("postgres".into(), PathBuf::new(), dsn),
+    };
+    let api_key_hash = loader.parse(
+        "VECTIS_APIKEY_HASH",
+        "must be empty or a 32-byte hex hash",
+        |v| {
+            if !v.is_empty() {
+                validation::validate_symmetric_key("VECTIS_APIKEY_HASH", v, 32)?;
+            }
+            Ok(Zeroizing::new(v.to_owned()))
+        },
+    )?;
+    let public_addr = loader.parse("VECTIS_PUBLIC_ADDR", "must be host:port", |v| {
+        validation::validate_host_port("VECTIS_PUBLIC_ADDR", v)
+    })?;
+    let default_crypto_profile = loader.parse(
+        "VECTIS_DEFAULT_CRYPTO_PROFILE",
+        "unsupported crypto profile",
+        |v| {
+            validation::validate_allowed_value(
+                "VECTIS_DEFAULT_CRYPTO_PROFILE",
+                v,
+                CRYPTO_PROFILES,
+            )?;
+            Ok(v.to_owned())
+        },
+    )?;
+    let crypto_policy = loader.parse("VECTIS_CRYPTO_POLICY", "unsupported crypto policy", |v| {
+        validation::validate_allowed_value("VECTIS_CRYPTO_POLICY", v, CRYPTO_POLICIES)?;
+        Ok(v.to_owned())
+    })?;
+    let metrics_enabled = loader.parse("VECTIS_METRICS_ENABLED", "must be true or false", |v| {
+        validate_bool_field("VECTIS_METRICS_ENABLED", v)
+    })?;
+    let admission = crypto_admission_config(loader)?;
+    for (name, allowed) in [
+        ("VECTIS_HASH", crypto::HASH_ALGORITHMS),
+        ("VECTIS_SYMMETRIC", crypto::SYMMETRIC_ALGORITHMS),
+        ("VECTIS_EDDSA", &["Ed25519", "Ed448"][..]),
+        ("VECTIS_XECDH", &["X25519", "X448"][..]),
+        (
+            "VECTIS_ML_DSA_VARIANT",
+            &["ML-DSA-44", "ML-DSA-65", "ML-DSA-87"][..],
+        ),
+        (
+            "VECTIS_ML_KEM_VARIANT",
+            &["ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"][..],
+        ),
+    ] {
+        loader.parse(name, "unsupported algorithm", |v| {
+            validation::validate_allowed_value(name, v, allowed)
+        })?;
+    }
+    Ok(AppConfig {
+        http_bind_addr,
+        mode,
+        remote_scheme: server_scheme.clone(),
+        final_app_scheme: server_scheme.clone(),
+        server_scheme,
+        public_addr,
+        final_app_addr: local.final_app_addr,
+        final_app_path: local.final_app_path,
+        tls_cert_path,
+        tls_key_path,
+        tls_skip_verify,
+        config_path: local.config_path,
+        config_sign_path: local.config_sign_path,
+        api_key_hash,
+        protocol_version: bootstrap.protocol_version,
+        storage_type,
+        sqlite_path,
+        postgres_dsn,
+        sender_hostname: bootstrap.sender_hostname,
+        receiver_hostname: bootstrap.receiver_hostname,
+        default_crypto_profile,
+        crypto_policy,
+        plaintext_message: bootstrap.plaintext_message,
+        metrics_enabled,
+        max_concurrent_crypto: admission.max_concurrent_crypto,
+        max_queued_crypto: admission.max_queued_crypto,
+        crypto_queue_timeout: admission.crypto_queue_timeout,
+    })
+}
+
+pub fn local_config(loader: &ConfigLoader) -> Result<LocalConfigSettings, DynError> {
+    Ok(LocalConfigSettings {
+        config_path: configured_path(loader, "VECTIS_CONFIG_PATH")?,
+        config_sign_path: configured_path(loader, "VECTIS_CONFIG_SIGN_PATH")?,
+        final_app_addr: loader.parse("VECTIS_FINAL_APP_ADDR", "must be host:port", |v| {
+            validation::validate_host_port("VECTIS_FINAL_APP_ADDR", v)
+        })?,
+        final_app_path: loader.parse(
+            "VECTIS_FINAL_APP_PATH",
+            "must be an HTTP path",
+            validate_http_path,
+        )?,
+    })
+}
+
+pub fn bootstrap_config(loader: &ConfigLoader) -> Result<BootstrapConfig, DynError> {
+    Ok(BootstrapConfig {
+        protocol_version: loader.parse(
+            "VECTIS_PROTOCOL_VERSION",
+            "unsupported protocol version",
+            |v| {
+                crate::core::protocol::validate_protocol_version("VECTIS_PROTOCOL_VERSION", v)?;
+                Ok(v.to_owned())
+            },
+        )?,
+        sender_hostname: loader.parse("VECTIS_SENDER_HOSTNAME", "must be a hostname", |v| {
+            validation::validate_hostname("VECTIS_SENDER_HOSTNAME", v)?;
+            Ok(v.to_owned())
+        })?,
+        receiver_hostname: loader.parse("VECTIS_RECEIVER_HOSTNAME", "must be a hostname", |v| {
+            validation::validate_hostname("VECTIS_RECEIVER_HOSTNAME", v)?;
+            Ok(v.to_owned())
+        })?,
+        plaintext_message: loader.parse(
+            "VECTIS_PLAINTEXT_MESSAGE",
+            "must be nonempty text without controls",
+            |v| {
+                validation::validate_text_field("VECTIS_PLAINTEXT_MESSAGE", v)?;
+                Ok(Zeroizing::new(v.to_owned()))
+            },
+        )?,
+    })
+}
+
+pub fn node_config(loader: &ConfigLoader) -> Result<NodeConfigSettings, DynError> {
+    Ok(NodeConfigSettings {
+        local: local_config(loader)?,
+        storage: storage_config(loader)?,
+    })
+}
+
+pub fn storage_config(loader: &ConfigLoader) -> Result<StorageConfig, DynError> {
+    let storage = loader.parse("VECTIS_STORAGE", "must be sqlite or postgres", |v| {
+        validation::validate_allowed_value(
+            "VECTIS_STORAGE",
+            v,
+            crate::core::storage::STORAGE_TYPES,
+        )?;
+        Ok(v.to_owned())
+    })?;
+    if storage == "sqlite" {
+        loader
+            .parse(
+                "VECTIS_SQLITE_PATH",
+                "must be an existing readable writable SQLite file",
+                validate_sqlite_path,
+            )
+            .map(StorageConfig::Sqlite)
+    } else {
+        loader
+            .parse(
+                "VECTIS_POSTGRES_DSN",
+                "must be a valid PostgreSQL DSN",
+                |v| {
+                    validate_postgres_dsn(v)?;
+                    Ok(Zeroizing::new(v.to_owned()))
+                },
+            )
+            .map(StorageConfig::Postgres)
+    }
 }
 
 pub struct HttpClientConfig {
@@ -372,44 +489,32 @@ pub struct HttpClientConfig {
     pub tls_skip_verify: bool,
 }
 
-pub fn http_client_config() -> Result<HttpClientConfig, DynError> {
-    let env_file = load_env_file(".env")?;
-    let mode = validate_vectis_mode(&config_value(&env_file, "VECTIS_MODE", "dev"))?;
-    let remote_scheme = transport_scheme_for_mode(&mode).to_string();
-    let final_app_scheme = transport_scheme_for_mode(&mode).to_string();
-    let tls_skip_verify = validate_bool_field(
-        "VECTIS_TLS_SKIP_VERIFY",
-        &config_value(&env_file, "VECTIS_TLS_SKIP_VERIFY", "false"),
-    )?;
-
+pub fn http_client_config(loader: &ConfigLoader) -> Result<HttpClientConfig, DynError> {
+    let mode = loader.parse("VECTIS_MODE", "must be dev or prod", validate_vectis_mode)?;
+    let scheme = transport_scheme_for_mode(&mode).to_owned();
+    let tls_skip_verify = loader.parse("VECTIS_TLS_SKIP_VERIFY", "must be true or false", |v| {
+        validate_bool_field("VECTIS_TLS_SKIP_VERIFY", v)
+    })?;
     Ok(HttpClientConfig {
         mode,
-        remote_scheme,
-        final_app_scheme,
+        remote_scheme: scheme.clone(),
+        final_app_scheme: scheme,
         tls_skip_verify,
     })
 }
 
-pub fn init_keys_file_path() -> Result<PathBuf, DynError> {
-    let env_file = load_env_file(".env")?;
-
-    validate_config_path(
-        "VECTIS_INIT_KEYS_FILE",
-        &config_value(&env_file, "VECTIS_INIT_KEYS_FILE", DEFAULT_INIT_KEYS_FILE),
-    )
+pub fn configured_path(loader: &ConfigLoader, name: &str) -> Result<PathBuf, DynError> {
+    loader.parse(name, "must be a nonempty path without controls", |v| {
+        validate_config_path(name, v)
+    })
 }
 
-pub fn init_public_keys_file_path() -> Result<PathBuf, DynError> {
-    let env_file = load_env_file(".env")?;
+pub fn init_keys_file_path(loader: &ConfigLoader) -> Result<PathBuf, DynError> {
+    configured_path(loader, "VECTIS_INIT_KEYS_FILE")
+}
 
-    validate_config_path(
-        "VECTIS_INIT_PUBLIC_KEYS_FILE",
-        &config_value(
-            &env_file,
-            "VECTIS_INIT_PUBLIC_KEYS_FILE",
-            DEFAULT_INIT_PUBLIC_KEYS_FILE,
-        ),
-    )
+pub fn init_public_keys_file_path(loader: &ConfigLoader) -> Result<PathBuf, DynError> {
+    configured_path(loader, "VECTIS_INIT_PUBLIC_KEYS_FILE")
 }
 
 pub fn validate_vectis_mode(value: &str) -> Result<String, DynError> {
@@ -504,12 +609,6 @@ fn validate_config_path(field: &str, value: &str) -> Result<PathBuf, DynError> {
     Ok(PathBuf::from(value))
 }
 
-fn validate_storage_path_text(field: &str, value: &str) -> Result<PathBuf, DynError> {
-    validation::validate_text_field(field, value)?;
-
-    Ok(PathBuf::from(value))
-}
-
 fn validate_postgres_dsn(value: &str) -> Result<(), DynError> {
     validation::validate_text_field("VECTIS_POSTGRES_DSN", value)?;
 
@@ -518,6 +617,10 @@ fn validate_postgres_dsn(value: &str) -> Result<(), DynError> {
             "VECTIS_POSTGRES_DSN must start with postgres:// or postgresql://",
         ));
     }
+
+    value
+        .parse::<sqlx::postgres::PgConnectOptions>()
+        .map_err(|_| crate::error::invalid_input("invalid PostgreSQL DSN"))?;
 
     Ok(())
 }
@@ -557,78 +660,19 @@ fn validate_sqlite_path(value: &str) -> Result<PathBuf, DynError> {
     Ok(path)
 }
 
-fn default_sqlite_path() -> String {
-    if cfg!(debug_assertions) {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("db")
-            .join("data.db")
-            .display()
-            .to_string()
-    } else {
-        env::current_dir()
-            .unwrap_or_else(|_| Path::new(".").to_path_buf())
-            .join("db")
-            .join("data.db")
-            .display()
-            .to_string()
-    }
-}
-
 pub fn load_env_file(path: &str) -> Result<HashMap<String, String>, DynError> {
-    let content = files::read_bounded_utf8_file(
-        Path::new(path),
-        "environment file",
-        ENV_FILE_MAX_SIZE_BYTES,
-        files::MissingFilePolicy::Optional,
-    )?
-    .unwrap_or_default();
-
-    let mut values = HashMap::new();
-
-    for line in content.lines() {
-        let line = line.trim();
-
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-
-        let key = key.trim();
-        let value = clean_env_value(value.trim());
-
-        // First occurrence wins: a later duplicate must not silently override an
-        // earlier value (e.g. the unseal key file path).
-        values.entry(key.to_string()).or_insert(value);
-    }
-
-    Ok(values)
+    crate::core::config_loader::load_env_file(path)
 }
 
-pub fn config_value(env_file: &HashMap<String, String>, key: &str, default: &str) -> String {
-    env::var(key)
-        .ok()
-        .or_else(|| env_file.get(key).cloned())
-        .unwrap_or_else(|| default.to_string())
-}
-
-pub fn clean_env_value(value: &str) -> String {
-    let quoted = (value.starts_with('"') && value.ends_with('"'))
-        || (value.starts_with('\'') && value.ends_with('\''));
-
-    if quoted && value.len() >= 2 {
-        value[1..value.len() - 1].to_string()
-    } else {
-        value.to_string()
-    }
+/// Validate only the file grammar; recognition and source policy belong to the loader.
+pub fn validate_env_file_content(content: &str) -> Result<(), DynError> {
+    crate::core::config_loader::validate_env_file_content(content)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::blocking::default_crypto_concurrency;
     use proptest::prelude::*;
     use std::fs;
 
@@ -640,24 +684,6 @@ mod tests {
             .expect("write oversized env file");
 
         assert!(load_env_file(path.to_str().expect("temporary path must be UTF-8")).is_err());
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn env_file_duplicate_keys_keep_first_occurrence() {
-        let path = std::env::temp_dir().join(format!("vectis-env-dup-test-{}", std::process::id()));
-        fs::write(
-            &path,
-            "VECTIS_UNSEAL_KEY_FILE=/a\nVECTIS_UNSEAL_KEY_FILE=/b\n",
-        )
-        .expect("write env file with duplicate key");
-
-        let values =
-            load_env_file(path.to_str().expect("temporary path must be UTF-8")).expect("load env");
-        assert_eq!(
-            values.get("VECTIS_UNSEAL_KEY_FILE").map(String::as_str),
-            Some("/a")
-        );
         let _ = fs::remove_file(path);
     }
 
@@ -678,15 +704,30 @@ mod tests {
     #[test]
     fn max_concurrent_crypto_parses_and_validates() {
         assert_eq!(
-            parse_max_concurrent_crypto("5").expect("positive integer is valid"),
+            parse_max_concurrent_crypto("5", default_crypto_concurrency)
+                .expect("positive integer is valid"),
             5
         );
         // Empty falls back to a positive default derived from available cores.
-        assert!(parse_max_concurrent_crypto("").expect("empty uses default") >= 1);
-        assert!(parse_max_concurrent_crypto("  ").expect("blank uses default") >= 1);
-        parse_max_concurrent_crypto("0").expect_err("zero is rejected");
-        parse_max_concurrent_crypto("abc").expect_err("non-numeric is rejected");
-        parse_max_concurrent_crypto(&usize::MAX.to_string())
+        assert!(
+            parse_max_concurrent_crypto("", default_crypto_concurrency)
+                .expect("empty uses default")
+                >= 1
+        );
+        assert!(
+            parse_max_concurrent_crypto("  ", default_crypto_concurrency)
+                .expect("blank uses default")
+                >= 1
+        );
+        parse_max_concurrent_crypto("0", default_crypto_concurrency).expect_err("zero is rejected");
+        parse_max_concurrent_crypto("abc", default_crypto_concurrency)
+            .expect_err("non-numeric is rejected");
+        // Sign-prefixed inputs are rejected, matching the queued and timeout parsers.
+        parse_max_concurrent_crypto("+1", default_crypto_concurrency)
+            .expect_err("leading plus is rejected");
+        parse_max_concurrent_crypto("-1", default_crypto_concurrency)
+            .expect_err("leading minus is rejected");
+        parse_max_concurrent_crypto(&usize::MAX.to_string(), default_crypto_concurrency)
             .expect_err("value above the semaphore maximum is rejected");
     }
 
@@ -731,40 +772,125 @@ mod tests {
     }
 
     #[test]
+    fn admission_extraction_preserves_values_errors_and_sources() {
+        for name in [
+            "VECTIS_MAX_CONCURRENT_CRYPTO",
+            "VECTIS_MAX_QUEUED_CRYPTO",
+            "VECTIS_CRYPTO_QUEUE_TIMEOUT_MS",
+        ] {
+            for value in [
+                "",
+                " ",
+                "0",
+                "1",
+                "+1",
+                " 5 ",
+                "128",
+                "30000",
+                "30001",
+                "-1",
+                "abc",
+                "999999999999999999999999999",
+                "4096",
+            ] {
+                for process in [false, true] {
+                    let file = format!("# line\n{name}={}", if process { "1" } else { value });
+                    let loader = ConfigLoader::from_sources(&file, |key| {
+                        (process && key == name).then(|| value.into())
+                    })
+                    .unwrap();
+                    let reference = (|| -> Result<CryptoAdmissionConfig, DynError> {
+                        Ok(CryptoAdmissionConfig {
+                            max_concurrent_crypto: loader.parse(
+                                "VECTIS_MAX_CONCURRENT_CRYPTO",
+                                "must be empty or a positive integer within the semaphore maximum",
+                                |v| {
+                                    parse_max_concurrent_crypto(v, || {
+                                        loader.default_crypto_concurrency()
+                                    })
+                                },
+                            )?,
+                            max_queued_crypto: loader.parse(
+                                "VECTIS_MAX_QUEUED_CRYPTO",
+                                "must be an integer between 0 and the semaphore maximum",
+                                parse_max_queued_crypto,
+                            )?,
+                            crypto_queue_timeout: loader.parse(
+                                "VECTIS_CRYPTO_QUEUE_TIMEOUT_MS",
+                                "must be an integer between 1 and 30000",
+                                parse_crypto_queue_timeout,
+                            )?,
+                        })
+                    })();
+                    assert_eq!(
+                        crypto_admission_config(&loader).map_err(|e| e.to_string()),
+                        reference.map_err(|e| e.to_string()),
+                        "{name}, process={process}"
+                    );
+                }
+            }
+        }
+        let loader = ConfigLoader::from_sources("", |_| None).unwrap();
+        let defaults = crypto_admission_config(&loader).unwrap();
+        assert_eq!(
+            defaults.max_concurrent_crypto,
+            crate::core::config_loader::SYNTHETIC_CRYPTO_CONCURRENCY
+        );
+        assert_eq!(defaults.max_queued_crypto, DEFAULT_MAX_QUEUED_CRYPTO);
+        assert_eq!(
+            defaults.crypto_queue_timeout.as_millis(),
+            DEFAULT_CRYPTO_QUEUE_TIMEOUT_MS as u128
+        );
+    }
+
+    #[test]
+    fn server_uses_extracted_admission_settings() {
+        let path =
+            std::env::temp_dir().join(format!("vectis-admission-config-{}", std::process::id()));
+        fs::write(&path, "").unwrap();
+        let loader = ConfigLoader::from_sources(
+            "VECTIS_MAX_CONCURRENT_CRYPTO=3\nVECTIS_MAX_QUEUED_CRYPTO=0\nVECTIS_CRYPTO_QUEUE_TIMEOUT_MS=7",
+            |key| (key == "VECTIS_SQLITE_PATH").then(|| path.as_os_str().to_owned()),
+        ).unwrap();
+        let admission = crypto_admission_config(&loader).unwrap();
+        let result = app_config(&loader);
+        fs::remove_file(path).unwrap();
+        let app = result.unwrap();
+        assert_eq!(app.max_concurrent_crypto, admission.max_concurrent_crypto);
+        assert_eq!(app.max_queued_crypto, admission.max_queued_crypto);
+        assert_eq!(app.crypto_queue_timeout, admission.crypto_queue_timeout);
+    }
+
+    #[test]
     fn crypto_queue_environment_precedence() {
         const CHILD: &str = "VECTIS_TEST_QUEUE_PRECEDENCE";
         if let Ok(mode) = std::env::var(CHILD) {
-            let file = if mode == "defaults" {
-                HashMap::new()
+            let content = if mode == "defaults" {
+                ""
             } else {
-                HashMap::from([
-                    ("VECTIS_MAX_QUEUED_CRYPTO".into(), "7".into()),
-                    ("VECTIS_CRYPTO_QUEUE_TIMEOUT_MS".into(), "250".into()),
-                ])
+                "VECTIS_MAX_QUEUED_CRYPTO=7\nVECTIS_CRYPTO_QUEUE_TIMEOUT_MS=250\n"
             };
-            let queued =
-                parse_max_queued_crypto(&config_value(&file, "VECTIS_MAX_QUEUED_CRYPTO", "128"));
-            let timeout = parse_crypto_queue_timeout(&config_value(
-                &file,
-                "VECTIS_CRYPTO_QUEUE_TIMEOUT_MS",
-                "1000",
-            ));
+            let loader =
+                ConfigLoader::from_sources(content, |name| std::env::var_os(name)).unwrap();
+            let admission = crypto_admission_config(&loader);
             match mode.as_str() {
                 "defaults" => {
-                    assert_eq!(queued.unwrap(), 128);
-                    assert_eq!(timeout.unwrap().as_millis(), 1000);
+                    let admission = admission.unwrap();
+                    assert_eq!(admission.max_queued_crypto, 128);
+                    assert_eq!(admission.crypto_queue_timeout.as_millis(), 1000);
                 }
                 "file" => {
-                    assert_eq!(queued.unwrap(), 7);
-                    assert_eq!(timeout.unwrap().as_millis(), 250);
+                    let admission = admission.unwrap();
+                    assert_eq!(admission.max_queued_crypto, 7);
+                    assert_eq!(admission.crypto_queue_timeout.as_millis(), 250);
                 }
                 "process" => {
-                    assert_eq!(queued.unwrap(), 3);
-                    assert_eq!(timeout.unwrap().as_millis(), 99);
+                    let admission = admission.unwrap();
+                    assert_eq!(admission.max_queued_crypto, 3);
+                    assert_eq!(admission.crypto_queue_timeout.as_millis(), 99);
                 }
                 "empty" => {
-                    assert!(queued.is_err());
-                    assert!(timeout.is_err());
+                    assert!(admission.is_err());
                 }
                 _ => panic!("unknown test mode"),
             }
@@ -778,6 +904,7 @@ mod tests {
                     "core::config::tests::crypto_queue_environment_precedence",
                 ])
                 .env(CHILD, mode)
+                .env_remove("VECTIS_MAX_CONCURRENT_CRYPTO")
                 .env_remove("VECTIS_MAX_QUEUED_CRYPTO")
                 .env_remove("VECTIS_CRYPTO_QUEUE_TIMEOUT_MS");
             if mode == "process" || mode == "empty" {

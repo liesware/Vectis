@@ -6,6 +6,12 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
 use crate::core::metrics::{self, CryptoQueueWait, CryptoRejection};
 use crate::error::DynError;
 
+pub(crate) fn default_crypto_concurrency() -> usize {
+    std::thread::available_parallelism()
+        .map(|cores| cores.get().saturating_sub(1).max(1))
+        .unwrap_or(4)
+}
+
 static CRYPTO_LIMITER: OnceLock<CryptoLimiter> = OnceLock::new();
 
 pub fn init_crypto_limit(max: usize, queued: usize, timeout: Duration) {

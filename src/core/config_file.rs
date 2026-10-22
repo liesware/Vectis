@@ -1,3 +1,20 @@
+/// The signed-file validator only consumes delivery defaults, not server/storage settings.
+pub trait ConfigFileDefaults {
+    fn delivery_defaults(&self) -> (&str, &str);
+}
+
+impl ConfigFileDefaults for crate::core::config::AppConfig {
+    fn delivery_defaults(&self) -> (&str, &str) {
+        (&self.final_app_addr, &self.final_app_path)
+    }
+}
+
+impl ConfigFileDefaults for crate::core::config::LocalConfigSettings {
+    fn delivery_defaults(&self) -> (&str, &str) {
+        (&self.final_app_addr, &self.final_app_path)
+    }
+}
+
 use crate::core::{
     canonical, commitments, config, deterministic_tokenization, files, fpe, mac, masking,
     permissions, protocol, remote_routes, routes, sharing, time_attestation, tokenization,
@@ -111,7 +128,7 @@ pub fn canonical_config_json(content: &str) -> Result<String, DynError> {
 #[allow(clippy::too_many_arguments)]
 pub fn validate_config_content(
     content: &str,
-    config: &config::AppConfig,
+    config: &impl ConfigFileDefaults,
     is_loaded_kid: impl Fn(&str) -> bool,
     derive_fpe_key: impl Fn(fpe::FpeKeyDerivationRequest<'_>) -> Result<Zeroizing<Vec<u8>>, DynError>,
     derive_tokenization_keys: impl Fn(
@@ -297,7 +314,7 @@ fn parse_config_json(content: &str) -> Result<ConfigFile, DynError> {
 
 fn validate_config_file(
     config_file: ConfigFile,
-    config: &config::AppConfig,
+    config: &impl ConfigFileDefaults,
     hooks: &ConfigValidationHooks<
         '_,
         impl Fn(&str) -> bool,
@@ -365,10 +382,11 @@ fn validate_config_file(
     let time_attestation =
         time_attestation::resolve_time_attestation(config_file.time_attestation)?;
 
+    let (delivery_addr, delivery_path) = config.delivery_defaults();
     Ok(ConfigState {
         routes: routes::RoutesState::from_parts(
-            config.final_app_addr.clone(),
-            config.final_app_path.clone(),
+            delivery_addr.to_owned(),
+            delivery_path.to_owned(),
             validated_routes,
         ),
         remote_routes: remote_routes::RemoteRoutesState::from_routes(validated_remote_routes),
@@ -385,10 +403,11 @@ fn validate_config_file(
 }
 
 fn empty_config_state(config: &config::AppConfig) -> ConfigState {
+    let (delivery_addr, delivery_path) = config.delivery_defaults();
     ConfigState {
         routes: routes::RoutesState::from_parts(
-            config.final_app_addr.clone(),
-            config.final_app_path.clone(),
+            delivery_addr.to_owned(),
+            delivery_path.to_owned(),
             Vec::new(),
         ),
         remote_routes: remote_routes::RemoteRoutesState::default(),
@@ -527,16 +546,16 @@ mod tests {
             tls_skip_verify: false,
             config_path,
             config_sign_path: PathBuf::from("config_sign.json"),
-            api_key_hash: String::new(),
+            api_key_hash: String::new().into(),
             protocol_version: String::from("v1"),
             storage_type: String::from("sqlite"),
             sqlite_path: PathBuf::from("data.db"),
-            postgres_dsn: String::new(),
+            postgres_dsn: String::new().into(),
             sender_hostname: String::from("a"),
             receiver_hostname: String::from("b"),
             default_crypto_profile: String::from("hybrid-performance-v1"),
             crypto_policy: String::from("profile-only"),
-            plaintext_message: String::new(),
+            plaintext_message: String::new().into(),
             metrics_enabled: true,
             max_concurrent_crypto: 8,
             max_queued_crypto: config::DEFAULT_MAX_QUEUED_CRYPTO,

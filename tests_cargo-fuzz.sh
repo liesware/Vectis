@@ -9,7 +9,7 @@ KEEP_GOING="${KEEP_GOING:-0}"
 MINIMIZE="${MINIMIZE:-0}"
 SEEDS_ONLY="${SEEDS_ONLY:-0}"
 INCLUDE_SLOW="${INCLUDE_SLOW:-1}"
-EXPECTED_TARGETS="${EXPECTED_TARGETS:-25}"
+EXPECTED_TARGETS="${EXPECTED_TARGETS:-27}"
 
 # Structural targets: fast, parse/validate/canonicalize without panics.
 FAST_TARGETS=(
@@ -19,6 +19,8 @@ FAST_TARGETS=(
   fuzz_timestamp_token
   fuzz_message_inputs
   fuzz_config_file
+  fuzz_env_file
+  fuzz_config_loader
   fuzz_keys_inputs
   fuzz_validation
   fuzz_routes_permissions

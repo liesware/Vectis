@@ -1,18 +1,19 @@
+use crate::core::config_loader::ConfigLoader;
 use crate::core::{config, files};
 use crate::error::DynError;
 use crate::io::cli::{help_catalog, http, init};
 use crate::ops;
 use std::path::{Path, PathBuf};
 
-pub fn run(args: Vec<String>) -> Result<(), DynError> {
+pub fn run(loader: &ConfigLoader, args: Vec<String>) -> Result<(), DynError> {
     let parsed = parse_args(args)?;
     if parsed.command == "help" {
         print!("{}", help_catalog::render_help_path(&["slh-dsa"]));
         return Ok(());
     }
     match parsed.command.as_str() {
-        "create" => run_create(parsed),
-        "sign" => run_sign(parsed),
+        "create" => run_create(loader, parsed),
+        "sign" => run_sign(loader, parsed),
         "verify" => run_verify(parsed),
         command => Err(crate::error::invalid_input(format!(
             "unknown slh-dsa command: {command}"
@@ -127,7 +128,7 @@ fn output_format(value: &str) -> Result<http::OutputFormat, DynError> {
     }
 }
 
-fn run_create(args: Args) -> Result<(), DynError> {
+fn run_create(loader: &ConfigLoader, args: Args) -> Result<(), DynError> {
     reject_unused(&args, &["out"], "create")?;
     let prefix = args
         .out
@@ -139,7 +140,7 @@ fn run_create(args: Args) -> Result<(), DynError> {
             "SLH-DSA key files already exist; refusing to overwrite",
         ));
     }
-    let init_state = init::load_init_state()?;
+    let init_state = init::load_init_state(loader)?;
     let (output, private_json, public_json) = ops::slh_dsa::create(&init_state)?;
     files::write_new_file_atomically(
         &private_path,
@@ -166,7 +167,7 @@ fn run_create(args: Args) -> Result<(), DynError> {
     http::print_serializable_response(&value, args.output)
 }
 
-fn run_sign(args: Args) -> Result<(), DynError> {
+fn run_sign(loader: &ConfigLoader, args: Args) -> Result<(), DynError> {
     reject_unused(&args, &["key", "input", "out"], "sign")?;
     let key_path = required(args.key, "slh-dsa sign requires --key <encrypted-key>")?;
     let input = required(args.input, "slh-dsa sign requires --input <artifact>")?;
@@ -187,7 +188,7 @@ fn run_sign(args: Args) -> Result<(), DynError> {
         "SLH-DSA private key file",
         config::SLH_DSA_PRIVATE_FILE_MAX_SIZE_BYTES,
     )?;
-    let init_state = init::load_init_state()?;
+    let init_state = init::load_init_state(loader)?;
     let (output, signature) = ops::slh_dsa::sign(&init_state, &key_content, &input)?;
     files::write_new_file_atomically(&out, signature.as_bytes(), 0o644, "SLH-DSA signature file")?;
     let value = serde_json::json!({"kid": output.kid, "algorithm": output.algorithm, "message_hash_alg": output.message_hash_alg, "message_hash": output.message_hash, "signature_file": out});

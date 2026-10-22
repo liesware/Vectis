@@ -8,6 +8,21 @@ manually for releases; the Git history remains the detailed engineering record.
 Future changes will be recorded here. v1.0.0 remains the first official release.
 
 ### Changed
+- Split configuration fuzzing into signed JSON, strict environment grammar and
+  loader targets, with synthetic-source semantic oracles, redaction checks and
+  boundary seeds. The native fuzz runner now includes 27 targets.
+- Configuration now uses one invocation-scoped snapshot with consumer-specific
+  validation and sanitized source/line diagnostics. Unknown or prohibited
+  variables in `.env`, invalid logging settings, and invalid effective process
+  values no longer silently fall back. Process values share the 4,096-byte cap;
+  CLI/bootstrap no longer require unrelated server or storage settings.
+- `.env` parsing is now strict and atomic: only `VECTIS_` names are accepted,
+  with 128-byte names and 4,096-byte values within the existing 64 KiB file cap.
+  Malformed assignments, duplicates, invalid quoting, NUL and isolated carriage
+  returns fail with sanitized diagnostics. Invalid files also stop logging
+  bootstrap instead of falling back to defaults. Previously ignored or accepted
+  malformed files must be corrected before upgrading; process precedence and
+  per-setting validation are unchanged.
 - Crypto admission now waits asynchronously with a bounded queue (128 jobs,
   1000 ms by default) before returning `429`; execution concurrency is unchanged.
   Setting `VECTIS_MAX_QUEUED_CRYPTO=0` restores immediate rejection. Jobs that

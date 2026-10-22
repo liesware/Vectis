@@ -20,8 +20,12 @@ const BANNER: &str = r#"
  |___/\___/\___/\__/_/____/
 "#;
 
-pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
-    let config = Arc::new(config::app_config()?);
+pub async fn run(
+    loader: &crate::core::config_loader::ConfigLoader,
+    init_state: ValidatedInitState,
+) -> Result<(), DynError> {
+    let config = Arc::new(config::app_config(loader)?);
+    crate::core::http_client::init(config::http_client_config(loader)?)?;
     let metrics_handle = if config.metrics_enabled {
         Some(Arc::new(crate::core::metrics::init()?))
     } else {
@@ -39,7 +43,7 @@ pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
         "crypto admission configured"
     );
     let auth_state = super::auth::HttpAuthState::from_config(&config)?;
-    let logging = crate::core::logging::logging_config();
+    let logging = crate::core::logging::logging_config(loader)?;
     crate::core::audit_chain::initialize(&logging, &init_state)?;
     let storage = StorageState::new(&config).await?;
     let internal_keys = Arc::new(Zeroizing::new(

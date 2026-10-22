@@ -635,9 +635,12 @@ mod tests {
 
     #[test]
     fn encrypted_key_signs_and_public_key_verifies_tampering() {
-        let encrypted = crate::ops::init::create_encrypted_init_output_json()
-            .expect("init material must be created");
+        let encrypted = crate::ops::init::create_encrypted_init_output_json(
+            &crate::core::config::test_app_config().bootstrap_settings(),
+        )
+        .expect("init material must be created");
         let init_state = crate::ops::init::load_validated_init_state(
+            &crate::core::config::test_app_config().bootstrap_settings(),
             &encrypted.json,
             &encrypted.encryption_key_hex,
         )
@@ -667,9 +670,12 @@ mod tests {
 
     #[test]
     fn verify_rejects_signature_from_a_different_key_pair() {
-        let encrypted = crate::ops::init::create_encrypted_init_output_json()
-            .expect("init material must be created");
+        let encrypted = crate::ops::init::create_encrypted_init_output_json(
+            &crate::core::config::test_app_config().bootstrap_settings(),
+        )
+        .expect("init material must be created");
         let init_state = crate::ops::init::load_validated_init_state(
+            &crate::core::config::test_app_config().bootstrap_settings(),
             &encrypted.json,
             &encrypted.encryption_key_hex,
         )
@@ -689,9 +695,12 @@ mod tests {
 
     #[test]
     fn verify_rejects_mutated_payload_segment() {
-        let encrypted = crate::ops::init::create_encrypted_init_output_json()
-            .expect("init material must be created");
+        let encrypted = crate::ops::init::create_encrypted_init_output_json(
+            &crate::core::config::test_app_config().bootstrap_settings(),
+        )
+        .expect("init material must be created");
         let init_state = crate::ops::init::load_validated_init_state(
+            &crate::core::config::test_app_config().bootstrap_settings(),
             &encrypted.json,
             &encrypted.encryption_key_hex,
         )

@@ -77,9 +77,10 @@ pub(crate) fn create_init_output() -> Result<InitOutput, DynError> {
     create_key_material(&spec)
 }
 
-pub fn create_encrypted_init_output_json() -> Result<EncryptedInitJsonOutput, DynError> {
-    let config = config::app_config()?;
-    let aad = init_keys_aad(&config)?;
+pub fn create_encrypted_init_output_json(
+    config: &config::BootstrapConfig,
+) -> Result<EncryptedInitJsonOutput, DynError> {
+    let aad = init_keys_aad(config)?;
     validation::validate_allowed_value(
         "INTERNAL_KEYS_HASH",
         config::INTERNAL_KEYS_HASH,
@@ -155,7 +156,7 @@ fn serialize_init_public_keys_json(output: &InitOutput, info: &str) -> Result<St
     })?)
 }
 
-fn init_keys_aad(config: &config::AppConfig) -> Result<String, DynError> {
+fn init_keys_aad(config: &config::BootstrapConfig) -> Result<String, DynError> {
     validation::build_validated_aad(&[
         ("version", &config.protocol_version),
         ("hostname", &config.sender_hostname),
@@ -164,17 +165,21 @@ fn init_keys_aad(config: &config::AppConfig) -> Result<String, DynError> {
     ])
 }
 
-fn validate_init_output(output: &InitOutput, aad: &str) -> Result<InitValidationOutput, DynError> {
-    let config = config::app_config()?;
-    validate_key_material(&config, output, aad, &config.plaintext_message)
+fn validate_init_output(
+    config: &config::BootstrapConfig,
+    output: &InitOutput,
+    aad: &str,
+) -> Result<InitValidationOutput, DynError> {
+    validate_key_material(config, output, aad, &config.plaintext_message)
 }
 
 pub fn load_validated_init_state(
+    config: &config::BootstrapConfig,
     encrypted_json: &str,
     key_hex: &str,
 ) -> Result<ValidatedInitState, DynError> {
     let decrypted_init = decrypt_encrypted_init_output(encrypted_json, key_hex)?;
-    let validation = validate_init_output(&decrypted_init.output, &decrypted_init.aad)?;
+    let validation = validate_init_output(config, &decrypted_init.output, &decrypted_init.aad)?;
 
     Ok(ValidatedInitState {
         init_keys: decrypted_init.output,
@@ -340,7 +345,7 @@ mod tests {
 
     #[test]
     fn init_keys_aad_keeps_legacy_format_for_valid_fields() {
-        let config = config::test_app_config();
+        let config = config::test_app_config().bootstrap_settings();
         let actual = init_keys_aad(&config).expect("valid init AAD must build");
         let expected = validation::build_aad(&[
             ("version", &config.protocol_version),
@@ -354,12 +359,12 @@ mod tests {
 
     #[test]
     fn init_keys_aad_rejects_delimiters_in_dynamic_fields() {
-        let mut config = config::test_app_config();
+        let mut config = config::test_app_config().bootstrap_settings();
         config.protocol_version = String::from("v1;type=evil");
         let err = init_keys_aad(&config).expect_err("protocol version delimiter must fail");
         assert!(err.to_string().contains("must not contain ';' or '='"));
 
-        let mut config = config::test_app_config();
+        let mut config = config::test_app_config().bootstrap_settings();
         config.sender_hostname = String::from("node=a");
         let err = init_keys_aad(&config).expect_err("sender hostname delimiter must fail");
         assert!(err.to_string().contains("must not contain ';' or '='"));
@@ -367,7 +372,10 @@ mod tests {
 
     #[test]
     fn init_public_output_contains_only_validated_public_material() {
-        let output = create_encrypted_init_output_json().expect("init output must be created");
+        let output = create_encrypted_init_output_json(
+            &crate::core::config::test_app_config().bootstrap_settings(),
+        )
+        .expect("init output must be created");
         let value: Value = serde_json::from_str(&output.public_json).unwrap();
         let rendered = output.public_json.as_str();
 
@@ -407,9 +415,16 @@ mod tests {
 
     #[test]
     fn reconstructs_identical_public_output_from_validated_init_state() {
-        let output = create_encrypted_init_output_json().expect("init output must be created");
-        let init_state =
-            load_validated_init_state(&output.json, &output.encryption_key_hex).unwrap();
+        let output = create_encrypted_init_output_json(
+            &crate::core::config::test_app_config().bootstrap_settings(),
+        )
+        .expect("init output must be created");
+        let init_state = load_validated_init_state(
+            &crate::core::config::test_app_config().bootstrap_settings(),
+            &output.json,
+            &output.encryption_key_hex,
+        )
+        .unwrap();
 
         assert_eq!(
             init_public_keys_json(&init_state).unwrap(),

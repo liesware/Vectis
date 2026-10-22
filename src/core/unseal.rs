@@ -1,5 +1,7 @@
+use crate::core::config_loader::ConfigLoader;
 use crate::core::{config, files, validation};
 use crate::error::DynError;
+#[cfg(test)]
 use std::env;
 use std::fs;
 use std::io;
@@ -8,44 +10,45 @@ use std::path::{Path, PathBuf};
 use tracing::info;
 use zeroize::Zeroizing;
 
-const DEFAULT_UNSEAL_KEY_FILE: &str = ".unseal_key";
 const SENSITIVE_FILE_FORBIDDEN_MODE_BITS: u32 = 0o137;
 const UNSEAL_KEY_FILE_PERMISSION_ERROR: &str = "unseal key file permissions are too open; allowed modes must not grant group write, execute, or any access to others";
 
-pub fn read_unseal_key(prompt: &str) -> Result<Zeroizing<String>, DynError> {
-    if let Some(key) = read_env_unseal_key()? {
+pub fn read_unseal_key(loader: &ConfigLoader, prompt: &str) -> Result<Zeroizing<String>, DynError> {
+    if let Some(key) = read_env_unseal_key(loader)? {
         return Ok(key);
     }
 
-    if let Some(key) = read_file_unseal_key()? {
+    if let Some(key) = read_file_unseal_key(loader)? {
         return Ok(key);
     }
 
     read_prompt_unseal_key(prompt)
 }
 
-fn read_env_unseal_key() -> Result<Option<Zeroizing<String>>, DynError> {
-    match env::var("VECTIS_UNSEAL_KEY") {
-        Ok(value) => {
-            info!("reading init unseal key from VECTIS_UNSEAL_KEY");
-            let key = Zeroizing::new(value.trim().to_string());
-            validation::validate_symmetric_key("VECTIS_UNSEAL_KEY", &key, 32)?;
-
-            Ok(Some(key))
-        }
-        Err(env::VarError::NotPresent) => Ok(None),
-        Err(err) => Err(crate::error::invalid_input(format!(
-            "VECTIS_UNSEAL_KEY could not be read: {err}"
-        ))),
+fn read_env_unseal_key(loader: &ConfigLoader) -> Result<Option<Zeroizing<String>>, DynError> {
+    if !loader.is_present("VECTIS_UNSEAL_KEY") {
+        return Ok(None);
     }
+    let key = loader.parse("VECTIS_UNSEAL_KEY", "must be a 32-byte hex key", |v| {
+        let key = Zeroizing::new(v.trim().to_owned());
+        validation::validate_symmetric_key("VECTIS_UNSEAL_KEY", &key, 32)?;
+        Ok(key)
+    })?;
+    info!("reading init unseal key from VECTIS_UNSEAL_KEY");
+    Ok(Some(key))
 }
 
-fn read_file_unseal_key() -> Result<Option<Zeroizing<String>>, DynError> {
-    let (path, explicit_path) = unseal_key_file_path()?;
+fn read_file_unseal_key(loader: &ConfigLoader) -> Result<Option<Zeroizing<String>>, DynError> {
+    let (path, explicit_path) = unseal_key_file_path(loader)?;
     match validate_unseal_key_file_permissions(&path) {
         Ok(()) => {}
         Err(err) if is_not_found(err.as_ref()) && !explicit_path => return Ok(None),
-        Err(err) => return Err(err),
+        Err(_) => {
+            return Err(loader.error(
+                "VECTIS_UNSEAL_KEY_FILE",
+                "unseal key file must exist with allowed permissions",
+            ));
+        }
     }
 
     let missing_policy = if explicit_path {
@@ -53,19 +56,30 @@ fn read_file_unseal_key() -> Result<Option<Zeroizing<String>>, DynError> {
     } else {
         files::MissingFilePolicy::Optional
     };
-    let Some(value) = files::read_bounded_utf8_file(
+    let Some(value) = files::read_bounded_secret_utf8_file(
         &path,
         "unseal key file",
         config::UNSEAL_KEY_FILE_MAX_SIZE_BYTES,
         missing_policy,
-    )?
+    )
+    .map_err(|_| {
+        loader.error(
+            "VECTIS_UNSEAL_KEY_FILE",
+            "must be readable UTF-8 within the unseal file size limit",
+        )
+    })?
     else {
         return Ok(None);
     };
 
     info!(path = %path.display(), "reading init unseal key from file");
     let key = Zeroizing::new(value.trim().to_string());
-    validation::validate_symmetric_key("VECTIS_UNSEAL_KEY_FILE", &key, 32)?;
+    validation::validate_symmetric_key("VECTIS_UNSEAL_KEY_FILE", &key, 32).map_err(|_| {
+        loader.error(
+            "VECTIS_UNSEAL_KEY_FILE",
+            "file must contain a 32-byte hex key",
+        )
+    })?;
 
     Ok(Some(key))
 }
@@ -78,37 +92,12 @@ fn read_prompt_unseal_key(prompt: &str) -> Result<Zeroizing<String>, DynError> {
     Ok(key)
 }
 
-fn unseal_key_file_path() -> Result<(PathBuf, bool), DynError> {
-    match env::var("VECTIS_UNSEAL_KEY_FILE") {
-        Ok(value) => resolve_unseal_key_file_path(Some(value), None),
-        Err(env::VarError::NotPresent) => {
-            resolve_unseal_key_file_path(None, env_file_value("VECTIS_UNSEAL_KEY_FILE")?)
-        }
-        Err(err) => Err(crate::error::invalid_input(format!(
-            "VECTIS_UNSEAL_KEY_FILE could not be read: {err}"
-        ))),
-    }
+fn unseal_key_file_path(loader: &ConfigLoader) -> Result<(PathBuf, bool), DynError> {
+    Ok((
+        config::configured_path(loader, "VECTIS_UNSEAL_KEY_FILE")?,
+        loader.is_present("VECTIS_UNSEAL_KEY_FILE"),
+    ))
 }
-
-fn resolve_unseal_key_file_path(
-    process_value: Option<String>,
-    env_file_value: Option<String>,
-) -> Result<(PathBuf, bool), DynError> {
-    if let Some(value) = process_value {
-        validation::validate_text_field("VECTIS_UNSEAL_KEY_FILE", &value)?;
-
-        return Ok((PathBuf::from(value), true));
-    }
-
-    if let Some(value) = env_file_value {
-        validation::validate_text_field("VECTIS_UNSEAL_KEY_FILE", &value)?;
-
-        return Ok((PathBuf::from(value), true));
-    }
-
-    Ok((PathBuf::from(DEFAULT_UNSEAL_KEY_FILE), false))
-}
-
 fn validate_unseal_key_file_permissions(path: &Path) -> Result<(), DynError> {
     let metadata = fs::metadata(path)?;
     if !metadata.is_file() {
@@ -132,13 +121,12 @@ fn is_not_found(err: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
         .is_some_and(|err| err.kind() == io::ErrorKind::NotFound)
 }
 
-fn env_file_value(key: &str) -> Result<Option<String>, DynError> {
-    Ok(config::load_env_file(".env")?.get(key).cloned())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn loader() -> ConfigLoader {
+        ConfigLoader::from_sources("", |name| env::var_os(name)).unwrap()
+    }
     use std::os::unix::fs::PermissionsExt;
     use std::sync::{Mutex, MutexGuard};
 
@@ -149,16 +137,13 @@ mod tests {
         "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
 
     struct EnvGuard {
-        vars: Vec<(&'static str, Option<String>)>,
+        vars: Vec<(&'static str, Option<std::ffi::OsString>)>,
     }
 
     impl EnvGuard {
         fn new(vars: &[&'static str]) -> Self {
             Self {
-                vars: vars
-                    .iter()
-                    .map(|name| (*name, env::var(name).ok()))
-                    .collect(),
+                vars: vars.iter().map(|name| (*name, env::var_os(name))).collect(),
             }
         }
     }
@@ -216,7 +201,7 @@ mod tests {
                 env::set_var("VECTIS_UNSEAL_KEY_FILE", &path);
             }
 
-            let key = read_unseal_key("prompt:").expect("read env unseal key");
+            let key = read_unseal_key(&loader(), "prompt:").expect("read env unseal key");
             assert_eq!(&*key, VALID_KEY);
 
             let _ = fs::remove_file(path);
@@ -228,7 +213,7 @@ mod tests {
         with_isolated_env(|| {
             unsafe { env::set_var("VECTIS_UNSEAL_KEY", "not-hex") };
 
-            assert!(read_unseal_key("prompt:").is_err());
+            assert!(read_unseal_key(&loader(), "prompt:").is_err());
         });
     }
 
@@ -239,7 +224,7 @@ mod tests {
             write_unseal_key_file(&path, VALID_KEY);
             unsafe { env::set_var("VECTIS_UNSEAL_KEY_FILE", &path) };
 
-            let key = read_file_unseal_key()
+            let key = read_file_unseal_key(&loader())
                 .expect("read explicit file")
                 .expect("explicit file key");
             assert_eq!(&*key, VALID_KEY);
@@ -257,11 +242,9 @@ mod tests {
                 .expect("set insecure unseal test file permissions");
             unsafe { env::set_var("VECTIS_UNSEAL_KEY_FILE", &path) };
 
-            let err = read_file_unseal_key().expect_err("insecure file permissions must fail");
-            assert!(
-                err.to_string()
-                    .contains("unseal key file permissions are too open")
-            );
+            let err =
+                read_file_unseal_key(&loader()).expect_err("insecure file permissions must fail");
+            assert!(err.to_string().contains("allowed permissions"));
 
             let _ = fs::remove_file(path);
         });
@@ -276,7 +259,7 @@ mod tests {
                 .expect("set group-readable unseal test file permissions");
             unsafe { env::set_var("VECTIS_UNSEAL_KEY_FILE", &path) };
 
-            let key = read_file_unseal_key()
+            let key = read_file_unseal_key(&loader())
                 .expect("read explicit file")
                 .expect("explicit file key");
             assert_eq!(&*key, VALID_KEY);
@@ -305,16 +288,18 @@ mod tests {
             let path = unique_path("missing");
             unsafe { env::set_var("VECTIS_UNSEAL_KEY_FILE", &path) };
 
-            assert!(read_file_unseal_key().is_err());
+            assert!(read_file_unseal_key(&loader()).is_err());
         });
     }
 
     #[test]
     fn default_file_path_is_not_explicit() {
         with_isolated_env(|| {
-            let (path, explicit) = resolve_unseal_key_file_path(None, None).expect("default path");
+            let (path, explicit) =
+                unseal_key_file_path(&ConfigLoader::from_sources("", |_| None).unwrap())
+                    .expect("default path");
 
-            assert_eq!(path, PathBuf::from(DEFAULT_UNSEAL_KEY_FILE));
+            assert_eq!(path, PathBuf::from(".unseal_key"));
             assert!(!explicit);
         });
     }
@@ -326,7 +311,7 @@ mod tests {
             write_unseal_key_file(&path, "not-hex");
             unsafe { env::set_var("VECTIS_UNSEAL_KEY_FILE", &path) };
 
-            assert!(read_file_unseal_key().is_err());
+            assert!(read_file_unseal_key(&loader()).is_err());
 
             let _ = fs::remove_file(path);
         });
@@ -342,7 +327,7 @@ mod tests {
             );
             unsafe { env::set_var("VECTIS_UNSEAL_KEY_FILE", &path) };
 
-            assert!(read_file_unseal_key().is_err());
+            assert!(read_file_unseal_key(&loader()).is_err());
             let _ = fs::remove_file(path);
         });
     }
@@ -350,7 +335,7 @@ mod tests {
     #[test]
     fn unseal_key_is_not_read_from_env_file() {
         with_isolated_env(|| {
-            let key = read_env_unseal_key().expect("env provider read");
+            let key = read_env_unseal_key(&loader()).expect("env provider read");
 
             assert!(key.is_none());
         });

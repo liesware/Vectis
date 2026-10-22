@@ -1,3 +1,4 @@
+use crate::core::config_loader::ConfigLoader;
 use crate::core::{config, files, storage::StorageState, validation};
 use crate::error::DynError;
 use crate::io::cli::{config_editor, help_catalog, init};
@@ -13,13 +14,11 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-const DEFAULT_API_URL: &str = "http://127.0.0.1:3000";
-const DEFAULT_TIMEOUT_SECONDS: u64 = 30;
 const PROGRAM_NAME: &str = "vectis";
 static ATOMIC_WRITE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-type CommandFuture = Pin<Box<dyn Future<Output = Result<(), DynError>>>>;
-type CommandHandler = fn(Vec<String>, OutputFormat) -> CommandFuture;
+type CommandFuture<'a> = Pin<Box<dyn Future<Output = Result<(), DynError>> + 'a>>;
+type CommandHandler = for<'a> fn(&'a ConfigLoader, Vec<String>, OutputFormat) -> CommandFuture<'a>;
 
 struct HttpCommand {
     name: &'static str,
@@ -33,8 +32,12 @@ struct ConfigCommand {
 
 macro_rules! boxed_command {
     ($wrapper:ident, $handler:path) => {
-        fn $wrapper(args: Vec<String>, output: OutputFormat) -> CommandFuture {
-            Box::pin($handler(args, output))
+        fn $wrapper(
+            loader: &ConfigLoader,
+            args: Vec<String>,
+            output: OutputFormat,
+        ) -> CommandFuture<'_> {
+            Box::pin($handler(loader, args, output))
         }
     };
 }
@@ -94,7 +97,7 @@ impl ConfigCommand {
     }
 }
 
-pub async fn run(command: &str, args: Vec<String>) -> Result<(), DynError> {
+pub async fn run(loader: &ConfigLoader, command: &str, args: Vec<String>) -> Result<(), DynError> {
     if let Some(path) = help_request_path(command, &args) {
         print_help_path(&path);
         return Ok(());
@@ -104,7 +107,7 @@ pub async fn run(command: &str, args: Vec<String>) -> Result<(), DynError> {
 
     let command = find_http_command(command)
         .ok_or_else(|| invalid_input(format!("unknown command: {command}")))?;
-    (command.handler)(args, output).await
+    (command.handler)(loader, args, output).await
 }
 
 pub fn print_help(command: &str) {
@@ -173,38 +176,58 @@ boxed_command!(command_time, run_time);
 boxed_command!(command_message, run_message);
 boxed_command!(command_symmetric, run_symmetric);
 
-fn config_command_init(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+fn config_command_init(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> CommandFuture<'_> {
     Box::pin(async move {
         expect_no_args(&args, "config init")?;
-        config_editor::init_config(output)
+        config_editor::init_config(loader, output)
     })
 }
 
-fn config_command_sign(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+fn config_command_sign(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> CommandFuture<'_> {
     Box::pin(async move {
         expect_no_args(&args, "config sign")?;
-        run_config_sign(output).await
+        run_config_sign(loader, output).await
     })
 }
 
-fn config_command_validate(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+fn config_command_validate(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> CommandFuture<'_> {
     Box::pin(async move {
         expect_no_args(&args, "config validate")?;
-        run_config_validate(output).await
+        run_config_validate(loader, output).await
     })
 }
 
-fn config_command_list(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+fn config_command_list(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> CommandFuture<'_> {
     Box::pin(async move {
         expect_no_args(&args, "config list")?;
-        run_config_list(output)
+        run_config_list(loader, output)
     })
 }
 
-fn config_command_reload(args: Vec<String>, output: OutputFormat) -> CommandFuture {
+fn config_command_reload(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> CommandFuture<'_> {
     Box::pin(async move {
         expect_no_args(&args, "config reload")?;
-        let client = CliHttpClient::from_env()?;
+        let client = CliHttpClient::from_config(loader)?;
         client
             .send(Method::POST, "/config/reload", true, None, output)
             .await
@@ -232,11 +255,15 @@ boxed_command!(
 boxed_command!(config_command_sharing, config_editor::run_config_sharing);
 boxed_command!(config_command_time, config_editor::run_config_time);
 
-async fn run_health(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+async fn run_health(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let target = expect_one(args, "health target")?;
     validation::validate_allowed_value("health target", &target, &["startup", "live", "ready"])?;
 
-    let client = CliHttpClient::from_env()?;
+    let client = CliHttpClient::from_config(loader)?;
     client
         .send(
             Method::GET,
@@ -248,7 +275,11 @@ async fn run_health(args: Vec<String>, output: OutputFormat) -> Result<(), DynEr
         .await
 }
 
-async fn run_test(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+async fn run_test(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let target = expect_one(args, "test target")?;
     let path = if target == "init" {
         String::from("/self-test/init")
@@ -257,13 +288,17 @@ async fn run_test(args: Vec<String>, output: OutputFormat) -> Result<(), DynErro
         format!("/self-test/keys/{target}")
     };
 
-    let client = CliHttpClient::from_env()?;
+    let client = CliHttpClient::from_config(loader)?;
     client.send(Method::GET, &path, true, None, output).await
 }
 
-async fn run_keys(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+async fn run_keys(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "keys command")?;
-    let client = CliHttpClient::from_env()?;
+    let client = CliHttpClient::from_config(loader)?;
 
     match subcommand.as_str() {
         "list" => {
@@ -296,12 +331,16 @@ async fn run_keys(args: Vec<String>, output: OutputFormat) -> Result<(), DynErro
     }
 }
 
-async fn run_lifecycle(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+async fn run_lifecycle(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (kid, rest) = split_positional_arg(args, "kid", "lifecycle")?;
     validate_kid("kid", &kid)?;
     let body = parse_lifecycle_body(rest)?;
 
-    let client = CliHttpClient::from_env()?;
+    let client = CliHttpClient::from_config(loader)?;
     client
         .send(
             Method::POST,
@@ -313,10 +352,14 @@ async fn run_lifecycle(args: Vec<String>, output: OutputFormat) -> Result<(), Dy
         .await
 }
 
-async fn run_routes(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+async fn run_routes(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "routes command")?;
     expect_no_args(&rest, &format!("routes {subcommand}"))?;
-    let client = CliHttpClient::from_env()?;
+    let client = CliHttpClient::from_config(loader)?;
     match subcommand.as_str() {
         "list" => {
             client
@@ -329,10 +372,14 @@ async fn run_routes(args: Vec<String>, output: OutputFormat) -> Result<(), DynEr
     }
 }
 
-async fn run_remote_routes(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+async fn run_remote_routes(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "remote-routes command")?;
     expect_no_args(&rest, &format!("remote-routes {subcommand}"))?;
-    let client = CliHttpClient::from_env()?;
+    let client = CliHttpClient::from_config(loader)?;
     match subcommand.as_str() {
         "list" => {
             client
@@ -345,10 +392,14 @@ async fn run_remote_routes(args: Vec<String>, output: OutputFormat) -> Result<()
     }
 }
 
-async fn run_permissions(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+async fn run_permissions(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "permissions command")?;
     expect_no_args(&rest, &format!("permissions {subcommand}"))?;
-    let client = CliHttpClient::from_env()?;
+    let client = CliHttpClient::from_config(loader)?;
     match subcommand.as_str() {
         "list" => {
             client
@@ -361,11 +412,15 @@ async fn run_permissions(args: Vec<String>, output: OutputFormat) -> Result<(), 
     }
 }
 
-async fn run_config(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+async fn run_config(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "config command")?;
     let command = find_config_command(&subcommand)
         .ok_or_else(|| invalid_input(format!("unknown config command: {subcommand}")))?;
-    (command.handler)(rest, output).await
+    (command.handler)(loader, rest, output).await
 }
 
 #[derive(Serialize)]
@@ -384,33 +439,30 @@ struct ConfigValidationOutput {
     sharing_profiles_loaded: usize,
 }
 
-async fn validate_config_for_local_node() -> Result<
+async fn validate_config_for_local_node(
+    loader: &ConfigLoader,
+) -> Result<
     (
-        config::AppConfig,
+        config::NodeConfigSettings,
         ops::init::ValidatedInitState,
         String,
         ConfigValidationOutput,
     ),
     DynError,
 > {
-    let config = config::app_config()?;
-    let init_state = init::load_init_state()?;
-    let config_content =
-        crate::core::config_file::read_config_file(&config.config_path).map_err(|err| {
-            invalid_input(format!(
-                "VECTIS_CONFIG_PATH could not be read from {}: {err}",
-                config.config_path.display()
-            ))
-        })?;
+    let config = config::node_config(loader)?;
+    let init_state = init::load_init_state(loader)?;
+    let config_content = crate::core::config_file::read_config_file(&config.local.config_path)
+        .map_err(|_| loader.error("VECTIS_CONFIG_PATH", "could not read config file"))?;
     let internal_keys = std::sync::Arc::new(zeroize::Zeroizing::new(
         ops::internal_keys::InternalDerivedKeysState::from_init_state(&init_state)?,
     ));
-    let storage = StorageState::new(&config).await?;
+    let storage = StorageState::from_config(&config.storage).await?;
     let keys_load = ops::keys::load_keys_db_state(&storage, &internal_keys).await?;
     let (keys_db_state, _) = keys_load.into_parts();
     let config_state = crate::core::config_file::validate_config_content(
         &config_content,
-        &config,
+        &config.local,
         |kid| keys_db_state.contains_id(kid),
         |request| {
             let loaded_key = keys_db_state.get(request.kid).ok_or_else(|| {
@@ -505,7 +557,7 @@ async fn validate_config_for_local_node() -> Result<
     )?;
     let output = ConfigValidationOutput {
         status: "valid",
-        config_path: config.config_path.display().to_string(),
+        config_path: config.local.config_path.display().to_string(),
         keys_loaded: keys_db_state.len(),
         routes_loaded: config_state.routes.len(),
         remote_routes_loaded: config_state.remote_routes.len(),
@@ -521,18 +573,20 @@ async fn validate_config_for_local_node() -> Result<
     Ok((config, init_state, config_content, output))
 }
 
-async fn run_config_validate(output: OutputFormat) -> Result<(), DynError> {
-    let (_, _, _, validation) = validate_config_for_local_node().await?;
+async fn run_config_validate(loader: &ConfigLoader, output: OutputFormat) -> Result<(), DynError> {
+    let (_, _, _, validation) = validate_config_for_local_node(loader).await?;
 
     print_response(&serde_json::to_string(&validation)?, output)
 }
 
-async fn run_config_sign(output: OutputFormat) -> Result<(), DynError> {
-    let (config, init_state, config_content, validation) = validate_config_for_local_node().await?;
-    let token = ops::sign::sign_config_file(&init_state, &config.config_path, &config_content)?;
+async fn run_config_sign(loader: &ConfigLoader, output: OutputFormat) -> Result<(), DynError> {
+    let (config, init_state, config_content, validation) =
+        validate_config_for_local_node(loader).await?;
+    let token =
+        ops::sign::sign_config_file(&init_state, &config.local.config_path, &config_content)?;
     let config_sign_path = crate::core::config_file::config_signature_path(
-        &config.config_path,
-        &config.config_sign_path,
+        &config.local.config_path,
+        &config.local.config_sign_path,
     );
     let token_json = serde_json::to_string_pretty(&token)?;
     write_file_atomically(&config_sign_path, &token_json)?;
@@ -540,7 +594,7 @@ async fn run_config_sign(output: OutputFormat) -> Result<(), DynError> {
     print_response(
         &serde_json::to_string(&json!({
             "status": "updated",
-            "config_path": config.config_path.display().to_string(),
+            "config_path": config.local.config_path.display().to_string(),
             "config_sign_path": config_sign_path.display().to_string(),
             "keys_loaded": validation.keys_loaded,
             "routes_loaded": validation.routes_loaded,
@@ -591,15 +645,10 @@ pub(super) fn write_file_atomically(path: &Path, content: &str) -> Result<(), Dy
     write_result
 }
 
-fn run_config_list(output: OutputFormat) -> Result<(), DynError> {
-    let config = config::app_config()?;
-    let config_content =
-        crate::core::config_file::read_config_file(&config.config_path).map_err(|err| {
-            invalid_input(format!(
-                "VECTIS_CONFIG_PATH could not be read from {}: {err}",
-                config.config_path.display()
-            ))
-        })?;
+fn run_config_list(loader: &ConfigLoader, output: OutputFormat) -> Result<(), DynError> {
+    let path = config::configured_path(loader, "VECTIS_CONFIG_PATH")?;
+    let config_content = crate::core::config_file::read_config_file(&path)
+        .map_err(|_| loader.error("VECTIS_CONFIG_PATH", "could not read config file"))?;
     let value: Value = serde_json::from_str(&config_content).map_err(|error| {
         crate::error::invalid_json_input("config file must be valid JSON", &error)
     })?;
@@ -607,19 +656,27 @@ fn run_config_list(output: OutputFormat) -> Result<(), DynError> {
     print_response(&serde_json::to_string(&value)?, output)
 }
 
-async fn run_pub(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+async fn run_pub(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let kid = expect_one(args, "kid")?;
     validate_kid("kid", &kid)?;
 
-    let client = CliHttpClient::from_env()?;
+    let client = CliHttpClient::from_config(loader)?;
     client
         .send(Method::GET, &format!("/pub/{kid}"), false, None, output)
         .await
 }
 
-async fn run_sign(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+async fn run_sign(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "sign command or kid")?;
-    let client = CliHttpClient::from_env()?;
+    let client = CliHttpClient::from_config(loader)?;
 
     if subcommand == "verify" {
         let body = parse_json_source(rest)?;
@@ -647,9 +704,13 @@ async fn run_sign(args: Vec<String>, output: OutputFormat) -> Result<(), DynErro
         .await
 }
 
-async fn run_fpe(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+async fn run_fpe(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (method, path, body) = fpe_request(args)?;
-    CliHttpClient::from_env()?
+    CliHttpClient::from_config(loader)?
         .send(method, &path, true, Some(body), output)
         .await
 }
@@ -682,9 +743,13 @@ fn fpe_request(args: Vec<String>) -> Result<(Method, String, Value), DynError> {
     }
 }
 
-async fn run_token(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+async fn run_token(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (method, path, body) = token_request(args)?;
-    CliHttpClient::from_env()?
+    CliHttpClient::from_config(loader)?
         .send(method, &path, true, body, output)
         .await
 }
@@ -819,9 +884,13 @@ fn parse_subject_option(
     Ok((subject, rest))
 }
 
-async fn run_subject(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+async fn run_subject(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (method, path, body) = subject_request(args)?;
-    CliHttpClient::from_env()?
+    CliHttpClient::from_config(loader)?
         .send(method, &path, true, body, output)
         .await
 }
@@ -848,9 +917,13 @@ fn subject_request(args: Vec<String>) -> Result<(Method, String, Option<Value>),
     }
 }
 
-async fn run_mac(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+async fn run_mac(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "mac command")?;
-    let client = CliHttpClient::from_env()?;
+    let client = CliHttpClient::from_config(loader)?;
 
     match subcommand.as_str() {
         "create" => {
@@ -877,9 +950,13 @@ async fn run_mac(args: Vec<String>, output: OutputFormat) -> Result<(), DynError
     }
 }
 
-async fn run_index(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+async fn run_index(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "index command")?;
-    let client = CliHttpClient::from_env()?;
+    let client = CliHttpClient::from_config(loader)?;
 
     match subcommand.as_str() {
         "create" => {
@@ -908,11 +985,15 @@ async fn run_index(args: Vec<String>, output: OutputFormat) -> Result<(), DynErr
     }
 }
 
-async fn run_mask(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+async fn run_mask(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (kid, rest) = split_positional_arg(args, "kid", "mask")?;
     validate_kid("kid", &kid)?;
     let body = parse_json_source(rest)?;
-    let client = CliHttpClient::from_env()?;
+    let client = CliHttpClient::from_config(loader)?;
     client
         .send(
             Method::POST,
@@ -924,21 +1005,29 @@ async fn run_mask(args: Vec<String>, output: OutputFormat) -> Result<(), DynErro
         .await
 }
 
-async fn run_time(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+async fn run_time(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "time command")?;
     if subcommand != "attest" {
         return Err(invalid_input(format!("unknown time command: {subcommand}")));
     }
     expect_no_args(&rest, "time attest")?;
-    let client = CliHttpClient::from_env()?;
+    let client = CliHttpClient::from_config(loader)?;
     client
         .send(Method::POST, "/time/attest", true, None, output)
         .await
 }
 
-async fn run_commit(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+async fn run_commit(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "commit command")?;
-    let client = CliHttpClient::from_env()?;
+    let client = CliHttpClient::from_config(loader)?;
 
     match subcommand.as_str() {
         "create" => {
@@ -967,9 +1056,13 @@ async fn run_commit(args: Vec<String>, output: OutputFormat) -> Result<(), DynEr
     }
 }
 
-async fn run_shares(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+async fn run_shares(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "shares command")?;
-    let client = CliHttpClient::from_env()?;
+    let client = CliHttpClient::from_config(loader)?;
 
     match subcommand.as_str() {
         "split" => {
@@ -998,9 +1091,13 @@ async fn run_shares(args: Vec<String>, output: OutputFormat) -> Result<(), DynEr
     }
 }
 
-async fn run_message(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+async fn run_message(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "message command")?;
-    let client = CliHttpClient::from_env()?;
+    let client = CliHttpClient::from_config(loader)?;
 
     match subcommand.as_str() {
         "send" => {
@@ -1035,9 +1132,13 @@ async fn run_message(args: Vec<String>, output: OutputFormat) -> Result<(), DynE
     }
 }
 
-async fn run_symmetric(args: Vec<String>, output: OutputFormat) -> Result<(), DynError> {
+async fn run_symmetric(
+    loader: &ConfigLoader,
+    args: Vec<String>,
+    output: OutputFormat,
+) -> Result<(), DynError> {
     let (method, path, body) = symmetric_request(args)?;
-    CliHttpClient::from_env()?
+    CliHttpClient::from_config(loader)?
         .send(method, &path, true, Some(body), output)
         .await
 }
@@ -1075,58 +1176,59 @@ fn symmetric_request(args: Vec<String>) -> Result<(Method, String, Value), DynEr
 struct CliHttpClient {
     client: reqwest::Client,
     base_url: Url,
-    api_key: String,
+    api_key: zeroize::Zeroizing<String>,
 }
 
 impl CliHttpClient {
-    fn from_env() -> Result<Self, DynError> {
-        let env_file = config::load_env_file(".env")?;
-        let base_url = validate_api_url(&config::config_value(
-            &env_file,
+    fn from_config(loader: &ConfigLoader) -> Result<Self, DynError> {
+        let base_url = loader.parse(
             "VECTIS_API_URL",
-            DEFAULT_API_URL,
-        ))?;
-        let timeout_seconds = config::config_value(
-            &env_file,
-            "VECTIS_TIMEOUT_SECONDS",
-            &DEFAULT_TIMEOUT_SECONDS.to_string(),
-        )
-        .parse::<u64>()
-        .map_err(|err| {
-            invalid_input(format!("VECTIS_TIMEOUT_SECONDS must be an integer: {err}"))
-        })?;
-        if timeout_seconds == 0 {
-            return Err(invalid_input(
-                "VECTIS_TIMEOUT_SECONDS must be greater than 0",
-            ));
-        }
-
-        let api_key = config::config_value(&env_file, "VECTIS_APIKEY", "");
-        if !api_key.is_empty() {
-            validation::validate_hash_hex_field(
-                "VECTIS_APIKEY",
-                &api_key,
-                config::INTERNAL_KEYS_HASH,
-            )?;
-        }
-        let tls_skip_verify = config::validate_bool_field(
-            "VECTIS_TLS_SKIP_VERIFY",
-            &config::config_value(&env_file, "VECTIS_TLS_SKIP_VERIFY", "false"),
+            "must be a valid API URL",
+            validate_api_url,
         )?;
-
+        let timeout = loader.parse(
+            "VECTIS_TIMEOUT_SECONDS",
+            "must be a positive integer with a representable deadline",
+            |v| {
+                let seconds = v
+                    .parse::<u64>()
+                    .map_err(|_| invalid_input("invalid timeout"))?;
+                let duration = Duration::from_secs(seconds);
+                if seconds == 0
+                    || std::time::Instant::now().checked_add(duration).is_none()
+                    || tokio::time::Instant::now().checked_add(duration).is_none()
+                {
+                    return Err(invalid_input("invalid timeout"));
+                }
+                Ok(duration)
+            },
+        )?;
+        let api_key = loader.parse("VECTIS_APIKEY", "must be empty or a valid API key", |v| {
+            if !v.is_empty() {
+                validation::validate_hash_hex_field(
+                    "VECTIS_APIKEY",
+                    v,
+                    config::INTERNAL_KEYS_HASH,
+                )?;
+            }
+            Ok(zeroize::Zeroizing::new(v.to_owned()))
+        })?;
+        let tls_skip_verify =
+            loader.parse("VECTIS_TLS_SKIP_VERIFY", "must be true or false", |v| {
+                config::validate_bool_field("VECTIS_TLS_SKIP_VERIFY", v)
+            })?;
         crate::core::tls::ensure_crypto_provider();
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(timeout_seconds))
+            .timeout(timeout)
             .tls_danger_accept_invalid_certs(tls_skip_verify)
-            .build()?;
-
+            .build()
+            .map_err(|_| crate::error::internal("could not initialize HTTP client"))?;
         Ok(Self {
             client,
             base_url,
             api_key,
         })
     }
-
     async fn send(
         &self,
         method: Method,
@@ -1142,7 +1244,7 @@ impl CliHttpClient {
             if self.api_key.is_empty() {
                 return Err(invalid_input("VECTIS_APIKEY is required for this command"));
             }
-            request = request.header("X-API-Key", &self.api_key);
+            request = request.header("X-API-Key", self.api_key.as_str());
         }
 
         if let Some(body) = body {

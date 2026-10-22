@@ -1290,8 +1290,12 @@ mod tests {
 
     #[test]
     fn verifier_uses_init_public_state_without_unsealing_private_material() {
-        let init_output = crate::ops::init::create_encrypted_init_output_json().unwrap();
+        let init_output = crate::ops::init::create_encrypted_init_output_json(
+            &crate::core::config::test_app_config().bootstrap_settings(),
+        )
+        .unwrap();
         let init_state = crate::ops::init::load_validated_init_state(
+            &crate::core::config::test_app_config().bootstrap_settings(),
             &init_output.json,
             &init_output.encryption_key_hex,
         )

@@ -142,6 +142,19 @@ pub fn read_bounded_utf8_file(
     max_size_bytes: u64,
     missing_policy: MissingFilePolicy,
 ) -> Result<Option<String>, DynError> {
+    Ok(
+        read_bounded_secret_utf8_file(path, label, max_size_bytes, missing_policy)?
+            .map(|value| value.to_string()),
+    )
+}
+
+/// Protected buffers, including failed reads and invalid UTF-8.
+pub fn read_bounded_secret_utf8_file(
+    path: &Path,
+    label: &str,
+    max_size_bytes: u64,
+    missing_policy: MissingFilePolicy,
+) -> Result<Option<zeroize::Zeroizing<String>>, DynError> {
     let metadata = match fs::metadata(path) {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
@@ -185,7 +198,9 @@ pub fn read_bounded_utf8_file(
     let max_read_bytes = max_size_bytes
         .checked_add(1)
         .ok_or_else(|| crate::error::internal("file size limit is invalid"))?;
-    let mut bytes = Vec::new();
+    let capacity = usize::try_from(opened_metadata.len())
+        .map_err(|_| crate::error::internal("file size limit is invalid"))?;
+    let mut bytes = zeroize::Zeroizing::new(Vec::with_capacity(capacity));
     file.take(max_read_bytes)
         .read_to_end(&mut bytes)
         .map_err(|_| crate::error::internal(format!("{label} could not be read")))?;
@@ -195,15 +210,17 @@ pub fn read_bounded_utf8_file(
         )));
     }
 
-    String::from_utf8(bytes)
-        .map(Some)
-        .map_err(|_| crate::error::invalid_input(format!("{label} is not valid UTF-8")))
+    std::str::from_utf8(&bytes)
+        .map_err(|_| crate::error::invalid_input(format!("{label} is not valid UTF-8")))?;
+    let text =
+        String::from_utf8(core::mem::take(&mut *bytes)).expect("bytes validated as UTF-8 above");
+    Ok(Some(zeroize::Zeroizing::new(text)))
 }
 
-fn missing_file_result(
+fn missing_file_result<T>(
     label: &str,
     missing_policy: MissingFilePolicy,
-) -> Result<Option<String>, DynError> {
+) -> Result<Option<T>, DynError> {
     match missing_policy {
         MissingFilePolicy::Required => {
             Err(crate::error::not_found(format!("{label} does not exist")))

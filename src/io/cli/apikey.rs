@@ -1,3 +1,4 @@
+use crate::core::config_loader::ConfigLoader;
 use crate::core::validation;
 use crate::error::DynError;
 use crate::io::cli::{help_catalog, init, sensitive};
@@ -11,7 +12,7 @@ enum OutputFormat {
     Yaml,
 }
 
-pub fn run(args: Vec<String>) -> Result<(), DynError> {
+pub fn run(loader: &ConfigLoader, args: Vec<String>) -> Result<(), DynError> {
     if is_help_request(&args) {
         print_help();
         return Ok(());
@@ -20,7 +21,7 @@ pub fn run(args: Vec<String>) -> Result<(), DynError> {
     let (command, rest) = split_subcommand(args, "apikey command")?;
 
     match command.as_str() {
-        "create" => run_create(rest),
+        "create" => run_create(loader, rest),
         _ => Err(invalid_input(format!("unknown apikey command: {command}"))),
     }
 }
@@ -29,11 +30,11 @@ pub fn print_help() {
     print!("{}", help_catalog::render_help_path(&["apikey"]));
 }
 
-fn run_create(args: Vec<String>) -> Result<(), DynError> {
+fn run_create(loader: &ConfigLoader, args: Vec<String>) -> Result<(), DynError> {
     let (output, rest) = parse_output_option(args)?;
     expect_no_args(&rest, "apikey create")?;
 
-    let init_state = init::load_init_state()?;
+    let init_state = init::load_init_state(loader)?;
     let output_value = ops::apikey::create_api_key(&init_state)?;
 
     sensitive::warn_if_stdout_is_terminal();

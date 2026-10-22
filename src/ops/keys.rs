@@ -773,7 +773,7 @@ pub(crate) async fn load_keys_db_state(
     internal_keys: &Arc<Zeroizing<InternalDerivedKeysState>>,
 ) -> Result<KeysDbLoad, DynError> {
     let rows = storage.list_ops_keys().await?;
-    let limit = config::default_crypto_concurrency();
+    let limit = crate::core::blocking::default_crypto_concurrency();
     let internal_keys = Arc::clone(internal_keys);
     let loader: KeyLoader = Arc::new(move |row| load_ops_key_from_row(&internal_keys, row));
 
