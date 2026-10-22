@@ -695,10 +695,14 @@ of cryptographically valid happy paths.
 
 ## Dynamic API Scanning With OWASP ZAP
 
-GitHub Actions runs an OWASP ZAP API Scan every Tuesday and on manual dispatch
+GitHub Actions runs an OWASP ZAP API Scan on main pushes/PRs and manual dispatch
 through `.github/workflows/dast.yml` (DAST). This is an active DAST scan: ZAP
 imports the OpenAPI contract and sends attack payloads to the described API.
 Run it only against systems that you own and are explicitly authorized to test.
+
+There is no scheduled DAST run. A new commit cancels the previous execution for
+the same event/ref, including an updated PR. Fork PRs use read-only permissions
+and synthetic credentials from the disposable lab, without repository secrets.
 
 The workflow never targets a deployed Vectis instance. Its dedicated
 `tests/security/zap/zap_scan.sh` runner creates a disposable HTTPS node with temporary
