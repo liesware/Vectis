@@ -41,7 +41,17 @@ cargo run -- serve
 | `VECTIS_TLS_SKIP_VERIFY` | `false` | `true` or `false` | Disables TLS certificate verification for outbound HTTPS clients. It only has practical effect when `VECTIS_MODE=prod` or the CLI calls an HTTPS `VECTIS_API_URL`. |
 | `VECTIS_PUBLIC_ADDR` | `127.0.0.1:3000` | Valid host:port, for example `localhost:3000` or `vectis-a.example.com:443` | Public address advertised as `sender.host` in protected messages. Useful when Vectis runs behind a load balancer. |
 | `VECTIS_PROTOCOL_VERSION` | `v1` | `v1` | Protocol version used by generated payloads and AAD. Currently only `v1` is supported. |
-| `VECTIS_MAX_CONCURRENT_CRYPTO` | One less than the number of CPU cores (minimum 1) | Positive integer | Global cap on cryptographic operations running concurrently on the blocking pool. The default leaves one core for the async runtime. When exhausted, further crypto requests are rejected immediately with `429 Too Many Requests`. Prevents CPU-bound work from piling up under overload. |
+| `VECTIS_MAX_CONCURRENT_CRYPTO` | One less than the number of CPU cores (minimum 1) | `1..=Semaphore::MAX_PERMITS`; empty uses default | Global cap on crypto jobs admitted to the blocking pool. The permit remains held until the job finishes, even if its caller is cancelled. |
+| `VECTIS_MAX_QUEUED_CRYPTO` | `128` | `0..=Semaphore::MAX_PERMITS` | Additional crypto jobs allowed to wait asynchronously. `0` disables waiting; a full queue returns `429`. The technical maximum is not a sizing recommendation. |
+| `VECTIS_CRYPTO_QUEUE_TIMEOUT_MS` | `1000` | `1..=30000` milliseconds | Maximum wait to acquire execution capacity, starting when a queue position is reserved. Expiration returns `429` without dispatching that job. |
+
+Admission settings use process environment, then `.env`, then defaults and require
+a restart; signed configuration reload does not change them. Empty values for
+the two queue variables are invalid. Pending jobs are bounded by count, not
+retained bytes. Each helper invocation is admitted separately: subject setup
+and the main crypto operation can wait independently. A batch is not split into
+per-item jobs. Queue timeout does not bound execution time or the whole request;
+the 30-second ceiling is not a promise about client deadlines.
 
 Notes:
 
@@ -415,6 +425,15 @@ Audit events use stable event names such as `auth.success`, `permission.denied`,
 | `VECTIS_METRICS_ENABLED` | `true` | `true` or `false` | Enable the Prometheus `/metrics` endpoint. The endpoint requires `X-API-Key` with root, `admin`, or `metrics` permission. When `false`, authorized requests return `404`. |
 
 Metrics include runtime gauges for unsealed state and loaded keys/routes/permissions, counters for auth and permission decisions, config/key reload results, operational-key load failures, message send/receive/decrypt results, and cryptographic sign/verify/encrypt/decrypt/FPE results. `vectis_keys_load_skipped` reports omissions from the most recent key-set load, while `vectis_key_load_failures_total{reason}` aggregates bounded failure categories. Labels are intentionally low cardinality and must not include KIDs, API keys, actors, remote addresses, plaintext, ciphertext, or free-form errors.
+
+Crypto admission adds `vectis_crypto_queue_pending` (current waiters),
+`vectis_crypto_queue_wait_seconds` (histogram of admitted/timed-out waits), and
+`vectis_crypto_rejections_total{reason="full|timeout"}`. Immediate execution,
+cancelled waits and semaphore closure are excluded from the histogram; cancellation
+still decrements the gauge. Rejections with waiting disabled count as `full`.
+Histogram buckets in seconds are `0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5,
+1, 2.5, 5, 10, 30` (plus Prometheus `+Inf`). Startup logs record effective
+execution capacity, queue capacity and queue timeout, without per-wait success logs.
 
 ## Hostnames
 

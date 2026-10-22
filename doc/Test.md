@@ -652,6 +652,14 @@ fixture file. Laboratory lifecycle, per-capability flows and reporting are
 separate; the performance guide also documents how to add a target without
 changing the campaign coordinator.
 
+Crypto admission regression tests cover bounded waiting, zero queue, timeout,
+cancellation before/after dispatch, FIFO semaphore waiters, panic/error cleanup
+and the unchanged HTTP `429` body. Queue tests use local limiter instances and
+channels/manual polling; timeout tests use Tokio's paused clock. Performance
+comparisons may explicitly set the three admission environment variables; see
+the performance guide for Q=0 versus default examples, successful-only latency
+columns and queue metric deltas collected outside the measured target.
+
 ## Native Fuzzing With cargo-fuzz
 
 Run all native fuzz targets with:

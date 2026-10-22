@@ -9,6 +9,7 @@ import urllib.error
 import urllib.request
 
 from processes import command, stop_process
+from admission import effective_settings, queue_snapshot
 
 HERE = Path(__file__).resolve().parent
 
@@ -101,6 +102,12 @@ class Laboratory:
             fixture["subject"] = subject["subject"]
         self.fixture_path.write_text(json.dumps(self.fixtures, indent=2))
         self.fixture_path.chmod(0o600)
+
+    def admission_settings(self):
+        return effective_settings(self.site / "logs")
+
+    def queue_metrics(self):
+        return queue_snapshot(request(self.fixtures["url"] + "/metrics", self.fixtures["apikey"]))
 
     def selected(self, profile):
         return self.fixtures["profiles"][profile]

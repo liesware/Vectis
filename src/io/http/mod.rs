@@ -14,6 +14,8 @@ mod commitments;
 mod config;
 mod deterministic_tokenization;
 mod error;
+#[cfg(test)]
+pub(crate) use error::error_response as test_crypto_error_response;
 mod extract;
 mod fpe;
 mod health;

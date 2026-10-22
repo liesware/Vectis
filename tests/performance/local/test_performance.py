@@ -18,6 +18,7 @@ from provision import profiles_config, build_fixtures
 from laboratory import Laboratory
 from processes import command, stop_process
 from resources import ResourceSampler, cpu_seconds
+from admission import overrides, effective_settings, queue_snapshot, queue_delta
 import runner
 
 
@@ -241,7 +242,8 @@ class LaboratoryTests(unittest.TestCase):
                     (site / "fixtures.json").write_text(json.dumps({"version": 1, "profiles": {}}))
                 return 0
 
-            with patch("laboratory.command", side_effect=run):
+            with patch("laboratory.command", side_effect=run), patch("laboratory.socket.socket") as socket:
+                socket.return_value.__enter__.return_value.getsockname.return_value = ("127.0.0.1", 1234)
                 lab.prepare()
             self.assertEqual(seen, [PROFILES[1]] * 3)
 
@@ -293,6 +295,9 @@ class LaboratoryTests(unittest.TestCase):
                     if phase == "prepare":
                         raise RuntimeError("initial prepare failure")
                 lab.prepare.side_effect = prepare
+                lab.admission_settings.return_value = {"max_concurrent_crypto": 1, "max_queued_crypto": 128,
+                                                      "crypto_queue_timeout_ms": 1000}
+                lab.queue_metrics.return_value = queue_snapshot("")
                 lab.sizes.return_value = {"db": 0, "-wal": 0, "-shm": 0}
                 if phase == "start":
                     lab.start.side_effect = RuntimeError("initial start failure")
@@ -313,7 +318,7 @@ class LaboratoryTests(unittest.TestCase):
                 if phase == "ok":
                     self.assertEqual(result["status"], "ok")
                     baseline = json.loads((Path(__file__).resolve().parents[1] / "lib/regression.json").read_text())
-                    self.assertEqual(set(result), set(baseline["profile_fields"]))
+                    self.assertEqual(set(result), set(baseline["profile_fields"]) | {"crypto_admission", "crypto_queue"})
                 else:
                     self.assertEqual(result["status"], "failed")
                     expected = {"prepare": "initial prepare failure", "start": "initial start failure",
@@ -324,6 +329,58 @@ class LaboratoryTests(unittest.TestCase):
                 if phase in ("measurement", "audit", "sampler", "ok"):
                     sampler.stop.assert_called_once()
                 self.assertTrue(site.exists())
+
+                if phase in ("measurement", "audit", "sampler", "ok"):
+                    self.assertEqual(lab.queue_metrics.call_count, 2)
+
+
+class AdmissionTests(unittest.TestCase):
+    def test_only_explicit_admission_variables_survive_environment_filter(self):
+        values = {"VECTIS_MAX_CONCURRENT_CRYPTO": "1", "VECTIS_MAX_QUEUED_CRYPTO": "0",
+                  "VECTIS_CRYPTO_QUEUE_TIMEOUT_MS": "", "VECTIS_APIKEY": "private", "PATH": "/bin",
+                  "K6_VUS": "12", "VECTIS_SQLITE_PATH": "/personal/db"}
+        self.assertEqual(overrides(values), {k: values[k] for k in (
+            "VECTIS_MAX_CONCURRENT_CRYPTO", "VECTIS_MAX_QUEUED_CRYPTO", "VECTIS_CRYPTO_QUEUE_TIMEOUT_MS")})
+        with patch.dict(os.environ, values, clear=True):
+            clean = runner.clean_environment()
+        self.assertNotIn("VECTIS_APIKEY", clean)
+        self.assertNotIn("VECTIS_SQLITE_PATH", clean)
+        self.assertNotIn("K6_VUS", clean)
+        self.assertEqual(clean["VECTIS_MAX_QUEUED_CRYPTO"], "0")
+        self.assertEqual(clean["VECTIS_CRYPTO_QUEUE_TIMEOUT_MS"], "")
+
+    def test_settings_are_read_from_rust_startup_not_guessed_from_python_cpus(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp)
+            (path / "vectis.log.test").write_text(json.dumps({"fields": {
+                "message": "crypto admission configured", "max_concurrent_crypto": 3,
+                "max_queued_crypto": 7, "crypto_queue_timeout_ms": 99, "unrelated": "private"}}) + "\n")
+            self.assertEqual(effective_settings(path),
+                             {"max_concurrent_crypto": 3, "max_queued_crypto": 7, "crypto_queue_timeout_ms": 99})
+            (path / "vectis.log.test").write_text("{}\n")
+            with self.assertRaises(RuntimeError):
+                effective_settings(path)
+
+    def test_queue_deltas_exclude_warmup_and_keep_histogram_buckets(self):
+        before = queue_snapshot('vectis_crypto_queue_wait_seconds_count 2\n'
+                                'vectis_crypto_queue_wait_seconds_sum 0.1\n'
+                                'vectis_crypto_queue_wait_seconds_bucket{le="+Inf"} 2\n'
+                                'vectis_crypto_rejections_total{reason="full"} 3\n')
+        after = queue_snapshot('vectis_crypto_queue_pending 0\n'
+                               'vectis_crypto_queue_wait_seconds_count 4\n'
+                               'vectis_crypto_queue_wait_seconds_sum 0.5\n'
+                               'vectis_crypto_queue_wait_seconds_bucket{le="+Inf"} 4\n'
+                               'vectis_crypto_rejections_total{reason="full"} 5\n'
+                               'vectis_crypto_rejections_total{reason="timeout"} 1\n'
+                               'vectis_crypto_rejections_total{reason="secret"} 99\n')
+        result = queue_delta(before, after)
+        self.assertEqual(result["wait_count"], 2)
+        self.assertAlmostEqual(result["wait_mean_seconds"], .2)
+        self.assertEqual(result["wait_buckets"], {"+Inf": 2})
+        self.assertEqual(result["rejections"], {"full": 2, "timeout": 1})
+        self.assertIsNone(queue_delta(before, before)["wait_mean_seconds"])
+        with self.assertRaises(ValueError):
+            queue_delta(after, before)
 
 
 class PersistenceTests(unittest.TestCase):

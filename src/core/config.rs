@@ -35,6 +35,9 @@ pub const INTERNAL_HTTP_MAX_SIZE: usize = 2 * 1024 * 1024;
 pub const INTERNAL_MESSAGE_PLAINTEXT_MAX_SIZE: usize = (1024 * 1024) - 1024;
 pub const INTERNAL_HTTP_GRACE_SEC: u64 = 30;
 pub const INTERNAL_HTTP_TIMEOUT_SEC: u64 = 30;
+pub const DEFAULT_MAX_QUEUED_CRYPTO: usize = 128;
+pub const DEFAULT_CRYPTO_QUEUE_TIMEOUT_MS: u64 = 1000;
+pub const MAX_CRYPTO_QUEUE_TIMEOUT_MS: u64 = 30_000;
 pub const INTERNAL_TIME_ATTEST_TIMEOUT_SEC: u64 = 5;
 pub const INTERNAL_TIME_ATTEST_MIN_INTERVAL_US: i64 = 1_000_000;
 pub const INTERNAL_TIME_ATTEST_MAX_ROUGHTIME_RESPONSE_BYTES: usize = 4096;
@@ -97,6 +100,8 @@ pub struct AppConfig {
     pub plaintext_message: String,
     pub metrics_enabled: bool,
     pub max_concurrent_crypto: usize,
+    pub max_queued_crypto: usize,
+    pub crypto_queue_timeout: std::time::Duration,
 }
 
 #[cfg(test)]
@@ -127,6 +132,8 @@ pub(crate) fn test_app_config() -> AppConfig {
         plaintext_message: String::from("hello"),
         metrics_enabled: true,
         max_concurrent_crypto: 8,
+        max_queued_crypto: DEFAULT_MAX_QUEUED_CRYPTO,
+        crypto_queue_timeout: std::time::Duration::from_millis(DEFAULT_CRYPTO_QUEUE_TIMEOUT_MS),
     }
 }
 
@@ -155,6 +162,46 @@ fn parse_max_concurrent_crypto(value: &str) -> Result<usize, DynError> {
         ));
     }
     Ok(parsed)
+}
+
+fn parse_max_queued_crypto(value: &str) -> Result<usize, DynError> {
+    let value = value.trim();
+    let parsed: usize = value.parse().map_err(|_| {
+        crate::error::invalid_input("VECTIS_MAX_QUEUED_CRYPTO must be a non-negative integer")
+    })?;
+    if value.is_empty()
+        || !value.bytes().all(|b| b.is_ascii_digit())
+        || parsed > tokio::sync::Semaphore::MAX_PERMITS
+    {
+        return Err(crate::error::invalid_input(
+            "VECTIS_MAX_QUEUED_CRYPTO must be between 0 and the semaphore maximum",
+        ));
+    }
+    Ok(parsed)
+}
+
+fn parse_crypto_queue_timeout(value: &str) -> Result<std::time::Duration, DynError> {
+    let value = value.trim();
+    let parsed: u64 = value.parse().map_err(|_| {
+        crate::error::invalid_input("VECTIS_CRYPTO_QUEUE_TIMEOUT_MS must be a positive integer")
+    })?;
+    if value.is_empty()
+        || !value.bytes().all(|b| b.is_ascii_digit())
+        || !(1..=MAX_CRYPTO_QUEUE_TIMEOUT_MS).contains(&parsed)
+    {
+        return Err(crate::error::invalid_input(
+            "VECTIS_CRYPTO_QUEUE_TIMEOUT_MS must be between 1 and 30000",
+        ));
+    }
+    let duration = std::time::Duration::from_millis(parsed);
+    std::time::Instant::now()
+        .checked_add(duration)
+        .ok_or_else(|| {
+            crate::error::invalid_input(
+                "VECTIS_CRYPTO_QUEUE_TIMEOUT_MS exceeds the supported duration",
+            )
+        })?;
+    Ok(duration)
 }
 
 pub fn app_config() -> Result<AppConfig, DynError> {
@@ -225,6 +272,16 @@ pub fn app_config() -> Result<AppConfig, DynError> {
     )?;
     let max_concurrent_crypto =
         parse_max_concurrent_crypto(&config_value(&env_file, "VECTIS_MAX_CONCURRENT_CRYPTO", ""))?;
+    let max_queued_crypto = parse_max_queued_crypto(&config_value(
+        &env_file,
+        "VECTIS_MAX_QUEUED_CRYPTO",
+        &DEFAULT_MAX_QUEUED_CRYPTO.to_string(),
+    ))?;
+    let crypto_queue_timeout = parse_crypto_queue_timeout(&config_value(
+        &env_file,
+        "VECTIS_CRYPTO_QUEUE_TIMEOUT_MS",
+        &DEFAULT_CRYPTO_QUEUE_TIMEOUT_MS.to_string(),
+    ))?;
     let plaintext_message = config_value(
         &env_file,
         "VECTIS_PLAINTEXT_MESSAGE",
@@ -303,6 +360,8 @@ pub fn app_config() -> Result<AppConfig, DynError> {
         plaintext_message,
         metrics_enabled,
         max_concurrent_crypto,
+        max_queued_crypto,
+        crypto_queue_timeout,
     })
 }
 
@@ -629,6 +688,116 @@ mod tests {
         parse_max_concurrent_crypto("abc").expect_err("non-numeric is rejected");
         parse_max_concurrent_crypto(&usize::MAX.to_string())
             .expect_err("value above the semaphore maximum is rejected");
+    }
+
+    #[test]
+    fn crypto_queue_limits_validate_bounds_and_strict_inputs() {
+        assert_eq!(parse_max_queued_crypto("0").unwrap(), 0);
+        assert_eq!(
+            parse_max_queued_crypto("128").unwrap(),
+            DEFAULT_MAX_QUEUED_CRYPTO
+        );
+        assert_eq!(
+            parse_max_queued_crypto(&tokio::sync::Semaphore::MAX_PERMITS.to_string()).unwrap(),
+            tokio::sync::Semaphore::MAX_PERMITS
+        );
+        assert!(
+            parse_max_queued_crypto(&(tokio::sync::Semaphore::MAX_PERMITS + 1).to_string())
+                .is_err()
+        );
+        for value in [
+            "",
+            " ",
+            "-1",
+            "+1",
+            "1.5",
+            "true",
+            "abc",
+            "99999999999999999999999999999",
+        ] {
+            assert!(parse_max_queued_crypto(value).is_err(), "{value:?}");
+            assert!(parse_crypto_queue_timeout(value).is_err(), "{value:?}");
+        }
+        assert!(parse_crypto_queue_timeout("0").is_err());
+        assert!(parse_crypto_queue_timeout("30001").is_err());
+        assert_eq!(
+            parse_crypto_queue_timeout("1").unwrap(),
+            std::time::Duration::from_millis(1)
+        );
+        assert_eq!(
+            parse_crypto_queue_timeout("30000").unwrap(),
+            std::time::Duration::from_secs(30)
+        );
+    }
+
+    #[test]
+    fn crypto_queue_environment_precedence() {
+        const CHILD: &str = "VECTIS_TEST_QUEUE_PRECEDENCE";
+        if let Ok(mode) = std::env::var(CHILD) {
+            let file = if mode == "defaults" {
+                HashMap::new()
+            } else {
+                HashMap::from([
+                    ("VECTIS_MAX_QUEUED_CRYPTO".into(), "7".into()),
+                    ("VECTIS_CRYPTO_QUEUE_TIMEOUT_MS".into(), "250".into()),
+                ])
+            };
+            let queued =
+                parse_max_queued_crypto(&config_value(&file, "VECTIS_MAX_QUEUED_CRYPTO", "128"));
+            let timeout = parse_crypto_queue_timeout(&config_value(
+                &file,
+                "VECTIS_CRYPTO_QUEUE_TIMEOUT_MS",
+                "1000",
+            ));
+            match mode.as_str() {
+                "defaults" => {
+                    assert_eq!(queued.unwrap(), 128);
+                    assert_eq!(timeout.unwrap().as_millis(), 1000);
+                }
+                "file" => {
+                    assert_eq!(queued.unwrap(), 7);
+                    assert_eq!(timeout.unwrap().as_millis(), 250);
+                }
+                "process" => {
+                    assert_eq!(queued.unwrap(), 3);
+                    assert_eq!(timeout.unwrap().as_millis(), 99);
+                }
+                "empty" => {
+                    assert!(queued.is_err());
+                    assert!(timeout.is_err());
+                }
+                _ => panic!("unknown test mode"),
+            }
+            return;
+        }
+        for mode in ["defaults", "file", "process", "empty"] {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "core::config::tests::crypto_queue_environment_precedence",
+                ])
+                .env(CHILD, mode)
+                .env_remove("VECTIS_MAX_QUEUED_CRYPTO")
+                .env_remove("VECTIS_CRYPTO_QUEUE_TIMEOUT_MS");
+            if mode == "process" || mode == "empty" {
+                command
+                    .env(
+                        "VECTIS_MAX_QUEUED_CRYPTO",
+                        if mode == "empty" { "" } else { "3" },
+                    )
+                    .env(
+                        "VECTIS_CRYPTO_QUEUE_TIMEOUT_MS",
+                        if mode == "empty" { "" } else { "99" },
+                    );
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "precedence mode {mode}: {}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+        }
     }
 
     #[test]

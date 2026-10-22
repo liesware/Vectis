@@ -17,6 +17,7 @@ from laboratory import Laboratory
 from options import parse_options
 from processes import command
 from resources import ResourceSampler
+from admission import overrides, queue_delta
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
@@ -27,7 +28,8 @@ def write_json(path, value):
 
 
 def clean_environment():
-    return {k: v for k, v in os.environ.items() if not k.startswith(("VECTIS_", "K6_"))}
+    return {**{k: v for k, v in os.environ.items() if not k.startswith(("VECTIS_", "K6_"))},
+            **overrides(os.environ)}
 
 
 def run_measured_k6(environment):
@@ -61,12 +63,17 @@ def run_profile(args, index, binary, run_id, environment, destination=None, posi
           f"batch-size={args.batch_size if args.target == 'all' or args.target.endswith('-batch') else 1} | "
           f"vusr={args.vusr} | {load}", flush=True)
     sampler = None
+    queue_before = None
     try:
         if result:
             result.mkdir()
             write_json(manifest, record)
         lab.prepare()
         lab.start()
+        record["crypto_admission"] = lab.admission_settings()
+        settings = record["crypto_admission"]
+        print(f"[{slug}] crypto admission: C={settings['max_concurrent_crypto']} | "
+              f"Q={settings['max_queued_crypto']} | timeout={settings['crypto_queue_timeout_ms']}ms", flush=True)
         k6env = {**environment, "K6_FIXTURE_PATH": str(lab.fixture_path),
                  "K6_CRYPTO_PROFILE": profile, "K6_TARGET": args.target,
                  "K6_SUBJECT": str(args.subject).lower(),
@@ -91,6 +98,7 @@ def run_profile(args, index, binary, run_id, environment, destination=None, posi
         print(f"[{slug}] measuring: {args.target} vusr={args.vusr}", flush=True)
         sampler = ResourceSampler(lab.pid, result / "resources.csv" if result else None)
         sampler.start()
+        queue_before = lab.queue_metrics()
         started = time.monotonic()
         try:
             record["k6_exit"] = run_measured_k6(k6env)
@@ -116,6 +124,11 @@ def run_profile(args, index, binary, run_id, environment, destination=None, posi
                     additional.append("resource sampling failed")
             except (Exception, KeyboardInterrupt):
                 additional.append("resource sampler cleanup failed")
+        if queue_before is not None:
+            try:
+                record["crypto_queue"] = queue_delta(queue_before, lab.queue_metrics())
+            except (Exception, KeyboardInterrupt):
+                additional.append("could not collect crypto queue metrics")
         try:
             record["db_final"] = lab.sizes()
         except (Exception, KeyboardInterrupt):
@@ -138,6 +151,16 @@ def run_profile(args, index, binary, run_id, environment, destination=None, posi
                 record["status"] = "failed"
                 record.setdefault("error", "could not persist profile manifest")
     print_resources(record)
+    if "crypto_queue" in record:
+        queue = record["crypto_queue"]
+        mean = f"{queue['wait_mean_seconds'] * 1000:.3f}ms" if queue["wait_count"] else "-"
+        print(f"[{slug}] crypto queue: waits={queue['wait_count']:g} | mean={mean} | "
+              f"full={queue['rejections']['full']:g} | timeout={queue['rejections']['timeout']:g} | "
+              f"pending-final={queue['pending_final']:g}", flush=True)
+        if queue["wait_buckets"]:
+            buckets = " ".join(f"<={bound}:{count:g}" for bound, count in
+                               sorted(queue["wait_buckets"].items(), key=lambda pair: float(pair[0])))
+            print(f"[{slug}] wait buckets (seconds; cumulative counts): {buckets}", flush=True)
     if record.get("error"):
         print(f"[{slug}] {record['error']} | logs: {site / 'logs'}", file=sys.stderr, flush=True)
     for error in record.get("cleanup_errors", []):
@@ -162,7 +185,7 @@ def main(argv=None):
                 "fixture": {"plaintext_chars": 16, "random_token_one_time": False,
                             "max_plaintext_chars": 128, "subjects_per_kid": 1,
                             "logging": "file; info; audit enabled",
-                            "crypto_concurrency": "Vectis compiled default (CPU cores minus one, minimum one)"},
+                            "crypto_concurrency": "Effective settings recorded per profile"},
                 "profiles": []}
     environment = clean_environment()
     previous_umask = os.umask(0o077)

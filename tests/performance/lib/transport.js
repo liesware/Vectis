@@ -13,6 +13,8 @@ export function expect(condition, label, failure = label) {
 function metricSet(prefix) {
   return {
     duration: new Trend(`${prefix}_duration`, true),
+    successDuration: new Trend(`${prefix}_success_duration`, true),
+    successes: new Counter(`${prefix}_successes`),
     requests: new Counter(`${prefix}_requests`), values: new Counter(`${prefix}_values`),
     httpErrors: new Counter(`${prefix}_http_errors`), transportErrors: new Counter(`${prefix}_transport_errors`),
     rejected: new Counter(`${prefix}_429`), contractErrors: new Counter(`${prefix}_contract_errors`),
@@ -66,6 +68,8 @@ export class Measurements {
       valid = true;
       return payload;
     } finally {
+      metric.successes.add(valid ? 1 : 0, tags);
+      if (valid) metric.successDuration.add(response.timings.duration, tags);
       metric.values.add(valid ? test.batchSize : 0, tags);
       metric.contractErrors.add(!valid && response.status === 200 ? 1 : 0, tags);
     }
@@ -77,7 +81,10 @@ export class Measurements {
     try { callback(); valid = true; } finally {
       const metric = this.metrics[`${test.id}/flow`];
       const tags = this.tags(test, "flow");
-      metric.duration.add(Date.now() - started, tags);
+      const duration = Date.now() - started;
+      metric.duration.add(duration, tags);
+      metric.successes.add(valid ? 1 : 0, tags);
+      if (valid) metric.successDuration.add(duration, tags);
       metric.requests.add(1, tags);
       metric.values.add(valid ? test.batchSize : 0, tags);
       metric.contractErrors.add(valid ? 0 : 1, tags);

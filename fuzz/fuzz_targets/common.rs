@@ -34,6 +34,8 @@ pub fn fuzz_config() -> config::AppConfig {
         plaintext_message: String::new(),
         metrics_enabled: true,
         max_concurrent_crypto: 8,
+        max_queued_crypto: config::DEFAULT_MAX_QUEUED_CRYPTO,
+        crypto_queue_timeout: std::time::Duration::from_millis(config::DEFAULT_CRYPTO_QUEUE_TIMEOUT_MS),
     }
 }
 

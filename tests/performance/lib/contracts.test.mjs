@@ -172,8 +172,31 @@ test("catalog preserves pre-refactor variants, metric identifiers and report col
   const metrics = Object.fromEntries(measured.rows.map(({prefix}) =>
     [prefix + "_requests", { values: { count: 1 } }]));
   const summary = h.reporting.renderSummary(measured.rows, measured.profile, { metrics, state: {} });
-  assert.deepEqual(summary["/results/summary.tsv"].split("\n")[0].split("\t"), baseline.tsv_columns);
+  const columns = summary["/results/summary.tsv"].split("\n")[0].split("\t");
+  assert.deepEqual(columns.slice(0, baseline.tsv_columns.length), baseline.tsv_columns);
+  assert.deepEqual(columns.slice(baseline.tsv_columns.length), ["success_samples", "p95_success_ms", "p99_success_ms"]);
   assert.deepEqual(Object.keys(JSON.parse(summary["/results/summary.json"])), baseline.summary_fields);
+});
+
+test("success latency excludes 429, transport and contract failures without changing total latency", async () => {
+  const h = await harness();
+  const prefix = "vectis_fpe_batch_stored_auth_fpe_encrypt_batch";
+  h.measurements.post(h.selected, "fpe_encrypt_batch", "/test", {}, () => {});
+  h.respond({ status: 429, timings: { duration: 1 } });
+  assert.throws(() => h.measurements.post(h.selected, "fpe_encrypt_batch", "/test", {}, () => {}));
+  h.respond({ status: 0, timings: { duration: 2 } });
+  assert.throws(() => h.measurements.post(h.selected, "fpe_encrypt_batch", "/test", {}, () => {}));
+  h.respond({ status: 200, timings: { duration: 3 } });
+  assert.throws(() => h.measurements.post(h.selected, "fpe_encrypt_batch", "/test", {}, () => { throw Error("contract"); }));
+  assert.deepEqual(h.samples.get(prefix + "_duration").map((s) => s.value), [10, 1, 2, 3]);
+  assert.deepEqual(h.samples.get(prefix + "_success_duration").map((s) => s.value), [10]);
+  assert.deepEqual(h.samples.get(prefix + "_successes").map((s) => s.value), [1, 0, 0, 0]);
+  const summary = h.summary({ state: {}, metrics: {
+    [prefix + "_requests"]: { values: { count: 4 } },
+    [prefix + "_success_duration"]: { values: { "p(95)": 0, "p(99)": 0 } },
+  } });
+  const row = summary["/results/summary.tsv"].trimEnd().split("\n")[1].split("\t");
+  assert.deepEqual(row.slice(-3), ["0", "-", "-"]);
 });
 
 test("catalog rejects inconsistent definitions and missing or extra runners", async () => {

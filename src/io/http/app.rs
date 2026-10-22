@@ -22,12 +22,22 @@ const BANNER: &str = r#"
 
 pub async fn run(init_state: ValidatedInitState) -> Result<(), DynError> {
     let config = Arc::new(config::app_config()?);
-    crate::core::blocking::init_crypto_limit(config.max_concurrent_crypto);
     let metrics_handle = if config.metrics_enabled {
         Some(Arc::new(crate::core::metrics::init()?))
     } else {
         None
     };
+    crate::core::blocking::init_crypto_limit(
+        config.max_concurrent_crypto,
+        config.max_queued_crypto,
+        config.crypto_queue_timeout,
+    );
+    info!(
+        max_concurrent_crypto = config.max_concurrent_crypto,
+        max_queued_crypto = config.max_queued_crypto,
+        crypto_queue_timeout_ms = config.crypto_queue_timeout.as_millis() as u64,
+        "crypto admission configured"
+    );
     let auth_state = super::auth::HttpAuthState::from_config(&config)?;
     let logging = crate::core::logging::logging_config();
     crate::core::audit_chain::initialize(&logging, &init_state)?;

@@ -225,10 +225,16 @@ mod tests {
 
     #[test]
     fn overloaded_error_returns_generic_too_many_requests_message() {
-        let err = crate::error::overloaded("crypto capacity exhausted");
-        let (status, body) = error_response(err.as_ref());
-        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
-        assert_eq!(body.0.error, "too many requests");
+        for reason in [
+            "crypto capacity exhausted",
+            "crypto queue full",
+            "crypto queue timeout",
+        ] {
+            let err = crate::error::overloaded(reason);
+            let (status, body) = error_response(err.as_ref());
+            assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+            assert_eq!(body.0.error, "too many requests");
+        }
     }
 
     #[test]

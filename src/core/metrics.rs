@@ -13,18 +13,76 @@ const VECTIS_KEY_LOAD_FAILURES_TOTAL: &str = "vectis_key_load_failures_total";
 const VECTIS_KEYS_LOAD_SKIPPED: &str = "vectis_keys_load_skipped";
 const VECTIS_MESSAGE_TOTAL: &str = "vectis_message_total";
 const VECTIS_CRYPTO_OPERATION_TOTAL: &str = "vectis_crypto_operation_total";
+const CRYPTO_QUEUE_PENDING: &str = "vectis_crypto_queue_pending";
+const CRYPTO_QUEUE_WAIT_SECONDS: &str = "vectis_crypto_queue_wait_seconds";
+const CRYPTO_REJECTIONS_TOTAL: &str = "vectis_crypto_rejections_total";
+const CRYPTO_WAIT_BUCKETS: &[f64] = &[
+    0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0,
+];
 
 const DURATION_BUCKETS: &[f64] = &[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0];
 
-pub fn init() -> Result<PrometheusHandle, crate::error::DynError> {
-    let handle = PrometheusBuilder::new()
+fn builder() -> Result<PrometheusBuilder, crate::error::DynError> {
+    Ok(PrometheusBuilder::new()
         .set_buckets_for_metric(
             Matcher::Full(HTTP_REQUEST_DURATION_SECONDS.to_string()),
             DURATION_BUCKETS,
         )?
-        .install_recorder()?;
+        .set_buckets_for_metric(
+            Matcher::Full(CRYPTO_QUEUE_WAIT_SECONDS.to_string()),
+            CRYPTO_WAIT_BUCKETS,
+        )?)
+}
 
-    Ok(handle)
+pub fn init() -> Result<PrometheusHandle, crate::error::DynError> {
+    Ok(builder()?.install_recorder()?)
+}
+
+#[cfg(test)]
+pub(crate) fn test_recorder() -> metrics_exporter_prometheus::PrometheusRecorder {
+    builder().unwrap().build_recorder()
+}
+
+pub(crate) enum CryptoRejection {
+    Full,
+    Timeout,
+}
+
+pub(crate) fn record_crypto_rejection(reason: CryptoRejection) {
+    let reason = match reason {
+        CryptoRejection::Full => "full",
+        CryptoRejection::Timeout => "timeout",
+    };
+    counter!(CRYPTO_REJECTIONS_TOTAL, "reason" => reason).increment(1);
+}
+
+/// Captures its metric handles so cancellation cleans up even on another thread.
+pub(crate) struct CryptoQueueWait {
+    pending: metrics::Gauge,
+    wait: metrics::Histogram,
+    started: tokio::time::Instant,
+}
+
+impl CryptoQueueWait {
+    pub(crate) fn new(started: tokio::time::Instant) -> Self {
+        let pending = gauge!(CRYPTO_QUEUE_PENDING);
+        pending.increment(1.0);
+        Self {
+            pending,
+            wait: histogram!(CRYPTO_QUEUE_WAIT_SECONDS),
+            started,
+        }
+    }
+
+    pub(crate) fn completed(&self) {
+        self.wait.record(self.started.elapsed().as_secs_f64());
+    }
+}
+
+impl Drop for CryptoQueueWait {
+    fn drop(&mut self) {
+        self.pending.decrement(1.0);
+    }
 }
 
 pub fn record_http_request(method: &str, endpoint: &str, status: u16, secs: f64) {

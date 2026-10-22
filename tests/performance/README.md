@@ -114,6 +114,42 @@ keeps these rejections as failed flows; it does not retry or hide them. Lower
 `--vusr` to measure within the admitted load. Increasing concurrency is a load
 experiment, not a guarantee that every request will succeed.
 
+Crypto admission now permits a bounded asynchronous wait before dispatch:
+128 pending jobs and 1000 ms by default. A full queue or expired wait still
+returns `429`; waiting does not increase execution capacity. Only these explicit
+process variables may override the isolated server: `VECTIS_MAX_CONCURRENT_CRYPTO`,
+`VECTIS_MAX_QUEUED_CRYPTO`, and `VECTIS_CRYPTO_QUEUE_TIMEOUT_MS`. Other personal
+`VECTIS_*` settings remain filtered. Empty overrides are forwarded so the Rust
+startup parser can reject invalid queue settings.
+
+Compare fresh laboratories with the same load and execution capacity:
+
+```sh
+VECTIS_MAX_CONCURRENT_CRYPTO=1 VECTIS_MAX_QUEUED_CRYPTO=0 \
+bash tests/performance/run.sh --target fpe --crypto-profile hybrid-performance-v1 \
+  --vusr 4 --duration 30s --save-results
+
+VECTIS_MAX_CONCURRENT_CRYPTO=1 \
+bash tests/performance/run.sh --target fpe --crypto-profile hybrid-performance-v1 \
+  --vusr 4 --duration 30s --save-results
+```
+
+Run these sequentially, not against simultaneous local campaigns. The first may
+exit nonzero because rejected flows still fail the existing thresholds.
+Effective settings are read from the server's structured startup log, displayed
+per profile and saved as `crypto_admission`, not inferred from Python CPU counts.
+The appended `success_samples`, `p95_success_ms`, `p99_success_ms` columns include
+only HTTP/flow results that passed their contracts; existing latency columns
+continue to include failures. No successes means `-`, not zero milliseconds.
+
+Authenticated `/metrics` snapshots run after warmup and after measurement, before
+server shutdown, even when k6 fails or is interrupted. `crypto_queue` stores
+counter/bucket deltas, wait count/mean and final pending gauge. Histogram buckets
+are not exact percentiles, and the final gauge is not peak queue occupancy.
+Metrics collection is outside k6 target samples; CPU/RSS can include observer
+overhead. Results stay in memory unless `--save-results` is enabled. Compare
+successful values/s, successful p95/p99, rejections, wait and RSS together.
+
 Few iterations are **smoke**, not evidence for p99 or capacity claims. Duration
 mode is a sustained measurement, but users must still inspect sample counts,
 repeat experiments, and control machine load. k6 runs on the same host and can

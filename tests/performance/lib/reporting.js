@@ -5,22 +5,27 @@ function alignedTable(rows) {
 }
 
 export function renderSummary(rows, profile, data) {
-  const lines = ["kind\ttarget\tcrypto_profile\tsubject\tfpe_authenticated\tbatch_size\toperation\tsamples\tavg_ms\tp95_ms\tp99_ms\trequests_or_flows_per_s\tvalues_per_s\thttp_errors\ttransport_errors\t429\tcontract_errors"];
+  const lines = ["kind\ttarget\tcrypto_profile\tsubject\tfpe_authenticated\tbatch_size\toperation\tsamples\tavg_ms\tp95_ms\tp99_ms\trequests_or_flows_per_s\tvalues_per_s\thttp_errors\ttransport_errors\t429\tcontract_errors\tsuccess_samples\tp95_success_ms\tp99_success_ms"];
   const groups = new Map();
   for (const { test, operation, prefix } of rows) {
     const values = (name) => data.metrics[`${prefix}_${name}`]?.values || {};
     const count = values("requests").count || 0;
     if (!count) continue;
     const duration = values("duration");
+    const successCount = values("successes").count || 0;
+    const successDuration = values("success_duration");
     const fmt = (value) => Number.isFinite(value) ? value.toFixed(3) : "-";
     lines.push([operation === "flow" ? "flow" : "http", test.target, profile,
       test.subject, test.authenticated, test.batchSize, operation, count,
       fmt(duration.avg), fmt(duration["p(95)"]), fmt(duration["p(99)"]),
       fmt(values("requests").rate), fmt(values("values").rate),
       values("http_errors").count || 0, values("transport_errors").count || 0,
-      values("429").count || 0, values("contract_errors").count || 0].join("\t"));
+      values("429").count || 0, values("contract_errors").count || 0,
+      successCount, successCount ? fmt(successDuration["p(95)"]) : "-",
+      successCount ? fmt(successDuration["p(99)"]) : "-"].join("\t"));
     if (!groups.has(test.id)) groups.set(test.id, { test, rows: [
-      ["Kind", "Operation", "Samples", "avg ms", "p95 ms", "p99 ms", "req/flow/s", "values/s", "H/T/429/C"],
+      ["Kind", "Operation", "Samples", "avg ms", "p95 ms", "p99 ms", "req/flow/s", "values/s", "H/T/429/C",
+        "Success", "p95 OK", "p99 OK"],
     ] });
     const family = test.target.replace(/-batch$/, "").replace(/-/g, "_");
     groups.get(test.id).rows.push([operation === "flow" ? "FLOW" : "HTTP",
@@ -28,7 +33,9 @@ export function renderSummary(rows, profile, data) {
       fmt(duration.avg), fmt(duration["p(95)"]), fmt(duration["p(99)"]),
       fmt(values("requests").rate), fmt(values("values").rate),
       [values("http_errors").count || 0, values("transport_errors").count || 0,
-        values("429").count || 0, values("contract_errors").count || 0].join("/")]);
+        values("429").count || 0, values("contract_errors").count || 0].join("/"),
+      successCount, successCount ? fmt(successDuration["p(95)"]) : "-",
+      successCount ? fmt(successDuration["p(99)"]) : "-"]);
   }
   const table = lines.join("\n") + "\n";
   const display = [`\nVectis operation summary | ${profile}`];

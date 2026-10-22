@@ -8,7 +8,16 @@ manually for releases; the Git history remains the detailed engineering record.
 Future changes will be recorded here. v1.0.0 remains the first official release.
 
 ### Changed
-- Updated Tokio to 1.54.0 in the main and fuzz lockfiles, and refreshed main
+- Crypto admission now waits asynchronously with a bounded queue (128 jobs,
+  1000 ms by default) before returning `429`; execution concurrency is unchanged.
+  Setting `VECTIS_MAX_QUEUED_CRYPTO=0` restores immediate rejection. Jobs that
+  time out or are cancelled while waiting are not dispatched.
+  Added restart-only queue settings and aggregate queue metrics.
+- Improved the k6 performance harness with selectable targets and variants,
+  native progress, readable summaries and optional `--save-results` reports.
+  Added successful-only latency percentiles and queue measurements to compare
+  admission settings with waiting enabled or disabled.
+- Updated Tokio to 1.54.1 in the main and fuzz lockfiles, and refreshed main
   transitive dependencies, including `inout` 0.2.5 and `libsqlite3-sys` 0.37.0.
 
 ### Security

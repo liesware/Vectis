@@ -1109,6 +1109,15 @@ message send/receive/decrypt results, and
 cryptographic sign/verify/encrypt/decrypt/FPE/token/MAC/commit/index/mask
 results.
 
+Crypto admission uses two process-wide semaphores: execution capacity and bounded
+asynchronous waiting positions. Its pending gauge is cancellation-safe; the wait
+histogram counts only admitted/timed-out waits, and rejection reasons are bounded
+to `full|timeout`. See [ENV](ENV.md#observability) for metric names and buckets.
+Waiting happens before blocking dispatch, not on blocking threads. Once dispatched,
+the job owns its execution permit until completion; caller cancellation does not
+promise to abort the crypto operation. A closed semaphore is an internal failure,
+not overload.
+
 ## Security Boundaries And Invariants
 
 Important invariants:
