@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM debian:13@sha256:9cc080028c43b27d2074d63a5f9caf7166d731494965616c1a6d2827a004585c AS builder
+FROM debian:13@sha256:2dc419c6d7fe3dad0a2f9fd469c34cc90b0f9ba642d8fde837fe3d7d34a0e7f1 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV RUSTUP_HOME=/usr/local/rustup
@@ -107,7 +107,7 @@ if os.environ.get("SBOM_BASE"):
 Path(os.environ["SBOM_INFO"]).write_text(json.dumps(info, indent=2) + "\n")
 PY
 
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2 AS runtime
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:08476c244888bfb425bae1ae4dd7c17f093e972aab8426883d97f3c6f280f7c1 AS runtime
 
 ENV VECTIS_HTTP_BIND_ADDR=0.0.0.0:3000
 ENV VECTIS_INIT_KEYS_FILE=/opt/vectis/conf/init.json
