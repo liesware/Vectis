@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1
 FROM debian:13@sha256:2dc419c6d7fe3dad0a2f9fd469c34cc90b0f9ba642d8fde837fe3d7d34a0e7f1 AS builder
 
+ARG TARGETARCH
+
 ENV DEBIAN_FRONTEND=noninteractive
 ENV RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
@@ -26,8 +28,24 @@ RUN apt-get update \
         xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL https://sh.rustup.rs \
-    | sh -s -- -y --profile minimal --default-toolchain 1.98.0
+RUN set -eu; \
+    case "$TARGETARCH" in \
+        amd64) \
+            rustup_target=x86_64-unknown-linux-gnu; \
+            rustup_sha256=b1c8cb14e30889e7e2999e6b69e62d9e9b9ffc0f4df8180564d306d9680e6c55 ;; \
+        arm64) \
+            rustup_target=aarch64-unknown-linux-gnu; \
+            rustup_sha256=9f608c142e0e38a78957d0661ba1dfaf0b6fb37184cfaa4b9a0aa57af6184282 ;; \
+        *) echo "Unsupported Rust installer architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    installer="$(mktemp)"; \
+    trap 'rm -f "$installer"' EXIT; \
+    curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL \
+        "https://static.rust-lang.org/rustup/archive/1.29.3/$rustup_target/rustup-init" \
+        -o "$installer"; \
+    printf '%s  %s\n' "$rustup_sha256" "$installer" | sha256sum --check; \
+    chmod 700 "$installer"; \
+    "$installer" -y --profile minimal --default-toolchain 1.98.0
 
 ENV CARGO_AUDITABLE_VERSION=0.7.7
 RUN cargo install cargo-auditable --version "$CARGO_AUDITABLE_VERSION" --locked

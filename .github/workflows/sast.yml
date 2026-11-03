@@ -36,13 +36,13 @@ jobs:
           persist-credentials: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
+        uses: github/codeql-action/init@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
         with:
           languages: ${{ matrix.language }}
           build-mode: none
 
       - name: Analyze
-        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
+        uses: github/codeql-action/analyze@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
         with:
           category: "/language:${{ matrix.language }}"
 
@@ -156,7 +156,7 @@ jobs:
         # Fork PRs get a read-only GITHUB_TOKEN, so code-scanning upload would 403.
         # Skip it there; the scan still runs and the SARIF is kept as an artifact.
         if: always() && hashFiles('semgrep.sarif') != '' && github.event.pull_request.head.repo.fork != true
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
+        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
         with:
           sarif_file: semgrep.sarif
           category: semgrep-ce
@@ -172,14 +172,17 @@ jobs:
 
       - name: Write job summary
         if: always()
+        env:
+          RULESET_SOURCE: ${{ steps.ruleset.outputs.source }}
+          SCAN_STATUS: ${{ steps.semgrep.outputs.status }}
         shell: bash
         run: |
           {
             echo "## Semgrep CE"
             echo
             echo "- Engine: 1.172.0"
-            echo "- Rules: p/default (${{ steps.ruleset.outputs.source }})"
-            echo "- Scan exit code: ${{ steps.semgrep.outputs.status }} (0 completed under report-only, 1 findings, >=2 error)"
+            echo "- Rules: p/default ($RULESET_SOURCE)"
+            echo "- Scan exit code: $SCAN_STATUS (0 completed under report-only, 1 findings, >=2 error)"
             echo "- Findings: Security > Code scanning"
             echo "- Full report: semgrep-ce-report artifact"
           } >>"$GITHUB_STEP_SUMMARY"
@@ -188,8 +191,11 @@ jobs:
         # Fail only on a real scan error (exit >=2). Exit 0 (completed) and 1 (findings)
         # both mean the scan completed; findings are triaged via code scanning.
         if: steps.semgrep.outputs.status != '0' && steps.semgrep.outputs.status != '1'
+        env:
+          SCAN_STATUS: ${{ steps.semgrep.outputs.status }}
+        shell: bash
         run: |
-          echo "Semgrep did not complete (exit ${{ steps.semgrep.outputs.status }})." >&2
+          echo "Semgrep did not complete (exit $SCAN_STATUS)." >&2
           exit 1
 
   gitleaks:

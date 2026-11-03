@@ -27,6 +27,12 @@ cargo --version
 Do not replace the pinned toolchain with an unreviewed `stable` update when
 producing release artifacts.
 
+The release-image Dockerfile pins the bootstrap installer separately to
+**rustup 1.29.3**. It downloads the versioned `rustup-init` for Linux AMD64 or
+ARM64 and verifies a SHA-256 recorded in the Dockerfile before execution.
+Updating this installer requires reviewing its version and both architecture
+hashes together; the compiler remains pinned independently to Rust `1.98.0`.
+
 ## System Dependencies
 
 Vectis enables the `vendored` feature of the Rust Botan binding. Botan is built
