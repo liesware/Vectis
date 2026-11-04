@@ -53,8 +53,26 @@ jobs:
       - name: Format
         run: cargo fmt --check
 
+      - name: Install llvm-tools
+        run: rustup component add llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+        with:
+          tool: cargo-llvm-cov@0.9.0
+
       - name: Test all targets
-        run: cargo test --locked --all-targets --all-features
+        run: cargo llvm-cov --locked --all-targets --all-features --no-report
+
+      - name: Publish Rust coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            printf '## Rust Coverage\n\n```text\n'
+            cargo llvm-cov report
+            printf '```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings

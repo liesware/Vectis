@@ -73,6 +73,16 @@ job IDs, suites, budgets, caches and artifacts. Confirm displayed check names
 in a real run before coordinating required-check changes; no remote protection
 is updated by this rename.
 
+The `verify` job uses **cargo-llvm-cov 0.9.0** to run Rust tests once with
+`cargo llvm-cov --locked --all-targets --all-features --no-report`. After the
+tests succeed, `cargo llvm-cov report` publishes its native table directly to
+the Job Summary; report generation failures fail `verify`. Coverage measures
+only Rust code exercised by these tests, without a minimum threshold. It does
+not measure doctests, Python suites, external tests or native Botan code.
+The `integration` job continues to run once against the ordinary,
+non-instrumented binary. Because Release Binaries calls `ci.yml`, the same
+coverage step also runs during releases.
+
 ### SCA policy and evidence
 
 The SCA workflow runs on main pushes/PRs, daily at **04:17 UTC**, manual dispatch,
