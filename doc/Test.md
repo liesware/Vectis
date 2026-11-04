@@ -761,7 +761,11 @@ checked to receive `403` from an administrative endpoint.
 using the laboratory TLS certificate and no personal proxy. Create results feed
 verify/decode/combine requests; round trips, positive verification results and
 three-item batch ordering are checked. A preflight failure stops preparation
-before ZAP, and `preflight.json` records its state and completed operations
+before ZAP. Numeric fixtures are distinct 16-digit synthetic identifiers with
+leading zeros and invalid Luhn checksums, intentionally avoiding card-like
+plaintexts while keeping PII detection enabled. This does not guarantee that
+random cryptographic outputs cannot incidentally match a detector. The file
+`preflight.json` records its state and completed operations
 without payloads or credentials. `sql-probes.json` separately records baseline
 and boolean SQLi probe responses for MAC and commitment verification, single
 and batch. Their hex fields are validated in `ops::mac::validate_verify_input`

@@ -10,7 +10,11 @@ import urllib.error
 import urllib.request
 
 
-VALUES = ("4111111111111111", "5555555555554444", "4000000000000002")
+VALUES = (
+    "0012345678901234",
+    "0023456789012345",
+    "0034567890123457",
+)
 PUBLIC = ("/healthz/startup", "/healthz/live", "/healthz/ready", "/keys", "/pub/{kid}")
 POST = (
     "/symmetric/encrypt/{kid}", "/symmetric/encrypt/{kid}/subject/{subject}",
@@ -198,7 +202,7 @@ class Preflight:
     def masking(self):
         profile = "pan-display-v1"
         self.call("/mask/{kid}", {"ref": "mask-single", "profile": profile, "plaintext": VALUES[0]},
-                  {"masked": "************1111"})
+                  {"masked": "*" * (len(VALUES[0]) - 4) + VALUES[0][-4:]})
         inputs = batch_items("mask")
         output = self.call("/mask/batch/{kid}", {"profile": profile, "items": inputs})
         results = checked_batch(output, inputs, self.client.kid, profile)

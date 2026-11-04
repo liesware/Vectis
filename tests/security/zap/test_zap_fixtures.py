@@ -86,6 +86,21 @@ class FakeClient:
 
 
 class FixtureTests(unittest.TestCase):
+    def test_identifiers_are_fixed_width_non_card_values(self):
+        self.assertEqual(len(VALUES), 3)
+        self.assertEqual(len(set(VALUES)), 3)
+        for value in VALUES:
+            with self.subTest(value=value):
+                self.assertEqual(len(value), 16)
+                self.assertTrue(value.isascii() and value.isdecimal())
+                self.assertTrue(value.startswith("00"))
+                digits = [int(char) for char in value]
+                total = sum(
+                    (2 * digit - 9 if digit >= 5 else 2 * digit) if index % 2 == 0 else digit
+                    for index, digit in enumerate(digits)
+                )
+                self.assertNotEqual(total % 10, 0, "fixture must fail the Luhn checksum")
+
     def setUp(self):
         self.client = FakeClient()
         self.preflight = Preflight(self.client)
