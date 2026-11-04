@@ -9,7 +9,6 @@ fi
 
 RESULTS="${ZAP_RESULTS_DIR:-$ROOT/zap-results}"
 ZAP_IMAGE="${ZAP_DOCKER_IMAGE:-ghcr.io/zaproxy/zaproxy:2.17.0@sha256:781a2bdaea47324e7bab583e2263f21d257b0aee61ed51521a5be45f5f5081ef}"
-KID_PLACEHOLDER="f55f086e75b58ac4dfaffd3e75c90d25719281df90e87880145fb9f2e32f2eed"
 
 for command in curl docker jq openssl python3 sqlite3 timeout uv; do
   command -v "$command" >/dev/null || {
@@ -27,6 +26,8 @@ mkdir -p "$RESULTS"
 RESULTS="$(cd "$RESULTS" && pwd)"
 rm -f \
   "$RESULTS/openapi-zap.json" \
+  "$RESULTS/preflight.json" \
+  "$RESULTS/sql-probes.json" \
   "$RESULTS/report.html" \
   "$RESULTS/report.md" \
   "$RESULTS/report.json" \
@@ -196,8 +197,10 @@ APP_APIKEY_HASH="$(printf '%s\n' "$APP_KEY_OUTPUT" | jq -r .VECTIS_APIKEY_HASH)"
 ./vectis config permissions add \
   --client zap-app --apikey-hash "$APP_APIKEY_HASH" --status active >/dev/null
 for action in \
+  symmetric \
   fpe-encrypt fpe-decrypt \
   token-encode token-decode \
+  token-deterministic-encode token-deterministic-decode \
   mac-create mac-verify \
   index-create index-verify \
   mask \
@@ -208,12 +211,18 @@ do
   ./vectis config permissions grant zap-app --kid "$KID" --action "$action" >/dev/null
 done
 
-./vectis config fpe add --name patient-id-decimal-v1 --kid "$KID" \
-  --alphabet 0123456789 --min-len 6 --max-len 32 \
-  --tweak-aad 'tenant=zap;field=patient_id;version=1' >/dev/null
-./vectis config token add --name patient-id-token-v1 --kid "$KID" \
-  --token-prefix tok_patient --token-len 32 --max-plaintext-len 128 \
-  --one-time false >/dev/null
+for mode in none stored; do
+  ./vectis config fpe add --name "zap-fpe-$mode" --kid "$KID" \
+    --alphabet 0123456789 --min-len 6 --max-len 32 \
+    --authenticated true --subject-mode "$mode" \
+    --tweak-aad 'tenant=zap;field=patient_id;version=1' >/dev/null
+  ./vectis config token add --name "zap-token-$mode" --kid "$KID" \
+    --subject-mode "$mode" --token-prefix tok_patient --token-len 32 \
+    --max-plaintext-len 128 --one-time false >/dev/null
+  ./vectis config token-deterministic add --name "zap-det-$mode" --kid "$KID" \
+    --subject-mode "$mode" --context 'tenant=zap;field=patient_id;version=1' \
+    --min-plaintext-len 1 --max-plaintext-len 128 >/dev/null
+done
 ./vectis config mac add --name pan-blind-index-v1 --kid "$KID" \
   --context 'tenant=zap;field=pan;purpose=mac;version=1' >/dev/null
 ./vectis config mac add --name pan-index-v1 --kid "$KID" \
@@ -231,9 +240,9 @@ done
 ./vectis config sign --output json >/dev/null
 ./vectis config reload --output json >/dev/null
 
-VECTIS_APIKEY="$APP_APIKEY" ./vectis fpe encrypt "$KID" \
-  --json '{"ref":"zap-preflight","profile":"patient-id-decimal-v1","plaintext":"123456"}' \
-  --output json | jq -e '.ciphertext | length == 6' >/dev/null
+SUBJECT="$(./vectis subject create "$KID" \
+  --json '{"profile":"zap-token-stored","subject_name":"zap-synthetic-person"}' \
+  --output json | jq -er .subject)"
 DENIED_STATUS="$(curl --insecure --silent --output /dev/null --write-out '%{http_code}' \
   --header "X-API-Key: $APP_APIKEY" "$BASE_URL/keys/properties")"
 if [[ "$DENIED_STATUS" != "403" ]]; then
@@ -241,57 +250,15 @@ if [[ "$DENIED_STATUS" != "403" ]]; then
   exit 1
 fi
 
-echo "[zap] prepare OpenAPI document"
+echo "[zap] validate operation fixtures and prepare scoped OpenAPI"
 export ZAP_OPENAPI_INPUT="$ROOT/doc/openapi.yaml"
-export ZAP_OPENAPI_OUTPUT="$RESULTS/openapi-zap.json"
 export ZAP_OPENAPI_BASE_URL="$BASE_URL"
 export ZAP_OPENAPI_KID="$KID"
-export ZAP_OPENAPI_KID_PLACEHOLDER="$KID_PLACEHOLDER"
-uv run --project "$ROOT" --group dast --frozen python - <<'PY'
-import json
-import os
-from pathlib import Path
-
-import yaml
-
-source = Path(os.environ["ZAP_OPENAPI_INPUT"])
-destination = Path(os.environ["ZAP_OPENAPI_OUTPUT"])
-base_url = os.environ["ZAP_OPENAPI_BASE_URL"]
-kid = os.environ["ZAP_OPENAPI_KID"]
-placeholder = os.environ["ZAP_OPENAPI_KID_PLACEHOLDER"]
-replacements = 0
-
-
-def replace_kid(value):
-    global replacements
-    if isinstance(value, dict):
-        return {key: replace_kid(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [replace_kid(item) for item in value]
-    if value == placeholder:
-        replacements += 1
-        return kid
-    return value
-
-
-document = yaml.safe_load(source.read_text(encoding="utf-8"))
-if not isinstance(document, dict):
-    raise SystemExit("OpenAPI document must be an object")
-for required in ("openapi", "paths", "components"):
-    if required not in document:
-        raise SystemExit(f"OpenAPI document is missing {required}")
-
-document["servers"] = [{"url": base_url, "description": "Disposable ZAP target"}]
-document = replace_kid(document)
-if replacements == 0:
-    raise SystemExit("OpenAPI KID placeholder was not found")
-
-destination.write_text(
-    json.dumps(document, indent=2, ensure_ascii=True) + "\n",
-    encoding="utf-8",
-)
-print(f"Prepared OpenAPI with {replacements} KID example replacements")
-PY
+export ZAP_SUBJECT="$SUBJECT"
+export ZAP_CERTIFICATE="$LAB/tls/server-cert.pem"
+export ZAP_RESULTS_DIR="$RESULTS"
+export ZAP_AUTH_HEADER_VALUE="$APP_APIKEY"
+uv run --project "$ROOT" --group dast --frozen python "$ROOT/tests/security/zap/zap_fixtures.py"
 
 echo "[zap] run active API scan"
 export ZAP_AUTH_HEADER="X-API-Key"

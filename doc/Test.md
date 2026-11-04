@@ -749,6 +749,49 @@ ZAP, Schemathesis, and `tests/security/fuzz/http_fuzz.py` answer different quest
 
 The initial ZAP policy is report-only. Scanner exit codes that indicate alerts
 do not fail the workflow, but Docker failures, scanner errors, and timeouts do.
+Before scanning, the laboratory creates one KID, a limited application API key,
+and one shared subject (created with bootstrap credentials, without granting
+subject creation or admin to the scan identity). Signed profiles cover symmetric,
+authenticated FPE, reusable random tokens, deterministic tokens, MACs, indexes,
+masking, commitments, sharing and signatures. Subject-aware families have
+separate `none` and `stored` profiles. The application identity is explicitly
+checked to receive `403` from an administrative endpoint.
+
+`zap_fixtures.py` sends valid synthetic requests to every selected operation,
+using the laboratory TLS certificate and no personal proxy. Create results feed
+verify/decode/combine requests; round trips, positive verification results and
+three-item batch ordering are checked. A preflight failure stops preparation
+before ZAP, and `preflight.json` records its state and completed operations
+without payloads or credentials. `sql-probes.json` separately records baseline
+and boolean SQLi probe responses for MAC and commitment verification, single
+and batch. Their hex fields are validated in `ops::mac::validate_verify_input`
+and `ops::commitments::validate_verify_input` (and their batch equivalents)
+before cryptographic verification; those fields are not SQL query text.
+Rejecting probes with `400` alone is not proof that every SQLi alert is false.
+
+Only an explicit operation allowlist is copied into `openapi-zap.json`, with
+operation-specific request/schema examples and real KID/subject path examples.
+The public OpenAPI is unchanged. Health, `/keys`, `/pub/{kid}` and local
+non-destructive crypto operations are included. Administration, metrics,
+self-tests, lifecycle, deletion, subject creation, `/message...` and
+`/time/attest` are excluded from this scan, not granted wider permissions.
+No alert rules are suppressed, including SQLi, security headers and caching.
+
+Preflight coverage is distinct from ZAP attack coverage: both subject modes
+are checked before scanning, but shared decode routes use the first (unscoped)
+example for import. Importer selection of media/schema/array examples must be
+verified with traffic or logs from the pinned image; multiple examples or a
+high percentage of `4xx` responses do not establish coverage. Review findings
+as unresolved vulnerabilities, hardening observations, intentional information
+or possible false positives only after inspecting their evidence. Report
+generation alone does not confirm or dismiss findings.
+
+Run the private fixture tests offline with the existing DAST dependencies:
+
+```sh
+uv run --locked --group dast python -m unittest discover -s tests/security/zap -p 'test_*.py' -v
+```
+
 The workflow summary shows alert counts by risk and publishes HTML, Markdown,
 JSON, XML, ZAP logs, and Vectis logs as a 30-day artifact. The synthetic API key
 is redacted before upload. DAST results remain in the workflow summary and
