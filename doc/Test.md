@@ -141,6 +141,15 @@ compares the inventory against all externally resolved names/versions in
 graph. Both `fuzz` and `dast` groups must be present, including locked
 Schemathesis and PyYAML. Zero vulnerabilities alone do not demonstrate coverage.
 The Python scan uses its own empty ignore file, independent of image exceptions.
+Its existing JSON is converted to native SARIF by the same Trivy installation,
+without another scan, and published to GitHub Code scanning as `trivy-python`.
+All severities and unfixed findings remain visible, independently of the
+CI/release blocking policy. Conversion and upload run even after policy findings
+fail the gate; technical failures remain blocking. SARIF is included in the
+existing evidence artifact. Fork and Dependabot PRs skip only Code Scanning
+upload, not scanning, policy validation or artifact retention. Package locations
+retain the original report paths; their presentation against `uv.lock` must be
+verified in Actions.
 
 Each scan attempts evidence upload with `if: always()`, retaining JSON reports,
 available diagnostics, commit/context and version information for **30 days**.
@@ -162,6 +171,14 @@ SAST has no scheduled runs. zizmor retains main pushes and PRs against any
 branch, without manual execution. Other scanners
 are skipped for PRs targeting branches other than main. Existing fork-PR upload
 handling remains unchanged.
+
+Gitleaks also publishes its existing, natively redacted `results.sarif` as
+`gitleaks` in GitHub Code scanning, including when findings fail the scan step.
+This creates Code Scanning alerts, not native Secret Scanning alerts. Fork and
+Dependabot PRs skip this upload but retain the scan, summary and artifact.
+Python/Trivy and Gitleaks uploads use job-scoped `security-events: write` and
+wait for GitHub processing. Upload errors fail the job and do not replace or
+neutralize existing scanner or policy failures.
 
 Confirm required checks and code-scanning tool status in a real PR after
 migration, including a fork PR when available. Workflow-specific ruleset
@@ -733,8 +750,18 @@ ZAP, Schemathesis, and `tests/security/fuzz/http_fuzz.py` answer different quest
 The initial ZAP policy is report-only. Scanner exit codes that indicate alerts
 do not fail the workflow, but Docker failures, scanner errors, and timeouts do.
 The workflow summary shows alert counts by risk and publishes HTML, Markdown,
-JSON, XML, ZAP logs, and Vectis logs as a 30-day artifact. The synthetic API key
-is redacted before upload.
+JSON, XML, SARIF, ZAP logs, and Vectis logs as a 30-day artifact. The synthetic
+API key is redacted before upload. A pre-shutdown hook requests the native
+`sarif-json` template from the same scan; no second scan or addon installation
+is performed. Missing or invalid SARIF is a technical failure, while a valid
+report with no findings is accepted.
+
+Successful scans publish SARIF to GitHub Security / Code scanning under the
+`zap-api` category, using job-scoped `security-events: write`. Upload failures
+fail the job, without changing the report-only findings policy. Fork and
+Dependabot PRs retain scanning and artifacts but skip Code Scanning upload.
+DAST locations describe HTTP URLs, not source-code lines; GitHub ingestion and
+display must be confirmed in a real Actions run, without inventing file mappings.
 
 On Linux with Docker available, run the same isolated scan locally with:
 

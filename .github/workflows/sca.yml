@@ -159,6 +159,9 @@ jobs:
     name: Python lockfile audit
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
     env:
       SCA_INPUTS: ${{ toJSON(inputs) }}
       EVIDENCE: .ci/sca/python
@@ -202,6 +205,7 @@ jobs:
           exit-code: "0"
 
       - name: Verify coverage and enforce Python policy
+        id: python-policy
         if: always()
         env:
           SCAN_OUTCOME: ${{ steps.scan.outcome }}
@@ -272,6 +276,28 @@ jobs:
               output.write(message + "\n")
           sys.exit(1 if context == "ci" and findings else 0)
           PY
+
+      - name: Convert Python report to SARIF
+        id: python-sarif
+        if: >-
+          always() && steps.scan.outcome == 'success' &&
+          hashFiles('.ci/sca/python/report.json') != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          trivy convert --format sarif --output "$EVIDENCE/report.sarif" "$EVIDENCE/report.json"
+
+      - name: Upload Python SARIF
+        if: >-
+          always() && steps.python-sarif.outcome == 'success' &&
+          github.event.pull_request.head.repo.fork != true &&
+          github.actor != 'dependabot[bot]' &&
+          github.event.pull_request.user.login != 'dependabot[bot]'
+        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+        with:
+          sarif_file: .ci/sca/python/report.sarif
+          category: trivy-python
+          wait-for-processing: true
 
       - name: Upload Python SCA evidence
         if: always()
