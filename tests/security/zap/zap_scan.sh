@@ -31,8 +31,6 @@ rm -f \
   "$RESULTS/report.md" \
   "$RESULTS/report.json" \
   "$RESULTS/report.xml" \
-  "$RESULTS/report.sarif" \
-  "$RESULTS/report.sarif.json" \
   "$RESULTS/vectis.log" \
   "$RESULTS/zap-exit-code.txt" \
   "$RESULTS/zap.log"
@@ -309,12 +307,10 @@ timeout --signal=TERM --kill-after=30s 45m \
     --env ZAP_AUTH_HEADER_VALUE \
     --env ZAP_AUTH_HEADER_SITE \
     --volume "$RESULTS:/zap/wrk:rw" \
-    --volume "$ROOT/tests/security/zap/sarif_hook.py:/zap/sarif_hook.py:ro" \
     "$ZAP_IMAGE" \
     zap-api-scan.py \
       -t /zap/wrk/openapi-zap.json \
       -f openapi \
-      --hook /zap/sarif_hook.py \
       -r report.html \
       -w report.md \
       -J report.json \
@@ -345,13 +341,5 @@ case "$ZAP_STATUS" in
     exit "$ZAP_STATUS"
     ;;
 esac
-
-jq -e '
-  .version == "2.1.0" and
-  (.runs | type == "array" and length > 0) and
-  all(.runs[];
-    (.tool.driver.name | type == "string" and length > 0) and
-    (.results | type == "array"))
-' "$RESULTS/report.sarif" >/dev/null
 
 echo "[zap] ok"

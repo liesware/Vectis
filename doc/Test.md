@@ -750,18 +750,11 @@ ZAP, Schemathesis, and `tests/security/fuzz/http_fuzz.py` answer different quest
 The initial ZAP policy is report-only. Scanner exit codes that indicate alerts
 do not fail the workflow, but Docker failures, scanner errors, and timeouts do.
 The workflow summary shows alert counts by risk and publishes HTML, Markdown,
-JSON, XML, SARIF, ZAP logs, and Vectis logs as a 30-day artifact. The synthetic
-API key is redacted before upload. A pre-shutdown hook requests the native
-`sarif-json` template from the same scan; no second scan or addon installation
-is performed. Missing or invalid SARIF is a technical failure, while a valid
-report with no findings is accepted.
-
-Successful scans publish SARIF to GitHub Security / Code scanning under the
-`zap-api` category, using job-scoped `security-events: write`. Upload failures
-fail the job, without changing the report-only findings policy. Fork and
-Dependabot PRs retain scanning and artifacts but skip Code Scanning upload.
-DAST locations describe HTTP URLs, not source-code lines; GitHub ingestion and
-display must be confirmed in a real Actions run, without inventing file mappings.
+JSON, XML, ZAP logs, and Vectis logs as a 30-day artifact. The synthetic API key
+is redacted before upload. DAST results remain in the workflow summary and
+artifacts, not GitHub Code scanning: ZAP reports HTTP URL locations, which
+GitHub rejects as source-file locations. No SARIF adaptation or artificial
+mapping to repository files is performed.
 
 On Linux with Docker available, run the same isolated scan locally with:
 

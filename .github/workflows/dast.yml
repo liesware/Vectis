@@ -22,9 +22,6 @@ env:
 jobs:
   scan:
     name: Disposable HTTPS API scan
-    permissions:
-      contents: read
-      security-events: write
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -57,17 +54,6 @@ jobs:
         run: |
           mkdir -p "$ZAP_RESULTS_DIR"
           bash tests/security/zap/zap_scan.sh
-
-      - name: Upload ZAP SARIF
-        if: >-
-          success() && steps.zap-scan.outcome == 'success' &&
-          github.event.pull_request.head.repo.fork != true &&
-          github.actor != 'dependabot[bot]' &&
-          github.event.pull_request.user.login != 'dependabot[bot]'
-        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
-        with:
-          sarif_file: zap-results/report.sarif
-          category: zap-api
 
       - name: Publish ZAP summary
         if: always()
@@ -133,7 +119,7 @@ jobs:
 
           lines.extend([
               "",
-              f"Full HTML, Markdown, JSON, XML, SARIF, and logs are in `zap-api-scan-{os.environ.get('GITHUB_RUN_ID', 'unknown')}`.",
+              f"Full HTML, Markdown, JSON, XML, and logs are in `zap-api-scan-{os.environ.get('GITHUB_RUN_ID', 'unknown')}`.",
           ])
           with summary.open("a", encoding="utf-8") as handle:
               handle.write("\n".join(lines) + "\n")
