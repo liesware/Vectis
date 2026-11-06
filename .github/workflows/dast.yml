@@ -117,6 +117,25 @@ jobs:
           else:
               lines.append("ZAP did not produce a JSON report. Review the uploaded logs.")
 
+          lines.extend(["", "### Alerts", ""])
+          table = []
+          try:
+              markdown = (results / "report.md").read_text(encoding="utf-8").splitlines()
+              start = next(i for i, line in enumerate(markdown) if line == "## Alerts")
+              for line in markdown[start + 1:]:
+                  if line.startswith("#"):
+                      break
+                  if line.startswith("|"):
+                      table.append(line)
+                  elif table:
+                      break
+          except (OSError, UnicodeError, StopIteration):
+              pass
+          if len(table) >= 2:
+              lines.extend(table)
+          else:
+              lines.append("The Alerts table is unavailable. Review the uploaded artifact.")
+
           lines.extend([
               "",
               f"Full HTML, Markdown, JSON, XML, and logs are in `zap-api-scan-{os.environ.get('GITHUB_RUN_ID', 'unknown')}`.",
