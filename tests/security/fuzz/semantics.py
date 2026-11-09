@@ -61,9 +61,6 @@ def token_semantic(sent_value, seed, status, body):
     return []
 
 
-CRYPTO_MESSAGE_FIELDS = ("ctx", "nonce", "aad", "variant")
-
-
 def internal_semantic(sent_value, seed, status, body):
     findings = []
     if status == 200:
@@ -73,7 +70,7 @@ def internal_semantic(sent_value, seed, status, body):
             findings.append(
                 "SEMANTIC: decrypt returned unexpected plaintext for a 200 response"
             )
-        if isinstance(sent_value, dict) and _crypto_fields_differ(sent_value, seed):
+        if _crypto_fields_differ(sent_value, seed):
             findings.append(
                 "SEMANTIC: AEAD bypass (mutated cipher field accepted with 200)"
             )
@@ -98,12 +95,26 @@ def internal_encrypt_semantic(sent_value, seed, status, body):
     return findings
 
 
+def _strict_hex_bytes(value):
+    if (not isinstance(value, str) or not value or len(value) % 2
+            or any(char not in "0123456789abcdefABCDEF" for char in value)):
+        return None
+    return bytes.fromhex(value)
+
+
 def _crypto_fields_differ(sent_value, seed):
+    if not isinstance(sent_value, dict) or not isinstance(seed, dict):
+        return True
     sent_msg = sent_value.get("message")
     seed_msg = seed.get("message")
     if not isinstance(sent_msg, dict) or not isinstance(seed_msg, dict):
         return True
-    return any(sent_msg.get(field) != seed_msg.get(field) for field in CRYPTO_MESSAGE_FIELDS)
+    for field in ("ctx", "nonce"):
+        sent_bytes = _strict_hex_bytes(sent_msg.get(field))
+        seed_bytes = _strict_hex_bytes(seed_msg.get(field))
+        if sent_bytes is None or seed_bytes is None or sent_bytes != seed_bytes:
+            return True
+    return any(sent_msg.get(field) != seed_msg.get(field) for field in ("aad", "variant"))
 
 
 def _fields_differ(sent_value, seed, fields):

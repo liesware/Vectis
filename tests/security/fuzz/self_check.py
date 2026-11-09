@@ -181,6 +181,44 @@ def self_check():
     expect(not internal_semantic(iseed, iseed, 200, ok_body), "internal ignores correct decrypt")
     expect(not internal_semantic(itamper, iseed, 400, '{"error":"x"}'), "internal ignores 4xx")
 
+    hex_seed = {**iseed, "message": {**iseed["message"], "ctx": "a4bc", "nonce": "d5ef"}}
+    for ctx, nonce in (("A4bc", "d5ef"), ("a4bc", "D5EF"), ("A4bC", "d5Ef")):
+        equivalent = {**hex_seed, "message": {**hex_seed["message"], "ctx": ctx, "nonce": nonce}}
+        expect(not internal_semantic(equivalent, hex_seed, 200, ok_body),
+               f"internal accepts equivalent hexadecimal {ctx}/{nonce}")
+        expect(internal_semantic(equivalent, hex_seed, 200, '{"plaintext":"WRONG"}'),
+               "internal still flags wrong plaintext with equivalent hexadecimal")
+
+    for field, value in (("ctx", "a5bc"), ("nonce", "d4ef"), ("aad", "C"),
+                         ("variant", "chacha20poly1305")):
+        changed = {**hex_seed, "message": {**hex_seed["message"], field: value}}
+        expect(internal_semantic(changed, hex_seed, 200, ok_body),
+               f"internal flags changed {field}")
+        expect(not internal_semantic(changed, hex_seed, 400, '{"error":"x"}'),
+               f"internal allows rejected {field} mutation")
+
+    for field in ("ctx", "nonce"):
+        for invalid in ("", "a", "aa bb", " aa ", "aa\tbb", "0xaa", "gg", "\uff41\uff41",
+                        None, 12, True, [], {}):
+            changed = {**hex_seed, "message": {**hex_seed["message"], field: invalid}}
+            expect(internal_semantic(changed, hex_seed, 200, ok_body),
+                   f"internal flags invalid {field}: {invalid!r}")
+    for field in ("ctx", "nonce", "aad", "variant"):
+        changed = {**hex_seed, "message": dict(hex_seed["message"])}
+        del changed["message"][field]
+        expect(internal_semantic(changed, hex_seed, 200, ok_body),
+               f"internal flags missing {field}")
+        for invalid in (None, 12, True, [], {}):
+            changed = {**hex_seed, "message": {**hex_seed["message"], field: invalid}}
+            expect(internal_semantic(changed, hex_seed, 200, ok_body),
+                   f"internal flags wrong type for {field}")
+    for invalid in (None, "not an envelope", [], 12, True, {}, {"message": None},
+                    {"message": []}, {"message": "invalid"}, {"message": {}}):
+        expect(internal_semantic(invalid, hex_seed, 200, ok_body),
+               "internal flags invalid envelope accepted with 200")
+        expect(not internal_semantic(invalid, hex_seed, 400, '{"error":"x"}'),
+               "internal allows rejected invalid envelope")
+
     encrypt_seed = {"plaintext": INTERNAL_SEED_PLAINTEXT}
     bad_encrypt_body = json.dumps({"message": {"ctx": INTERNAL_SEED_PLAINTEXT}})
     good_encrypt_body = json.dumps({"message": {"ctx": "aa", "nonce": "bb", "aad": "c"}})
