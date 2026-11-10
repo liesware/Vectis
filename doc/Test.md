@@ -43,6 +43,11 @@ measures how a known valid flow behaves under load.
 
 ## Release Validation and SCA
 
+> The authoritative reference for pipeline architecture, triggers,
+> blocking-vs-report policy, evidence and the release supply-chain chain of trust
+> is [Pipelines.md](Pipelines.md). This section covers running and reasoning
+> about these checks from a tester's perspective.
+
 `Release Binaries` runs on `v*` tag pushes and manual dispatch. It calls the
 local reusable CI and SCA workflows, and builds release packages in parallel
 with validation. Every checkout explicitly selects the event SHA and records
@@ -160,8 +165,9 @@ do not block. Neither findings policy changes the image scanner's thresholds.
 
 ### SAST workflow
 
-`SAST` (`sast.yml`) consolidates CodeQL, Semgrep CE, Gitleaks and zizmor as
-independent jobs, without dependencies between scanners. Action pins, scanner
+See [Pipelines.md](Pipelines.md) for the authoritative SAST policy, triggers and
+SARIF categories. `SAST` (`sast.yml`) consolidates CodeQL, Semgrep CE, Gitleaks
+and zizmor as independent jobs, without dependencies between scanners. Action pins, scanner
 versions, findings policies, artifacts and SARIF categories remain unchanged.
 Permissions and concurrency are scoped per job; one scanner does not cancel
 another. CodeQL retains its Actions/Rust matrix with `fail-fast: false`.
@@ -722,6 +728,10 @@ of cryptographically valid happy paths.
 
 ## Dynamic API Scanning With OWASP ZAP
 
+> Pipeline-level DAST policy (report-only, exit-code mapping) and the ZAP
+> false-positive triage are documented in [Pipelines.md](Pipelines.md). This
+> section explains the scan itself and how to run it.
+
 GitHub Actions runs an OWASP ZAP API Scan on main pushes/PRs and manual dispatch
 through `.github/workflows/dast.yml` (DAST). This is an active DAST scan: ZAP
 imports the OpenAPI contract and sends attack payloads to the described API.
@@ -898,6 +908,10 @@ the performance guide for Q=0 versus default examples, successful-only latency
 columns and queue metric deltas collected outside the measured target.
 
 ## Native Fuzzing With cargo-fuzz
+
+The scheduled FUZZ workflow (cadence, budget, the `EXPECTED_TARGETS` invariant
+and evidence) is documented in [Pipelines.md](Pipelines.md); this section covers
+running the targets locally.
 
 Run all native fuzz targets with:
 

@@ -110,7 +110,9 @@ Official binary and image builds use **cargo-auditable 0.7.7** with
 in the executable; normal development builds do not need this tool. **Trivy
 0.70.0** inventories that executable or the final image and converts one complete
 JSON inventory to **CycloneDX 1.6 JSON** and **SPDX 2.3 JSON**. SBOM generation
-is part of release workflows only, not SCA.
+is part of release workflows only, not SCA. See
+[Pipelines.md](Pipelines.md) for how these SBOMs fit the release supply-chain
+chain of trust (provenance attestation and keyless Cosign signing).
 
 Executable inventories use Trivy's `rootfs` mode on the single binary: `fs`
 mode disables its individual-binary analyzers. The cargo-auditable version is

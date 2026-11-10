@@ -270,26 +270,18 @@ other tools, not absorb their responsibilities.
 
 ## High-Level Flow
 
-```text
-Application / CLI
-        |
-        | operation + bounded input
-        v
-      Vectis
-        |
-        | validate input
-        | authenticate and authorize
-        | resolve signed policy and profiles
-        | enforce key lifecycle
-        v
-Cryptographic capability
-        |
-        +-- FPE / random and deterministic tokenization / masking
-        +-- MAC / blind indexes / commitments
-        +-- secret sharing / signatures
-        +-- symmetric encryption / protected messages
-        v
-Protected output / verification result / shares / peer delivery
+```mermaid
+flowchart TD
+    APP["Application / CLI"] -- "operation + bounded input" --> V["Vectis<br/>validate input · authenticate and authorize<br/>resolve signed policy and profiles · enforce key lifecycle"]
+    V --> CAP["Cryptographic capability"]
+    CAP --> F1["FPE / random and deterministic tokenization / masking"]
+    CAP --> F2["MAC / blind indexes / commitments"]
+    CAP --> F3["secret sharing / signatures"]
+    CAP --> F4["symmetric encryption / protected messages"]
+    F1 --> OUT["Protected output / verification result / shares / peer delivery"]
+    F2 --> OUT
+    F3 --> OUT
+    F4 --> OUT
 ```
 
 FPE, deterministic tokenization, symmetric encryption, masking, MAC, commitments,
@@ -305,24 +297,12 @@ message before final application delivery.
 
 ## Protected Messaging Flow
 
-```text
-Application A
-    |
-    | private record / sensitive payload
-    v
-Vectis A
-    |
-    | hybrid KEM + authenticated encryption + signatures
-    v
-Vectis B
-    |
-    | verify + decrypt + local re-encrypt
-    v
-Application B
-    |
-    | local decrypt through Vectis B
-    v
-Recovered private record / sensitive payload
+```mermaid
+flowchart TD
+    A["Application A"] -- "private record / sensitive payload" --> VA["Vectis A"]
+    VA -- "hybrid KEM + authenticated encryption + signatures" --> VB["Vectis B"]
+    VB -- "verify + decrypt + local re-encrypt" --> B["Application B"]
+    B -- "local decrypt through Vectis B" --> R["Recovered private record / sensitive payload"]
 ```
 
 The receiving application does not receive remote plaintext directly. It receives
@@ -541,6 +521,8 @@ native `cargo-fuzz` targets.
 - [doc/CLI.md](doc/CLI.md): CLI behavior, commands, output, and environment.
 - [doc/ENV.md](doc/ENV.md): environment variables and expected values.
 - [doc/Test.md](doc/Test.md): testing strategy and test commands.
+- [doc/Pipelines.md](doc/Pipelines.md): CI/CD workflows, their blocking-vs-report
+  policy, evidence, and the release supply-chain chain of trust.
 - [doc/Clustering.md](doc/Clustering.md): multi-node behavior and shared
   storage model.
 - [doc/HA_DR.md](doc/HA_DR.md): high availability, backups, restore, and

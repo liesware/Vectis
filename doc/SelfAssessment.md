@@ -12,3 +12,7 @@ and actionable findings tracked by the project.
 
 This self-assessment is not an independent external security audit,
 certification, or compliance assessment.
+
+The CI/CD controls behind the release process — static and dynamic analysis,
+dependency audit, fuzzing, and the signed, attested release supply chain — are
+documented in [Pipelines.md](Pipelines.md).
