@@ -12,7 +12,7 @@ GitHub provenance attached to an official release.
 
 ## Rust Toolchain
 
-Vectis pins Rust `1.98.0` in `rust-toolchain.toml`. A rustup-managed `cargo`
+Vectis pins its Rust toolchain in `rust-toolchain.toml`. A rustup-managed `cargo`
 automatically selects that toolchain while inside the repository.
 
 Install rustup from its official distribution channel, then confirm the active
@@ -31,7 +31,7 @@ The release-image Dockerfile pins the bootstrap installer separately to
 **rustup 1.29.3**. It downloads the versioned `rustup-init` for Linux AMD64 or
 ARM64 and verifies a SHA-256 recorded in the Dockerfile before execution.
 Updating this installer requires reviewing its version and both architecture
-hashes together; the compiler remains pinned independently to Rust `1.98.0`.
+hashes together; the compiler version is pinned independently in `rust-toolchain.toml`.
 
 ## System Dependencies
 

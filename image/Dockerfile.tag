@@ -45,7 +45,7 @@ RUN set -eu; \
         -o "$installer"; \
     printf '%s  %s\n' "$rustup_sha256" "$installer" | sha256sum --check; \
     chmod 700 "$installer"; \
-    "$installer" -y --profile minimal --default-toolchain 1.98.0
+    "$installer" -y --profile minimal --default-toolchain 1.100.0
 
 ENV CARGO_AUDITABLE_VERSION=0.7.7
 RUN cargo install cargo-auditable --version "$CARGO_AUDITABLE_VERSION" --locked
