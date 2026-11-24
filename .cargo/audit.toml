@@ -1,6 +1,2 @@
 [advisories]
-ignore = [
-  # Transitive RSA advisory without an upstream fixed release.
-  # Track removal when the dependency graph no longer includes rsa 0.9.x.
-  "RUSTSEC-2026-0459"
-]
+ignore = []
