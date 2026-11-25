@@ -186,7 +186,6 @@ pub async fn delete_endpoint(
     ops::keys::validate_key_id(&kid).map_err(&failed)?;
     subjects::validate_subject(&subject).map_err(&failed)?;
     request.require_permission_for(Some(&kid), "subject-delete", Some("subject.delete.denied"))?;
-    // Administrative deletion intentionally does not load a key or open its seed.
     state
         .storage()
         .delete_subject(&kid, &subject)

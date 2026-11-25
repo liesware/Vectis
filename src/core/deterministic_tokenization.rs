@@ -340,7 +340,6 @@ mod tests {
     }
     #[test]
     fn aes256_siv_wycheproof_302() {
-        // Google Wycheproof aes_siv_cmac_test.json, tcId 302 (512-bit combined key).
         let key = hex::decode("c25cafc6018b98dfbb79a40ec89c575a4f88c4116489bba27707479800c0130235334a45dbe8d8dae3da8dcb45bbe5dce031b0f68ded544fda7eca30d6749442").unwrap();
         let aad = hex::decode("deeb0ccf3aef47a296ed1ca8f4ae5907").unwrap();
         let msg = hex::decode("beec61030fa3d670337196beade6aeaa").unwrap();
@@ -542,7 +541,6 @@ mod tests {
                 .to_string(),
             "subject is required for stored deterministic token profiles"
         );
-        // Both profiles have exactly the same parent; mode is policy, not KDF input.
         assert_eq!(none.key, stored.key);
         let origins = crate::core::tokenization::validate_tokenization_profiles(
             serde_json::from_value(json!([{"name":"origin","kid":none.kid(),"token_prefix":"subject","token_len":32,"max_plaintext_len":128,"one_time":false,"subject_mode":"stored"}])).unwrap(),

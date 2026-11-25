@@ -201,7 +201,7 @@ pub fn sign(
     let mut rng = crypto::new_rng()?;
     let signature =
         crypto::sign_slh_dsa_with_rng(&mut rng, &loaded.private_key, signing_input.as_bytes())?;
-    drop(loaded); // botan::Privkey::drop borra la clave privada de forma segura
+    drop(loaded);
     let compact = format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature));
     validate_compact_signature_encoding(&compact)?;
     Ok((
@@ -259,8 +259,6 @@ pub fn validate_compact_signature_encoding(signature: &str) -> Result<(), DynErr
     split_compact_signature(signature).map(|_| ())
 }
 
-/// Validates only the encrypted private-file wrapper and envelope encoding.
-/// It deliberately does not derive keys, decrypt, or load DER material.
 pub fn validate_private_key_file_encoding(content: &str) -> Result<(), DynError> {
     if content.len() > config::SLH_DSA_PRIVATE_FILE_MAX_SIZE_BYTES as usize {
         return Err(crate::error::invalid_input(
@@ -280,9 +278,6 @@ pub fn validate_private_key_file_encoding(content: &str) -> Result<(), DynError>
     Ok(())
 }
 
-/// Validates only the public-file schema and textual encodings.
-/// KID binding and DER loading remain part of `load_public` and therefore do
-/// not run in native fuzz loops.
 pub fn validate_public_key_file_encoding(content: &str) -> Result<(), DynError> {
     if content.len() > config::SLH_DSA_PUBLIC_FILE_MAX_SIZE_BYTES as usize {
         return Err(crate::error::invalid_input(

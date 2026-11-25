@@ -188,11 +188,6 @@ pub fn load_validated_init_state(
     })
 }
 
-/// Validates only the untrusted outer shape of `init.json`.
-///
-/// This deliberately stops before unseal, decryption, or key-material
-/// validation so callers such as native fuzzers can exercise the parser
-/// without handling private key material.
 pub fn validate_init_encrypted_artifact_encoding(encrypted_json: &str) -> Result<(), DynError> {
     if encrypted_json.len() > config::INIT_KEYS_FILE_MAX_SIZE_BYTES as usize {
         return Err(crate::error::invalid_input(
@@ -212,10 +207,6 @@ pub fn validate_init_encrypted_artifact_encoding(encrypted_json: &str) -> Result
     )
 }
 
-/// Validates only the public JSON artifact's schema and encodings.
-///
-/// Loading DER keys and checking their algorithms remains part of
-/// `load_validated_init_public_state`; this helper intentionally avoids Botan.
 pub fn validate_init_public_artifact_encoding(public_json: &str) -> Result<(), DynError> {
     if public_json.len() > config::INIT_PUBLIC_KEYS_FILE_MAX_SIZE_BYTES as usize {
         return Err(crate::error::invalid_input(

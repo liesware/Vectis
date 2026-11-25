@@ -1,9 +1,3 @@
-"""Negative HTTP contract cases: key lifecycle enforcement.
-
-Bootstrap (weight 0) creates the lifecycle keys/tokens/messages the cases drive
-through disabled/retired/compromised/destroyed states, storing them on
-ctx.fixtures. Reads ctx.fixtures.key_id (from the authz bootstrap).
-"""
 
 import hashlib
 
@@ -195,6 +189,30 @@ def _(ctx):
         auth=True,
     )
     require_status("POST /lifecycle/{kid} destroyed to active", status, 400)
+
+
+@cases("negative.lifecycle.forbidden-transition-matrix")
+def _(ctx):
+    forbidden = {
+        "active": ("active",),
+        "disabled": ("disabled",),
+        "retired": ("active", "disabled", "retired"),
+        "compromised": ("active", "disabled", "retired", "compromised"),
+        "destroyed": ("active", "disabled", "retired", "compromised", "destroyed"),
+    }
+    for current, destinations in forbidden.items():
+        kid = create_valid_key(ctx.http)
+        if current != "active":
+            set_lifecycle(ctx, kid, current)
+        for destination in destinations:
+            status, response = ctx.http.post(
+                f"/lifecycle/{kid}",
+                {"status": destination, "reason": "forbidden transition"},
+                auth=True,
+            )
+            require_status(f"{current} -> {destination}", status, 400)
+            require(response.get("error") == f"invalid lifecycle transition: {current} -> {destination}",
+                    "forbidden transition must preserve its public error")
 
 
 CASES = cases.tuple()

@@ -1,10 +1,3 @@
-"""Negative HTTP contract cases: config object validation.
-
-Each case isolates one config section with a deliberately bad value and asserts
-the unified reload rejects it. Reads key_id and ctx.fixtures.api_key_hashes
-(produced by the authz bootstrap). restore-permissions runs last (weight 0) to put
-the valid permission set back for the modules that follow.
-"""
 
 import copy
 

@@ -1,4 +1,3 @@
-"""Offline contracts for the private ZAP fixture preparation."""
 
 import copy
 import contextlib
@@ -18,7 +17,6 @@ from zap_fixtures import (
 
 
 class FakeClient:
-    """Synthetic transport: captures are intentionally different for every plaintext."""
 
     kid = "a" * 64
     subject = "b" * 64

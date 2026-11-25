@@ -1,4 +1,3 @@
-"""Signed fixture definitions private to the performance suite."""
 
 import json
 from pathlib import Path

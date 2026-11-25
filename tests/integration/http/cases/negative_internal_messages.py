@@ -1,7 +1,3 @@
-"""Negative HTTP contract cases: internal message encrypt/decrypt input validation.
-
-Each case is a plain function taking ctx; reads shared state from ctx.fixtures.
-"""
 
 import copy
 

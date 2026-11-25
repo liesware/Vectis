@@ -1,4 +1,3 @@
-"""Ordered, synthetic happy paths; no test-suite imports or hidden provisioning."""
 
 import hashlib
 
@@ -43,7 +42,6 @@ def symmetric(client, kid, subject=None):
 
 
 def reversible(client, kid, family, subject=None):
-    """Single and three-item batch for FPE or either tokenization family."""
     mode = "stored" if subject else "none"
     slug, route, produced = {
         "fpe": ("fpe", "/fpe", "ciphertext"),

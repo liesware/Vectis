@@ -1,8 +1,3 @@
-"""Negative HTTP contract cases: authentication and key-input validation.
-
-Each case is a plain function taking ctx. Reads key_id (produced by
-the authz bootstrap). No config mutation, no other shared state.
-"""
 
 from lib.casekit import CaseSet
 from lib.assertions import require_request_id

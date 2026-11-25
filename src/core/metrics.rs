@@ -56,7 +56,6 @@ pub(crate) fn record_crypto_rejection(reason: CryptoRejection) {
     counter!(CRYPTO_REJECTIONS_TOTAL, "reason" => reason).increment(1);
 }
 
-/// Captures its metric handles so cancellation cleans up even on another thread.
 pub(crate) struct CryptoQueueWait {
     pending: metrics::Gauge,
     wait: metrics::Histogram,

@@ -1,4 +1,3 @@
-"""Explicit token deletion, authorization, lifecycle and concurrent consumption."""
 
 import copy
 import json

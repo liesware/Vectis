@@ -1,4 +1,3 @@
-"""Per-process state explicitly shared by ordered HTTP cases."""
 
 from dataclasses import dataclass, field
 
@@ -30,10 +29,8 @@ class HttpTestContext:
         self.client = Client(self.base_url, self.apikey)
         self.config.capture()
 
-    # --- Ergonomic surface for decorator-style cases (ctx.*) -----------------
     @property
     def http(self) -> StatusClient:
-        """Status-preserving client for negative contract checks (keeps 4xx/5xx)."""
         if self._http is None:
             self._http = StatusClient(self.base_url, self.apikey)
         return self._http
@@ -54,7 +51,6 @@ class HttpTestContext:
             f"{label} expected HTTP {expected}, got HTTP {actual}",
         )
 
-    # --- Explicit config surface (replaces the former global `config`) --------
     def write_config(self, sign=True):
         write_config_file(self.config_data, sign=sign)
 
@@ -62,8 +58,6 @@ class HttpTestContext:
         write_config_file(self.config_data, sign=False)
 
     def _isolate_section(self, section, value, sign=True):
-        # Put bad/valid data in exactly one section and clear the rest, so the
-        # unified reload validates the section under test in isolation.
         for name in CONFIG_SECTIONS:
             self.config_data[name] = []
         self.config_data[section] = value

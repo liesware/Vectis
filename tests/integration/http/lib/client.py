@@ -1,4 +1,3 @@
-"""HTTP transports shared by integration test cases."""
 
 import json
 import http.client
@@ -8,7 +7,7 @@ import urllib.request
 
 
 class WorkflowError(Exception):
-    """A failed HTTP integration-test contract."""
+    pass
 
 
 def parse_json(payload):
@@ -21,7 +20,6 @@ def parse_json(payload):
 
 
 def raw_http_request(base_url, method, path, body=b"", headers=None):
-    """Send a raw request while preserving the server status and JSON body."""
     parsed = urllib.parse.urlsplit(base_url)
     connection_class = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
     connection = connection_class(parsed.hostname, parsed.port, timeout=60)
@@ -37,7 +35,6 @@ def raw_http_request(base_url, method, path, body=b"", headers=None):
 
 
 def raw_request(base_url, method, path, data=None, content_type=None):
-    """Send arbitrary bytes and method without JSON serialization."""
     headers = {"Content-Type": content_type} if content_type is not None else {}
     request = urllib.request.Request(f"{base_url}{path}", data=data, headers=headers, method=method)
     try:
@@ -120,7 +117,6 @@ class Client:
 
 
 class StatusClient:
-    """HTTP client that preserves 4xx and 5xx responses for contract assertions."""
 
     def __init__(self, base_url, apikey):
         self.base_url = base_url.rstrip("/")

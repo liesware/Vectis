@@ -1,6 +1,5 @@
 import { definition } from "./registry.js";
 
-// Reject incomplete private fixtures without reflecting their values in errors.
 export function readFixture(text, profile, cases) {
   try {
     const value = JSON.parse(text);

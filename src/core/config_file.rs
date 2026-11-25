@@ -1,4 +1,3 @@
-/// The signed-file validator only consumes delivery defaults, not server/storage settings.
 pub trait ConfigFileDefaults {
     fn delivery_defaults(&self) -> (&str, &str);
 }

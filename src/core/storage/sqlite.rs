@@ -14,6 +14,77 @@ pub struct SqliteStorage {
 }
 
 impl SqliteStorage {
+    pub(super) async fn purge_ops_key(
+        &self,
+        kid: &str,
+        keys: &str,
+        properties: &str,
+    ) -> Result<super::KeyPurgeCounts, DynError> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(|_| super::purge_failed())?;
+        let row = sqlx::query("SELECT keys, properties FROM opskeys WHERE kid = ?")
+            .bind(kid)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|_| super::purge_failed())?
+            .ok_or_else(|| crate::error::not_found("ops key not found"))?;
+        let current_keys = zeroize::Zeroizing::new(
+            row.try_get::<String, _>("keys")
+                .map_err(|_| super::purge_failed())?,
+        );
+        let current_properties = zeroize::Zeroizing::new(
+            row.try_get::<String, _>("properties")
+                .map_err(|_| super::purge_failed())?,
+        );
+        if current_keys.as_str() != keys || current_properties.as_str() != properties {
+            return Err(crate::error::conflict(
+                "ops key changed since confirmation preflight; nothing was deleted",
+            ));
+        }
+        let tokens = sqlx::query("DELETE FROM tokens WHERE kid = ?")
+            .bind(kid)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| super::purge_failed())?
+            .rows_affected();
+        let subjects = sqlx::query("DELETE FROM subjects WHERE kid = ?")
+            .bind(kid)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| super::purge_failed())?
+            .rows_affected();
+        let indexes = sqlx::query("DELETE FROM indexes WHERE kid = ?")
+            .bind(kid)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| super::purge_failed())?
+            .rows_affected();
+        let opskeys =
+            sqlx::query("DELETE FROM opskeys WHERE kid = ? AND keys = ? AND properties = ?")
+                .bind(kid)
+                .bind(keys)
+                .bind(properties)
+                .execute(&mut *tx)
+                .await
+                .map_err(|_| super::purge_failed())?
+                .rows_affected();
+        if opskeys != 1 {
+            return Err(super::purge_failed());
+        }
+        tx.commit()
+            .await
+            .map_err(|_| super::purge_commit_unknown())?;
+        Ok(super::KeyPurgeCounts {
+            opskeys,
+            tokens,
+            subjects,
+            indexes,
+        })
+    }
+
     pub async fn new(path: &Path) -> Result<Self, DynError> {
         let options = SqliteConnectOptions::new()
             .filename(path)
@@ -879,6 +950,159 @@ mod tests {
         let _ = tokio::fs::remove_file(path).await;
     }
 
+    async fn seed_purge(storage: &SqliteStorage, kid: &str) {
+        storage
+            .save_ops_keys(kid, "keys-v1", "properties-v1")
+            .await
+            .unwrap();
+        for id in ["first", "second"] {
+            sqlx::query("INSERT INTO tokens(kid, hashid, data) VALUES (?, ?, 'synthetic')")
+                .bind(kid)
+                .bind(id)
+                .execute(&storage.pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("INSERT INTO subjects VALUES (?, 'subject', 'synthetic')")
+            .bind(kid)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO indexes VALUES (?, 'digest')")
+            .bind(kid)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+    }
+
+    async fn purge_counts(storage: &SqliteStorage, kid: &str) -> super::super::KeyPurgeCounts {
+        let mut counts = Vec::new();
+        for sql in [
+            "SELECT COUNT(*) FROM opskeys WHERE kid = ?",
+            "SELECT COUNT(*) FROM tokens WHERE kid = ?",
+            "SELECT COUNT(*) FROM subjects WHERE kid = ?",
+            "SELECT COUNT(*) FROM indexes WHERE kid = ?",
+        ] {
+            counts.push(
+                sqlx::query_scalar::<_, i64>(sql)
+                    .bind(kid)
+                    .fetch_one(&storage.pool)
+                    .await
+                    .unwrap() as u64,
+            );
+        }
+        super::super::KeyPurgeCounts {
+            opskeys: counts[0],
+            tokens: counts[1],
+            subjects: counts[2],
+            indexes: counts[3],
+        }
+    }
+
+    #[tokio::test]
+    async fn purge_counts_isolate_kids_and_reject_missing() {
+        let (storage, path) = test_storage("purge-counts").await;
+        seed_purge(&storage, "purged").await;
+        seed_purge(&storage, "retained").await;
+        let expected = purge_counts(&storage, "purged").await;
+        assert_eq!(
+            storage
+                .purge_ops_key("purged", "keys-v1", "properties-v1")
+                .await
+                .unwrap(),
+            expected
+        );
+        assert_eq!(purge_counts(&storage, "purged").await, Default::default());
+        assert_eq!(purge_counts(&storage, "retained").await, expected);
+        assert!(is_not_found(
+            storage
+                .purge_ops_key("purged", "keys-v1", "properties-v1")
+                .await
+                .unwrap_err()
+                .as_ref()
+        ));
+        storage.pool.close().await;
+        cleanup(path).await;
+    }
+
+    #[tokio::test]
+    async fn purge_rejects_both_stale_blobs_without_deleting_children() {
+        let (storage, path) = test_storage("purge-stale").await;
+        seed_purge(&storage, "stale").await;
+        let expected = purge_counts(&storage, "stale").await;
+        for (keys, properties) in [("changed", "properties-v1"), ("keys-v1", "changed")] {
+            assert!(
+                storage
+                    .purge_ops_key("stale", keys, properties)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("changed since")
+            );
+            assert_eq!(purge_counts(&storage, "stale").await, expected);
+        }
+        storage.pool.close().await;
+        cleanup(path).await;
+    }
+
+    #[tokio::test]
+    async fn purge_intermediate_error_rolls_back_all_deletes() {
+        let (storage, path) = test_storage("purge-rollback").await;
+        seed_purge(&storage, "rollback").await;
+        let expected = purge_counts(&storage, "rollback").await;
+        sqlx::raw_sql("CREATE TRIGGER reject_purge BEFORE DELETE ON indexes BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;")
+            .execute(&storage.pool).await.unwrap();
+        assert!(
+            storage
+                .purge_ops_key("rollback", "keys-v1", "properties-v1")
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("before COMMIT")
+        );
+        assert_eq!(purge_counts(&storage, "rollback").await, expected);
+        storage.pool.close().await;
+        cleanup(path).await;
+    }
+
+    #[tokio::test]
+    async fn purge_concurrent_calls_have_exactly_one_success() {
+        let (storage, path) = test_storage("purge-concurrent").await;
+        seed_purge(&storage, "concurrent").await;
+        let (first, second) = tokio::join!(
+            storage.purge_ops_key("concurrent", "keys-v1", "properties-v1"),
+            storage.purge_ops_key("concurrent", "keys-v1", "properties-v1"),
+        );
+        assert_ne!(first.is_ok(), second.is_ok());
+        assert_eq!(
+            purge_counts(&storage, "concurrent").await,
+            Default::default()
+        );
+        storage.pool.close().await;
+        cleanup(path).await;
+    }
+
+    #[tokio::test]
+    async fn purge_commit_error_is_not_reported_as_success_or_automatic_retry() {
+        let (storage, path) = test_storage("purge-commit").await;
+        seed_purge(&storage, "commit").await;
+        let expected = purge_counts(&storage, "commit").await;
+        sqlx::raw_sql("CREATE TABLE commit_guard(kid VARCHAR(128) REFERENCES opskeys(kid) DEFERRABLE INITIALLY DEFERRED); INSERT INTO commit_guard VALUES ('commit');")
+            .execute(&storage.pool).await.unwrap();
+        let error = storage
+            .purge_ops_key("commit", "keys-v1", "properties-v1")
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("outcome is unknown after COMMIT")
+        );
+        assert_eq!(purge_counts(&storage, "commit").await, expected);
+        storage.pool.close().await;
+        cleanup(path).await;
+    }
+
     #[tokio::test]
     async fn subject_purge_rolls_back_when_token_delete_fails() {
         let (storage, path) = test_storage("subject-purge-rollback").await;
@@ -935,7 +1159,6 @@ mod tests {
             .save_token_for_subject(&kid, &hashid, seed, Some(&subject), Some(seed))
             .await
             .unwrap();
-        // Deferred constraint lets both deletes execute, but rejects COMMIT.
         sqlx::raw_sql("CREATE TABLE purge_parent (id INTEGER PRIMARY KEY); CREATE TABLE purge_child (id INTEGER REFERENCES purge_parent(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER fail_purge_commit AFTER DELETE ON tokens BEGIN INSERT INTO purge_child VALUES (1); END;")
             .execute(&storage.pool).await.unwrap();
         assert!(storage.delete_subject(&kid, &subject).await.is_err());

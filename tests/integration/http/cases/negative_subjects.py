@@ -1,4 +1,3 @@
-"""Subject request boundaries and strict signed profile modes."""
 import copy
 
 from lib.assertions import require

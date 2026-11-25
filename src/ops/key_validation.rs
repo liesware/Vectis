@@ -1,4 +1,3 @@
-/// Hostnames used by the local key-material self-test.
 pub trait KeyValidationSettings {
     fn validation_hosts(&self) -> (&str, &str);
 }

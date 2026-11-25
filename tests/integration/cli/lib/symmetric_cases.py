@@ -1,4 +1,3 @@
-"""Symmetric CLI and retired HTTP interface contracts on the suite's isolated node."""
 
 import json
 import urllib.error

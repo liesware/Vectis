@@ -1,4 +1,3 @@
-"""Positive HTTP helpers for one capability domain."""
 
 import base64
 import hashlib
@@ -165,8 +164,6 @@ def index_round_trip(client, key_id):
 def index_batch_round_trip(client, key_id):
     profile = "pan-blind-index-v1"
     refs = ["index-batch-1", "index-batch-2"]
-    # Blind indexes persist by (kid, digest). Keep this atomicity probe separate
-    # from prior index tests that intentionally use the common PAN fixtures.
     plaintexts = [
         f"index-batch-atomic-{key_id[:12]}-a",
         f"index-batch-atomic-{key_id[:12]}-b",

@@ -267,7 +267,21 @@ paths:
     post:
       tags: [Keys]
       summary: Update key lifecycle metadata
-      description: Administrative endpoint. Updates encrypted lifecycle metadata for an operational key. Lifecycle status is enforced by cryptographic operations. Allowed transitions are active to disabled/retired/compromised/destroyed, and disabled to active. Retired, compromised, and destroyed are terminal states. Same-status transitions are rejected.
+      description: >-
+        Administrative endpoint requiring the lifecycle permission for the KID.
+        Updates encrypted lifecycle metadata. Allowed transitions are active to
+        disabled/retired/compromised/destroyed, disabled to
+        active/retired/compromised/destroyed, retired to compromised/destroyed,
+        and compromised to destroyed. Only destroyed has no outgoing transitions;
+        retired and compromised cannot return to service. Disabled to retired
+        restores recovery and verification, but not new production or /pub.
+        No prior deletion of dependent records is required. Allowed transitions
+        return 200; same-status and other prohibited transitions return 400 with
+        "invalid lifecycle transition: {current} -> {next}".
+        Destroyed is logical, not physical key erasure. In-flight operations and
+        external verification are not revoked. Other nodes require explicit key
+        reload or restart. Storage CAS does not guarantee monotonic cache
+        publication under concurrent updates or reloads.
       security:
         - ApiKeyAuth: []
       parameters:

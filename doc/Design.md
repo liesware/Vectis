@@ -1146,16 +1146,22 @@ implementations.
 
 **How**: keep two levels distinct.
 
-- **Implementation**: no comments that restate the code. Express normal intent
-  through names, types, and small functions. Use short comments only for
-  non-obvious security, protocol, fallback, or invariant behavior.
+- **Implementation**: no explanatory comments, including inline comments,
+  Rustdoc, module comments, and Python docstrings. Express intent through names,
+  types, signatures, and focused functions; preserve expected behavior in tests.
+  Copyright and SPDX notices, shebangs, and functional tool directives are the
+  only exceptions. Strings containing sample input, generated text, or protocol
+  data are not code comments and must remain intact.
 - **Contracts and system**: HTTP behavior, design rationale, and cross-cutting
   flows live in the documentation set (Rule 43), which is reviewed and kept
   consistent.
 
-**In Vectis**: implementation comments follow the discipline (comments are
-reserved for non-obvious protocol behavior); HTTP contracts live in
-`doc/API.md` field tables, and system behavior lives in the documentation set.
+**In Vectis**: non-obvious implementation invariants live in `doc/Internal.md`,
+test properties and exclusions in `doc/Test.md`, and HTTP contracts in
+`doc/API.md`. These documents are maintained with the code. This no-comment
+policy is a project choice, not Ousterhout's recommendation to document
+information that code cannot express. Removing a comment must not remove the
+contract or the evidence that protects it.
 
 ## How to Apply This to a New Project
 

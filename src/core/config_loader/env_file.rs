@@ -1,4 +1,3 @@
-//! Pure .env grammar and protected parsed values; source policy belongs to the loader.
 use crate::error::DynError;
 use std::collections::HashMap;
 use zeroize::Zeroizing;

@@ -1,4 +1,3 @@
-"""Offline contracts for CLI selection, fixtures, resources and process cleanup."""
 
 import contextlib
 import copy

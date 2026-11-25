@@ -34,7 +34,6 @@ def _vectis_binary():
 
 @functools.lru_cache(maxsize=1)
 def _build_vectis_binary():
-    """Standalone fallback: build once per process when no binary was supplied."""
     result = subprocess.run(
         ["cargo", "build", "--quiet"],
         check=False,
@@ -122,7 +121,6 @@ def build_config_baseline():
 
 
 def configure_time_attestation_offline(client):
-    """Install local-unavailable sources and return the exact restore snapshot."""
     original_cfg = CONFIG_PATH.read_bytes() if CONFIG_PATH.exists() else None
     original_sig = CONFIG_SIGN_PATH.read_bytes() if CONFIG_SIGN_PATH.exists() else None
     snapshot = (original_cfg, original_sig)
@@ -422,14 +420,6 @@ def configure_sharing_profile(client, kid):
 
 
 def configure_lifecycle_profiles(client, batches):
-    """Load one complete, uniquely named profile set for every lifecycle KID
-    across all iterations, signing and reloading the config a single time.
-
-    `batches` is a list of {state: kid} maps (one per fuzz iteration). Each KID
-    is bound only within its batch, so the profile names carry the batch index to
-    stay globally unique. Returns the matching list of {state: {role: name}} maps.
-    Signing and reloading once avoids repeated setup for every iteration.
-    """
     original_cfg = CONFIG_PATH.read_bytes() if CONFIG_PATH.exists() else None
     original_sig = CONFIG_SIGN_PATH.read_bytes() if CONFIG_SIGN_PATH.exists() else None
     config = read_config_or_empty()
@@ -473,8 +463,6 @@ def configure_lifecycle_profiles(client, batches):
             tokenization_profiles.append({
                 "name": names["token"],
                 "kid": kid,
-                # Token prefixes are limited to 16 characters. Hex batch IDs
-                # plus a one-letter lifecycle code remain unique and compact.
                 "token_prefix": f"tl{batch_index:x}{state_codes[label]}",
                 "token_len": 32,
                 "max_plaintext_len": 1024,

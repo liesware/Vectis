@@ -1,4 +1,3 @@
-"""Positive HTTP helpers for one capability domain."""
 
 import base64
 import hashlib

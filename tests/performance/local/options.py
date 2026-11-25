@@ -1,4 +1,3 @@
-"""Validated public options, independent of subprocesses and lab mutation."""
 
 import argparse
 import math
@@ -87,7 +86,6 @@ def parse_options(argv=None, environ=None):
             args.duration_seconds = None
             args.iterations = positive_integer(args.iterations if args.iterations is not None else "4")
             if args.vusr > args.iterations:
-                # k6 shared iterations need at least one iteration per VU; fail before any build.
                 raise ValueError("--vusr cannot exceed --iterations; raise --iterations or use --duration")
         args.p95_ms = None
         if "K6_P95_MS" in env:

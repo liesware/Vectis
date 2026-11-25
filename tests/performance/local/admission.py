@@ -1,4 +1,3 @@
-"""Only public admission settings and aggregate queue metrics cross this boundary."""
 
 import json
 import math
@@ -10,7 +9,6 @@ FIELDS = ("max_concurrent_crypto", "max_queued_crypto", "crypto_queue_timeout_ms
 
 
 def overrides(environment):
-    # Preserve even empty values: Rust remains the authority for validation.
     return {key: environment[key] for key in SETTINGS if key in environment}
 
 

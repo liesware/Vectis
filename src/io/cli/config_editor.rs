@@ -1019,8 +1019,6 @@ fn merge_and_validate_time_overrides(
 ) -> Result<Value, DynError> {
     let mut overrides = current;
     overrides.extend(values);
-    // Revalidate the *merged* object, not just the new fields, so a pre-existing invalid
-    // override cannot be silently persisted and deferred to a later sign/reload.
     let merged = Value::Object(overrides);
     let parsed: time_attestation::TimeAttestationConfigInput =
         serde_json::from_value(merged.clone()).map_err(|error| {
@@ -3440,8 +3438,6 @@ mod tests {
 
     #[test]
     fn time_config_set_revalidates_merged_object() {
-        // A pre-existing hand-edited invalid override plus a valid new field must be rejected,
-        // not silently persisted.
         let mut current = Map::new();
         current.insert("max_round_trip_ms".to_string(), serde_json::json!(0));
         let mut values = Map::new();
@@ -3453,7 +3449,6 @@ mod tests {
             .expect_err("merged object with a pre-existing invalid field must be rejected");
         assert!(err.to_string().contains("max_round_trip_ms"));
 
-        // A fully valid merge succeeds and keeps both fields.
         let mut current = Map::new();
         current.insert("max_clock_skew_ms".to_string(), serde_json::json!(250));
         let mut values = Map::new();

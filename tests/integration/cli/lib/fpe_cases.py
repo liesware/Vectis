@@ -1,4 +1,3 @@
-"""Signed FPE format edits and runtime round trips on an isolated CLI node."""
 import json
 from pathlib import Path
 
@@ -28,7 +27,6 @@ def fpe_runtime_contracts(env, directory):
     run_cli(["config", "fpe", "add", "--name", "formatted-cli", *common,
              "--alphabet-preset", "num", "--preserve-characters", "-"], env)
     definition = run_cli_json(["config", "fpe", "get", "formatted-cli"], env)
-    # The editor wraps the stored definition in the section response.
     definition = definition.get("item", definition)
     require(definition["alphabet_preset"] == "num" and "alphabet" not in definition, "preset stays declared as a preset")
     run_cli(["config", "sign"], env)

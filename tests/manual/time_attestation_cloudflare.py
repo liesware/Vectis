@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Opt-in live smoke test for a Vectis Cloudflare time attestation."""
 
 import argparse
 import json

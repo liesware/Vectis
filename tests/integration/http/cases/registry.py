@@ -1,4 +1,3 @@
-"""Explicit HTTP case registries. Keep order stable; do not auto-discover modules."""
 
 from . import (
     negative_auth,
@@ -36,35 +35,28 @@ from . import (
 )
 
 
-# Explicit, ordered composition of the positive workflow. Each capability module
-# owns its own cases; the registry fixes the order they execute in. runtime-metrics
-# lives in positive_health but must run last, after every capability has emitted the
-# metrics it asserts on.
 POSITIVE_CASES = (
-    *positive_health.CASES[:3],  # health, metrics, init
-    *positive_keys.CASES,  # keys.create, inventory, lifecycle, routes, remote-public-keys
-    *positive_fpe.CASES,  # fpe (profile load + stale-config warning + round-trips)
-    *positive_tokenization.CASES,  # tokenization, tokenization.one-time
+    *positive_health.CASES[:3],
+    *positive_keys.CASES,
+    *positive_fpe.CASES,
+    *positive_tokenization.CASES,
     *positive_token_delete.CASES,
     *positive_subjects.CASES,
     *positive_deterministic_tokenization.CASES,
     *positive_fpe_subjects.CASES,
     *positive_symmetric_subjects.CASES,
     *positive_token_budget.CASES,
-    *positive_mac_index.CASES,  # mac, index
-    *positive_commitments.CASES,  # commit
-    *positive_sharing.CASES,  # shares
-    *positive_masking.CASES,  # mask
-    *positive_lifecycle.CASES,  # lifecycle.retired
-    *positive_permissions.CASES,  # permissions
-    *positive_messages.CASES,  # messages
-    *positive_signatures.CASES,  # signatures
-    positive_health.CASES[3],  # runtime-metrics (runs last)
+    *positive_mac_index.CASES,
+    *positive_commitments.CASES,
+    *positive_sharing.CASES,
+    *positive_masking.CASES,
+    *positive_lifecycle.CASES,
+    *positive_permissions.CASES,
+    *positive_messages.CASES,
+    *positive_signatures.CASES,
+    positive_health.CASES[3],
 )
 
-# Explicit, ordered composition of the negative suite. Order is load-bearing:
-# authz bootstraps the shared key + api-key hashes that later groups reuse, and
-# config/lifecycle mutate then restore shared state in sequence.
 NEGATIVE_CASES = (
     *negative_protocol.CASES,
     *negative_authz.CASES,
@@ -72,7 +64,6 @@ NEGATIVE_CASES = (
     *negative_config.CASES,
     *negative_lifecycle.CASES,
     *negative_messages.CASES,
-    # negative_operations split by capability, in the original execution order:
     *negative_internal_messages.CASES,
     *negative_fpe.CASES,
     *negative_tokenization.CASES,

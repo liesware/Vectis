@@ -1,4 +1,3 @@
-"""Positive HTTP helpers for one capability domain."""
 
 import base64
 import hashlib
@@ -112,7 +111,6 @@ def token_batch_round_trip(client, key_id):
         "token batch decode metadata order mismatch",
     )
 
-    # Reusable profiles permit one token per distinct client reference.
     duplicate_decoded = client.post(
         "/token/decode/batch",
         {
@@ -263,10 +261,6 @@ def one_time_token_cases(client, key_id):
         if status == 404 and body.get("error") == "token not found"
     ]
     require(len(winners) == 1 and len(losers) == 1, "one-time token race must have one winner")
-    # Scan the whole serialized loser body, not just its top-level keys: the
-    # plaintext could leak inside an error message, a nested field, or a non-JSON
-    # body that parse_json wrapped as {"raw": ...}. Matches the fuzz oracle
-    # (one_time_race_semantic), which scans the raw response string.
     require(
         all(race_plaintext not in json.dumps(body) for status, body in outcomes if status != 200),
         "one-time token race loser must not receive plaintext",

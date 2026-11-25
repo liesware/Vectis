@@ -1,10 +1,3 @@
-"""Offline self-tests for semantic oracles and campaign measurements.
-
-Each oracle is exercised with hand-built mock responses to prove it both accepts
-a valid flow and flags the specific defect it exists to catch. Run with
-`http_fuzz.py --self-check`; it needs no server. Kept in its own module so
-semantics.py stays a library of oracles rather than a library-plus-test-suite.
-"""
 
 import io
 import json
@@ -231,7 +224,6 @@ def self_check():
         "internal encrypt ignores plausible body",
     )
 
-    # Floor oracle: a body that is not a JSON object must never be accepted with 200.
     expect(
         reject_malformed_body_semantic(None, {"a": 1}, 200, ""),
         "malformed floor flags a non-JSON body accepted with 200",
@@ -249,9 +241,6 @@ def self_check():
         "malformed floor ignores a rejected non-object body",
     )
 
-    # Slow-response oracle: a completed HTTP response over the duration limit is a
-    # finding; a fast one is not, and a transport failure (status 0) is left to the
-    # connection-failure classification regardless of how long it took.
     over = MAX_RESPONSE_DURATION_MS + 1
     fast = FuzzResponse(200, "{}", MAX_RESPONSE_DURATION_MS - 1)
     at_limit = FuzzResponse(200, "{}", MAX_RESPONSE_DURATION_MS)

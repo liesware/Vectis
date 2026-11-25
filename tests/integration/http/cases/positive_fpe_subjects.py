@@ -1,4 +1,3 @@
-"""One existing subject seed protects both tokenization and FPE."""
 import copy
 
 from lib.assertions import require
@@ -54,7 +53,6 @@ def run_subject_fpe(ctx):
             status, decoded=app.post("/fpe/decrypt/batch",{"kid":kid,"profile":profile["name"],"subject":subject,"items":output["items"]},auth=True)
             require(status==200 and [item["plaintext"] for item in decoded["items"]]==["001-234","567-890"],"subject batch order")
             saved.append(inverse)
-        # The original creator is resolved from signed config, not request parameters.
         ctx.config_data["tokenization_profiles"].remove(creator)
         ctx.write_config(); ctx.reload_config()
         require(app.post("/fpe/decrypt",saved[1],auth=True)==(500,{"error":"internal server error"}),"missing creator config fails closed")

@@ -49,10 +49,6 @@ chmod 755 "$LAB/vectis"
 cd "$LAB"
 mkdir -p db logs tls
 sqlite3 db/data.db < "$ROOT/src/db/sqlite_schema.sql"
-# Own the SQLite path explicitly. A VECTIS_SQLITE_PATH inherited from the CI job
-# env points at another job's runner (created only in the `verify` job), so
-# `vectis init` below would fail to open it. Override it before any vectis call;
-# the .env written later keeps `serve` on this same database.
 export VECTIS_SQLITE_PATH="$LAB/db/data.db"
 
 cat > tls/openssl.cnf <<'EOF'
@@ -224,8 +220,6 @@ echo "[smoke] lifecycle and audit"
 ./vectis lifecycle "$KID" --status disabled --reason maintenance >/dev/null
 ./vectis lifecycle "$KID" --status active --reason maintenance-complete >/dev/null
 kill -INT "$SERVER_PID"
-# A nonzero graceful-shutdown status must not abort the smoke test before the
-# audit verification below; cleanup() guards its wait the same way.
 wait "$SERVER_PID" || true
 SERVER_PID=
 ./vectis audit verify --file logs/audit.log --output json >/dev/null

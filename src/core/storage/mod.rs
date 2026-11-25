@@ -82,6 +82,24 @@ pub struct OpsKeyRow {
     pub properties: String,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct KeyPurgeCounts {
+    pub opskeys: u64,
+    pub tokens: u64,
+    pub subjects: u64,
+    pub indexes: u64,
+}
+
+fn purge_failed() -> DynError {
+    crate::error::storage("key purge failed before COMMIT; no purge was committed")
+}
+
+fn purge_commit_unknown() -> DynError {
+    crate::error::storage(
+        "key purge outcome is unknown after COMMIT; check the database before retrying",
+    )
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct TokenRow {
     pub kid: String,
@@ -96,7 +114,6 @@ pub struct SubjectRow {
     pub seed: String,
 }
 
-/// Generation opened by encode; never serialized or included in diagnostics.
 #[derive(Clone)]
 pub struct SubjectWriteGuard {
     pub kid: String,
@@ -163,6 +180,19 @@ enum StorageBackend {
 }
 
 impl StorageState {
+    pub(crate) async fn purge_ops_key(
+        &self,
+        kid: &str,
+        keys: &str,
+        properties: &str,
+    ) -> Result<KeyPurgeCounts, DynError> {
+        validate_ops_key_fields(kid, keys, properties)?;
+        match &self.backend {
+            StorageBackend::Sqlite(db) => db.purge_ops_key(kid, keys, properties).await,
+            StorageBackend::Postgres(db) => db.purge_ops_key(kid, keys, properties).await,
+        }
+    }
+
     pub async fn from_config(config: &config::StorageConfig) -> Result<Self, DynError> {
         Ok(Self {
             backend: match config {
@@ -674,7 +704,6 @@ mod tests {
 
     #[test]
     fn token_envelope_limit_is_independent_of_operational_keys() {
-        // Padded Base64 segments plus two dots have length 2 modulo 4.
         let overhead = envelope().len() - 24;
         let ciphertext_chars = (config::STORAGE_TOKEN_ENVELOPE_MAX_CHARS - overhead) / 4 * 4;
         let encrypted = format!("{}{}", "A".repeat(ciphertext_chars), &envelope()[24..]);

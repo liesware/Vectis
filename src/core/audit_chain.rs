@@ -59,8 +59,6 @@ struct AuditRecordBody {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-// Strictness is enforced by canonical byte-equality in verify_file, not by serde:
-// deny_unknown_fields is silently ignored when combined with flatten.
 struct AuditChainRecord {
     #[serde(flatten)]
     body: AuditRecordBody,
@@ -89,7 +87,7 @@ struct AuditCheckpointPayload {
 }
 
 #[derive(Clone)]
-struct AuditCheckpointSigner {
+pub(crate) struct AuditCheckpointSigner {
     eddsa: VariantDerKeyPair,
     ml_dsa: VariantDerKeyPair,
 }
@@ -156,7 +154,6 @@ impl AuditSink {
 
     fn sync(&mut self) -> io::Result<()> {
         match self {
-            // fsync so audit records acknowledged to the client survive power loss.
             Self::File(writer) => writer.get_ref().sync_all(),
             Self::Stdout(writer) => writer.flush(),
             #[cfg(test)]
@@ -202,16 +199,19 @@ pub fn initialize(
         return Ok(());
     }
 
-    let runtime =
-        AuditRuntime::start(logging_config, AuditCheckpointSigner::from_init(init_state))?;
+    initialize_prepared(logging_config, AuditCheckpointSigner::from_init(init_state))
+}
+
+pub(crate) fn initialize_prepared(
+    logging_config: &logging::LoggingConfig,
+    signer: AuditCheckpointSigner,
+) -> Result<(), DynError> {
+    let runtime = AuditRuntime::start(logging_config, signer)?;
     RUNTIME
         .set(runtime)
         .map_err(|_| crate::error::internal("audit chain runtime was initialized concurrently"))
 }
 
-// A deferred record is written but not fsynced until a later commit; the caller MUST
-// follow it with confirm() (or a Barrier) for durability. Callers without a guaranteed
-// confirm must use record_standalone(), which commits on its own.
 pub(crate) fn record(event: AuditEvent, failure: &Arc<Mutex<Option<String>>>) {
     let Some(runtime) = RUNTIME.get() else {
         return;
@@ -249,9 +249,6 @@ pub fn verify_file(
     )
 }
 
-/// Validates one newline-stripped JSONL audit entry without verifying event
-/// hashes or checkpoint signatures. This is the parser boundary used by native
-/// fuzzing; full authenticity remains the responsibility of `verify_file`.
 pub fn validate_audit_jsonl_line_encoding(line: &str) -> Result<(), DynError> {
     parse_structural_audit_line(line)
 }
@@ -562,7 +559,7 @@ impl AuditChainState {
 }
 
 impl AuditCheckpointSigner {
-    fn from_init(init_state: &ValidatedInitState) -> Self {
+    pub(crate) fn from_init(init_state: &ValidatedInitState) -> Self {
         Self {
             eddsa: init_state.init_keys.keys().eddsa().clone(),
             ml_dsa: init_state.init_keys.keys().ml_dsa().clone(),
@@ -628,8 +625,6 @@ fn writer_loop_with_policy(
     mut receiver: mpsc::Receiver<WriterCommand>,
     policy: CheckpointPolicy,
 ) {
-    // Once a write fails the chain state and the file could diverge, so the writer stops
-    // appending permanently: any further append could reuse a sequence and poison verify.
     let mut poisoned: Option<String> = None;
     let mut dirty = false;
 
@@ -639,8 +634,6 @@ fn writer_loop_with_policy(
             break;
         };
         let mut barriers: Vec<PendingBarrier> = Vec::new();
-        // Group commit: append a bounded number of queued records, fsync only at a
-        // durability boundary, then release every barrier included in that commit.
         let mut next = Some(first);
         let mut processed = 0usize;
         let mut commit_requested = false;
@@ -674,8 +667,6 @@ fn writer_loop_with_policy(
                     commit_requested = true;
                 }
             }
-            // On shutdown, ignore the batch cap and drain everything already queued so
-            // events enqueued after the Shutdown command are still persisted.
             if shutdown_reply.is_none() && processed >= config::AUDIT_GROUP_COMMIT_MAX_COMMANDS {
                 break;
             }
@@ -1652,7 +1643,6 @@ mod tests {
                 reply: shutdown_reply,
             })
             .unwrap();
-        // Record + barrier queued *after* the Shutdown command: they must still be drained.
         let second = Arc::new(Mutex::new(None));
         sender
             .try_send(WriterCommand::Record {

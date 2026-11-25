@@ -1,4 +1,3 @@
-"""Credential lookup private to the Schemathesis suite."""
 
 import os
 from pathlib import Path

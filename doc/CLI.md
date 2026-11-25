@@ -2,7 +2,7 @@
 
 ## Contents
 
-[Purpose](#purpose) · [Command Groups](#command-groups) · [Output](#output) · [SLH-DSA Artifact Signing](#slh-dsa-artifact-signing) · [Environment](#environment) · [Local Bootstrap Commands](#local-bootstrap-commands) · [Audit Verification](#audit-verification) · [HTTP Client Commands](#http-client-commands) · [Authentication](#authentication) · [Input Validation](#input-validation) · [Failure Model](#failure-model) · [What The CLI Does Not Do](#what-the-cli-does-not-do)
+[Purpose](#purpose) · [Command Groups](#command-groups) · [Offline Key Purge](#offline-key-purge) · [Output](#output) · [SLH-DSA Artifact Signing](#slh-dsa-artifact-signing) · [Environment](#environment) · [Local Bootstrap Commands](#local-bootstrap-commands) · [Audit Verification](#audit-verification) · [HTTP Client Commands](#http-client-commands) · [Authentication](#authentication) · [Input Validation](#input-validation) · [Failure Model](#failure-model) · [What The CLI Does Not Do](#what-the-cli-does-not-do)
 
 ## Purpose
 
@@ -14,7 +14,7 @@ primary integration interface for application data workflows.
 
 The Vectis CLI has two jobs:
 
-1. local bootstrap work that must happen before the HTTP service exists;
+1. local bootstrap and offline maintenance outside the HTTP service;
 2. HTTP client work against a running Vectis service.
 
 It is not a daemon manager, database migrator, secret manager, Kubernetes
@@ -31,6 +31,7 @@ interfaces, and stay easy to inspect.
 - `vectis init`
 - `vectis apikey create`
 - `vectis audit verify`
+- `vectis keys drop <kid>` (offline, destructive maintenance)
 - `vectis slh-dsa create|sign|verify`
 - `vectis config init|validate|sign|list`
 - `vectis config routes|remote-routes|permissions`
@@ -39,6 +40,60 @@ interfaces, and stay easy to inspect.
 Config edit commands modify the local signed-config source. They do not apply
 changes to a running node until the config is signed and reloaded. Remote-route
 editing may fetch peer public keys from the configured remote Vectis node.
+
+### Offline Key Purge
+
+`vectis keys drop <kid> [--output yaml|json]` connects directly to the configured
+SQLite or PostgreSQL database. It does not contact the HTTP API or require an API
+key, signed configuration, profiles, or server TLS settings. It requires the
+existing init/unseal material to authenticate the selected key and its properties.
+The key must already be `destroyed`; that lifecycle state alone remains a logical
+block and does not purge data.
+
+Stop **every node** using the database before running the command. This is an
+operator precondition, not a cluster-wide check performed by Vectis. Remove the
+KID's references from signed configurations and sign them before restarting; the
+command never edits or signs configuration automatically.
+
+The database destination, KID, scope and confirmation prompt appear on stderr.
+Both stdin and stderr must be terminals; stdout may be redirected for YAML/JSON.
+`VECTIS_LOG_TARGET=file` is mandatory, and the audit file must be writable and
+exclusively lockable. There is no `--yes`, `--force`, `--confirm` or piped-input
+confirmation. Type exactly `delete` followed by Enter; spaces and capitalization
+changes are rejected. The read is bounded to eight bytes including LF/CRLF.
+Empty input, EOF or Ctrl-C during confirmation cancel with a nonzero exit status
+and no database deletion. No transaction or lock is held while prompting.
+
+After confirmation the transaction checks the originally authenticated key and
+properties again and explicitly deletes that KID's tokens, subjects, indexes and
+one key record. Success returns `kid` and `deleted` counts for `opskeys`, `tokens`,
+`subjects` and `indexes`, using the existing output formats. A concurrent change
+or an error before COMMIT prevents the purge; there are no automatic retries.
+
+A communication error during COMMIT reports an **unknown outcome**: check the
+database before retrying. If commit succeeds but audit persistence, the closing
+checkpoint or result output fails, the command returns an error stating that the
+purge **already committed**. Ctrl-C cancellation is guaranteed only at the prompt;
+after confirmation the command states that interrupts are ignored until the purge
+finishes. On PostgreSQL, the purge transaction waits at most 5 seconds for row
+locks; a lock held by a node that is still running aborts it before COMMIT with
+nothing deleted. Database and external audit log writes are not atomic together.
+
+All purge audit events use actor `offline` (not an authenticated API actor):
+
+- `key.drop.started` is persisted before any deletion and names the KID and
+  database destination; if it cannot be persisted, nothing is deleted.
+- `key.drop.failed` records the public error, including an unknown outcome
+  after COMMIT.
+- `key.drop.completed` records the deletion counts.
+
+A `key.drop.started` without a matching `failed` or `completed` event means the
+process stopped mid-purge: check the database before retrying.
+
+This is removal from the active database, not secure physical erasure. Backups,
+WAL, recoverable pages, exported files and memory in other processes remain.
+There is no tombstone: after restart, the KID is absent rather than returning its
+old lifecycle `403`. Restoring an earlier backup can restore the purged records.
 
 ### Runtime Commands
 
@@ -655,7 +710,8 @@ vectis test <kid>
 
 ### `vectis keys`
 
-Creates, lists, inspects, or reloads operational keys.
+Creates, lists, inspects, or reloads operational keys through HTTP. The separate
+`keys drop` subcommand performs [offline purge](#offline-key-purge).
 
 ```sh
 vectis keys create --tag payments --profile hybrid-high-assurance-v1
@@ -1194,4 +1250,5 @@ The CLI does not:
 - rotate secrets automatically;
 - replace `curl`, `jq`, shell scripts, or deployment tooling.
 
-It is a bootstrap tool and an HTTP client. Nothing more.
+It is a bootstrap/offline maintenance tool and an HTTP client, not a cluster
+coordinator.

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Run and display a disposable, single-client Vectis happy-path laboratory."""
 
 import argparse
 import json
@@ -55,7 +54,7 @@ def execute(binary, keep=False, stream=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description='Run and display a disposable, single-client Vectis happy-path laboratory.')
     parser.add_argument("--binary", help="Existing Vectis executable; otherwise build the development binary")
     parser.add_argument("--keep-lab", action="store_true", help="Keep SQLite, config, init material and logs after success")
     args = parser.parse_args()

@@ -15,8 +15,6 @@ if [[ -z "${K6_PROFILE:-}" ]]; then
   exit 1
 fi
 
-# A plain command substitution (unlike a process substitution) stops the script
-# under set -e, before any init or key material is created.
 kid_env="$(python3 - "${SCRIPT_DIR}" "${K6_PROFILE}" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])

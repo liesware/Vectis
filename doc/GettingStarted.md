@@ -716,8 +716,17 @@ run_as_app sign verify --file signature.json
 Keys age, get rotated, and are sometimes compromised — so every operational
 key carries a lifecycle status, and the node enforces it on every call.
 `active` and `disabled` are reversible, like suspending and restoring a badge.
-`retired`, `compromised`, and `destroyed` are terminal *by design*: a key
-that was ever declared compromised must never quietly return to service.
+`retired` and `compromised` cannot return to service: retirement may advance to
+compromise or destruction, and compromise may advance to destruction. Only
+`destroyed` has no outgoing transitions. It is a logical state, not physical
+erasure of the encrypted key material.
+
+A disabled key can be retired, compromised, or destroyed without reactivation.
+`disabled` to `retired` deliberately restores decrypt and verification, but not
+new production or `/pub`. No prior token cleanup is required. Updates do not
+cancel in-flight work or external verification; other nodes require key reload
+or restart. These examples assume local, sequential operations without
+concurrent updates or reloads.
 
 Use the root API key from `.env` for lifecycle administration — note that
 `lab-app` was never granted lifecycle powers. Disable the key:
@@ -744,7 +753,7 @@ run_as_app mask "$KID" \
 ```
 
 Do not use `retired`, `compromised`, or `destroyed` for this lab key. Those
-states are terminal by design.
+states cannot return to active service.
 
 ## Verify The Audit Chain
 
@@ -788,7 +797,8 @@ You now hold the complete Vectis mental model, exercised end to end:
   blind index (remember without storing), masking (display safely),
   commitment (prove later), secret sharing (split trust), hybrid signature
   (sign for the long term);
-- key **lifecycle** enforcement, with terminal states that stay terminal;
+- key **lifecycle** enforcement, with no return to service after retirement,
+  compromise, or logical destruction;
 - a **hash-chained audit log** verifiable offline with public keys alone.
 
 ## Optional Next Steps

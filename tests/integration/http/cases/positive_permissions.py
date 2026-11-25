@@ -1,4 +1,3 @@
-"""Positive HTTP helpers for one capability domain."""
 
 import base64
 import hashlib
@@ -24,9 +23,6 @@ def validate_permissions_flow(ctx, key_id, case):
     limited_key, limited_hash = create_api_key_pair()
     admin_key, admin_hash = create_api_key_pair()
     metrics_key, metrics_hash = create_api_key_pair()
-    # This positive flow extends the configuration prepared by earlier cases.
-    # ``ctx.set_permissions`` intentionally isolates negative test input and
-    # would erase the remote routes needed by the following messages case.
     ctx.config_data["permissions"] = [
         {
             "client": "positive-limited-message",

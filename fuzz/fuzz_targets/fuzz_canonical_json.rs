@@ -4,13 +4,6 @@ use libfuzzer_sys::fuzz_target;
 use serde_json::Value;
 use vectis::core::canonical;
 
-// serde_json stores any JSON number that does not fit in i64/u64 as an f64, and
-// the f64 -> shortest-string -> f64 round-trip is not bit-stable for every value.
-// canonical_json_v1 is only ever applied to Vectis' typed payloads (config,
-// tokens, envelopes), whose fields are strings — no signed payload contains a
-// floating-point number. So the idempotence invariant is asserted only for
-// float-free JSON; float-containing arbitrary input is still canonicalized (to
-// catch panics) but not required to be idempotent.
 fn contains_float(value: &Value) -> bool {
     match value {
         Value::Number(number) => number.is_f64(),

@@ -1,4 +1,3 @@
-"""Compact-signature tamper helper private to the HTTP fuzz suite."""
 
 import base64
 
@@ -15,12 +14,6 @@ def _flip_base64url_char(value):
 
 
 def mutate_compact_signature_segment(signature, segment_index):
-    """Change one Base64URL character without weakening the compact shape.
-
-    Raises ValueError unless `signature` is four non-empty, canonical, unpadded
-    base64url segments; callers that tolerate a missing/garbled signature catch
-    that and treat the result as absent.
-    """
     if not isinstance(signature, str) or segment_index not in range(4):
         raise ValueError("compact signature mutation requires a segment index from 0 through 3")
     segments = signature.split(".")

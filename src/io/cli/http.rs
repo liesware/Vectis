@@ -298,6 +298,9 @@ async fn run_keys(
     output: OutputFormat,
 ) -> Result<(), DynError> {
     let (subcommand, rest) = split_subcommand(args, "keys command")?;
+    if subcommand == "drop" {
+        return super::key_drop::run(loader, rest, output).await;
+    }
     let client = CliHttpClient::from_config(loader)?;
 
     match subcommand.as_str() {
@@ -1449,7 +1452,9 @@ fn validate_kid(field: &str, value: &str) -> Result<(), DynError> {
     validation::validate_hash_hex_field(field, value, config::INTERNAL_KEYS_HASH)
 }
 
-fn parse_output_option(args: Vec<String>) -> Result<(OutputFormat, Vec<String>), DynError> {
+pub(super) fn parse_output_option(
+    args: Vec<String>,
+) -> Result<(OutputFormat, Vec<String>), DynError> {
     let mut output = OutputFormat::Yaml;
     let mut rest = Vec::with_capacity(args.len());
     let mut index = 0;
@@ -1567,11 +1572,11 @@ pub(super) fn print_serializable_response<T: Serialize>(
     value: &T,
     output: OutputFormat,
 ) -> Result<(), DynError> {
-    match output {
-        OutputFormat::Json => println!("{}", serde_json::to_string_pretty(value)?),
-        OutputFormat::Yaml => print!("{}", yaml_serde::to_string(value)?),
-    }
-
+    let payload = match output {
+        OutputFormat::Json => format!("{}\n", serde_json::to_string_pretty(value)?),
+        OutputFormat::Yaml => yaml_serde::to_string(value)?,
+    };
+    std::io::Write::write_all(&mut std::io::stdout().lock(), payload.as_bytes())?;
     Ok(())
 }
 

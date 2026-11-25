@@ -209,7 +209,6 @@ fn parse_crypto_queue_timeout(value: &str) -> Result<std::time::Duration, DynErr
     Ok(duration)
 }
 
-/// Only the defaults consumed while validating a signed config file.
 pub struct LocalConfigSettings {
     pub config_path: PathBuf,
     pub config_sign_path: PathBuf,
@@ -217,7 +216,6 @@ pub struct LocalConfigSettings {
     pub final_app_path: String,
 }
 
-/// Storage selection is typed so an inactive backend cannot be used accidentally.
 pub enum StorageConfig {
     Sqlite(PathBuf),
     Postgres(Zeroizing<String>),
@@ -664,7 +662,6 @@ pub fn load_env_file(path: &str) -> Result<HashMap<String, String>, DynError> {
     crate::core::config_loader::load_env_file(path)
 }
 
-/// Validate only the file grammar; recognition and source policy belong to the loader.
 pub fn validate_env_file_content(content: &str) -> Result<(), DynError> {
     crate::core::config_loader::validate_env_file_content(content)
 }
@@ -708,7 +705,6 @@ mod tests {
                 .expect("positive integer is valid"),
             5
         );
-        // Empty falls back to a positive default derived from available cores.
         assert!(
             parse_max_concurrent_crypto("", default_crypto_concurrency)
                 .expect("empty uses default")
@@ -722,7 +718,6 @@ mod tests {
         parse_max_concurrent_crypto("0", default_crypto_concurrency).expect_err("zero is rejected");
         parse_max_concurrent_crypto("abc", default_crypto_concurrency)
             .expect_err("non-numeric is rejected");
-        // Sign-prefixed inputs are rejected, matching the queued and timeout parsers.
         parse_max_concurrent_crypto("+1", default_crypto_concurrency)
             .expect_err("leading plus is rejected");
         parse_max_concurrent_crypto("-1", default_crypto_concurrency)

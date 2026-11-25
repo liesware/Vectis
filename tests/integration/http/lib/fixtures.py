@@ -1,4 +1,3 @@
-"""Reusable suite fixtures kept independent from endpoint assertions."""
 
 import http.server
 import json
@@ -18,13 +17,6 @@ from .client import WorkflowError
 
 @dataclass
 class Fixtures:
-    """Shared state that ordered cases produce and later cases consume by name.
-
-    Populated incrementally: the authz bootstrap fills ``key_id``, the api-key
-    hashes and the authz clients; the lifecycle module fills the lifecycle keys,
-    a valid token and a valid internal message. Positive suites reuse ``keys``
-    and ``recipient_host``.
-    """
 
     key_id: str | None = None
     api_key_hashes: dict = field(default_factory=dict)

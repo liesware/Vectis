@@ -1,4 +1,3 @@
-"""Sample the Vectis PID on macOS/Linux, without sampling the load generator."""
 
 import csv
 from contextlib import ExitStack
@@ -35,7 +34,6 @@ class ResourceSampler:
         self.aggregates = {"samples": 0}
 
     def summary(self):
-        """Read after stop/join; no per-sample history is retained in memory."""
         return dict(self.aggregates)
 
     def _record(self, rss, cpu, percent):

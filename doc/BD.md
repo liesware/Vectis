@@ -8,6 +8,42 @@ validation are the source of truth; this document does not introduce migrations.
 See [Cryptographic Flows and Key Derivation](Cryptography.md) for init/unseal,
 parent/subject key derivations and capability-specific cryptographic flows.
 
+## Offline Purge
+
+`vectis keys drop <kid>` is an explicit offline maintenance operation for a key
+whose authenticated lifecycle is `destroyed`. Stop every node using the database;
+Vectis cannot verify that operational precondition across the cluster. The CLI
+uses the existing database and schema and does not create tables. Init/unseal
+material is required; an API key and running server are not.
+
+After interactive terminal confirmation, SQLite uses `BEGIN IMMEDIATE` and
+PostgreSQL locks the selected row with `SELECT ... FOR UPDATE` under a
+transaction-local `lock_timeout` of 5 seconds, so a lock still held by a running
+node aborts the purge before COMMIT with nothing deleted. Both compare the
+observed encrypted `keys` and `properties`, explicitly delete associated tokens,
+subjects and indexes, delete exactly one `opskeys` row, and commit together.
+Counts reflect affected rows, not preflight estimates. This does not add foreign
+keys or automatic cascades. Other KIDs remain untouched. A missing or changed
+row, missing privilege, or intermediate failure prevents a successful purge.
+
+The PostgreSQL maintenance identity needs `CONNECT` to the database, `USAGE` on
+the schema, `SELECT` on `opskeys`, and `DELETE` on `opskeys`, `tokens`, `subjects`
+and `indexes`; `SELECT` on their `kid` columns is also required for the predicates.
+`SELECT ... FOR UPDATE` additionally needs `UPDATE` privilege on at least one
+column of `opskeys`. Use a separately provisioned maintenance identity. The
+command does not execute `GRANT` or expand ordinary service privileges.
+
+Mandatory file audit is prepared before deletion. The audit file is exclusively
+locked only after confirmation; its durability and final checkpoint are checked.
+Audit is external to the database transaction: failure after a confirmed commit
+is reported as an already-completed purge, while COMMIT communication failures
+report an uncertain outcome requiring inspection, without destructive retries.
+
+`destroyed` itself remains logical, and purge does not erase WAL, free pages,
+backups, exports or running-process memory. Remove and sign configuration
+references before restarting. No tombstone is retained, and restoring an older
+database can recover the key and its associated records.
+
 ## Entity-Relationship Model
 
 ```mermaid

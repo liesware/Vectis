@@ -1,8 +1,3 @@
-"""Negative HTTP contract cases: signing and verification validation.
-
-Reads ctx.fixtures.key_id and ctx.fixtures.token (a valid signed token produced
-by the lifecycle bootstrap). Each case is a plain function taking ctx.
-"""
 
 import copy
 import hashlib

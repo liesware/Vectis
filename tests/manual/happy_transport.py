@@ -1,4 +1,3 @@
-"""HTTP exchange display and small assertions for the manual walkthrough."""
 
 import json
 import re
@@ -50,7 +49,6 @@ class Transcript:
 
     def block(self, value, language="json"):
         text = json.dumps(value, indent=2, ensure_ascii=False) if language == "json" else value
-        # A fence longer than any run in the data keeps remote bodies as content.
         fence = "`" * max(3, max((len(run) for run in re.findall(r'`+', text)), default=0) + 1)
         return f"{fence}{language}\n{text}\n{fence}"
 
@@ -80,7 +78,6 @@ class Client:
         started = time.monotonic()
         request = urllib.request.Request(self.base_url + path, data=data, headers=headers, method=method)
         try:
-            # Do not follow redirects or inherit a proxy for the local laboratory.
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
             try:
                 response = opener.open(request, timeout=40)

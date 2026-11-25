@@ -1,4 +1,3 @@
-"""Resolve an explicit test binary without changing subprocess behavior."""
 
 import os
 from pathlib import Path

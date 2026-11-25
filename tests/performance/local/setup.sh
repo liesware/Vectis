@@ -7,7 +7,6 @@ SITE_DIR="${K6_SITE_DIR:-${SCRIPT_DIR}/site}"
 BIN_DIR="${SITE_DIR}/bin"
 PORT="${K6_PORT:-3020}"
 
-# The runner owns the release build; this script only installs its binary.
 if [[ -z "${K6_BINARY:-}" || ! -x "${K6_BINARY}" ]]; then
   echo "K6_BINARY must point to the vectis binary built by runner.py" >&2
   exit 1

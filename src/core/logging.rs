@@ -65,7 +65,6 @@ pub fn init_logging(loader: &ConfigLoader) -> Result<LoggingGuards, crate::error
     let operational_layer = fmt::layer()
         .json()
         .with_writer(operational_writer)
-        // Spans always pass so request_id/method/path correlation survives at WARN+.
         .with_filter(filter_fn(move |metadata| {
             metadata.is_span() || *metadata.level() <= level
         }));

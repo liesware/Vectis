@@ -10,10 +10,6 @@ use vectis::core::tokenization::{self, TokenDataPayload};
 #[path = "common.rs"]
 mod common;
 
-// One tokenization profile, keyed once per process (deterministic dummy keys via
-// `common::validate_fuzz_config_content`). The property under test is that
-// encrypting a token-data payload and decrypting it back preserves both the
-// plaintext and the metadata verbatim.
 const CONFIG: &str = r#"{
   "version": "v1",
   "routes": [],
@@ -37,7 +33,6 @@ const CONFIG: &str = r#"{
 }"#;
 
 const PROFILE_NAME: &str = "fuzz-token-roundtrip-v1";
-// The hashid binds the ciphertext AAD; encrypt and decrypt must agree on it.
 const HASHID: &str = "fuzz-token-roundtrip-hashid";
 
 static STATE: LazyLock<ConfigState> = LazyLock::new(|| {
@@ -70,10 +65,6 @@ fuzz_target!(|data: &[u8]| {
         .get(PROFILE_NAME)
         .expect("tokenization profile must be present");
 
-    // Derive the payload from the fuzz input: the tail is the plaintext (bounded
-    // to the profile's max), the leading byte decides whether metadata is
-    // present. metadata carries a JSON integer so the round-trip stays stable
-    // (no float re-encoding to reason about).
     let (head, body) = data.split_first().unwrap_or((&0, &[]));
     let plaintext =
         String::from_utf8_lossy(&body[..body.len().min(profile.max_plaintext_len())]).into_owned();

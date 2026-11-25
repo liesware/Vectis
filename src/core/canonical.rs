@@ -3,11 +3,6 @@ use serde::Serialize;
 
 pub fn canonical_json_v1<T: Serialize>(value: &T) -> Result<Vec<u8>, DynError> {
     let value = serde_json::to_value(value)?;
-    // Rejecting serde_json's reserved keys keeps every successful result parseable
-    // (otherwise the key smuggles raw, unescaped JSON into the output). Note: this
-    // makes verification callers that compare `canonical_json_v1(&x)? != bytes`
-    // return Err on a reserved key instead of a plain mismatch — acceptable, as
-    // validated input never reaches this path carrying such a key.
     validation::validate_canonical_json_value("canonical JSON", &value)?;
     Ok(serde_json::to_vec(&value)?)
 }

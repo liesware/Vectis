@@ -8,6 +8,15 @@ manually for releases; the Git history remains the detailed engineering record.
 Future changes will be recorded here. v1.0.0 remains the first official release.
 
 ### Changed
+- Added interactive offline `vectis keys drop <kid>` maintenance to purge a
+  destroyed key and its tokens, subjects and indexes transactionally, with
+  mandatory audit, exact confirmation and explicit uncertain/post-commit errors.
+  The purge audits its start before deleting and its failure when it fails, and
+  PostgreSQL waits at most 5 seconds for row locks.
+- Operational keys can now move from disabled to retired, compromised or
+  destroyed, from retired to compromised or destroyed, and from compromised to
+  destroyed without reactivation. Retirement restores recovery/verification from
+  disabled, never new production; destruction remains logical, not physical.
 - Split configuration fuzzing into signed JSON, strict environment grammar and
   loader targets, with synthetic-source semantic oracles, redaction checks and
   boundary seeds. The native fuzz runner now includes 27 targets.

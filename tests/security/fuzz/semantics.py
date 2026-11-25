@@ -157,11 +157,6 @@ CONFIG_LOADED_COUNTS = (
 
 
 def config_semantic(status, body):
-    # The baseline signed config is empty, so a legitimate 200 reload must load
-    # zero content. Comparing raw bytes would false-positive on canonically
-    # equivalent inputs (serde defaults, key order); comparing the observable
-    # loaded counts catches a real integrity break: altered content accepted
-    # under the baseline signature.
     if status != 200:
         return []
     parsed = _parse(body)
@@ -333,7 +328,6 @@ def tokenization_batch_semantic(sent_value, seed, status, body):
 
 
 def _response_items(response):
-    """Return the `items` list from an (status, body) response tuple, or []."""
     parsed = _parse(response[1])
     items = parsed.get("items") if isinstance(parsed, dict) else None
     return items if isinstance(items, list) else []
@@ -352,8 +346,6 @@ def token_delete_semantic(sent_value, seed, status, response):
     token = token if isinstance(token, str) and token else None
     reflected = bool(canary and canary in response) if parsed is None else False
     pending = [parsed] if parsed is not None else []
-    # Only fixture-issued tokens are substring canaries; short mutations such as
-    # "t" must match a complete JSON value, not ordinary error-message text.
     while pending and not reflected:
         value = pending.pop()
         if isinstance(value, str):
@@ -377,23 +369,12 @@ def token_delete_semantic(sent_value, seed, status, response):
 
 
 def reject_malformed_body_semantic(sent_value, _seed_obj, status, _response):
-    """Floor oracle for body endpoints that carry no richer semantic.
-
-    Every Vectis write endpoint expects a JSON object body. `sent_value` is the
-    body that actually reached the server (the parsed structured mutation, or the
-    raw-mutated bytes parsed back — None when they were not valid JSON). If that
-    body is not a JSON object, the request is malformed and the server must answer
-    4xx; a 200 means it accepted non-JSON, a bare scalar/array, or null — a lenient
-    parser or a body-ignoring handler. This claims only what is always true, so it
-    never fires on a benign mutation that left a still-valid object.
-    """
     if status == 200 and not isinstance(sent_value, dict):
         return ["SEMANTIC: endpoint accepted a non-object body with 200"]
     return []
 
 
 def batch_output_contract(status, body, kid, profile, refs, required_fields):
-    """Validate the shape and input order shared by successful batch responses."""
     if status != 200:
         return ["SEMANTIC: batch control did not return 200"]
     parsed = _parse(body)
@@ -410,9 +391,6 @@ def batch_output_contract(status, body, kid, profile, refs, required_fields):
         return [*findings, "SEMANTIC: batch control item count mismatch"]
     if [item.get("ref") if isinstance(item, dict) else None for item in items] != refs:
         findings.append("SEMANTIC: batch control did not preserve item order")
-    # Enforce the exact key set, not a subset: an item that echoes an extra field
-    # (e.g. a leaked "plaintext" on an encrypt result) or an unexpected internal
-    # field must be caught, which a "required fields are present" check misses.
     allowed_keys = {"ref", *required_fields}
     if any(
         not isinstance(item, dict) or set(item.keys()) != allowed_keys
@@ -423,7 +401,6 @@ def batch_output_contract(status, body, kid, profile, refs, required_fields):
 
 
 def batch_duplicate_ref_rejection(status, body):
-    """A duplicate ref must be an indexed 400 without partial batch output."""
     if status != 400:
         return ["SEMANTIC: duplicate batch ref was not rejected with 400"]
     parsed = _parse(body)
@@ -530,13 +507,6 @@ def commitment_batch_contract_semantic(case, context):
 
 
 def _encoded_token_present(encoded_status, encoded_body):
-    """A well-formed encode is HTTP 200 with a non-empty token in the body.
-
-    A malformed 200 (parse failure, or a body missing the token) is itself an
-    anomaly: the encode step succeeded on the wire but produced nothing usable.
-    Flagging it here keeps the real defect at the encode step instead of letting
-    it surface later as a misleading "did not decode exactly once".
-    """
     if encoded_status != 200:
         return False
     encoded = _parse(encoded_body)
@@ -544,7 +514,6 @@ def _encoded_token_present(encoded_status, encoded_body):
 
 
 def _encoded_tokens_present(encoded_status, encoded_body, count):
-    """A well-formed batch encode is HTTP 200 with `count` non-empty tokens."""
     if encoded_status != 200:
         return False
     encoded = _parse(encoded_body)
@@ -580,9 +549,6 @@ def one_time_single_semantic(results, plaintext):
 
 
 def one_time_batch_semantic(results, plaintext, leaked_plaintexts=None):
-    """`plaintext` is the survivor's expected value; `leaked_plaintexts`
-    enumerates every plaintext that could leak in the failure body (both the
-    survivor's and the already-consumed item's). Defaults to `[plaintext]`."""
     leaked_plaintexts = leaked_plaintexts if leaked_plaintexts is not None else [plaintext]
     encoded_status, encoded_body = results[0]
     consumed_status, _consumed_body = results[1]
@@ -593,9 +559,6 @@ def one_time_batch_semantic(results, plaintext, leaked_plaintexts=None):
     findings = []
     if not _encoded_tokens_present(encoded_status, encoded_body, 2):
         findings.append("SEMANTIC: one-time batch encode returned no usable tokens")
-    # Atomicity: the batch must fail as a whole (404, token-not-found, no partial
-    # output). Match the failure reason by substring rather than the exact string
-    # so a wording or item-index change (0- vs 1-based) does not fake a finding.
     if (
         encoded_status != 200
         or consumed_status != 200
@@ -658,7 +621,6 @@ def token_batch_duplicate_policy_semantic(results, plaintext):
 
 
 def lifecycle_contract_semantic(records):
-    """Validate the lifecycle matrix without retaining sensitive request data."""
     findings = []
     sensitive_fields = {"plaintext", "token", "ciphertext", "digest", "opening", "shares", "signature"}
     for record in records:
@@ -810,7 +772,6 @@ def sharing_integrity_semantic(case, context):
 
 
 def compact_signature_integrity_semantic(case, _context):
-    """Validate hybrid verification order without retaining signature material."""
     expected = {
         "control": ("ok", "ok", "ok"),
         "header": ("fail", "not_checked", "fail"),
@@ -834,9 +795,6 @@ def compact_signature_integrity_semantic(case, _context):
             or status.get("eddsa") != eddsa
         ):
             findings.append(f"SEMANTIC: compact signature verification state mismatch for {label}")
-        # `signature` is None when the producer returned no signature or the
-        # mutation could not be built; only scan for it when it is a real string
-        # (`None in verify_body` would raise and abort the whole target).
         signature_leaked = isinstance(signature, str) and bool(signature) and signature in verify_body
         if signature_leaked or case["message_hash_hex"] in verify_body:
             findings.append(f"SEMANTIC: compact signature failure reflected sensitive input for {label}")

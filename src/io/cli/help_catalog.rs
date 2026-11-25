@@ -587,8 +587,11 @@ const KEYS_HELP: CommandHelp = CommandHelp {
         "vectis keys properties",
         "vectis keys properties <kid>",
         "vectis keys reload",
+        "vectis keys drop <kid>",
     ],
-    summary: Some("Creates, lists, or reloads operational keys through the HTTP API."),
+    summary: Some(
+        "Creates, lists, or reloads operational keys through HTTP; drops destroyed keys offline.",
+    ),
     sections: &[
         HelpSection {
             title: "Commands:",
@@ -598,6 +601,7 @@ const KEYS_HELP: CommandHelp = CommandHelp {
                 "  properties            GET /keys/properties, requires VECTIS_APIKEY",
                 "  properties <kid>      GET /keys/properties/{kid}, requires VECTIS_APIKEY",
                 "  reload                POST /keys/reload, requires VECTIS_APIKEY",
+                "  drop <kid>            Offline database purge; requires destroyed, init/unseal and terminal confirmation",
             ],
         },
         HelpSection {
@@ -624,9 +628,32 @@ const KEYS_HELP: CommandHelp = CommandHelp {
                 "  vectis keys properties",
                 "  vectis keys properties <kid>",
                 "  vectis keys reload",
+                "  vectis keys drop <kid>",
             ],
         },
     ],
+    output: true,
+};
+
+const KEYS_DROP_HELP: CommandHelp = CommandHelp {
+    key: "keys drop",
+    heading: "Usage:",
+    usage: &["vectis keys drop <kid> [--output <yaml|json>]"],
+    summary: Some(
+        "Offline purge of a destroyed operational key and its tokens, subjects and indexes.",
+    ),
+    sections: &[HelpSection {
+        title: "Safety:",
+        lines: &[
+            "Stop every node using the database; this command does not verify the cluster is stopped.",
+            "Requires database maintenance access, init/unseal material and VECTIS_LOG_TARGET=file, not an API key.",
+            "Terminal stdin and stderr are required. Type exactly delete at the prompt; no --yes or --force.",
+            "Remove signed-config references before restart. Configurations are not edited automatically.",
+            "Interrupts are ignored after confirmation; PostgreSQL waits at most 5 seconds for row locks.",
+            "Backups, WAL, recoverable pages, exports and process memory are not erased.",
+            "After a COMMIT communication failure, check the database before retrying.",
+        ],
+    }],
     output: true,
 };
 
@@ -1658,6 +1685,7 @@ const COMMAND_HELPS: &[CommandHelp] = &[
     HEALTH_HELP,
     TEST_HELP,
     KEYS_HELP,
+    KEYS_DROP_HELP,
     LIFECYCLE_HELP,
     ROUTES_HELP,
     REMOTE_ROUTES_HELP,

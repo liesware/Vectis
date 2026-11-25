@@ -30,9 +30,6 @@ test -n "$VECTIS_APIKEY"
 test -n "$VECTIS_APIKEY_HASH"
 
 server_log="$ci_dir/vectis.log"
-# The HTTP fixtures deliberately exercise documented development/test overrides.
-# Allow all eight subject-create contenders through crypto admission so the
-# uniqueness race tests storage conflicts rather than hardware-dependent 429s.
 VECTIS_CRYPTO_POLICY=allow-overrides \
     VECTIS_MAX_CONCURRENT_CRYPTO=8 \
     run_vectis serve >"$server_log" 2>&1 &

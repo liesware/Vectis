@@ -1,4 +1,3 @@
-"""Credential lookup private to manual Vectis tools."""
 
 import os
 from pathlib import Path

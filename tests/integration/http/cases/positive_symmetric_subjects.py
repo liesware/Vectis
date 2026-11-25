@@ -1,4 +1,3 @@
-"""Shared subject seeds with private symmetric keys and external envelopes."""
 
 import copy
 

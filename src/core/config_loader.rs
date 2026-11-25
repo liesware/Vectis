@@ -1,4 +1,3 @@
-//! Invocation-scoped sources. Resolution and semantic validation remain lazy.
 mod env_file;
 
 use crate::core::{blocking, files};
@@ -10,7 +9,6 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
-/// Host-independent default used only by synthetic sources.
 pub const SYNTHETIC_CRYPTO_CONCURRENCY: usize = 4;
 
 #[derive(Clone, Copy)]
@@ -80,7 +78,6 @@ variables! {
     "VECTIS_AUDIT_LOG_FILE" => "audit.log", Rejected,
 }
 
-// Rust's native encoding preserves non-Unicode values on Unix and Windows.
 struct NativeValue(Zeroizing<Vec<u8>>);
 
 impl NativeValue {
@@ -113,7 +110,6 @@ impl ConfigLoader {
         )
     }
 
-    /// Synthetic sources for tests and fuzzing; never reads the filesystem or environment.
     pub fn from_sources(
         content: &str,
         process: impl FnMut(&str) -> Option<OsString>,
@@ -132,7 +128,6 @@ impl ConfigLoader {
         sqlite_default: String,
         crypto_default: Option<usize>,
     ) -> Result<Self, DynError> {
-        // File policy is unconditional, including assignments overridden by the process.
         for (name, entry) in &file {
             let variable = VARIABLES.iter().find(|v| v.name == name);
             if variable.is_none() || !variable.is_some_and(|v| v.allow_file) {

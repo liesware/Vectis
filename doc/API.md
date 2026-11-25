@@ -589,12 +589,27 @@ Lifecycle behavior:
 Allowed transitions:
 
 - `active` -> `disabled`, `retired`, `compromised`, `destroyed`
-- `disabled` -> `active`
-- `retired` -> no transitions
-- `compromised` -> no transitions
+- `disabled` -> `active`, `retired`, `compromised`, `destroyed`
+- `retired` -> `compromised`, `destroyed`
+- `compromised` -> `destroyed`
 - `destroyed` -> no transitions
 
 Transitions to the same status are rejected.
+
+`retired` and `compromised` cannot return to service; only `destroyed` has no
+outgoing transitions. Moving from `disabled` to `retired` deliberately restores
+decrypt and verification, but not new cryptographic production or `/pub`.
+No prior deletion of tokens or other dependent records is required.
+
+Allowed transitions return `200`; prohibited transitions return `400` with
+`invalid lifecycle transition: {current} -> {next}`. The `lifecycle` permission
+remains scoped to the KID. Destruction is logical: encrypted key material remains
+stored, and administrative cleanup requires its own permissions.
+
+Lifecycle updates do not cancel in-flight work or invalidate external
+verification. Other nodes require explicit key reload or restart. Local blocking
+after a successful update applies to sequential operations; concurrent reloads
+or updates can interleave with the local cache refresh.
 
 Response:
 

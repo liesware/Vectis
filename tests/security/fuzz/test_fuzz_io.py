@@ -1,4 +1,3 @@
-"""Offline regression checks and disposable loopback transport tests."""
 
 import gzip
 import hashlib

@@ -18,7 +18,6 @@ def _remaining(deadline):
 
 
 class _DeadlineReader(io.RawIOBase):
-    """Keep header parsing and trickled response bodies on the same deadline."""
 
     def __init__(self, reader, sock, deadline):
         self.reader = reader
@@ -119,7 +118,6 @@ class FuzzClient:
         def connect(address, timeout, source_address):
             sock = original_connect(address, _remaining(deadline), source_address)
             try:
-                # HTTPS must not restart the TCP budget for its TLS handshake.
                 sock.settimeout(_remaining(deadline))
             except OSError:
                 sock.close()
@@ -145,8 +143,6 @@ class FuzzClient:
             try:
                 connection.request(method, self._url.path + path, body=data, headers=request_headers)
             except (BrokenPipeError, ConnectionResetError) as upload_error:
-                # The server may have rejected the upload while we were sending.
-                # Read that response on this connection; never retry the request.
                 error = upload_error
             connection.sock.settimeout(_remaining(deadline))
             phase = "receive"

@@ -114,7 +114,6 @@ impl Drop for KeyLoadLease {
         let mut flights = owner.lock_flights();
         let own_flight = Arc::downgrade(&flight);
 
-        // Release under the lock so the last participant always removes its entry.
         drop(flight);
         let remove = flights
             .get(&self.kid)

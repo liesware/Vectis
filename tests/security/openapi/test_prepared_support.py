@@ -1,4 +1,3 @@
-"""Offline regression tests for Schemathesis prepared-profile setup."""
 
 import tempfile
 import unittest

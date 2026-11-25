@@ -72,10 +72,6 @@ pub fn internal(message: impl Into<String>) -> DynError {
     Box::new(VectisError::Internal(message.into()))
 }
 
-/// Returns a bounded diagnostic for a Serde error without reflecting caller values.
-///
-/// Field names, expected shapes, and line/column information are useful to callers.
-/// Values supplied by the caller are not: they may be sensitive or contain controls.
 pub fn sanitized_serde_json_error_detail(error: &serde_json::Error) -> String {
     sanitize_untrusted_error_detail(&redact_serde_value(&error.to_string()))
 }

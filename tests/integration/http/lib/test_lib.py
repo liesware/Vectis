@@ -19,7 +19,6 @@ PRIVATE_SUITE_PREFIXES = {
     "openapi": ("tests.integration.cli", "tests.integration.http", "tests.security.fuzz", "tests.manual"),
     "manual": ("tests.integration.cli", "tests.integration.http", "tests.security.fuzz", "tests.security.openapi"),
 }
-# Modules under cases/ that are shared mechanisms or composition, not case sets.
 NON_CASE_FILES = {"registry.py", "negative_support.py", "__init__.py"}
 
 
@@ -33,7 +32,6 @@ def _module_declares_cases(path):
 
 
 def _registry_composed_modules():
-    """Modules whose CASES the registry composes (via ``module.CASES``)."""
     tree = ast.parse((CASES_DIR / "registry.py").read_text(encoding="utf-8"))
     modules = set()
     for node in ast.walk(tree):
@@ -89,8 +87,6 @@ class ResultsTests(unittest.TestCase):
         self.assertEqual(completed, [("first", 2, 2), ("second", 3, 5)])
 
     def test_require_result_rejects_a_positive_case_without_a_caseresult(self):
-        # Positive cases count via the returned CaseResult; a forgotten return must
-        # fail loudly instead of silently counting weight=1 and undercounting 93.
         class Context:
             current_case = None
 
@@ -101,7 +97,6 @@ class ResultsTests(unittest.TestCase):
             run_cases(Context(), (Case("positive.forgot", forgot),), require_result=True)
 
     def test_require_result_allows_weight_zero_setup_without_a_caseresult(self):
-        # A deliberate weight-0 setup case counts nothing and needs no CaseResult.
         class Context:
             current_case = None
 
@@ -137,12 +132,6 @@ class ConfigTransactionTests(unittest.TestCase):
 
 
 class StructuralGuardTests(unittest.TestCase):
-    """Keep the split from silently regressing back toward a monolith.
-
-    These are structural guards, not behavioral tests: they read the case
-    directory statically (no server, no imports) so they run in the plain
-    ``python -m unittest`` pass alongside the rest of the harness suite.
-    """
 
     def test_no_monolithic_workflow_module_reappears(self):
         offenders = sorted(p.name for p in CASES_DIR.glob("*_workflow.py"))
@@ -166,9 +155,6 @@ class StructuralGuardTests(unittest.TestCase):
         )
 
     def test_no_case_module_uses_the_retired_global_patterns(self):
-        # The ergonomics layer replaced these: cases register via @cases and reach
-        # shared state through ctx (ctx.http / ctx.fixtures / ctx.config_data),
-        # never a module-global config, a bind_config bridge, run_case or `import *`.
         forbidden = ("global config", "bind_config", "run_case(", "import *")
         offenders = {}
         for path in sorted(CASES_DIR.glob("*.py")):
@@ -185,10 +171,6 @@ class StructuralGuardTests(unittest.TestCase):
         )
 
     def test_every_declared_case_module_is_composed_by_the_registry(self):
-        # A module that declares a top-level CASES but is not composed into the
-        # registry is an orphan -- exactly the failure mode that left the split
-        # incomplete. Adding a case never needs a registry edit; adding a *module*
-        # does, and this guard makes forgetting it a test failure.
         composed = _registry_composed_modules()
         orphans = [
             path.stem

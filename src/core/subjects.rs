@@ -1,4 +1,3 @@
-//! Per-subject seed envelopes and request-scoped token keys. No storage or IO.
 use crate::core::{crypto, tokenization::TokenizationProfile, validation};
 use crate::error::DynError;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -25,7 +24,6 @@ impl OpenedSeed {
     }
 }
 
-// A lookup hint only: the selected signed profile must authenticate the full AAD.
 pub(crate) fn seed_profile_hint(envelope: &str) -> Result<String, DynError> {
     (|| {
         validate_seed_envelope(envelope)?;
@@ -179,7 +177,6 @@ pub(crate) fn open_authenticated_seed(
     subject: &str,
     envelope: &str,
 ) -> Result<OpenedSeed, DynError> {
-    // Stored corruption is an internal failure, never reflected to callers.
     open_seed_inner(profile, subject, envelope)
         .map_err(|_| crate::error::internal("stored subject seed is invalid"))
 }
@@ -416,7 +413,6 @@ mod tests {
             assert!(validate_subject(&invalid).is_err());
         }
         assert!(validate_seed_envelope(&"a".repeat(2049)).is_err());
-        // Base64 segment lengths are multiples of four; two separators remain.
         let max = format!("{}.AAAAAAAAAAAAAAAA.dmFsaWQtYWFk", "A".repeat(2016));
         assert_eq!(max.len(), SUBJECT_SEED_ENVELOPE_MAX_CHARS - 2);
         validate_seed_envelope(&max).unwrap();

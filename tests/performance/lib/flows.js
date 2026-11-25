@@ -20,10 +20,8 @@ export function runFlow(test, suite, measured) {
   measured.flow(test, () => RUNNERS[definition(test).family](test, suite, measured));
 }
 
-// A failed flow is already counted by measured.flow; keep visiting the rest so
-// one broken family cannot hide the results of the others in the same iteration.
 export function runCases(cases, suite, measured) {
   for (const test of cases) {
-    try { runFlow(test, suite, measured); } catch (_) { /* recorded as a flow failure */ }
+    try { runFlow(test, suite, measured); } catch (_) { }
   }
 }

@@ -1,4 +1,3 @@
-"""Stateless deterministic tokens, subject isolation and lifecycle."""
 import base64
 import copy
 import json

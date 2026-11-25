@@ -193,9 +193,11 @@ satisfy them need compensating controls.
    Host compromise is out of scope.
 5. **The system clock is reasonably correct.** Timestamps in tokens and
    messages are informative and used for audit, not for security decisions.
-6. **Lifecycle states are authoritative and final.** `destroyed` is terminal by
-   design; there are no guardrails or recovery paths. Managing the business
-   consequences of lifecycle transitions belongs to the client.
+6. **Lifecycle states are authoritative.** `destroyed` is terminal; `retired`
+   and `compromised` never return to `active`, and `disabled` may be re-enabled.
+   There are no recovery paths, and the offline `keys drop` purge is
+   irreversible. Managing the business consequences of lifecycle transitions
+   belongs to the client.
 7. **FPE is deterministic; legacy profiles do not authenticate.** For the same
    key/profile/tweak, equal plaintexts produce equal ciphertexts, so FPE leaks
    equality and frequency and enables correlation of repeated values. The profile

@@ -18,7 +18,6 @@ export const options = {
   vus: Number(__ENV.K6_VUS || 1),
   ...(__ENV.K6_DURATION ? { duration: __ENV.K6_DURATION } : { iterations: Number(__ENV.K6_ITERATIONS || 4) }),
   thresholds, summaryTrendStats: ["avg", "p(95)", "p(99)"],
-  // Exclude URL/error text tags: paths contain instance-specific KIDs/subjects.
   systemTags: ["method", "status", "name", "scenario", "check", "expected_response", "error_code"],
 };
 
@@ -27,7 +26,6 @@ export function setup() {
 }
 
 export default function (suite) {
-  // Every VU iteration visits the entire selected list, even after a failed flow.
   runCases(cases, suite, measured);
 }
 

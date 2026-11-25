@@ -72,8 +72,13 @@ async fn main() {
     }
 }
 
+fn command_args(args: &[String]) -> &[String] {
+    args.get(1..).unwrap_or_default()
+}
+
 async fn real_main(args: Vec<String>) -> Result<(), DynError> {
     let loader = core::config_loader::ConfigLoader::capture()?;
+    io::cli::key_drop::before_logging(&loader, command_args(&args))?;
     let _guard = core::logging::init_logging(&loader)?;
     core::tls::ensure_crypto_provider();
 
@@ -304,6 +309,14 @@ mod tests {
         let command =
             find_root_command("version").expect("version root command must be dispatched");
         assert_eq!(command.kind, RootCommandKind::Version);
+    }
+
+    #[test]
+    fn command_args_tolerate_empty_argv() {
+        assert!(command_args(&[]).is_empty());
+        assert!(command_args(&[String::from("vectis")]).is_empty());
+        let args = [String::from("vectis"), String::from("keys")];
+        assert_eq!(command_args(&args), [String::from("keys")]);
     }
 
     #[tokio::test]

@@ -1046,7 +1046,6 @@ fn fpe_transform(
     };
     let output_digits = Zeroizing::new(Vec::<u16>::from(output));
 
-    // Four bytes per Unicode scalar avoids reallocating a partially decrypted value.
     let mut result = Zeroizing::new(String::with_capacity(total_len * 4));
     let mut positions = preserved.iter().peekable();
     let mut digits = output_digits.iter();

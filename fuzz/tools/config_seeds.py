@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Generate only the versioned synthetic config seeds; never touch runtime corpora."""
 
 import argparse
 from pathlib import Path
@@ -62,7 +61,7 @@ def fixtures():
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description='Generate only the versioned synthetic config seeds; never touch runtime corpora.')
     parser.add_argument("--write", action="store_true", help="Generate versioned seeds")
     args = parser.parse_args()
     count = 0

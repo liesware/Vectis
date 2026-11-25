@@ -1,4 +1,3 @@
-"""Credential lookup private to the HTTP fuzz suite."""
 
 import os
 from pathlib import Path

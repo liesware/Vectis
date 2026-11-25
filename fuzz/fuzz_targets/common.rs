@@ -1,6 +1,3 @@
-// Shared helpers for native fuzz targets.
-// Included with `#[path = "common.rs"] mod common;` — it is not a fuzz target
-// itself (not listed as a [[bin]] in Cargo.toml).
 
 use std::path::PathBuf;
 use vectis::core::{commitments, config, config_file, fpe, mac, sharing, tokenization};

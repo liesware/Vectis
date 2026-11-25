@@ -785,9 +785,6 @@ fn validate_metadata(metadata: &Value) -> Result<(), DynError> {
             "metadata must be a JSON object when present",
         ));
     }
-    // Reserved-key rejection already happened in validate_request_metadata,
-    // before `from_value` could collapse a magic-key object into a Number; by this
-    // point the metadata is reserved-key-free.
     let serialized = serde_json::to_string(metadata)?;
     if serialized.chars().count() > tokenization::TOKEN_METADATA_MAX_CHARS {
         return Err(crate::error::invalid_input(
@@ -798,11 +795,6 @@ fn validate_metadata(metadata: &Value) -> Result<(), DynError> {
     Ok(())
 }
 
-// Runs on the raw request before `from_value`, so it sees a `$serde_json::private::*`
-// object key before deserialization collapses it into a Number/RawValue. The shared
-// parse_json_request guard is the safety net for all endpoints; this field-scoped
-// check runs first for tokenization to return the precise "metadata ..." message
-// (and, per item, the "batch item N failed" prefix) to the API caller.
 fn validate_request_metadata(request: &Value) -> Result<(), DynError> {
     if let Some(metadata) = request.get("metadata") {
         validation::validate_canonical_json_value("metadata", metadata)?;

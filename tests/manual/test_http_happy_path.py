@@ -1,4 +1,3 @@
-"""Offline regressions for the manual tool; no Vectis process or external calls."""
 
 import io
 from pathlib import Path

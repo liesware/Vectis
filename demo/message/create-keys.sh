@@ -156,8 +156,6 @@ create_site_key() {
     return 1
   fi
 
-  # Capture this site's public keys (from /pub) while its server is up, so
-  # configure-routes.sh can embed them into the peer's signed config.
   local base="${ready_url%/healthz/ready}"
   curl -s "${base}/pub/${kid}" > "${SCRIPT_DIR}/${site}/pub.json"
 

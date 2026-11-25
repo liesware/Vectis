@@ -92,9 +92,6 @@ cat > "${SCRIPT_DIR}/site-b/config.json" <<JSON
 }
 JSON
 
-# Embed each peer's public keys (captured from /pub during create-keys) into the
-# other site's remote_routes entry, so cross-instance verification and /message
-# use the signed config directly instead of fetching /pub.
 if [[ -f "${SCRIPT_DIR}/site-a/pub.json" && -f "${SCRIPT_DIR}/site-b/pub.json" ]]; then
   python3 - "${SCRIPT_DIR}" "${A_LOCAL_KID}" "${B_LOCAL_KID}" <<'PY'
 import json, sys

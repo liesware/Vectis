@@ -107,7 +107,6 @@ async fn contract(storage: StorageState) {
             .await
             .is_err()
     );
-    // A mismatch rolls the entire consume back, including the matching row.
     assert!(storage.get_token(&kid, &first).await.is_ok());
     storage.delete_subject(&kid, &subject).await.unwrap();
     assert!(crate::error::is_not_found(
@@ -184,7 +183,6 @@ async fn contract(storage: StorageState) {
     storage.delete_subject(&kid, &other).await.unwrap();
     storage.consume_token(&kid, &second).await.unwrap();
 
-    // Whichever transaction wins, a completed deletion leaves no stale insert.
     for batch in [false, true] {
         storage.save_subject(&row).await.unwrap();
         let records = [TokenRow {
@@ -276,7 +274,6 @@ async fn sqlite_subject_contract_and_legacy_migration() {
     let legacy = db.get_token(&kid, &hashid).await.unwrap();
     assert_eq!(legacy.data, ENVELOPE);
     assert!(legacy.subject.is_none());
-    // Corrupt seeds can still be administratively removed without decoding.
     let subject = "0".repeat(64);
     let row = SubjectRow {
         kid: kid.clone(),

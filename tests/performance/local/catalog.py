@@ -1,4 +1,3 @@
-"""Private shared metadata, not an endpoint/request definition language."""
 
 import json
 from pathlib import Path

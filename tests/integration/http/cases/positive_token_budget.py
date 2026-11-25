@@ -1,4 +1,3 @@
-"""Decode batch envelope budget, complete responses and one-time preservation."""
 
 import copy
 import json

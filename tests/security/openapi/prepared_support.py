@@ -1,8 +1,3 @@
-"""Private setup helpers for the prepared Schemathesis profile.
-
-Schemathesis runs independently from HTTP integration cases, so it owns this
-small amount of provisioning instead of importing ``tests/integration/http``.
-"""
 
 import json
 import subprocess
@@ -57,7 +52,7 @@ KEY_CASES = (
 
 
 class WorkflowError(Exception):
-    """A failed Schemathesis preparation contract."""
+    pass
 
 
 class Client:
@@ -122,9 +117,6 @@ def restore_config_sign_file(content):
 
 def _load_config():
     if not CONFIG_PATH.exists():
-        # The preceding HTTP suite restores an absent pre-test config by
-        # deleting it. Prepared Schemathesis must still be able to provision
-        # its isolated routes from the same minimal state as a fresh node.
         return json.loads(json.dumps(DEFAULT_CONFIG))
     try:
         return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))

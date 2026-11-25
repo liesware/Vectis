@@ -352,8 +352,6 @@ fn ml_kem_decapsulation_rejects_wrong_ciphertext() {
 
         let mut wrong_ciphertext = encapsulation.encapsulated_key.clone();
         wrong_ciphertext[0] ^= 0x01;
-        // Tampered ciphertext must not recover the original shared secret; ML-KEM
-        // implicit rejection yields a different key, and a hard error is also fine.
         if let Ok(shared) =
             crypto::decapsulate_ml_kem_shared_key(&private_key, &wrong_ciphertext, &salt, 32)
         {

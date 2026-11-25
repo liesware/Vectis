@@ -223,9 +223,6 @@ pub fn evaluate_time_attestation(
         local_start_us.saturating_add(local_end_us.saturating_sub(local_start_us) / 2);
     let earliest_us = roughtime.midpoint_us.saturating_sub(roughtime.radius_us);
     let latest_us = roughtime.midpoint_us.saturating_add(roughtime.radius_us);
-    // The server stamped its time at some instant inside the local [start, end] bracket, so a
-    // correct clock is one whose bracket overlaps the Roughtime interval; a single-point sample
-    // would wrongly reject a correct clock by up to the query latency.
     let local_within = local_start_us <= latest_us && earliest_us <= local_end_us;
     let nts_start = signed_add(local_start_us, nts.offset_us);
     let nts_end = signed_add(local_end_us, nts.offset_us);
@@ -371,7 +368,6 @@ pub async fn query_roughtime(
     Ok(RoughtimeObservation {
         midpoint_us: verified.midpoint_micros,
         radius_us: u64::from(verified.radius_micros),
-        // Reaching here means verify_response accepted the signed Roughtime reply.
         verified: true,
         nonce_b64: base64::engine::general_purpose::STANDARD.encode(nonce.as_bytes()),
         response_b64: base64::engine::general_purpose::STANDARD.encode(response),
@@ -558,7 +554,7 @@ mod tests {
         let config = EffectiveTimeAttestationConfig::defaults();
         let roughtime = || RoughtimeObservation {
             midpoint_us: 1_001_000,
-            radius_us: 1_000, // interval [1_000_000, 1_002_000]
+            radius_us: 1_000,
             verified: true,
             nonce_b64: String::from("nonce"),
             response_b64: String::from("response"),
@@ -568,11 +564,9 @@ mod tests {
             round_trip_us: 1,
             authenticated: true,
         };
-        // Bracket whose midpoint (999_250) is outside the interval but overlaps it.
         let overlapping =
             evaluate_time_attestation(998_000, 1_000_500, &config, nts(), roughtime());
         assert!(overlapping.server_clock.local_within_roughtime_interval);
-        // Bracket entirely below the interval must not overlap.
         let disjoint = evaluate_time_attestation(990_000, 995_000, &config, nts(), roughtime());
         assert!(!disjoint.server_clock.local_within_roughtime_interval);
     }

@@ -1,7 +1,3 @@
-"""Negative HTTP contract cases: commitment and secret-sharing input validation.
-
-Each case is a plain function taking ctx; reads shared state from ctx.fixtures.
-"""
 
 from lib.casekit import CaseSet
 from .negative_support import (

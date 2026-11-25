@@ -7,14 +7,6 @@ use vectis::core::time_attestation::{
     self, EffectiveTimeAttestationConfig, NtsObservation, RoughtimeObservation,
 };
 
-// The byte-level parsing of NTS and Roughtime replies lives in vetted external
-// crates (rkik_nts / roughtime); Vectis only consumes their structured results.
-// What Vectis owns is `evaluate_time_attestation`: the acceptability arithmetic
-// over observations a malicious or compromised time server fully controls
-// (offset, round-trip, Roughtime midpoint/radius) plus the local bracket. This
-// target drives that path with adversarial values and asserts two things:
-//   * it never panics (all arithmetic must stay saturating / overflow-safe), and
-//   * the acceptability verdict is internally consistent.
 static CONFIG: LazyLock<EffectiveTimeAttestationConfig> =
     LazyLock::new(EffectiveTimeAttestationConfig::defaults);
 
@@ -46,14 +38,11 @@ fuzz_target!(|data: &[u8]| {
         response_b64: String::new(),
     };
 
-    // Must not panic for any adversarial observation.
     let output =
         time_attestation::evaluate_time_attestation(local_start_us, local_end_us, &CONFIG, nts, roughtime);
 
-    // The Serialize path must also survive adversarial values.
     let view = serde_json::to_value(&output).expect("time attestation output must serialize");
 
-    // `output_is_acceptable` must agree with the serialized verdict.
     let acceptable = time_attestation::output_is_acceptable(&output);
     assert_eq!(
         json!(acceptable),
@@ -61,9 +50,6 @@ fuzz_target!(|data: &[u8]| {
         "output_is_acceptable must match the serialized acceptable flag"
     );
 
-    // A verdict of "acceptable" is defined to require that both the local and
-    // NTS-corrected brackets overlap the Roughtime interval. This invariant is a
-    // direct consequence of the acceptability formula, so it must always hold.
     if acceptable {
         assert_eq!(
             view["server_clock"]["local_within_roughtime_interval"],

@@ -1,4 +1,3 @@
-"""Own the private SQLite lab, fixture preparation and server/audit lifecycle."""
 
 import json
 from pathlib import Path
@@ -85,7 +84,6 @@ class Laboratory:
         wait_ready(self.server, self.fixtures["url"])
         for state in ("startup", "live", "ready"):
             request(self.fixtures["url"] + f"/healthz/{state}")
-        # Only the measured profile is provisioned in this laboratory.
         for name in self.fixtures["profiles"]:
             fixture = self.selected(name)
             kid = fixture["kid"]

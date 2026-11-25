@@ -1,4 +1,3 @@
-"""Deterministic token CLI configuration and single/batch contracts."""
 import json
 from pathlib import Path
 

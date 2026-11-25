@@ -1,18 +1,9 @@
-"""Concurrency scaffold private to the HTTP fuzz suite."""
 
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
 
 def run_simultaneously(jobs, executor=None, release_timeout=10, result_timeout=20):
-    """Run `jobs` (zero-arg callables) concurrently and return their results in
-    submission order.
-
-    A barrier holds every worker until all of them — plus the calling thread —
-    have arrived, so the jobs are released together and actually race. Pass an
-    `executor` to reuse one pool across many calls (e.g. a fuzz loop); when it is
-    None a right-sized pool is created and torn down for this single call.
-    """
     jobs = list(jobs)
     barrier = Barrier(len(jobs) + 1)
 

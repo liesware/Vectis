@@ -1,4 +1,3 @@
-"""Seed isolation and aggregate measurements, without retaining request data."""
 
 import hashlib
 import json
@@ -44,8 +43,6 @@ class TargetMetrics:
         self._inputs = 0
 
     def record_input(self, method, path, body=b"", *, invalid_headers=None, file=None):
-        # Length-prefix each component to avoid ambiguous concatenations. Valid
-        # auth headers and response material never enter this measurement.
         digest = hashlib.sha256()
         for value in (method, path, body, invalid_headers or {}, file or ""):
             if not isinstance(value, bytes):

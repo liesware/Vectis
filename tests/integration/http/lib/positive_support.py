@@ -1,4 +1,3 @@
-"""HTTP-only constants and configuration helpers for positive cases."""
 
 from .assertions import require
 from .client import StatusClient
@@ -33,7 +32,6 @@ KEY_CASES = (
 
 
 def reload_config(ctx, client=None):
-    """Reload the signed config through the root client or an authorized client."""
     if client is None or client is ctx.client:
         return ctx.reload_config()
     response = client.post("/config/reload", {}, auth=True)

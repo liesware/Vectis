@@ -10,7 +10,8 @@ and how to run the tests consistently.
 ## Testing Strategy
 
 Deterministic token coverage includes a 512-bit combined-key Wycheproof AES-SIV
-known-answer vector, exact HKDF contexts, Unicode maxima, tampering and strict
+known-answer vector (`aes_siv_cmac_test.json`, tcId 302), exact HKDF contexts,
+Unicode maxima, tampering and strict
 parsers. HTTP/CLI isolated cases exercise single/batch flows, independent grants,
 subjects and lifecycle. The signed none/stored policy matrix is tested in single
 and batch operations, including constructor guards, editor preservation/removal,
@@ -459,6 +460,19 @@ The HTTP suite is structured so that adding a case is adding one function:
 6. Keep endpoint-specific assertions next to the case. Move an abstraction into
    `lib/` only when more than one HTTP capability needs it.
 
+The registry's order is intentional: positive runtime-metrics assertions run
+after all capabilities have emitted metrics; negative authorization setup creates
+fixtures reused by later groups, and config/lifecycle cases mutate and restore
+shared state in sequence. Weighted positive cases must return `CaseResult` rather
+than silently falling back to one result. Library tests enforce that case modules
+are registered and do not reintroduce module-global configuration bridges.
+
+The integration runner allows eight concurrent crypto workers for the eight-way
+subject-create test, keeping its outcome about storage uniqueness rather than
+machine-dependent admission rejection. The TLS laboratory owns its SQLite path
+before invoking Vectis and verifies audit even if graceful shutdown reports an
+error. These are isolated fixtures, not changes to production defaults.
+
 ## Python CLI Tests
 
 Run the local CLI suite with:
@@ -576,6 +590,17 @@ Uniqueness is scoped to one target in one run; fresh fixtures make cross-run
 comparisons unsuitable as accumulated coverage. The harness has neither
 instrumented coverage nor an evolving corpus; saved findings are not seed input.
 A run without findings does not establish saturation or absence of vulnerabilities.
+
+`campaign.py` length-prefixes fingerprint components to prevent ambiguous
+concatenations. Semantic oracles require exact response key sets where the
+contract specifies them and treat accepting a non-object mutation with `200` as
+a failure. Signed-config mutations compare observable loaded counts rather than
+raw JSON bytes, avoiding false positives from equivalent canonical content.
+One-time races scan complete responses for plaintext leakage, and blind-index
+atomicity scenarios use fresh plaintexts so prior persisted rows cannot invalidate
+the expected-missing baseline. Time-source failure probes respect admission
+spacing; key-reload scenarios use their administrative response budget rather
+than the malformed-input latency budget.
 
 CI keeps the complete regression pass (`--seed 1337 --iterations 300`) and adds
 an exploratory pass (`--random-seed --mutation-only --iterations 100`). The latter
@@ -831,6 +856,15 @@ production, shared test environments, remote peers, or final applications.
 of `tests.sh`, and it does not replace `tests/integration/http/http_positive.py`, Schemathesis,
 or fuzzing.
 
+`runCases` continues through the selected cases after an individual flow
+fails; the measured flow has already recorded that failure. k6 excludes URL and
+error-text tags so fixture KIDs and subjects do not become metric labels. Private
+fixture validation never reflects malformed or secret values. The Python runner
+passes admission overrides through unchanged, including empty strings, leaving
+validation to Vectis. Cleanup and audit verification run after measurement or
+sampler failures and terminal hangup; the measured child inherits the terminal
+instead of being piped through a progress wrapper.
+
 Prerequisites:
 
 - `k6` must be installed locally.
@@ -965,6 +999,14 @@ the (git-ignored) `fuzz/corpus/<target>/` before each run to bootstrap coverage
 from realistic examples. Existing corpus entries discovered by libFuzzer are
 preserved.
 
+`SEEDS_ONLY=1` runs each committed seed with libFuzzer's `-runs=0`, without
+exploring accumulated corpora; targets with no seeds are skipped. The runner
+selects the host target triple so prebuilt musl cargo-fuzz executables do not
+accidentally request an ASan-incompatible static libc target. `FUZZ_TRIPLE` remains
+an explicit override. `PER_INPUT_TIMEOUT` detects individual hanging inputs,
+independently of campaign duration; the shared dictionary supplies field names,
+enum values and algorithm names to reach validation beyond malformed JSON.
+
 The script runs 27 targets: 23 structural/fast and four bounded crypto targets.
 
 - `fuzz_canonical_json`
@@ -993,6 +1035,34 @@ The script runs 27 targets: 23 structural/fast and four bounded crypto targets.
 
 The slow group adds `fuzz_fpe_roundtrip`, `fuzz_tokenization_roundtrip`,
 `fuzz_commitment_verify` and `fuzz_internal_encryption_roundtrip`.
+
+### Native property boundaries
+
+- `fuzz_canonical_json` requires canonicalization idempotence only for float-free
+  JSON. Serde's fallback through `f64` is not bit-stable for all numeric inputs;
+  float-containing input still exercises canonicalization for panics.
+- `fuzz_protected_message_artifact` starts from an envelope with exact canonical
+  AAD, checks stable parse/validate/canonicalize round trips, and independently
+  mutates AAD-bound metadata and encodings to require rejection.
+- `fuzz_fpe_roundtrip` initializes synthetic profiles/ciphers once per process
+  and maps input into the permitted alphabet and length domain. An encrypt
+  rejection is allowed; accepted encryption must decrypt to the original text.
+- `fuzz_tokenization_roundtrip` preserves plaintext and metadata using a fixed
+  profile and matching hashid/AAD. Metadata uses integers, avoiding unrelated
+  floating-point re-encoding differences.
+- `fuzz_commitment_verify` checks deterministic verification and binding to
+  plaintext. It requires enough input for the profile's complete opening.
+- `fuzz_internal_encryption_roundtrip` tests AEAD round trips with fixed key and
+  nonce while varying message and AAD. It does not test nonce generation or
+  uniqueness.
+- `fuzz_time_attestation_evaluate` checks overflow-safe evaluation, serialization
+  and verdict consistency against local/NTS-corrected bracket overlap. Wire
+  parsing and signature verification belong to the upstream time libraries.
+
+Init and SLH-DSA wrapper validators stop before unseal, decryption, DER loading
+or key-algorithm authentication. The audit-line validator likewise proves shape,
+not record hashes or checkpoint authenticity. Their runtime loaders and Rust
+crypto tests cover those separate responsibilities.
 
 ### Configuration fuzzing
 

@@ -38,10 +38,6 @@ from semantics import (
 )
 
 
-# Minimal, policy-safe key requests (one per crypto profile) used to CREATE seed
-# keys. Creating with only tag+profile works under both crypto policies, and the
-# different profiles exercise AES-GCM nonce sizes, ChaCha20 (24-byte nonce),
-# and Ed448/X448 vs Ed25519/X25519.
 KEY_CASES = [
     {"tag": "fuzz-performance", "profile": "hybrid-performance-v1"},
     {"tag": "fuzz-standard", "profile": "hybrid-standard-v1"},
@@ -49,8 +45,6 @@ KEY_CASES = [
     {"tag": "fuzz-long-term", "profile": "hybrid-long-term-v1"},
 ]
 
-# Full-shape request used as the seed for the /keys fuzz target (all fields
-# present so mutations can hit every one).
 KEY_TARGET_SEED = {
     "tag": "fuzz",
     "profile": "hybrid-performance-v1",
@@ -121,7 +115,6 @@ def batch_contract_context(client, capability):
 
 
 def crypto_semantics_context(client, capability):
-    """Create one fresh active KID/profile pair for a deterministic scenario."""
     if capability in _BATCH_CONTRACTS:
         return batch_contract_context(client, capability)
     if capability != "sharing":
@@ -160,7 +153,6 @@ def subject_contract_context(client):
 
 
 def mutate_share_tag(encoded):
-    """Change only the authenticated tag while preserving a canonical envelope."""
     prefix = "vectis-sss-v1."
     if not isinstance(encoded, str) or not encoded.startswith(prefix):
         return encoded
@@ -274,11 +266,6 @@ def lifecycle_seeds(client):
 
 
 def lifecycle_contract_setup(client, iterations):
-    """Provision every lifecycle iteration up front: one fresh 5-KID batch per
-    iteration (keys are permanently transitioned, so each iteration needs its
-    own), all bound in a single signed config reload. Returns one context per
-    iteration, each {"kids": {state: kid}, "profiles": {state: {role: name}}}.
-    """
     states = ("active", "retired", "disabled", "compromised", "destroyed")
     batches = [
         {

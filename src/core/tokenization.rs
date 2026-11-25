@@ -71,7 +71,6 @@ pub struct DerivedTokenizationKeys {
     pub cipher_algorithm: String,
 }
 
-/// Owned, request-scoped key selection, transferable to a blocking worker.
 #[derive(Clone)]
 pub struct TokenContext {
     profile: Arc<TokenizationProfile>,

@@ -1,4 +1,3 @@
-"""Generic HTTP response assertions with no endpoint semantics."""
 
 from .client import WorkflowError
 

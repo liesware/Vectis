@@ -528,7 +528,6 @@ pub fn encrypt_batch(prepared: PreparedFpeEncryptBatch) -> Result<FpeEncryptBatc
 }
 
 pub fn decrypt_batch(prepared: PreparedFpeDecryptBatch) -> Result<FpeDecryptBatchOutput, DynError> {
-    // Authenticate the complete batch before recovering any plaintext.
     for (index, item) in prepared.input.items.iter().enumerate() {
         prepared
             .profile

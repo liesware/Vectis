@@ -1,4 +1,3 @@
-"""Private, synthetic preflights and operation-specific OpenAPI examples for ZAP."""
 
 import copy
 import hashlib
@@ -40,7 +39,7 @@ OPERATIONS = tuple((path, "get") for path in PUBLIC) + tuple((path, "post") for 
 
 
 class FixtureError(ValueError):
-    """An application-owned diagnostic that contains no response body or credential."""
+    pass
 
 
 def require(condition, message):
@@ -70,7 +69,6 @@ class Client:
         self.credential = credential
         self.kid = kid
         self.subject = subject
-        # Trust only the disposable laboratory certificate; never use personal proxies.
         self.opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({}),
             urllib.request.HTTPSHandler(context=ssl.create_default_context(cafile=certificate)),
@@ -314,7 +312,6 @@ def prepare_document(source, preflight):
             example = preflight.examples[(path, method)][0]
             media.pop("examples", None)
             media["example"] = copy.deepcopy(example)
-            # Inline a private schema copy: component examples must not override the body.
             media["schema"] = {"type": "object", "example": copy.deepcopy(example),
                                "required": list(example),
                                "properties": example_properties(example)}
@@ -329,7 +326,6 @@ def prepare_document(source, preflight):
 
 
 def example_properties(value):
-    """Schema-level examples also support importers that ignore media examples."""
     def schema(item):
         if isinstance(item, dict):
             return {"type": "object", "example": item, "required": list(item),
@@ -371,7 +367,6 @@ if __name__ == "__main__":
     try:
         main()
     except (ValueError, KeyError, OSError) as error:
-        # Do not print HTTP bodies, credentials, or third-party transport exceptions.
         detail = str(error) if isinstance(error, FixtureError) else type(error).__name__
         print(f"[zap] fixture preparation failed: {detail}; review preflight.json")
         raise SystemExit(1) from None

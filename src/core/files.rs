@@ -148,7 +148,6 @@ pub fn read_bounded_utf8_file(
     )
 }
 
-/// Protected buffers, including failed reads and invalid UTF-8.
 pub fn read_bounded_secret_utf8_file(
     path: &Path,
     label: &str,

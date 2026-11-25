@@ -1,8 +1,3 @@
-"""Minimal runtime helper for the CLI remote-route integration case.
-
-This stays local to the CLI suite: importing the HTTP integration library would
-couple two independently runnable test families.
-"""
 
 import json
 import urllib.error
@@ -24,7 +19,6 @@ REMOTE_ROUTE_KEY_CASE = {
 
 
 def create_remote_route_key(base_url, apikey):
-    """Create one runtime key used solely to import a remote route."""
     request = urllib.request.Request(
         f"{base_url.rstrip('/')}/keys",
         data=json.dumps(REMOTE_ROUTE_KEY_CASE).encode("utf-8"),

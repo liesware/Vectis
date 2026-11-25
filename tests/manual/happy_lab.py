@@ -1,4 +1,3 @@
-"""Private, disposable SQLite process lifecycle for the manual walkthrough."""
 
 import json
 import os
@@ -85,7 +84,6 @@ class Laboratory:
         result = subprocess.run([str(self.binary), *args], cwd=self.path, env=self.env,
                                 capture_output=True, text=True, timeout=120)
         if result.returncode:
-            # Init output can contain secrets even on failure; never echo it.
             details = "output suppressed for init" if args == ("init",) else self.out.redact(result.stderr + result.stdout)
             with (self.path / "command.log").open("a") as log:
                 log.write(f"vectis {' '.join(args)}: exit {result.returncode}\n{details}\n")

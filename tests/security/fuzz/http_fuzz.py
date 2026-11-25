@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""CLI entry point for the Vectis HTTP fuzz suite. See doc/Test.md."""
 
 import argparse
 import sys

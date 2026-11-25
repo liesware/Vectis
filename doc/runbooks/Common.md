@@ -436,7 +436,7 @@ vectis keys properties <kid>
 
 ### Do Not
 
-- Do not force terminal lifecycle states back to active.
+- Do not force retired, compromised, or destroyed keys back to active.
 - Do not expose `/pub/{kid}` for retired, compromised, or destroyed keys.
 
 ## Subject Or Deterministic Token Failure

@@ -9,10 +9,6 @@ use vectis::core::config_file::ConfigState;
 #[path = "common.rs"]
 mod common;
 
-// One commitment profile, keyed once per process. A commitment is a keyed tag
-// over the canonical (opening, plaintext) payload. Two properties are asserted:
-//   * verify  — recomputing with the same opening+plaintext reproduces the tag;
-//   * binding — a different plaintext must not reproduce the tag.
 const CONFIG: &str = r#"{
   "version": "v1",
   "routes": [],
@@ -46,9 +42,6 @@ fuzz_target!(|data: &[u8]| {
         .get(PROFILE_NAME)
         .expect("commitment profile must be present");
 
-    // The opening must be exactly opening_len bytes; the remainder is the
-    // plaintext (bounded to the profile max). Inputs too short to carry a full
-    // opening carry no case.
     if data.len() < profile.opening_len() {
         return;
     }
@@ -61,7 +54,6 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
 
-    // verify: the commitment is deterministic in its inputs.
     let recomputed = commitments::compute_commitment(&profile, &opening, &plaintext)
         .expect("recomputing a valid commitment must succeed");
     assert_eq!(
@@ -69,7 +61,6 @@ fuzz_target!(|data: &[u8]| {
         "commitment must verify: recompute is deterministic"
     );
 
-    // binding: perturbing the plaintext must change the tag.
     let perturbed = format!("{plaintext}\u{0}");
     if let Ok(other) = commitments::compute_commitment(&profile, &opening, &perturbed) {
         assert_ne!(

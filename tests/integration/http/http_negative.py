@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Run the ordered negative HTTP integration workflow."""
 
 import argparse
 import sys

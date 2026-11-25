@@ -12,7 +12,84 @@ pub struct PostgresStorage {
     dsn_context: String,
 }
 
+#[cfg(test)]
+#[path = "postgres_purge_tests.rs"]
+mod purge_tests;
+
+const PURGE_LOCK_TIMEOUT: &str = "SET LOCAL lock_timeout = '5s'";
+
 impl PostgresStorage {
+    pub(super) async fn purge_ops_key(
+        &self,
+        kid: &str,
+        keys: &str,
+        properties: &str,
+    ) -> Result<super::KeyPurgeCounts, DynError> {
+        let mut tx = self.pool.begin().await.map_err(|_| super::purge_failed())?;
+        sqlx::query(PURGE_LOCK_TIMEOUT)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| super::purge_failed())?;
+        let row = sqlx::query("SELECT keys, properties FROM opskeys WHERE kid = $1 FOR UPDATE")
+            .bind(kid)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|_| super::purge_failed())?
+            .ok_or_else(|| crate::error::not_found("ops key not found"))?;
+        let current_keys = zeroize::Zeroizing::new(
+            row.try_get::<String, _>("keys")
+                .map_err(|_| super::purge_failed())?,
+        );
+        let current_properties = zeroize::Zeroizing::new(
+            row.try_get::<String, _>("properties")
+                .map_err(|_| super::purge_failed())?,
+        );
+        if current_keys.as_str() != keys || current_properties.as_str() != properties {
+            return Err(crate::error::conflict(
+                "ops key changed since confirmation preflight; nothing was deleted",
+            ));
+        }
+        let tokens = sqlx::query("DELETE FROM tokens WHERE kid = $1")
+            .bind(kid)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| super::purge_failed())?
+            .rows_affected();
+        let subjects = sqlx::query("DELETE FROM subjects WHERE kid = $1")
+            .bind(kid)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| super::purge_failed())?
+            .rows_affected();
+        let indexes = sqlx::query("DELETE FROM indexes WHERE kid = $1")
+            .bind(kid)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| super::purge_failed())?
+            .rows_affected();
+        let opskeys =
+            sqlx::query("DELETE FROM opskeys WHERE kid = $1 AND keys = $2 AND properties = $3")
+                .bind(kid)
+                .bind(keys)
+                .bind(properties)
+                .execute(&mut *tx)
+                .await
+                .map_err(|_| super::purge_failed())?
+                .rows_affected();
+        if opskeys != 1 {
+            return Err(super::purge_failed());
+        }
+        tx.commit()
+            .await
+            .map_err(|_| super::purge_commit_unknown())?;
+        Ok(super::KeyPurgeCounts {
+            opskeys,
+            tokens,
+            subjects,
+            indexes,
+        })
+    }
+
     #[cfg(test)]
     pub async fn save_token(
         &self,

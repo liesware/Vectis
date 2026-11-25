@@ -264,8 +264,6 @@ echo "[zap] run active API scan"
 export ZAP_AUTH_HEADER="X-API-Key"
 export ZAP_AUTH_HEADER_VALUE="$APP_APIKEY"
 export ZAP_AUTH_HEADER_SITE="127.0.0.1"
-# The official image runs as the unprivileged zap user. Make only this
-# disposable report directory writable across the bind mount.
 chmod 777 "$RESULTS"
 set +e
 timeout --signal=TERM --kill-after=30s 45m \

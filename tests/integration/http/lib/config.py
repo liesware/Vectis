@@ -1,4 +1,3 @@
-"""Configuration snapshots and deterministic cleanup for HTTP suites."""
 
 import atexit
 import copy
@@ -15,8 +14,6 @@ from .client import StatusClient, WorkflowError
 CONFIG_PATH = Path("config.json")
 CONFIG_SIGN_PATH = Path("config_sign.json")
 
-# The nine config sections a negative case isolates when it puts deliberately bad
-# data in one of them (the unified reload validates every section at once).
 CONFIG_SECTIONS = (
     "routes",
     "remote_routes",
@@ -105,7 +102,6 @@ class ConfigTransaction:
             self._restore(self.config_path, self._config_snapshot)
             self._restore(self.sign_path, self._sign_snapshot)
         except FileNotFoundError:
-            # A temporary test directory may legitimately be gone during atexit.
             return
 
     def restore_runtime(self, base_url, apikey):

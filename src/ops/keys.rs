@@ -960,19 +960,82 @@ fn load_ops_key_from_row(
     internal_keys: &InternalDerivedKeysState,
     row: crate::core::storage::OpsKeyRow,
 ) -> Result<LoadedOpsKey, DynError> {
-    validate_kid_matches_keys(&row.kid, &row.keys)?;
-    let decrypted = decrypt_ops_keys_payload(internal_keys, &row.keys)?;
-    let properties = decrypt_ops_key_properties_payload(internal_keys, &row.properties)?;
+    authenticate_ops_key_row(internal_keys, &row.kid, &row.keys, &row.properties)
+}
+
+fn authenticate_ops_key_row(
+    internal_keys: &InternalDerivedKeysState,
+    kid: &str,
+    keys: &str,
+    properties: &str,
+) -> Result<LoadedOpsKey, DynError> {
+    validate_kid_matches_keys(kid, keys)?;
+    let decrypted = decrypt_ops_keys_payload(internal_keys, keys)?;
+    let properties = decrypt_ops_key_properties_payload(internal_keys, properties)?;
     validate_ops_key_properties(&properties.output)?;
-    validate_loaded_ops_key_binding(&row.kid, &decrypted, &properties)?;
+    validate_loaded_ops_key_binding(kid, &decrypted, &properties)?;
 
     Ok(LoadedOpsKey {
-        id: row.kid,
+        id: kid.to_owned(),
         aad: decrypted.aad,
         properties_aad: properties.aad,
         key_material: decrypted.output,
         properties: properties.output,
     })
+}
+
+pub(crate) struct PreparedKeyDrop {
+    kid: String,
+    keys: Zeroizing<String>,
+    properties: Zeroizing<String>,
+}
+
+impl PreparedKeyDrop {
+    pub(crate) async fn execute(
+        self,
+        storage: &StorageState,
+    ) -> Result<crate::core::storage::KeyPurgeCounts, DynError> {
+        storage
+            .purge_ops_key(&self.kid, &self.keys, &self.properties)
+            .await
+    }
+}
+
+pub(crate) async fn prepare_key_drop(
+    storage: &StorageState,
+    internal_keys: &InternalDerivedKeysState,
+    kid: &str,
+) -> Result<PreparedKeyDrop, DynError> {
+    validate_key_id(kid)?;
+    let row = storage.get_ops_keys(kid).await.map_err(|error| {
+        if crate::error::is_not_found(error.as_ref()) {
+            crate::error::not_found("ops key not found")
+        } else {
+            crate::error::storage("could not read operational key")
+        }
+    })?;
+    let prepared = PreparedKeyDrop {
+        kid: row.kid,
+        keys: Zeroizing::new(row.keys),
+        properties: Zeroizing::new(row.properties),
+    };
+    let loaded = Zeroizing::new(
+        authenticate_ops_key_row(
+            internal_keys,
+            &prepared.kid,
+            &prepared.keys,
+            &prepared.properties,
+        )
+        .map_err(|_| {
+            crate::error::invalid_input("could not authenticate operational key and properties")
+        })?,
+    );
+    if loaded.lifecycle_status() != "destroyed" {
+        return Err(crate::error::invalid_input(
+            "keys drop requires lifecycle destroyed; nothing was deleted",
+        ));
+    }
+    Ok(prepared)
 }
 
 struct DecryptedOpsKeys {
@@ -1209,8 +1272,10 @@ fn validate_lifecycle_status(field: &str, status: &str) -> Result<(), DynError> 
 fn validate_lifecycle_transition(current: &str, next: &str) -> Result<(), DynError> {
     let allowed = match current {
         "active" => matches!(next, "disabled" | "retired" | "compromised" | "destroyed"),
-        "disabled" => next == "active",
-        "retired" | "compromised" | "destroyed" => false,
+        "disabled" => matches!(next, "active" | "retired" | "compromised" | "destroyed"),
+        "retired" => matches!(next, "compromised" | "destroyed"),
+        "compromised" => next == "destroyed",
+        "destroyed" => false,
         _ => false,
     };
 
@@ -1457,7 +1522,36 @@ mod tests {
                 | ("active", "compromised")
                 | ("active", "destroyed")
                 | ("disabled", "active")
+                | ("disabled", "retired")
+                | ("disabled", "compromised")
+                | ("disabled", "destroyed")
+                | ("retired", "compromised")
+                | ("retired", "destroyed")
+                | ("compromised", "destroyed")
         )
+    }
+
+    #[test]
+    fn lifecycle_transition_matrix() {
+        let expected = [
+            [false, true, true, true, true],
+            [true, false, true, true, true],
+            [false, false, false, true, true],
+            [false, false, false, false, true],
+            [false, false, false, false, false],
+        ];
+        for (row, current) in LIFECYCLE.iter().enumerate() {
+            for (column, next) in LIFECYCLE.iter().enumerate() {
+                let result = validate_lifecycle_transition(current, next);
+                assert_eq!(result.is_ok(), expected[row][column], "{current} -> {next}");
+                if !expected[row][column] {
+                    assert_eq!(
+                        result.unwrap_err().to_string(),
+                        format!("invalid lifecycle transition: {current} -> {next}")
+                    );
+                }
+            }
+        }
     }
 
     fn loaded_key_with_lifecycle(status: &str) -> LoadedOpsKey {

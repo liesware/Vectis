@@ -1,4 +1,3 @@
-"""Coordinate campaigns; laboratory details and request contracts live elsewhere."""
 
 from datetime import datetime, timezone
 import json
@@ -33,7 +32,6 @@ def clean_environment():
 
 
 def run_measured_k6(environment):
-    # Preserve isatty(): piping/teeing the measured child hides k6's native UI.
     return command(["k6", "run", str(HERE.parent / "k6.js")], env=environment, check=False)
 
 
@@ -133,7 +131,6 @@ def run_profile(args, index, binary, run_id, environment, destination=None, posi
             record["db_final"] = lab.sizes()
         except (Exception, KeyboardInterrupt):
             additional.append("could not inspect final database sizes")
-        # Closing and audit must still run after any measurement/sampler failure.
         try:
             closed = lab.close()
             record["audit_exit"] = closed["audit_exit"]
@@ -171,7 +168,7 @@ def run_profile(args, index, binary, run_id, environment, destination=None, posi
 
 
 def main(argv=None):
-    args = parse_options(argv)  # All validation precedes builds or filesystem writes.
+    args = parse_options(argv)
     if not shutil.which("k6"):
         raise RuntimeError("k6 must be installed")
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ-") + uuid.uuid4().hex[:8]
@@ -249,8 +246,6 @@ def interrupt(*_):
 
 
 if __name__ == "__main__":
-    # Children run in their own sessions, so a closed terminal (SIGHUP) must also
-    # unwind through the normal cleanup instead of orphaning Vectis and k6.
     for signum in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(signum, interrupt)
     sys.exit(main())

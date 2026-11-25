@@ -31,6 +31,15 @@ accepts only authenticated NTP responses. It does not fall back to unauthenticat
 SNTP. The response reports the authenticated offset and round-trip time; it does
 not expose NTP stratum.
 
+`evaluate_time_attestation` compares the complete local query bracket with the
+signed Roughtime interval, not just a midpoint sample. A correct remote timestamp
+can fall anywhere between request start and response end; reducing that bracket
+to a point would incorrectly reject clocks by as much as the query latency.
+`query_roughtime` marks an observation verified only after `verify_response`
+accepts it. HTTP admission uses an atomic compare-and-exchange on the last
+attempt time, admitting at most one authorized request per configured interval
+across concurrent callers.
+
 Vectis uses three main code layers:
 
 - `core`: reusable primitives and infrastructure;
@@ -97,6 +106,13 @@ Storage is reached through `core/storage/mod.rs`. SQLite and PostgreSQL share
 the same logical storage contract.
 
 ## Startup Flow
+
+Before constructing a rustls client or server configuration, call
+`core::tls::ensure_crypto_provider`. Transitive dependencies can enable both
+`ring` and `aws-lc-rs`, preventing rustls from selecting a provider automatically.
+The helper installs `ring` once per process; an already-installed provider is
+accepted. Library users and in-process tests need this initialization too, not
+only the CLI entrypoint.
 
 `vectis serve` starts the HTTP service. The high-level flow is:
 
@@ -172,6 +188,14 @@ Reload boundaries are explicit:
 - missing-key lazy-load loads one key from storage if a request references a
   valid `kid` not present in memory.
 
+`KeyLoadSingleflight` coalesces concurrent loads for the same KID. Its registry
+holds weak references rather than retaining completed loads or negative results.
+`KeyLoadLease::drop` releases its flight reference while holding the registry
+mutex, then removes an entry only if it still names that flight and has no
+participants. Moving the release outside the lock can leave an abandoned entry;
+removing without checking identity can remove a newer flight for the same KID.
+The registry mutex is not held across storage or decryption.
+
 The cluster rule applies inside the process too:
 
 > Storage can be shared. Runtime state is local. Reload is explicit.
@@ -221,6 +245,13 @@ business logic belongs in `ops`.
 Audit is emitted for security-relevant decisions and operations. Metrics are
 updated with low-cardinality labels. Operational logs can include request
 context and non-secret summaries.
+
+`CryptoLimiter::acquire` owns a queue position and a `CryptoQueueWait` metric
+guard while waiting for an execution permit. Both waiting guards are dropped
+before blocking dispatch, including on timeout or cancellation. Once dispatched,
+the worker owns its execution permit until it finishes; cancelling the HTTP
+future must not release capacity for work that is still executing. Metric guards
+retain their handles so cancellation remains correct on a different thread.
 
 ## Key Flow
 
@@ -275,7 +306,21 @@ Key loading happens at startup, explicit reload, or missing-key lazy-load.
 
 Lifecycle changes update encrypted `properties`. The update uses
 compare-and-swap semantics against the previous encrypted properties blob. This
-prevents stale concurrent lifecycle writes from overwriting terminal states.
+rejects writes based on obsolete encrypted properties, rather than silently
+overwriting a later storage update. Retired and compromised keys can advance
+toward logical destruction, but cannot return to active service.
+
+After the storage write, the endpoint reads the key again and upserts the local
+cache. These are separate operations: concurrent updates or reloads may
+interleave, so CAS does not guarantee monotonic cache publication. This existing
+limitation is not corrected by the expanded transition policy. Post-update
+crypto blocking is tested locally and sequentially without concurrent reloads
+or updates. Other nodes must explicitly reload keys or restart.
+
+Moving a disabled key to retired deliberately restores recovery/verification,
+not production or public key exposure. No dependent-record cleanup is required.
+Logical destruction retains encrypted key material; cleanup grants remain
+independent. Updates do not cancel in-flight work or revoke external verification.
 
 ## Message Flow
 
@@ -404,6 +449,10 @@ The signed profile also controls presets, case, preserved characters and
 requires subject in JSON; `none` prohibits it. A stored context derives temporary
 FF1 and, when authenticated, MAC keys from their profile parents and the opened
 seed. Seed opening and context preparation happen once per batch.
+
+Authenticated batch decrypt checks every item's tag before recovering any
+plaintext. `fpe_transform` reserves four bytes per Unicode scalar when rebuilding
+the result so it need not reallocate a partially decrypted UTF-8 string.
 
 ### Tokenization Flow
 
@@ -572,6 +621,15 @@ Reload behavior:
 Config reload is whole-file. There is no partial route, remote route, or
 permissions reload.
 
+`merge_and_validate_time_overrides` validates the complete merged time policy,
+not only newly supplied fields; a valid edit must not preserve an invalid
+hand-edited override. `ConfigLoader` captures invocation-scoped sources but
+resolves and validates consumer settings lazily. File source restrictions remain
+unconditional even when process values override the assignment. Synthetic sources
+use native process-value encodings and deterministic host-independent defaults;
+they perform no environment or filesystem reads. The pure `.env` parser owns
+grammar, while the loader owns recognized names and permitted sources.
+
 ## Zeroizing And Memory
 
 Vectis uses `zeroize` and `Zeroizing` for secret material that should be cleared
@@ -590,6 +648,10 @@ Important secret categories:
 Loaded operational keys live in memory while the server needs them. They are
 stored as `Arc<LoadedOpsKey>` to avoid deep clones of private material across
 requests. When the last `Arc` is dropped, the key tree is zeroized.
+
+`core::files` protects partial reads and invalid UTF-8 buffers as well as
+successful reads. `decrypt_aes256_siv` places its output under zeroizing ownership
+before authentication, so failed SIV authentication also cleans its output buffer.
 
 Zeroization is a best-effort memory hygiene tool. It does not protect against:
 
@@ -638,6 +700,22 @@ stable event names and logical identity fields such as:
 
 Audit logs must not include plaintext, ciphertext bodies, API keys, unseal keys,
 private keys, shared secrets, or full sensitive payloads.
+
+`audit_chain::record` defers durability: callers must follow it with `confirm`
+or a writer barrier. Callers outside a request use `record_standalone`, which
+requests its own commit. The writer groups bounded batches, fsyncs the file at
+durability boundaries, and only then acknowledges their barriers. Once a write
+or sync fails, it stops appending permanently rather than risk reusing a sequence
+against divergent file state. Shutdown drains commands already queued even after
+the shutdown command, then writes the final checkpoint and confirms persistence.
+
+`audit_chain::verify_file` enforces strict record encoding by comparing canonical
+bytes; `deny_unknown_fields` cannot provide this protection on flattened Serde
+records. `validate_audit_jsonl_line_encoding` checks structural encoding only and
+must not be used as evidence of authentic hashes or signatures. HTTP middleware
+waits for audit confirmation only when the request emitted audit events: probes
+and metrics do not become writer-dependent. Operational logging always admits
+spans so request correlation survives restrictive log levels.
 
 Every HTTP response includes `X-Request-Id`. The same ID is present in request
 and audit logs so a caller can report a failing request without exposing
@@ -692,6 +770,15 @@ General rules:
 Public errors should be useful but not revealing. Internal logs can keep more
 detail, as long as they still avoid secrets.
 
+`ops::json::parse_json_request` rejects reserved `$serde_json::private::*`
+object keys before typed deserialization can collapse them into number or raw
+value nodes. Tokenization checks raw metadata first for field/item-specific
+diagnostics; the common parser remains the boundary guard. Canonical JSON also
+checks these keys and bounds recursion for internally constructed values.
+`invalid_json_input` preserves safe field, shape and location diagnostics but
+never the caller's offending value. Stored subject corruption is an internal
+error, not reflected storage content or a reason to try a legacy key.
+
 ## Internal Invariants
 
 These invariants are part of the implementation contract:
@@ -710,7 +797,9 @@ These invariants are part of the implementation contract:
   production or recovery. Explicit token deletion permits any lifecycle state;
   subject deletion does not load the key or enforce lifecycle. These cleanup
   operations still require their independent grants.
-- Terminal lifecycle states must remain terminal under concurrent writes.
+- Lifecycle transitions must not restore retired, compromised, or destroyed
+  keys to active service. Only destroyed has no outgoing transitions. Storage
+  CAS rejects stale writes; cache publication is not monotonic under concurrency.
 - Signed config is the source of runtime route, remote peer, and permission
   policy.
 - Config reload and key reload are explicit.

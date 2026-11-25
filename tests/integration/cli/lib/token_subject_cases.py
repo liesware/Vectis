@@ -1,4 +1,3 @@
-"""CLI runtime token/subject coverage against an independently provisioned server."""
 
 import json
 import os
@@ -20,6 +19,7 @@ def token_subject_runtime_case():
             port = socket_handle.getsockname()[1]
         env.update(VECTIS_MODE="dev", VECTIS_HTTP_BIND_ADDR=f"127.0.0.1:{port}",
                    VECTIS_API_URL=f"http://127.0.0.1:{port}", VECTIS_LOG_DIR=str(Path(directory) / "log"),
+                   VECTIS_LOG_TARGET="file", VECTIS_AUDIT_LOG_FILE="audit.log",
                    VECTIS_CRYPTO_POLICY="profile-only")
         initialized = run_cli(["init"], env)
         for line in initialized.stdout.splitlines():
@@ -45,6 +45,8 @@ def token_subject_runtime_case():
                 else:
                     raise RuntimeError("isolated CLI server readiness timed out")
                 _runtime_contracts(env, configuration, directory)
+                from .key_drop_cases import prepare_key_drop_cases
+                drop_kids = prepare_key_drop_cases(env)
             finally:
                 if server.poll() is None:
                     os.killpg(server.pid, signal.SIGINT)
@@ -53,6 +55,9 @@ def token_subject_runtime_case():
                 except subprocess.TimeoutExpired:
                     os.killpg(server.pid, signal.SIGKILL)
                     server.wait()
+        run_cli(["audit", "verify", "--file", str(Path(directory) / "log" / "audit.log")], env)
+        from .key_drop_cases import key_drop_offline_cases
+        key_drop_offline_cases(env, drop_kids, directory)
 
 
 def _runtime_contracts(env, configuration, directory):
@@ -120,3 +125,5 @@ def _runtime_contracts(env, configuration, directory):
     fpe_runtime_contracts(env, directory)
     from .deterministic_cases import deterministic_runtime_contracts
     deterministic_runtime_contracts(env, directory)
+    from .lifecycle_cases import lifecycle_runtime_contracts
+    lifecycle_runtime_contracts(env)

@@ -1,4 +1,3 @@
-"""Subject seeds, isolation, batch atomicity and explicit deletion."""
 import copy
 
 from lib.assertions import require

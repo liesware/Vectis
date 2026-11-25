@@ -73,7 +73,6 @@ impl CryptoLimiter {
                 Err(crate::error::overloaded("crypto queue timeout"))
             }
         }
-        // Both guards drop here (or on cancellation), before any blocking dispatch.
     }
 
     async fn run<T>(
@@ -233,7 +232,6 @@ mod tests {
         assert_eq!(limiter.execution.available_permits(), 0);
         assert!(limiter.acquire().await.is_err());
         release_tx.send(()).unwrap();
-        // A released execution permit, not a sleep, establishes worker completion.
         drop(limiter.execution.acquire().await.unwrap());
         assert_eq!(limiter.execution.available_permits(), 1);
     }

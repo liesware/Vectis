@@ -1,9 +1,3 @@
-"""Negative HTTP contract cases: authorization enforcement.
-
-Setup (negative.authz.bootstrap) builds the shared negative fixtures every later
-module reuses: key_id, .api_key_hashes and the limited/metrics/admin/time
-authz clients. Each case is a plain function taking ctx.
-"""
 
 import hashlib
 import json
@@ -48,9 +42,6 @@ def _(ctx):
             {"client": "negative-time-attest", "apikey_hash": time_api_key_hash,
              "status": "active", "permissions": [{"kid": "*", "actions": ["time-attest"]}]},
         ],
-        # The profiles below are added to the same config_data and signed once by
-        # the write_config() at the end of the bootstrap; signing here too would be
-        # a wasted `cargo run -- config sign` on a config that is about to change.
         sign=False,
     )
     ctx.config_data["fpe_profiles"] = [valid_fpe_profile(key_id)]

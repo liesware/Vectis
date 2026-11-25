@@ -24,7 +24,6 @@ pub fn decrypt_aes256_siv(
     cipher.set_key(key)?;
     cipher.set_associated_data(aad)?;
     cipher.start(&[])?;
-    // Keep even a failed-authentication output buffer under zeroizing ownership.
     let mut output = Zeroizing::new(vec![0; ciphertext.len()]);
     let written = cipher
         .finish_into(ciphertext, &mut output)

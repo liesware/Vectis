@@ -355,12 +355,18 @@ Operational keys have a lifecycle status:
 Allowed transitions:
 
 - `active` -> `disabled`, `retired`, `compromised`, `destroyed`
-- `disabled` -> `active`
-- `retired` -> no transitions
-- `compromised` -> no transitions
+- `disabled` -> `active`, `retired`, `compromised`, `destroyed`
+- `retired` -> `compromised`, `destroyed`
+- `compromised` -> `destroyed`
 - `destroyed` -> no transitions
 
 Transitions to the same status are rejected.
+
+`retired` and `compromised` are irreversible with respect to returning to
+service; only `destroyed` has no outgoing transitions. `disabled` to `retired`
+deliberately restores recovery and verification without allowing new production
+or `/pub`. Transitions do not require deleting dependent tokens first.
+`destroyed` does not physically erase encrypted key material.
 
 ```mermaid
 stateDiagram-v2
@@ -370,10 +376,20 @@ stateDiagram-v2
     active --> retired
     active --> compromised
     active --> destroyed
-    retired --> [*]
-    compromised --> [*]
+    disabled --> retired
+    disabled --> compromised
+    disabled --> destroyed
+    retired --> compromised
+    retired --> destroyed
+    compromised --> destroyed
     destroyed --> [*]
 ```
+
+Updates do not cancel in-flight operations, invalidate external verification,
+or propagate automatically to other nodes; key reload or restart is explicit.
+Storage CAS rejects stale writes but does not make cache publication monotonic.
+Post-update blocking is guaranteed here only for local sequential operations,
+without concurrent reloads or updates.
 
 Lifecycle enforcement is centralized through helper functions in `ops/keys.rs`,
 such as:

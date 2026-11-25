@@ -1,9 +1,3 @@
-"""Shared mechanisms for the negative HTTP contract cases.
-
-Reusable domain constants and validators imported by the negative_* case modules.
-Config writing/reloading now lives on HttpTestContext (ctx.*), so this module no
-longer carries the old global-config plumbing.
-"""
 
 import hashlib
 import subprocess

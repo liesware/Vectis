@@ -1,4 +1,3 @@
-// Built-in Node modules only. k6 adapters are stubbed; no HTTP/crypto is executed.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";

@@ -11,7 +11,6 @@ SEEDS_ONLY="${SEEDS_ONLY:-0}"
 INCLUDE_SLOW="${INCLUDE_SLOW:-1}"
 EXPECTED_TARGETS="${EXPECTED_TARGETS:-27}"
 
-# Structural targets: fast, parse/validate/canonicalize without panics.
 FAST_TARGETS=(
   fuzz_canonical_json
   fuzz_sign_input
@@ -38,9 +37,6 @@ FAST_TARGETS=(
   fuzz_time_attestation_evaluate
 )
 
-# Bounded crypto property targets: real round-trip / verify properties over live
-# primitives. Lower throughput (crypto backend), so they run as a separate group
-# that a fast weekly pass can skip with INCLUDE_SLOW=0.
 SLOW_TARGETS=(
   fuzz_fpe_roundtrip
   fuzz_tokenization_roundtrip
@@ -115,9 +111,6 @@ if ! cargo fuzz --help >/dev/null 2>&1; then
   fail "cargo-fuzz is not installed; run: cargo install cargo-fuzz"
 fi
 
-# Prebuilt cargo-fuzz binaries are musl-static and default the fuzz target to
-# their own musl triple, which ASan cannot link (static libc). Pin the build to
-# the host triple; callers may override via FUZZ_TRIPLE.
 FUZZ_TRIPLE="${FUZZ_TRIPLE:-$(rustc -vV 2>/dev/null | awk '/^host:/ { print $2 }')}"
 [[ -n "$FUZZ_TRIPLE" ]] || fail "could not determine target triple; set FUZZ_TRIPLE explicitly"
 
@@ -161,14 +154,8 @@ else
   libfuzzer_args=(-runs="$RUNS")
 fi
 
-# Flag any single input that takes longer than PER_INPUT_TIMEOUT seconds, so an
-# algorithmic-complexity DoS (a crafted input that makes a parser/validator hang)
-# surfaces as a finding instead of silently eating the time budget.
 libfuzzer_args+=(-timeout="$PER_INPUT_TIMEOUT")
 
-# Seed the mutator with the domain's field names, enum values, and algorithm
-# identifiers so it synthesizes structurally valid JSON far more often than from
-# random bytes, reaching past the initial parse into the real logic.
 DICT_FILE="$REPO_DIR/fuzz/vectis.dict"
 if [[ -f "$DICT_FILE" ]]; then
   libfuzzer_args+=(-dict="$DICT_FILE")
@@ -200,9 +187,6 @@ for target in "${TARGETS[@]}"; do
   if [[ "$MINIMIZE" == "1" ]]; then
     action=(cargo fuzz cmin --target "$FUZZ_TRIPLE" "$target")
   elif [[ "$SEEDS_ONLY" == "1" ]]; then
-    # Regression gate: execute every committed seed exactly once (-runs=0) and
-    # exit. Fast enough for a per-PR check; any seed that now crashes is a
-    # reintroduced bug. Targets without seeds have nothing to replay.
     if [[ ! -d "$seed_dir" ]]; then
       echo "[$target] no committed seeds; skipping replay"
       continue

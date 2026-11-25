@@ -10,8 +10,6 @@ use tracing::error;
 
 static ATTEST_SLOT: AtomicI64 = AtomicI64::new(i64::MIN);
 
-// Global admission control: succeeds at most once per min_interval_us via CAS, so a burst
-// of authorized callers cannot amplify outbound load against the external time servers.
 fn admit(slot: &AtomicI64, now_us: i64, min_interval_us: i64) -> bool {
     let mut last = slot.load(Ordering::Acquire);
     loop {

@@ -2,7 +2,7 @@
 
 ## Contents
 
-[Purpose](#purpose) · [Critical Recovery Set](#critical-recovery-set) · [High Availability Model](#high-availability-model) · [Disaster Recovery Model](#disaster-recovery-model) · [Failure Scenarios](#failure-scenarios) · [RPO And RTO](#rpo-and-rto) · [Operational Checks](#operational-checks)
+[Purpose](#purpose) · [Offline Retirement And Purge](#offline-retirement-and-purge) · [Critical Recovery Set](#critical-recovery-set) · [High Availability Model](#high-availability-model) · [Disaster Recovery Model](#disaster-recovery-model) · [Failure Scenarios](#failure-scenarios) · [RPO And RTO](#rpo-and-rto) · [Operational Checks](#operational-checks)
 
 ## Purpose
 
@@ -22,6 +22,39 @@ multi-node model:
 HA/DR builds on that rule. PostgreSQL helps Vectis run across nodes, but
 PostgreSQL alone is not a full HA or DR plan. Recovery also depends on matching
 cryptographic material, signed config, operational secrets, and logs.
+
+## Offline Retirement And Purge
+
+Marking an operational key `destroyed` blocks its cryptographic use but does not
+erase its stored material. `vectis keys drop <kid>` is a separate, destructive
+maintenance action against the active database, not an HTTP operation.
+
+Stop all nodes sharing that database, preserve any evidence and recovery copies
+required by policy, then use database maintenance credentials and the matching
+init/unseal material. Vectis shows the credential-free destination and requires
+terminal confirmation with exactly `delete`; no automatic confirmation is
+available. A mandatory writable audit file records, with offline attribution,
+the purge start before any deletion, then either its failure or the committed
+counts. No transaction or lock remains open during the prompt.
+
+Before restarting any node, remove references to the KID from its signed
+configuration and sign it. The purge does not alter configuration or invalidate
+other nodes' caches. After restart, the deleted KID is absent from the database
+and key inventory; no tombstone or former lifecycle error is preserved.
+
+Do not blindly retry a reported COMMIT communication failure: inspect database
+state first. An error saying the purge already committed means deletion succeeded
+but subsequent audit persistence/checkpoint or output failed. A
+`key.drop.started` audit event without a matching `key.drop.failed` or
+`key.drop.completed` means the process stopped mid-purge: inspect database state
+before any retry. Database and file audit cannot be committed atomically by this
+command.
+
+Backups, replicas outside the selected active database, WAL, recoverable pages,
+exports and existing process memory are not securely erased. Restoring a recovery
+set taken before the purge can restore both the key and its related data. Apply
+the organization's independent retention and backup-destruction policy; this
+command is not complete crypto-shredding.
 
 ## Critical Recovery Set
 

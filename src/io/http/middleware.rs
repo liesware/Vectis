@@ -34,8 +34,6 @@ pub async fn request_context(request: Request, next: Next) -> Response {
     let mut response =
         crate::core::audit::with_request_context(audit.clone(), next.run(request).instrument(span))
             .await;
-    // Fail-closed only for requests that actually emitted audit events: probes and
-    // /metrics enqueue nothing, so they never wait on the writer nor 500 on its failure.
     if audit.enqueued() {
         crate::core::audit_chain::confirm(audit.failure_cell()).await;
         if audit.failure().is_some() {

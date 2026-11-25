@@ -1,8 +1,3 @@
-"""Negative HTTP contract cases: message routing validation.
-
-Reads key_id and disabled_key_id (produced by the authz
-and lifecycle bootstraps). Each case is a plain function taking ctx.
-"""
 
 from lib.casekit import CaseSet
 from lib.fixtures import host_from_base_url

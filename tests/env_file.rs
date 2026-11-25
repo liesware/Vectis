@@ -61,7 +61,6 @@ fn env_reader_reports_unreadable_files() {
     let path = directory.0.join(".env");
     fs::write(&path, "VECTIS_VALID=secret").unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
-    // Privileged runners can read mode-000 files; do not assert an OS restriction there.
     if fs::read(&path).is_err() {
         let error = load_env_file(path.to_str().unwrap())
             .unwrap_err()

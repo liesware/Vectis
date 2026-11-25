@@ -9,11 +9,6 @@ use vectis::core::fpe;
 #[path = "common.rs"]
 mod common;
 
-// Legacy, preset and Unicode FPE profiles. `common::validate_fuzz_config_content` derives
-// the FPE key with a deterministic dummy hook, so the prepared FF1 cipher is
-// stable for the whole run. Building it inside a `LazyLock` pays the profile /
-// cipher setup exactly once per process instead of once per iteration — FF1 key
-// scheduling would otherwise dominate throughput and defeat the fuzzer.
 const FPE_CONFIG: &str = r#"{
   "version": "v1",
   "routes": [],
@@ -100,11 +95,6 @@ fuzz_target!(|data: &[u8]| {
     }
     let profile = &CONTEXTS[usize::from(data[0]) % CONTEXTS.len()];
 
-    // Map arbitrary bytes into a plaintext this profile actually accepts: each
-    // byte selects an alphabet character and the length is clamped to the profile's
-    // [min_len, max_len] domain. This keeps the fuzzer exercising the roundtrip
-    // property instead of burning iterations on inputs the encoder rejects
-    // outright. Inputs shorter than min_len simply carry no usable plaintext.
     let alphabet: Vec<_> = profile.alphabet().chars().collect();
     let separator = profile.preserve_characters().chars().next();
     let variable: String = data
@@ -117,10 +107,6 @@ fuzz_target!(|data: &[u8]| {
         None => variable,
     };
 
-    // The property: on the success path, decrypting our own ciphertext must
-    // return the exact plaintext. A rejection from encrypt is not a bug (the
-    // profile legitimately constrains its domain); a failed decrypt or a
-    // mismatch is.
     let Ok(ciphertext) = profile.encrypt(&plaintext) else {
         return;
     };

@@ -15,9 +15,6 @@ pub struct DecodedBase64Envelope {
 
 const SERDE_JSON_PRIVATE_KEY_PREFIX: &str = "$serde_json::private::";
 
-// Matches serde_json's default recursion limit for parsing untrusted input.
-// HTTP-sourced values are already bounded by that limit, but canonical_json_v1
-// also routes internally-built values through this walk, so bound it explicitly.
 const MAX_JSON_DEPTH: usize = 128;
 
 pub fn validate_canonical_json_value(field: &str, value: &Value) -> Result<(), DynError> {

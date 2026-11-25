@@ -1,4 +1,3 @@
-"""Owned subprocess groups used by the laboratory and k6 coordinator."""
 
 import os
 from pathlib import Path
@@ -34,6 +33,5 @@ def command(args, *, env=None, cwd=ROOT, stdout=None, check=True):
     finally:
         stop_process(process)
     if code and check:
-        # No child output/credentials are incorporated into public errors.
         raise RuntimeError(f"{Path(args[0]).name} command failed (exit {code}); inspect laboratory logs")
     return code

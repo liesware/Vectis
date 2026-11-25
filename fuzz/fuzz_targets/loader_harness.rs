@@ -189,7 +189,6 @@ fn admission(bytes: &[u8], choice: usize) {
     let name = names[choice % names.len()];
     let loader = checks::checked(sources(&format!("{name}=1"), name, bytes)).unwrap();
     let result = checks::checked(config::crypto_admission_config(&loader));
-    // All three reject signs; only C accepts an empty value as the default.
     let parsed = std::str::from_utf8(bytes)
         .ok()
         .filter(|v| v.len() <= config::ENV_VALUE_MAX_SIZE_BYTES)
@@ -289,7 +288,6 @@ fn raw_file(bytes: &[u8], process: &[u8]) {
             }
         },
         Err(_) => {
-            // The file reader owns UTF-8 rejection; still exercise independent process bytes.
             unused_value(process);
         }
     }
