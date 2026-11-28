@@ -286,7 +286,7 @@ the bound KID come from signed config.
 | `VECTIS_INIT_KEYS_FILE` | `init.json` | Non-empty file path | Encrypted init key material file. `vectis init` refuses to overwrite this file if it already exists. |
 | `VECTIS_INIT_PUBLIC_KEYS_FILE` | `init_pub.json` | Non-empty file path | Public init verification keys created with `vectis init`. Required by `vectis audit verify`; must not be writable by group or others. |
 | `VECTIS_UNSEAL_KEY` | No default | 32-byte symmetric key encoded as 64 hex characters | Key used to decrypt `VECTIS_INIT_KEYS_FILE` for `serve` and CLI validation flows. If missing, Vectis tries the unseal key file and then prompts for it as a hidden password. |
-| `VECTIS_UNSEAL_KEY_FILE` | `.unseal_key` | Non-empty file path | File containing only the unseal key as a hex string. A final newline is allowed. The file must have `0600` permissions. |
+| `VECTIS_UNSEAL_KEY_FILE` | `.unseal_key` | Non-empty file path | File containing only the unseal key as a hex string. A final newline is allowed. `0600` is recommended; see the permission policy below for read-only and group-readable modes. |
 
 Security notes:
 
@@ -297,7 +297,10 @@ Security notes:
 - If `VECTIS_UNSEAL_KEY_FILE` is explicitly set and cannot be read, Vectis fails instead of falling back to the prompt.
 - If the default `.unseal_key` file is missing, Vectis falls back to the hidden prompt.
 - The unseal key file must contain one valid 64-character hex string after trimming whitespace.
-- The unseal key file must be a regular file with `0600` permissions. Vectis does not fix permissions automatically.
+- The unseal key file must be a readable regular file. Its permission check forbids execute bits, group write and any access for others. Vectis does not fix permissions automatically.
+- Use `0600` when the Vectis process owns the file; `0400` is also supported for read-only access. Group-readable modes `0640` and `0440` are supported when the group contains only authorized users or processes.
+- Group read supports non-root container deployments. The [Helm chart](../charts/vectis/README.md#required-secret-keys) mounts root-owned Secret files with `0640` and uses `fsGroup` to make them readable by Vectis. Requiring `0600` on a root-owned file would prevent that non-root process from reading it. Docker mounts likewise require ownership and group permissions compatible with the container's UID/GID.
+- The operator must restrict file ownership and group membership to authorized identities. The permission check does not establish whether group members are authorized.
 - `VECTIS_UNSEAL_KEY` should be supplied as a process environment variable, unseal key file, or typed interactively.
 - Do not put `VECTIS_UNSEAL_KEY` in `.env`.
 - Do not commit `.unseal_key`; it is listed in `.gitignore`.
