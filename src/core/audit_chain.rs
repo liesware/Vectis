@@ -6,6 +6,7 @@ use crate::ops::sign;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
@@ -136,7 +137,7 @@ enum WriterCommand {
 }
 
 enum AuditSink {
-    File(BufWriter<File>),
+    File(BufWriter<File>, crate::error::ConfigOrigin),
     Stdout(BufWriter<io::Stdout>),
     #[cfg(test)]
     Memory(Arc<Mutex<tests::MemorySink>>),
@@ -145,7 +146,7 @@ enum AuditSink {
 impl AuditSink {
     fn write_record(&mut self, serialized: &[u8]) -> io::Result<()> {
         match self {
-            Self::File(writer) => write_json_line(writer, serialized),
+            Self::File(writer, _) => write_json_line(writer, serialized),
             Self::Stdout(writer) => write_json_line(writer, serialized),
             #[cfg(test)]
             Self::Memory(sink) => sink.lock().unwrap().write_record(serialized),
@@ -154,10 +155,18 @@ impl AuditSink {
 
     fn sync(&mut self) -> io::Result<()> {
         match self {
-            Self::File(writer) => writer.get_ref().sync_all(),
+            Self::File(writer, _) => writer.get_ref().sync_all(),
             Self::Stdout(writer) => writer.flush(),
             #[cfg(test)]
             Self::Memory(sink) => sink.lock().unwrap().sync(),
+        }
+    }
+    fn failure(&self, reason: &'static str, err: &io::Error) -> DynError {
+        match self {
+            Self::File(_, origin) => {
+                origin.context(reason, err, crate::error::ConfigErrorCategory::Internal)
+            }
+            _ => crate::error::internal(format!("{reason} ({:?})", err.kind())),
         }
     }
 }
@@ -206,10 +215,48 @@ pub(crate) fn initialize_prepared(
     logging_config: &logging::LoggingConfig,
     signer: AuditCheckpointSigner,
 ) -> Result<(), DynError> {
-    let runtime = AuditRuntime::start(logging_config, signer)?;
+    install_runtime(AuditRuntime::start(logging_config, signer)?)
+}
+
+pub(crate) fn initialize_prepared_file(
+    logging_config: &logging::LoggingConfig,
+    signer: AuditCheckpointSigner,
+    file: File,
+) -> Result<(), DynError> {
+    install_runtime(AuditRuntime::start_file(logging_config, signer, file)?)
+}
+
+fn install_runtime(runtime: AuditRuntime) -> Result<(), DynError> {
     RUNTIME
         .set(runtime)
         .map_err(|_| crate::error::internal("audit chain runtime was initialized concurrently"))
+}
+
+pub(crate) fn open_audit_log(logging_config: &logging::LoggingConfig) -> Result<File, DynError> {
+    fs::create_dir_all(&logging_config.dir).map_err(|err| {
+        logging_config
+            .origins
+            .origin("VECTIS_LOG_DIR")
+            .internal_context("could not create audit log directory", &err)
+    })?;
+    let origin = logging_config.origins.origin("VECTIS_AUDIT_LOG_FILE");
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(Path::new(&logging_config.dir).join(logging_config.audit_file.as_str()))
+        .map_err(|err| {
+            origin.internal_context("could not open audit log without following symlinks", &err)
+        })?;
+    let metadata = file
+        .metadata()
+        .map_err(|err| origin.internal_context("could not inspect opened audit log", &err))?;
+    if !metadata.is_file() {
+        return Err(crate::error::internal(format!(
+            "{origin}: audit log must be a regular file"
+        )));
+    }
+    Ok(file)
 }
 
 pub(crate) fn record(event: AuditEvent, failure: &Arc<Mutex<Option<String>>>) {
@@ -438,34 +485,38 @@ impl AuditRuntime {
         logging_config: &logging::LoggingConfig,
         signer: AuditCheckpointSigner,
     ) -> Result<Self, DynError> {
-        let mut sink = match logging_config.target {
+        match logging_config.target {
             logging::LogTarget::File => {
-                fs::create_dir_all(&logging_config.dir).map_err(|err| {
-                    crate::error::internal(format!(
-                        "cannot create audit log directory {}: {err}",
-                        logging_config.dir
-                    ))
-                })?;
-                let path = Path::new(&logging_config.dir).join(&logging_config.audit_file);
-                let file = OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&path)
-                    .map_err(|err| {
-                        crate::error::internal(format!(
-                            "cannot open audit log {}: {err}",
-                            path.display()
-                        ))
-                    })?;
-                AuditSink::File(BufWriter::new(file))
+                Self::start_file(logging_config, signer, open_audit_log(logging_config)?)
             }
-            logging::LogTarget::Stdout => AuditSink::Stdout(BufWriter::new(io::stdout())),
-        };
+            logging::LogTarget::Stdout => {
+                Self::start_with_sink(AuditSink::Stdout(BufWriter::new(io::stdout())), signer)
+            }
+        }
+    }
 
+    fn start_file(
+        logging_config: &logging::LoggingConfig,
+        signer: AuditCheckpointSigner,
+        file: File,
+    ) -> Result<Self, DynError> {
+        Self::start_with_sink(
+            AuditSink::File(
+                BufWriter::new(file),
+                logging_config.origins.origin("VECTIS_AUDIT_LOG_FILE"),
+            ),
+            signer,
+        )
+    }
+
+    fn start_with_sink(
+        mut sink: AuditSink,
+        signer: AuditCheckpointSigner,
+    ) -> Result<Self, DynError> {
         let mut state = AuditChainState::new()?;
         write_event(&mut sink, &mut state, AuditEvent::chain_started())?;
         sink.sync()
-            .map_err(|err| crate::error::internal(format!("cannot fsync audit log: {err}")))?;
+            .map_err(|err| sink.failure("cannot fsync audit log", &err))?;
 
         let (sender, receiver) = mpsc::channel(config::AUDIT_CHAIN_CHANNEL_CAPACITY);
         let thread = thread::Builder::new()
@@ -688,7 +739,9 @@ fn writer_loop_with_policy(
         if commit_requested && dirty && poisoned.is_none() {
             match sink.sync() {
                 Ok(()) => dirty = false,
-                Err(err) => poisoned = Some(format!("cannot fsync audit log: {err}")),
+                Err(err) => {
+                    poisoned = Some(sink.failure("cannot fsync audit log", &err).to_string())
+                }
             }
         }
         if commit_requested {
@@ -744,7 +797,7 @@ fn write_event(
         return Err(crate::error::internal("audit record exceeds maximum size"));
     }
     sink.write_record(&serialized)
-        .map_err(|err| crate::error::internal(format!("cannot persist audit record: {err}")))?;
+        .map_err(|err| sink.failure("cannot persist audit record", &err))?;
     state.head_hash = record.event_hash;
     state.next_sequence = state
         .next_sequence
@@ -791,7 +844,7 @@ fn append_checkpoint(
         ));
     }
     sink.write_record(&serialized)
-        .map_err(|err| crate::error::internal(format!("cannot persist audit checkpoint: {err}")))?;
+        .map_err(|err| sink.failure("cannot persist audit checkpoint", &err))?;
     state.events_since_checkpoint = 0;
     state.last_checkpoint_sequence = Some(payload.last_sequence);
     Ok(())
@@ -1008,7 +1061,10 @@ impl VerifiedChain {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    static NEXT_TEMP_PATH: AtomicU64 = AtomicU64::new(0);
 
     #[derive(Default)]
     struct RecordingWriter {
@@ -1049,7 +1105,9 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("vectis-{name}-{nanos}.jsonl"))
+        let sequence = NEXT_TEMP_PATH.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        std::env::temp_dir().join(format!("vectis-{name}-{pid}-{nanos}-{sequence}.jsonl"))
     }
 
     impl AuditRuntime {
@@ -1089,12 +1147,228 @@ mod tests {
 
     fn logging_config_for(path: &std::path::Path) -> logging::LoggingConfig {
         logging::LoggingConfig {
+            origins: Default::default(),
             level: tracing::Level::INFO,
             dir: path.parent().unwrap().display().to_string(),
-            file: String::from("unused.log"),
-            audit_file: path.file_name().unwrap().to_string_lossy().to_string(),
+            file: logging::LogFileName::parse("unused.log").unwrap(),
+            audit_file: logging::LogFileName::parse(&path.file_name().unwrap().to_string_lossy())
+                .unwrap(),
             target: logging::LogTarget::File,
         }
+    }
+
+    struct AuditDirectory(std::path::PathBuf);
+
+    impl AuditDirectory {
+        fn new() -> Self {
+            Self::from_candidates(std::iter::repeat_with(|| temp_path("audit-directory")))
+        }
+
+        fn from_candidates(paths: impl IntoIterator<Item = std::path::PathBuf>) -> Self {
+            for path in paths.into_iter().take(32) {
+                match fs::create_dir(&path) {
+                    Ok(()) => return Self(path),
+                    Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+                    Err(err) => panic!("could not create audit test directory: {err}"),
+                }
+            }
+            panic!("could not allocate a unique audit test directory after collisions")
+        }
+    }
+
+    impl Drop for AuditDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn audit_directory_retries_collisions_without_reusing_or_removing_existing_paths() {
+        let parent = AuditDirectory::new();
+        let occupied_directory = parent.0.join("occupied-directory");
+        let occupied_file = parent.0.join("occupied-file");
+        let available = parent.0.join("available");
+        fs::create_dir(&occupied_directory).unwrap();
+        fs::write(occupied_directory.join("marker"), b"directory marker").unwrap();
+        fs::write(&occupied_file, b"file marker").unwrap();
+
+        let allocated = AuditDirectory::from_candidates([
+            occupied_directory.clone(),
+            occupied_file.clone(),
+            available.clone(),
+        ]);
+        assert_eq!(allocated.0, available);
+        drop(allocated);
+        assert!(!available.exists());
+        assert_eq!(
+            fs::read(occupied_directory.join("marker")).unwrap(),
+            b"directory marker"
+        );
+        assert_eq!(fs::read(&occupied_file).unwrap(), b"file marker");
+    }
+
+    #[test]
+    fn audit_directory_does_not_retry_other_io_failures() {
+        let parent = AuditDirectory::new();
+        let unavailable = parent.0.join("missing-parent/child");
+        let available = parent.0.join("available");
+        let result = std::panic::catch_unwind(|| {
+            AuditDirectory::from_candidates([unavailable, available.clone()])
+        });
+        assert!(result.is_err());
+        assert!(!available.exists());
+    }
+
+    #[test]
+    fn audit_directory_allocations_are_independent_under_concurrency() {
+        let start = Arc::new(std::sync::Barrier::new(16));
+        let directories = std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..16)
+                .map(|_| {
+                    let start = Arc::clone(&start);
+                    scope.spawn(move || {
+                        start.wait();
+                        (0..8).map(|_| AuditDirectory::new()).collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .flat_map(|worker| worker.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        let paths = directories
+            .iter()
+            .map(|directory| directory.0.clone())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(paths.len(), 128);
+        assert!(paths.iter().all(|path| path.is_dir()));
+        drop(directories);
+        assert!(paths.iter().all(|path| !path.exists()));
+    }
+
+    #[test]
+    fn audit_open_creates_regular_files_and_preserves_append() {
+        let directory = AuditDirectory::new();
+        let path = directory.0.join("logs/audit.log");
+        let config = logging_config_for(&path);
+        let mut file = open_audit_log(&config).unwrap();
+        assert!(file.metadata().unwrap().is_file());
+        file.write_all(b"existing\n").unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+        open_audit_log(&config)
+            .unwrap()
+            .write_all(b"next\n")
+            .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"existing\nnext\n");
+    }
+
+    #[test]
+    fn audit_open_rejects_final_symlinks_without_touching_their_targets() {
+        use std::os::unix::fs::symlink;
+        let directory = AuditDirectory::new();
+        let logs = directory.0.join("logs");
+        fs::create_dir(&logs).unwrap();
+        let path = logs.join("audit.log");
+        for (target, existing) in [
+            (logs.join("inside"), true),
+            (directory.0.join("secret-canary-outside"), true),
+            (directory.0.join("secret-canary-missing"), false),
+        ] {
+            if existing {
+                fs::write(&target, b"secret-canary contents").unwrap();
+            }
+            symlink(&target, &path).unwrap();
+            for source in [
+                crate::error::ConfigSource::Process,
+                crate::error::ConfigSource::EnvFile { line: 4 },
+                crate::error::ConfigSource::Default,
+            ] {
+                let mut config = logging_config_for(&path);
+                config.origins = Arc::new(crate::error::ConfigOrigins::new([(
+                    "VECTIS_AUDIT_LOG_FILE",
+                    source,
+                )]));
+                let err = open_audit_log(&config).unwrap_err();
+                assert!(matches!(
+                    err.downcast_ref::<crate::error::VectisError>(),
+                    Some(crate::error::VectisError::Internal(_))
+                ));
+                let message = err.to_string();
+                assert!(message.contains(&format!("VECTIS_AUDIT_LOG_FILE ({source})")));
+                assert!(!message.contains("secret-canary"));
+                assert!(!message.contains(&path.display().to_string()));
+                assert_eq!(target.exists(), existing);
+                if existing {
+                    assert_eq!(fs::read(&target).unwrap(), b"secret-canary contents");
+                }
+            }
+            fs::remove_file(&path).unwrap();
+        }
+    }
+
+    #[test]
+    fn audit_open_rejects_directories_and_allows_symlinked_parents() {
+        use std::os::unix::fs::symlink;
+        let directory = AuditDirectory::new();
+        let path = directory.0.join("audit.log");
+        fs::create_dir(&path).unwrap();
+        assert!(open_audit_log(&logging_config_for(&path)).is_err());
+        fs::remove_dir(&path).unwrap();
+        let real = directory.0.join("real-logs");
+        fs::create_dir(&real).unwrap();
+        let alias = directory.0.join("logs");
+        symlink(&real, &alias).unwrap();
+        open_audit_log(&logging_config_for(&alias.join("audit.log")))
+            .unwrap()
+            .write_all(b"append\n")
+            .unwrap();
+        assert_eq!(fs::read(real.join("audit.log")).unwrap(), b"append\n");
+    }
+
+    #[tokio::test]
+    async fn prepared_audit_keeps_the_locked_file_when_its_path_is_replaced() {
+        use std::os::unix::fs::{MetadataExt, symlink};
+        let directory = AuditDirectory::new();
+        let path = directory.0.join("audit.log");
+        let saved = directory.0.join("saved.log");
+        let target = directory.0.join("secret-canary-target");
+        fs::write(&target, b"untouched").unwrap();
+        let config = logging_config_for(&path);
+        let locked = open_audit_log(&config).unwrap();
+        locked.try_lock().unwrap();
+        let writer = locked.try_clone().unwrap();
+        assert_eq!(
+            locked.metadata().unwrap().ino(),
+            writer.metadata().unwrap().ino()
+        );
+        assert_eq!(
+            locked.metadata().unwrap().dev(),
+            writer.metadata().unwrap().dev()
+        );
+        fs::rename(&path, &saved).unwrap();
+        symlink(&target, &path).unwrap();
+        let other = OpenOptions::new().append(true).open(&saved).unwrap();
+        assert!(other.try_lock().is_err());
+        let signer = test_signer();
+        let runtime = Arc::new(AuditRuntime::start_file(&config, signer.clone(), writer).unwrap());
+        let recorder = Arc::clone(&runtime);
+        assert!(
+            tokio::task::spawn_blocking(
+                move || recorder.record_sync(sample_event("key.drop.started", "keys.drop"))
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
+        runtime.shutdown().await.unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"untouched");
+        let verified = verify_file_with_signer(&saved, &signer).unwrap();
+        assert_eq!(verified.chains[0].checkpoints_verified, 1);
+        assert!(other.try_lock().is_err());
+        drop(locked);
+        other.try_lock().unwrap();
     }
 
     fn test_signer() -> AuditCheckpointSigner {

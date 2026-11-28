@@ -91,6 +91,36 @@ Errors identify the variable, source (`process`, `env_file` with line, or
 parser buffers and sensitive typed results use zeroizing ownership. This does
 not erase the original process environment or all OS/library copies.
 
+Provenance also accompanies delayed consumers: failures to open, write or sync
+configured files, initialize storage, load the TLS pair, bind the listener or
+contact the CLI endpoint identify the variable and its captured source. External
+error text is not copied into these diagnostics; I/O failures may include a
+bounded `ErrorKind`. Paths, DSNs, URLs and file contents are not disclosed by
+configuration-derived errors. Intentional successful administrative output and
+confirmation destinations remain unchanged.
+
+When an external error wraps an I/O cause, diagnostics inspect at most eight
+errors including the root and report only the first available `ErrorKind`.
+The consumer explicitly selects one of two operational categories, `Internal` or
+`Storage`; the cause supplies diagnostics only. Both return generic HTTP `500`
+responses. Unlike the former inference, even causes already typed as public
+errors cannot change this choice. SQLx initialization selects `Storage`, and
+server config reads select `Internal`. Causes without I/O,
+including database authentication failures, keep the static generic reason;
+driver messages and SQLSTATE classification are not exposed.
+
+For server-side config and signature reads, these diagnostics remain internal:
+`POST /config/reload` returns `500` with `{"error":"internal server error"}`
+when the configured file cannot be read, retaining the active snapshot. Logs and
+audit retain the sanitized variable/source context. Authentication, permission,
+semantic validation and signature-verification errors keep their existing handling.
+
+An absent signed configuration file permits an empty configuration. An existing
+configuration without its signature does not: startup fails, and reload rejects
+the update while retaining the previous snapshot. An outdated signature keeps
+its existing dedicated handling. A missing default `.unseal_key` still permits
+the prompt; an explicitly configured missing unseal file is an error.
+
 Example:
 
 ```bash
@@ -473,11 +503,37 @@ The init symmetric key is a root key. Vectis derives separate internal keys from
 
 | Variable | Default | Expected value | Purpose |
 | --- | --- | --- | --- |
-| `VECTIS_LOG_LEVEL` | `info` | `trace`, `debug`, `info`, `warn`, `warning`, or `error` | Maximum tracing level. Invalid values fall back to `info`. |
+| `VECTIS_LOG_LEVEL` | `info` | `trace`, `debug`, `info`, `warn`, `warning`, or `error` | Maximum tracing level. Invalid values stop initialization. |
 | `VECTIS_LOG_TARGET` | `file` | `file` or `stdout` | Destination for operational logs and the audit chain. Operational file logs rotate daily; audit files append to one JSONL file. `stdout` writes JSON lines and is recommended for Kubernetes. |
 | `VECTIS_LOG_DIR` | `logs` | Directory path | Directory for JSON logs. Created automatically if missing. |
-| `VECTIS_LOG_FILE` | `vectis.log` | File name | Base log file name used by daily rotation. |
-| `VECTIS_AUDIT_LOG_FILE` | `audit.log` | File name | Append-only local audit JSONL stream with hash-chained records and hybrid-signed checkpoints, separate from the operational log. |
+| `VECTIS_LOG_FILE` | `vectis.log` | File name | Base log file name used by daily rotation; not a path. |
+| `VECTIS_AUDIT_LOG_FILE` | `audit.log` | File name | Append-only local audit JSONL stream with hash-chained records and hybrid-signed checkpoints; not a path. |
+
+Both file names must be nonempty and contain no control characters, `/` or `\`;
+the exact names `.` and `..` are rejected. Spaces and ordinary dots are preserved
+without trimming or normalization. The general 4,096-byte value cap remains in
+effect; filesystem-specific filename limits are checked operationally and fail
+with sanitized diagnostics. These basename restrictions do not apply to
+`VECTIS_LOG_DIR` or other settings that intentionally accept full paths.
+
+In file mode, the operational log reserves its base name and every name starting
+with that base plus `.`. `VECTIS_AUDIT_LOG_FILE` must use another name: with
+`VECTIS_LOG_FILE=vectis.log`, both `vectis.log` and `vectis.log.backup` are rejected,
+as are rotated names such as `vectis.log.2026-11-27`. This conservative check runs
+before creating files and uses exact case-sensitive comparisons, without
+normalization. Stdout mode permits matching names but retains their individual
+validation. This is not physical alias, hardlink or symlink detection.
+
+The audit writer additionally opens its final file with `O_NOFOLLOW` and rejects
+non-regular files before writing. An existing or dangling symlink at the audit
+basename prevents startup and offline purge. Opening is nonblocking so a FIFO
+cannot stall this type check. Creation still uses the existing permissions and
+process umask, and regular files retain append semantics.
+
+Only the final component is protected: trusted parent directories may be
+symlinks. Operators remain responsible for directory ownership and permissions;
+this does not prevent hardlinks, parent-directory manipulation or unlink. The
+operational log's `tracing-appender` path is not covered by this audit-only rule.
 
 Logging is JSON by default. With `VECTIS_LOG_TARGET=file`, operational events go to `VECTIS_LOG_FILE`; security events go to one dedicated audit stream (`VECTIS_AUDIT_LOG_FILE`) under `VECTIS_LOG_DIR`. With `VECTIS_LOG_TARGET=stdout`, the same audit stream is written to stdout beside operational logs. It contains records with `version: "audit-chain-v1"` and hybrid-signed checkpoints with `version: "audit-checkpoint-v1"`; collectors must export both line types before running `vectis audit verify --file <path>`. Checkpoints occur after 10,000 accepted events and during orderly shutdown; an idle server emits no checkpoints. File mode flushes and synchronizes accepted records and checkpoints; stdout remains a best-effort transport until a collector persists it independently.
 

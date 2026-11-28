@@ -6,6 +6,7 @@ use zeroize::Zeroizing;
 
 pub fn fuzz_config() -> config::AppConfig {
     config::AppConfig {
+        origins: Default::default(),
         http_bind_addr: "127.0.0.1:3000".parse().unwrap(),
         mode: String::from("dev"),
         server_scheme: String::from("http"),

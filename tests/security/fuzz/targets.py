@@ -14,7 +14,9 @@ from config import (
     restore_time_attestation_config,
 )
 from mutations import BAD_APIKEYS, NASTY_KIDS, WRONG_METHODS, corrupt_string, mutate_raw, mutate_structured
-from oracle import ALLOWED_STATUS, FRAMEWORK_STATUS, _parse, oracle
+from oracle import (
+    ALLOWED_STATUS, FRAMEWORK_STATUS, _parse, config_oracle, config_read_failure_expected, oracle,
+)
 from reporting import check_and_record, describe, print_progress
 from seeds import (
     batch_contract_context,
@@ -308,6 +310,18 @@ def run_no_body(target, client, rng, args, secrets):
     return counters
 
 
+def _config_snapshot(client, secrets):
+    snapshot, findings = {}, []
+    for path, field in (("/permissions", "clients"), ("/routes", "routes"), ("/remote-routes", "routes")):
+        status, body = client.request("GET", path, auth=True)
+        findings.extend(oracle(status, body, *secrets, {200}, False))
+        parsed = _parse(body)
+        if not isinstance(parsed, dict) or not isinstance(parsed.get(field), list):
+            findings.append(f"SEMANTIC: config snapshot {path} must return a JSON listing")
+        snapshot[path] = parsed
+    return snapshot, findings
+
+
 def run_config(target, client, rng, args, secrets):
     apikey, unseal = secrets
     counters = {"passed": 0, "failed": 0}
@@ -321,8 +335,6 @@ def run_config(target, client, rng, args, secrets):
                 if rng.random() < 0.7
                 else mutate_raw(seed, rng)
             )
-            CONFIG_PATH.write_bytes(mutated)
-            CONFIG_SIGN_PATH.write_bytes(baseline_sig)
             target_file = "config.json"
         else:
             seed = json.loads(baseline_sig)
@@ -331,21 +343,30 @@ def run_config(target, client, rng, args, secrets):
                 if rng.random() < 0.5
                 else mutate_raw(seed, rng)
             )
-            CONFIG_PATH.write_bytes(baseline_cfg)
-            CONFIG_SIGN_PATH.write_bytes(mutated)
             target_file = "config_sign.json"
-        args.metrics.record_input("POST", "/config/reload", mutated, file=target_file)
-        status, response = client.post_json("/config/reload", {}, auth=True)
-        findings = oracle(status, response, apikey, unseal, ALLOWED_STATUS, False)
-        findings.extend(config_semantic(status, response))
-        description = {
-            "endpoint": "POST /config/reload",
-            "mutated_file": target_file,
-            "_payload_bytes": mutated,
-        }
-        aborted = check_and_record("config", client, args, index, status, findings, description, counters)
-        CONFIG_PATH.write_bytes(baseline_cfg)
-        CONFIG_SIGN_PATH.write_bytes(baseline_sig)
+        read_failure = config_read_failure_expected(target_file, mutated)
+        before, findings = _config_snapshot(client, secrets) if read_failure else ({}, [])
+        try:
+            CONFIG_PATH.write_bytes(mutated if target_file == "config.json" else baseline_cfg)
+            CONFIG_SIGN_PATH.write_bytes(mutated if target_file == "config_sign.json" else baseline_sig)
+            args.metrics.record_input("POST", "/config/reload", mutated, file=target_file)
+            status, response = client.post_json("/config/reload", {}, auth=True)
+            findings.extend(config_oracle(target_file, mutated, status, response, apikey, unseal))
+            findings.extend(config_semantic(status, response))
+            if read_failure:
+                after, snapshot_findings = _config_snapshot(client, secrets)
+                findings.extend(snapshot_findings)
+                if after != before:
+                    findings.append("SEMANTIC: rejected config reload changed permissions or routes")
+            description = {
+                "endpoint": "POST /config/reload",
+                "mutated_file": target_file,
+                "_payload_bytes": mutated,
+            }
+            aborted = check_and_record("config", client, args, index, status, findings, description, counters)
+        finally:
+            CONFIG_PATH.write_bytes(baseline_cfg)
+            CONFIG_SIGN_PATH.write_bytes(baseline_sig)
         if aborted:
             break
         print_progress("config", index, args, counters)

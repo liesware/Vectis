@@ -210,27 +210,7 @@ pub fn load_config_state(
         derive_fpe_auth_key: &derive_fpe_auth_key,
         derive_deterministic_key: &derive_deterministic_key,
     };
-    match load_config_file(&config.config_path, verify_config, config, &hooks) {
-        Ok(state) => {
-            info!(
-                config_path = %config.config_path.display(),
-                routes_loaded = state.routes.len(),
-                remote_routes_loaded = state.remote_routes.len(),
-                clients_loaded = state.permissions.len(),
-                "signed config loaded"
-            );
-            Ok(state)
-        }
-        Err(err) if crate::error::is_not_found(err.as_ref()) => {
-            warn!(
-                config_path = %config.config_path.display(),
-                error = %err,
-                "signed config unavailable, using empty defaults"
-            );
-            Ok(empty_config_state(config))
-        }
-        Err(err) => Err(err),
-    }
+    load_config_file(&config.config_path, verify_config, config, &hooks)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -268,11 +248,7 @@ pub fn reload_config_state(
         derive_fpe_auth_key: &derive_fpe_auth_key,
         derive_deterministic_key: &derive_deterministic_key,
     };
-    match load_config_file(&config.config_path, verify_config, config, &hooks) {
-        Ok(state) => Ok(state),
-        Err(err) if crate::error::is_not_found(err.as_ref()) => Ok(empty_config_state(config)),
-        Err(err) => Err(err),
-    }
+    load_config_file(&config.config_path, verify_config, config, &hooks)
 }
 
 fn load_config_file(
@@ -300,10 +276,30 @@ fn load_config_file(
         ) -> Result<Zeroizing<Vec<u8>>, DynError>,
     >,
 ) -> Result<ConfigState, DynError> {
-    let content = read_config_file(path)?;
+    let content = match read_config_file(path) {
+        Ok(content) => content,
+        Err(err) if crate::error::is_not_found(err.as_ref()) => {
+            warn!("signed config file is absent, using empty defaults");
+            return Ok(empty_config_state(config));
+        }
+        Err(err) => {
+            return Err(config
+                .origins
+                .origin("VECTIS_CONFIG_PATH")
+                .internal_context("could not read config file", err.as_ref()));
+        }
+    };
     verify_config(path, &content)?;
     let config_file = parse_config_json(&content)?;
-    validate_config_file(config_file, config, hooks)
+    let state = validate_config_file(config_file, config, hooks)?;
+    info!(
+        config_path = %config.config_path.display(),
+        routes_loaded = state.routes.len(),
+        remote_routes_loaded = state.remote_routes.len(),
+        clients_loaded = state.permissions.len(),
+        "signed config loaded"
+    );
+    Ok(state)
 }
 
 fn parse_config_json(content: &str) -> Result<ConfigFile, DynError> {
@@ -486,6 +482,127 @@ mod tests {
         ))
     }
 
+    #[test]
+    fn signed_config_event_requires_a_verified_and_valid_file() {
+        use std::io::Write;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct Capture(Arc<Mutex<Vec<u8>>>);
+        impl Write for Capture {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let populated = json!({"version":"v1", "routes":[{
+            "kid":"a".repeat(64), "name":"synthetic", "final_app_addr":"localhost:3999", "final_app_path":"/message"
+        }]}).to_string();
+        for (tag, content, signature_valid, expected_success, expected_routes) in [
+            ("missing", None, true, true, 0),
+            ("empty", Some(r#"{"version":"v1"}"#), true, true, 0),
+            ("populated", Some(populated.as_str()), true, true, 1),
+            (
+                "bad-signature",
+                Some(r#"{"version":"v1"}"#),
+                false,
+                false,
+                0,
+            ),
+            ("bad-policy", Some(r#"{"version":"v2"}"#), true, false, 0),
+            ("bad-json", Some("{ broken"), true, false, 0),
+            ("unreadable", None, true, false, 0),
+        ] {
+            let path = unique_path(tag);
+            if let Some(content) = content {
+                fs::write(&path, content).unwrap();
+            }
+            if tag == "unreadable" {
+                fs::create_dir(&path).unwrap();
+            }
+            let config = test_config(path.clone());
+            let capture = Capture(Arc::new(Mutex::new(Vec::new())));
+            let output = capture.clone();
+            let subscriber = tracing_subscriber::fmt()
+                .json()
+                .without_time()
+                .with_max_level(tracing::Level::INFO)
+                .with_writer(move || output.clone())
+                .finish();
+            let verified = std::cell::Cell::new(0);
+            let hooks = ConfigValidationHooks {
+                is_loaded_kid: &|_: &str| true,
+                derive_fpe_key: &|_: fpe::FpeKeyDerivationRequest<'_>| Ok(dummy_fpe_key()),
+                derive_tokenization_keys: &|_: tokenization::TokenizationKeyDerivationRequest<
+                    '_,
+                >| Ok(dummy_tokenization_keys()),
+                hash_algorithm_for_kid: &dummy_hash_algorithm,
+                derive_mac_key: &dummy_mac_key,
+                derive_commitment_key: &dummy_commitment_key,
+                derive_sharing_key: &dummy_sharing_key,
+                derive_fpe_auth_key: &|_: fpe::FpeKeyDerivationRequest<'_>| {
+                    Ok(Zeroizing::new(vec![9; fpe::FPE_AUTH_KEY_SIZE_BYTES]))
+                },
+                derive_deterministic_key:
+                    &|_: deterministic_tokenization::DeterministicTokenKeyDerivationRequest<'_>| {
+                        Ok(Zeroizing::new(vec![7; 64]))
+                    },
+            };
+            let result = tracing::subscriber::with_default(subscriber, || {
+                load_config_file(
+                    &path,
+                    |_, _| {
+                        verified.set(verified.get() + 1);
+                        if signature_valid {
+                            Ok(())
+                        } else {
+                            Err(crate::error::invalid_signature(
+                                "synthetic signature rejection",
+                            ))
+                        }
+                    },
+                    &config,
+                    &hooks,
+                )
+            });
+            if tag == "unreadable" {
+                fs::remove_dir(&path).unwrap();
+            } else if content.is_some() {
+                fs::remove_file(&path).unwrap();
+            }
+            assert_eq!(result.is_ok(), expected_success, "{tag}");
+            assert_eq!(verified.get(), usize::from(content.is_some()), "{tag}");
+            let logs = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+            let events: Vec<serde_json::Value> = logs
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            let loaded: Vec<_> = events
+                .iter()
+                .filter(|event| event["fields"]["message"] == "signed config loaded")
+                .collect();
+            assert_eq!(
+                loaded.len(),
+                usize::from(content.is_some() && expected_success),
+                "{tag}: {logs}"
+            );
+            if let Some(event) = loaded.first() {
+                assert_eq!(event["fields"]["routes_loaded"], expected_routes);
+                assert_eq!(event["fields"]["remote_routes_loaded"], 0);
+                assert_eq!(event["fields"]["clients_loaded"], 0);
+                assert_eq!(event["fields"]["config_path"], path.display().to_string());
+            }
+            if tag == "missing" {
+                assert!(events.iter().any(|event| event["fields"]["message"]
+                    == "signed config file is absent, using empty defaults"));
+            }
+        }
+    }
+
     fn dummy_fpe_key() -> Zeroizing<Vec<u8>> {
         Zeroizing::new(vec![0u8; fpe::FPE_KEY_SIZE_BYTES])
     }
@@ -532,6 +649,7 @@ mod tests {
 
     fn test_config(config_path: PathBuf) -> config::AppConfig {
         config::AppConfig {
+            origins: Default::default(),
             http_bind_addr: "127.0.0.1:3000".parse().unwrap(),
             mode: String::from("dev"),
             server_scheme: String::from("http"),
@@ -633,7 +751,7 @@ mod tests {
         let config = test_config(path.clone());
         let result = load_config_state(
             &config,
-            |_, _| Err(crate::error::invalid_signature("bad signature")),
+            |_, _| Err(crate::error::not_found("signature missing")),
             |_| true,
             |_| Ok(dummy_fpe_key()),
             |_| Ok(dummy_tokenization_keys()),
@@ -649,7 +767,7 @@ mod tests {
             |_| Ok(zeroize::Zeroizing::new(vec![7; 64])),
         );
         let _ = fs::remove_file(&path);
-        assert!(result.is_err());
+        assert!(crate::error::is_not_found(result.err().unwrap().as_ref()));
     }
 
     #[test]
@@ -714,7 +832,10 @@ mod tests {
             Ok(_) => panic!("oversized config file must be rejected"),
             Err(err) => err.to_string(),
         };
-        assert!(err.contains("config file exceeds maximum allowed size"));
+        assert_eq!(
+            err,
+            "VECTIS_CONFIG_PATH (default): could not read config file"
+        );
     }
 
     #[test]
@@ -803,7 +924,10 @@ mod tests {
             Ok(_) => panic!("oversized config file must be rejected"),
             Err(err) => err.to_string(),
         };
-        assert!(err.contains("config file exceeds maximum allowed size"));
+        assert_eq!(
+            err,
+            "VECTIS_CONFIG_PATH (default): could not read config file"
+        );
     }
 
     #[test]

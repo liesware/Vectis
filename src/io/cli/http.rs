@@ -456,11 +456,18 @@ async fn validate_config_for_local_node(
     let config = config::node_config(loader)?;
     let init_state = init::load_init_state(loader)?;
     let config_content = crate::core::config_file::read_config_file(&config.local.config_path)
-        .map_err(|_| loader.error("VECTIS_CONFIG_PATH", "could not read config file"))?;
+        .map_err(|err| {
+            config.local.origins.origin("VECTIS_CONFIG_PATH").context(
+                "could not read config file",
+                err.as_ref(),
+                crate::error::ConfigErrorCategory::Internal,
+            )
+        })?;
     let internal_keys = std::sync::Arc::new(zeroize::Zeroizing::new(
         ops::internal_keys::InternalDerivedKeysState::from_init_state(&init_state)?,
     ));
-    let storage = StorageState::from_config(&config.storage).await?;
+    let storage =
+        StorageState::from_config_with_origins(&config.storage, &config.local.origins).await?;
     let keys_load = ops::keys::load_keys_db_state(&storage, &internal_keys).await?;
     let (keys_db_state, _) = keys_load.into_parts();
     let config_state = crate::core::config_file::validate_config_content(
@@ -592,7 +599,17 @@ async fn run_config_sign(loader: &ConfigLoader, output: OutputFormat) -> Result<
         &config.local.config_sign_path,
     );
     let token_json = serde_json::to_string_pretty(&token)?;
-    write_file_atomically(&config_sign_path, &token_json)?;
+    write_file_atomically(&config_sign_path, &token_json).map_err(|err| {
+        config
+            .local
+            .origins
+            .origin("VECTIS_CONFIG_SIGN_PATH")
+            .context(
+                "could not write config signature file",
+                err.as_ref(),
+                crate::error::ConfigErrorCategory::Internal,
+            )
+    })?;
 
     print_response(
         &serde_json::to_string(&json!({
@@ -650,8 +667,13 @@ pub(super) fn write_file_atomically(path: &Path, content: &str) -> Result<(), Dy
 
 fn run_config_list(loader: &ConfigLoader, output: OutputFormat) -> Result<(), DynError> {
     let path = config::configured_path(loader, "VECTIS_CONFIG_PATH")?;
-    let config_content = crate::core::config_file::read_config_file(&path)
-        .map_err(|_| loader.error("VECTIS_CONFIG_PATH", "could not read config file"))?;
+    let config_content = crate::core::config_file::read_config_file(&path).map_err(|err| {
+        loader.origins().origin("VECTIS_CONFIG_PATH").context(
+            "could not read config file",
+            err.as_ref(),
+            crate::error::ConfigErrorCategory::Internal,
+        )
+    })?;
     let value: Value = serde_json::from_str(&config_content).map_err(|error| {
         crate::error::invalid_json_input("config file must be valid JSON", &error)
     })?;
@@ -1177,6 +1199,7 @@ fn symmetric_request(args: Vec<String>) -> Result<(Method, String, Value), DynEr
 }
 
 struct CliHttpClient {
+    origins: std::sync::Arc<crate::error::ConfigOrigins>,
     client: reqwest::Client,
     base_url: Url,
     api_key: zeroize::Zeroizing<String>,
@@ -1227,6 +1250,7 @@ impl CliHttpClient {
             .build()
             .map_err(|_| crate::error::internal("could not initialize HTTP client"))?;
         Ok(Self {
+            origins: loader.origins(),
             client,
             base_url,
             api_key,
@@ -1245,7 +1269,10 @@ impl CliHttpClient {
 
         if auth {
             if self.api_key.is_empty() {
-                return Err(invalid_input("VECTIS_APIKEY is required for this command"));
+                return Err(invalid_input(format!(
+                    "{}: is required for this command",
+                    self.origins.origin("VECTIS_APIKEY")
+                )));
             }
             request = request.header("X-API-Key", self.api_key.as_str());
         }
@@ -1257,9 +1284,15 @@ impl CliHttpClient {
         let response = request
             .send()
             .await
-            .map_err(|err| cli_transport_error(&self.base_url, err))?;
+            .map_err(|err| cli_transport_error(self.origins.origin("VECTIS_API_URL"), err))?;
         let status = response.status();
-        let payload = response.text().await?;
+        let payload = response.text().await.map_err(|err| {
+            self.origins.origin("VECTIS_API_URL").context(
+                "could not read Vectis response",
+                &err,
+                crate::error::ConfigErrorCategory::Internal,
+            )
+        })?;
 
         if !status.is_success() {
             return Err(invalid_input(format!("HTTP {status}: {payload}")));
@@ -1286,30 +1319,23 @@ fn classify_transport_error(err: &reqwest::Error) -> TransportFailure {
     }
 }
 
-fn cli_transport_error(base_url: &Url, err: reqwest::Error) -> DynError {
+fn cli_transport_error(origin: crate::error::ConfigOrigin, err: reqwest::Error) -> DynError {
     invalid_input(cli_transport_error_message(
-        base_url,
+        origin,
         classify_transport_error(&err),
     ))
 }
 
-fn cli_transport_error_message(base_url: &Url, failure: TransportFailure) -> String {
-    let display_url = base_url.as_str().trim_end_matches('/');
-    match failure {
-        TransportFailure::Unreachable => {
-            format!(
-                "cannot reach Vectis at {display_url} — is the server running? (VECTIS_API_URL)"
-            )
-        }
-        TransportFailure::Timeout => {
-            format!(
-                "timed out waiting for Vectis at {display_url} — is the server responding? (VECTIS_API_URL)"
-            )
-        }
-        TransportFailure::Other => {
-            format!("failed to reach Vectis at {display_url} (VECTIS_API_URL)")
-        }
-    }
+fn cli_transport_error_message(
+    origin: crate::error::ConfigOrigin,
+    failure: TransportFailure,
+) -> String {
+    let reason = match failure {
+        TransportFailure::Unreachable => "cannot reach Vectis; is the server running?",
+        TransportFailure::Timeout => "timed out waiting for Vectis; is the server responding?",
+        TransportFailure::Other => "failed to reach Vectis",
+    };
+    format!("{origin}: {reason}")
 }
 
 fn parse_keys_create_body(args: Vec<String>) -> Result<Value, DynError> {
@@ -2018,20 +2044,20 @@ mod tests {
     }
 
     #[test]
-    fn cli_transport_error_mentions_base_url_and_env() {
-        let url = validate_api_url("http://127.0.0.1:9999").unwrap();
+    fn cli_transport_error_identifies_origin_without_url() {
+        let origin = crate::error::ConfigOrigins::default().origin("VECTIS_API_URL");
 
         assert_eq!(
-            cli_transport_error_message(&url, TransportFailure::Unreachable),
-            "cannot reach Vectis at http://127.0.0.1:9999 — is the server running? (VECTIS_API_URL)"
+            cli_transport_error_message(origin, TransportFailure::Unreachable),
+            "VECTIS_API_URL (default): cannot reach Vectis; is the server running?"
         );
         assert_eq!(
-            cli_transport_error_message(&url, TransportFailure::Timeout),
-            "timed out waiting for Vectis at http://127.0.0.1:9999 — is the server responding? (VECTIS_API_URL)"
+            cli_transport_error_message(origin, TransportFailure::Timeout),
+            "VECTIS_API_URL (default): timed out waiting for Vectis; is the server responding?"
         );
         assert_eq!(
-            cli_transport_error_message(&url, TransportFailure::Other),
-            "failed to reach Vectis at http://127.0.0.1:9999 (VECTIS_API_URL)"
+            cli_transport_error_message(origin, TransportFailure::Other),
+            "VECTIS_API_URL (default): failed to reach Vectis"
         );
     }
 

@@ -85,24 +85,70 @@ impl SqliteStorage {
         })
     }
 
+    #[cfg(test)]
     pub async fn new(path: &Path) -> Result<Self, DynError> {
+        Self::new_with_origin(
+            path,
+            crate::error::ConfigOrigins::default().origin("VECTIS_SQLITE_PATH"),
+        )
+        .await
+    }
+
+    pub(super) async fn new_with_origin(
+        path: &Path,
+        origin: crate::error::ConfigOrigin,
+    ) -> Result<Self, DynError> {
         let options = SqliteConnectOptions::new()
             .filename(path)
             .create_if_missing(false);
         let context = sqlite_context(path);
         let pool = SqlitePool::connect_with(options).await.map_err(|err| {
-            crate::error::storage(format!(
-                "failed to connect to ops sqlite at {context}: {err}"
-            ))
+            origin.context(
+                "could not connect to configured SQLite storage",
+                &err,
+                crate::error::ConfigErrorCategory::Storage,
+            )
         })?;
         info!(path = %path.display(), "connected to ops sqlite");
 
-        validate_opskeys_schema(&pool, &context).await?;
+        validate_opskeys_schema(&pool, &context)
+            .await
+            .map_err(|err| {
+                origin.context(
+                    "configured storage has an incompatible or inaccessible opskeys schema",
+                    err.as_ref(),
+                    crate::error::ConfigErrorCategory::Storage,
+                )
+            })?;
         info!("validated opskeys sqlite schema");
-        validate_tokens_schema(&pool, &context).await?;
-        validate_subjects_schema(&pool, &context).await?;
+        validate_tokens_schema(&pool, &context)
+            .await
+            .map_err(|err| {
+                origin.context(
+                    "configured storage has an incompatible or inaccessible tokens schema",
+                    err.as_ref(),
+                    crate::error::ConfigErrorCategory::Storage,
+                )
+            })?;
+        validate_subjects_schema(&pool, &context)
+            .await
+            .map_err(|err| {
+                origin.context(
+                    "configured storage has an incompatible or inaccessible subjects schema",
+                    err.as_ref(),
+                    crate::error::ConfigErrorCategory::Storage,
+                )
+            })?;
         info!("validated tokens sqlite schema");
-        validate_indexes_schema(&pool, &context).await?;
+        validate_indexes_schema(&pool, &context)
+            .await
+            .map_err(|err| {
+                origin.context(
+                    "configured storage has an incompatible or inaccessible indexes schema",
+                    err.as_ref(),
+                    crate::error::ConfigErrorCategory::Storage,
+                )
+            })?;
         info!("validated indexes sqlite schema");
 
         Ok(Self {
@@ -1261,7 +1307,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn schema_error_includes_sqlite_path() {
+    async fn schema_error_identifies_setting_without_sqlite_path() {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system time must be valid")
@@ -1283,8 +1329,9 @@ mod tests {
             Err(err) => err,
         };
         let message = err.to_string();
-        assert!(message.contains("sqlite schema is missing opskeys table"));
-        assert!(message.contains(&path.display().to_string()));
+        assert!(message.contains("incompatible or inaccessible opskeys schema"));
+        assert!(message.contains("VECTIS_SQLITE_PATH (default)"));
+        assert!(!message.contains(&path.display().to_string()));
 
         cleanup(path).await;
     }

@@ -753,6 +753,78 @@ and the `key.reload.partial` audit event.
 
 ## Error Boundary
 
+`error::ConfigOrigin` contains a static variable name and `ConfigSource`, never
+the configured value. `ConfigLoader::origins` shares an immutable `Arc` index;
+`AppConfig`, local configuration, logging and the CLI client retain this metadata
+for delayed I/O and reload diagnostics without keeping an extra secret map.
+Synthetic callers use pure default origins.
+
+`ConfigOrigin::context` and `error::config_error` replace external details with a
+static reason and require a closed `ConfigErrorCategory`: `Internal` or `Storage`.
+The consumer decides the operational category; the cause supplies diagnostics
+only. Even previously typed `VectisError` causes are converted to the selected
+category. No function-valued fallback or category-preserving overload exists.
+They never concatenate external `Display` output. Generic file helpers remain
+independent of configuration; the consumer that knows the variable supplies
+context. Cryptographic and policy failures are not reclassified as path errors.
+
+The shared message builder searches at most eight errors, root included, for an
+I/O cause and appends only its `ErrorKind`. A cyclic or deeper source chain does
+not cause an unbounded walk. This is diagnostic traversal only: neither a direct
+nor nested I/O cause can select a public `NotFound` or `Forbidden`. Storage
+initialization selects `Storage`; errors without an I/O cause remain generic.
+
+`ConfigOrigin::internal_context` delegates to the same adapter with `Internal`,
+including when a file helper already classified the cause as `NotFound`,
+`Forbidden` or `InvalidInput`. Server config/signature read boundaries use this
+convenience method. Both operational categories reach the HTTP boundary as
+generic `500` errors; internal logs and audit retain provenance.
+The missing-config fallback is checked before this adaptation. Signature
+verification and semantic policy failures remain separate from read failures.
+Offline purge audit initialization uses the same adapter to explicitly identify
+its pre-delete phase; failure there means no purge was executed. Post-commit
+errors retain their distinct outcome and retry guidance.
+
+`logging::LogFileName` owns a validated basename, preventing configured log and
+audit names from becoming paths. This is lexical validation, not symlink
+confinement. Operational logging remains nonblocking and best-effort; writer
+failures are diagnosed on stderr with sanitized provenance. Audit retains its
+existing durability and error propagation.
+
+In file mode, `logging_config` also reserves the operational basename and its
+dot-prefixed suffix namespace against audit names before any file creation.
+Stdout skips this cross-field check. Comparisons are lexical, case-sensitive and
+do not detect aliases on the underlying filesystem.
+
+The common config file loader emits `signed config loaded` once, only after
+signature verification and semantic validation succeed. An absent config emits
+the existing defaults warning; failed loads never emit that success event. This
+applies to startup and reload, including a valid signed empty config. HTTP state
+initialization and the startup banner use neutral configuration-loaded wording
+because they also run when defaults were selected.
+
+The operational writer attempts one diagnostic per `io::ErrorKind` over its
+lifetime, shared across writes and flushes, without resetting on recovery. It
+marks the category before attempting a fallible diagnostic write and ignores
+that diagnostic's result, avoiding its own panic/retry loop if stderr fails.
+Original operational I/O errors still propagate to the nonblocking worker with
+their kind and sanitized reason. This does not change `tracing-appender`'s own
+shutdown flush diagnostic or guarantee that dependency code cannot panic.
+
+`audit_chain::open_audit_log` is the shared audit-file opening boundary for server
+startup and offline purge. It uses `O_NOFOLLOW | O_NONBLOCK` and checks the opened
+descriptor's metadata before any audit record is written. It rejects final
+symlinks and non-regular files, without a racy pre-open path check. Directory and
+file errors use sanitized operational provenance. Parent directories remain
+trusted and may contain symlinks; no full path confinement is claimed.
+
+Offline purge passes a clone of its locked descriptor to
+`initialize_prepared_file`, retaining the original through shutdown. The server
+and prepared-file paths share the sink/writer startup implementation, preserving
+hash chains, checkpoint signing and sync behavior. Replacing the path cannot
+redirect the prepared writer, but unlink can still remove the local evidence;
+external preservation remains necessary. Operational log opening is unchanged.
+
 Vectis uses `VectisError` as its semantic error boundary.
 
 Operations should return meaningful internal errors. HTTP handlers map those

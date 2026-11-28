@@ -58,8 +58,15 @@ pub async fn run(
                 config_path,
                 &config.config_sign_path,
             );
-            let signature_content =
-                crate::core::config_file::read_config_signature_file(&config_sign_path)?;
+            let signature_content = crate::core::config_file::read_config_signature_file(
+                &config_sign_path,
+            )
+            .map_err(|err| {
+                config
+                    .origins
+                    .origin("VECTIS_CONFIG_SIGN_PATH")
+                    .internal_context("could not read config signature file", err.as_ref())
+            })?;
             crate::ops::sign::verify_config_file_signature(
                 &init_state,
                 config_path,
@@ -197,7 +204,7 @@ pub async fn run(
         loaded_masking_profiles = config_state.masking_profiles.len(),
         loaded_commitment_profiles = config_state.commitment_profiles.len(),
         loaded_sharing_profiles = config_state.sharing_profiles.len(),
-        "signed config loaded into http state"
+        "configuration loaded into http state"
     );
     if metrics_handle.is_some() {
         crate::core::metrics::set_unsealed_state(true);
@@ -228,7 +235,7 @@ pub async fn run(
     );
     println!("\n--------------------------------------------------------------");
     println!("\n[OK] Loaded cryptographic runtime");
-    println!("[OK] Verified signed configuration");
+    println!("[OK] Loaded configuration");
     println!("[OK] Initialized protected storage");
     println!("[OK] Loaded operational key material");
     println!("[OK] Started audit and metrics subsystems");
@@ -254,8 +261,19 @@ pub async fn run(
             crate::error::invalid_input("VECTIS_TLS_KEY_PATH is required when VECTIS_MODE=prod")
         })?;
         crate::core::tls::ensure_crypto_provider();
-        let tls_config =
-            axum_server::tls_rustls::RustlsConfig::from_pem_file(cert_path, key_path).await?;
+        let tls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(cert_path, key_path)
+            .await
+            .map_err(|err| {
+                crate::error::config_error(
+                    &[
+                        config.origins.origin("VECTIS_TLS_CERT_PATH"),
+                        config.origins.origin("VECTIS_TLS_KEY_PATH"),
+                    ],
+                    "could not load TLS certificate and private key",
+                    &err,
+                    crate::error::ConfigErrorCategory::Internal,
+                )
+            })?;
 
         info!(addr = %config.http_bind_addr, scheme = %config.server_scheme, "server listening");
         axum_server::bind_rustls(config.http_bind_addr, tls_config)
@@ -273,7 +291,13 @@ pub async fn run(
     };
 
     let audit_result = crate::core::audit_chain::shutdown().await;
-    server_result?;
+    server_result.map_err(|err| {
+        config.origins.origin("VECTIS_HTTP_BIND_ADDR").context(
+            "could not run HTTP listener",
+            &err,
+            crate::error::ConfigErrorCategory::Internal,
+        )
+    })?;
     audit_result?;
     Ok(())
 }

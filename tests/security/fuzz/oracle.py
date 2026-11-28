@@ -5,6 +5,7 @@ ALLOWED_STATUS = {200, 400, 401, 403, 404, 413}
 FRAMEWORK_STATUS = ALLOWED_STATUS | {405, 415}
 REMOTE_UNREACHABLE_MARKER = "final app can't be reached"
 MAX_RESPONSE_DURATION_MS = 2_000
+CONFIG_FILE_MAX_SIZES = {"config.json": 8 * 1024 * 1024, "config_sign.json": 1024 * 1024}
 
 
 def _parse(body):
@@ -38,6 +39,25 @@ def oracle(status, body, apikey, unseal, allowed_status, allow_ru, require_json_
     for name, secret in (("apikey", apikey), ("unseal-key", unseal)):
         if secret and secret in body:
             findings.append(f"possible {name} leak in response body")
+    return findings
+
+
+def config_read_failure_expected(mutated_file, content):
+    if len(content) > CONFIG_FILE_MAX_SIZES[mutated_file]:
+        return True
+    try:
+        content.decode("utf-8")
+    except UnicodeDecodeError:
+        return True
+    return False
+
+
+def config_oracle(mutated_file, content, status, body, apikey, unseal):
+    read_failure = config_read_failure_expected(mutated_file, content)
+    allowed = {500} if read_failure else ALLOWED_STATUS
+    findings = oracle(status, body, apikey, unseal, allowed, False)
+    if read_failure and _parse(body) != {"error": "internal server error"}:
+        findings.append("SEMANTIC: config read failure must return a generic JSON error")
     return findings
 
 

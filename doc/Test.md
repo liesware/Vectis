@@ -9,6 +9,47 @@ and how to run the tests consistently.
 
 ## Testing Strategy
 
+`tests/config_contract.rs` classifies every registered environment variable by
+meaning, consumer and activation condition. Set equality against the production
+catalog makes an unclassified addition fail. Independent valid/invalid examples
+exercise effective process and file values; isolated CLI cases cover delayed
+failures, credential-bearing URLs, basenames and unrelated settings. Error
+adapter tests verify explicit operational categories and synthetic driver errors without
+requiring PostgreSQL in CI. Operational failures require integration tests, not
+just successful parser execution.
+
+Config reload tests cover missing and unreadable signature files and unreadable
+config files: they require an exact generic `500` response and an unchanged
+runtime snapshot. An adapter matrix covers both `ConfigErrorCategory` choices
+against every `VectisError` variant, including the batch-budget error, and direct
+or wrapped I/O causes. Both categories must return exact generic HTTP `500`
+responses; independent semantic errors retain `400/403/404/409/413/429` contracts.
+Logging tests inject diagnostic writers to check
+once-per-kind reporting across write/flush, recovery, sanitization and a broken
+diagnostic destination. Offline purge tests check that audit initialization
+failures explicitly identify the pre-delete phase.
+
+Additional regressions check bounded error-source traversal, cycles, nested SQLx
+I/O causes without reclassification, and static errors without I/O. Log-name
+tests cover the reserved operational namespace and prove that file-mode
+conflicts fail before creating directories, while stdout permits coincident
+names. A local subscriber captures config-load events for absent, empty valid,
+populated valid and rejected files; success requires verification and semantic
+validation, not merely an empty or nonempty runtime state.
+
+Audit opening tests cover regular creation/append, final symlinks with existing
+and absent targets, rejected directories, and accepted symlinked parents. Startup
+tests ensure audit symlink targets remain untouched. CLI purge tests also reject
+FIFOs with and without readers and Unix sockets under subprocess timeouts, with
+unchanged database snapshots and sanitized errors. Descriptor tests verify that
+the locked file is the one used by the writer after a path replacement and that
+its resulting chain remains verifiable. Run filesystem/locking tests on Linux
+and macOS; these checks do not establish resistance to hostile parent directories.
+
+The existing `fuzz_config_loader` also checks basename acceptance and rejection,
+preservation of valid text, and sanitized origin diagnostics. It performs no I/O;
+its existing framing, target inventory and campaign budgets are unchanged.
+
 Deterministic token coverage includes a 512-bit combined-key Wycheproof AES-SIV
 known-answer vector (`aes_siv_cmac_test.json`, tcId 302), exact HKDF contexts,
 Unicode maxima, tampering and strict
@@ -590,6 +631,16 @@ Uniqueness is scoped to one target in one run; fresh fixtures make cross-run
 comparisons unsuitable as accumulated coverage. The harness has neither
 instrumented coverage nor an evolving corpus; saved findings are not seed input.
 A run without findings does not establish saturation or absence of vulnerabilities.
+
+The config mutation oracle predicts file-read rejection from complete bytes:
+invalid UTF-8 or more than 8 MiB for `config.json` / 1 MiB for `config_sign.json`
+must return exactly HTTP `500` with `{"error":"internal server error"}`. It compares
+permission, route and remote-route listings before and after those rejected
+reloads; this checks observable state, not every internal profile. A `500` for an
+in-bounds UTF-8 mutation remains a finding. JSON/signature validation failures,
+transport failures, secret detection and liveness checks retain their existing
+rules. Mutated files are restored to baseline even if case execution raises.
+Offline self-checks cover these boundaries and rejected-reload state changes.
 
 `campaign.py` length-prefixes fingerprint components to prevent ambiguous
 concatenations. Semantic oracles require exact response key sets where the

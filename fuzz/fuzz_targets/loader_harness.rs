@@ -296,6 +296,7 @@ fn raw_file(bytes: &[u8], process: &[u8]) {
 pub fn exercise(data: &[u8]) -> Scenario {
     let frame = decode(data);
     process_precedence(frame.process);
+    log_file_names(frame.process);
     match frame.scenario {
         Scenario::ProcessPrecedence => {}
         Scenario::FilePrecedence => file_precedence(),
@@ -308,4 +309,27 @@ pub fn exercise(data: &[u8]) -> Scenario {
         Scenario::RawFile => raw_file(frame.file, frame.process),
     }
     frame.scenario
+}
+
+fn log_file_names(bytes: &[u8]) {
+    let Ok(value) = std::str::from_utf8(bytes) else {
+        return;
+    };
+    let expected = !value.trim().is_empty()
+        && !matches!(value, "." | "..")
+        && !value
+            .chars()
+            .any(|c| c.is_control() || c == '/' || c == '\\');
+    let result = checks::checked(logging::LogFileName::parse(value));
+    assert_eq!(result.is_ok(), expected);
+    if let Ok(name) = result {
+        assert_eq!(name.as_str(), value);
+    }
+    for name in ["VECTIS_LOG_FILE", "VECTIS_AUDIT_LOG_FILE"] {
+        let loader = checks::checked(sources("", name, b"../secret-canary")).unwrap();
+        let message = checks::rejected(logging::logging_config(&loader));
+        assert!(message.contains(name));
+        assert!(message.contains("process"));
+        assert!(!message.contains("secret-canary"));
+    }
 }

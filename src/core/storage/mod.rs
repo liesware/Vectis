@@ -193,15 +193,26 @@ impl StorageState {
         }
     }
 
-    pub async fn from_config(config: &config::StorageConfig) -> Result<Self, DynError> {
+    pub async fn from_config_with_origins(
+        config: &config::StorageConfig,
+        origins: &crate::error::ConfigOrigins,
+    ) -> Result<Self, DynError> {
         Ok(Self {
             backend: match config {
-                config::StorageConfig::Sqlite(path) => {
-                    StorageBackend::Sqlite(sqlite::SqliteStorage::new(path).await?)
-                }
-                config::StorageConfig::Postgres(dsn) => {
-                    StorageBackend::Postgres(postgres::PostgresStorage::new(dsn).await?)
-                }
+                config::StorageConfig::Sqlite(path) => StorageBackend::Sqlite(
+                    sqlite::SqliteStorage::new_with_origin(
+                        path,
+                        origins.origin("VECTIS_SQLITE_PATH"),
+                    )
+                    .await?,
+                ),
+                config::StorageConfig::Postgres(dsn) => StorageBackend::Postgres(
+                    postgres::PostgresStorage::new_with_origin(
+                        dsn,
+                        origins.origin("VECTIS_POSTGRES_DSN"),
+                    )
+                    .await?,
+                ),
             },
         })
     }
@@ -210,12 +221,20 @@ impl StorageState {
         match config.storage_type.as_str() {
             "sqlite" => Ok(Self {
                 backend: StorageBackend::Sqlite(
-                    sqlite::SqliteStorage::new(&config.sqlite_path).await?,
+                    sqlite::SqliteStorage::new_with_origin(
+                        &config.sqlite_path,
+                        config.origins.origin("VECTIS_SQLITE_PATH"),
+                    )
+                    .await?,
                 ),
             }),
             "postgres" => Ok(Self {
                 backend: StorageBackend::Postgres(
-                    postgres::PostgresStorage::new(&config.postgres_dsn).await?,
+                    postgres::PostgresStorage::new_with_origin(
+                        &config.postgres_dsn,
+                        config.origins.origin("VECTIS_POSTGRES_DSN"),
+                    )
+                    .await?,
                 ),
             }),
             storage => unsupported_storage(storage),

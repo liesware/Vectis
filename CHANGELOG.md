@@ -8,6 +8,31 @@ manually for releases; the Git history remains the detailed engineering record.
 Future changes will be recorded here. v1.0.0 remains the first official release.
 
 ### Changed
+- Configuration error adapters now require an explicit `Internal` or `Storage`
+  category. Causes supply sanitized diagnostics only, including when already
+  typed as public errors; they no longer determine the operational category.
+  Both categories return generic HTTP `500` responses. Unadapted semantic
+  errors retain their existing status codes.
+- Audit file opening now rejects final symlinks and non-regular files in server
+  startup and offline key purge. Existing audit symlinks must be replaced with
+  regular files. Purge writes through a duplicate of its locked descriptor rather
+  than reopening the path; parent-directory symlinks remain supported.
+- Configuration diagnostics now include bounded I/O categories from wrapped
+  errors without exposing driver messages or changing error classification.
+  File logging reserves the operational basename and its dotted suffix namespace
+  against audit names; conflicting configurations must be renamed before startup.
+  Signed-config success events now require verification and semantic validation;
+  startup messages remain neutral when defaults are selected.
+- Server config/signature read failures during reload now return a generic `500`
+  without exposing provenance to HTTP clients; internal diagnostics retain it.
+  Offline purge audit initialization failures explicitly state that nothing was
+  deleted. Operational log I/O diagnostics are limited to one attempt per error
+  category and no longer panic from our writer when stderr fails.
+- Log and audit filenames now reject path separators, control characters and
+  the exact names `.` and `..`. Configuration-derived operational errors retain
+  variable/source metadata without reflecting configured paths, URLs or DSNs.
+  A present signed configuration with a missing signature now fails loading
+  rather than silently activating an empty configuration.
 - Added interactive offline `vectis keys drop <kid>` maintenance to purge a
   destroyed key and its tokens, subjects and indexes transactionally, with
   mandatory audit, exact confirmation and explicit uncertain/post-commit errors.

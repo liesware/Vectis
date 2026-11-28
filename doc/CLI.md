@@ -6,6 +6,13 @@
 
 ## Purpose
 
+Configuration-derived failures use `VARIABLE (source): reason`, including
+failures that occur after parsing. Sources are `process`, `env_file line N`, or
+`default`. CLI transport errors identify `VECTIS_API_URL` without printing the
+URL, userinfo or response-reader details; a required missing credential identifies
+`VECTIS_APIKEY` and its source. Intentional successful path output and offline
+purge confirmation destinations remain available. See [ENV](ENV.md#resolution-order).
+
 Vectis is an API-first service. Applications integrate with Vectis through its
 HTTP API. The CLI exists for local bootstrap and gives administrators a
 first-party way to configure, inspect, validate, and exercise a Vectis node
@@ -42,6 +49,15 @@ changes to a running node until the config is signed and reloaded. Remote-route
 editing may fetch peer public keys from the configured remote Vectis node.
 
 ### Offline Key Purge
+
+The mandatory audit must be a regular file, not a symlink, FIFO or socket. An
+unsafe or unavailable destination aborts before deletion. The command opens the
+file once, acquires its lock after confirmation and gives the writer a duplicate
+of that same descriptor; it does not reopen the path. The original descriptor
+remains alive through audit shutdown. Renaming or replacing the directory entry
+therefore cannot redirect writes to a different target. Trusted parent-directory
+symlinks remain supported; this is not filesystem confinement or protection
+against unlink. Existing audit symlinks must be replaced with regular files.
 
 `vectis keys drop <kid> [--output yaml|json]` connects directly to the configured
 SQLite or PostgreSQL database. It does not contact the HTTP API or require an API

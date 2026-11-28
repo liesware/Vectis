@@ -1,5 +1,6 @@
 
 import copy
+from pathlib import Path
 
 from lib.casekit import CaseSet
 from lib.client import raw_request
@@ -669,6 +670,44 @@ def _(ctx):
     CONFIG_SIGN_PATH.write_text('{"invalid":true}\n', encoding="utf-8")
     status, _ = ctx.http.post("/config/reload", {}, auth=True)
     require_status("permissions invalid signature", status, 400)
+
+
+def _assert_config_read_failure_keeps_snapshot(ctx, path, missing=False):
+    ctx.write_config()
+    ctx.reload_config()
+    status, before = ctx.http.get("/permissions", auth=True)
+    require_status("permissions before rejected reload", status, 200)
+    original = path.read_bytes()
+    try:
+        path.unlink()
+        if not missing:
+            path.mkdir()
+        status, response = ctx.http.post("/config/reload", {}, auth=True)
+        require_status("config read failure rejects reload", status, 500)
+        require(response == {"error": "internal server error"},
+                "config read failures must not expose internal diagnostics")
+        status, after = ctx.http.get("/permissions", auth=True)
+        require_status("permissions after rejected reload", status, 200)
+        require(after == before, "config read failure must retain the prior config snapshot")
+    finally:
+        if path.is_dir():
+            path.rmdir()
+        path.write_bytes(original)
+
+
+@cases("negative.config.missing-signature-keeps-snapshot")
+def _(ctx):
+    _assert_config_read_failure_keeps_snapshot(ctx, CONFIG_SIGN_PATH, missing=True)
+
+
+@cases("negative.config.unreadable-signature-keeps-snapshot")
+def _(ctx):
+    _assert_config_read_failure_keeps_snapshot(ctx, CONFIG_SIGN_PATH)
+
+
+@cases("negative.config.unreadable-config-keeps-snapshot")
+def _(ctx):
+    _assert_config_read_failure_keeps_snapshot(ctx, Path("config.json"))
 
 
 @cases("negative.config.restore-permissions", weight=0)

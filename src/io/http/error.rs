@@ -264,4 +264,109 @@ mod tests {
             "internal server error"
         );
     }
+
+    #[test]
+    fn operational_config_failures_are_internal_without_public_provenance() {
+        use crate::error::ConfigErrorCategory;
+
+        let origin = crate::error::ConfigOrigin {
+            name: "VECTIS_CONFIG_SIGN_PATH",
+            source: crate::error::ConfigSource::EnvFile { line: 3 },
+        };
+        let errors = [
+            crate::error::not_found("secret-canary"),
+            crate::error::forbidden("secret-canary"),
+            crate::error::invalid_input("secret-canary"),
+            crate::error::conflict("secret-canary"),
+            crate::error::invalid_signature("secret-canary"),
+            crate::error::config_signature_stale("secret-canary"),
+            crate::error::remote_unreachable("secret-canary"),
+            crate::error::storage("secret-canary"),
+            crate::error::overloaded("secret-canary"),
+            crate::error::internal("secret-canary"),
+            Box::new(VectisError::TokenDecodeBatchTooLarge) as crate::error::DynError,
+            Box::new(sqlx::Error::Io(io::Error::new(
+                io::ErrorKind::NotFound,
+                "secret-canary",
+            ))) as crate::error::DynError,
+            Box::new(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "secret-canary",
+            )) as crate::error::DynError,
+        ];
+        for cause in errors {
+            for category in [ConfigErrorCategory::Internal, ConfigErrorCategory::Storage] {
+                let err = origin.context(
+                    "could not read config signature file",
+                    cause.as_ref(),
+                    category,
+                );
+                assert!(
+                    err.to_string()
+                        .contains("VECTIS_CONFIG_SIGN_PATH (env_file line 3)")
+                );
+                assert!(!err.to_string().contains("secret-canary"));
+                let (status, response) = error_response(err.as_ref());
+                assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+                assert_eq!(
+                    serde_json::to_value(response.0).unwrap(),
+                    serde_json::json!({"error": "internal server error"})
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn semantic_errors_without_config_adaptation_keep_public_contracts() {
+        let cases = [
+            (
+                VectisError::InvalidInput("invalid field".into()),
+                StatusCode::BAD_REQUEST,
+                "invalid field",
+            ),
+            (
+                VectisError::InvalidSignature("invalid signature".into()),
+                StatusCode::BAD_REQUEST,
+                "invalid signature",
+            ),
+            (
+                VectisError::ConfigSignatureStale("stale signature".into()),
+                StatusCode::BAD_REQUEST,
+                "stale signature",
+            ),
+            (
+                VectisError::Forbidden("permission denied".into()),
+                StatusCode::FORBIDDEN,
+                "permission denied",
+            ),
+            (
+                VectisError::NotFound("key not found".into()),
+                StatusCode::NOT_FOUND,
+                "key not found",
+            ),
+            (
+                VectisError::Conflict("subject changed".into()),
+                StatusCode::CONFLICT,
+                "subject changed",
+            ),
+            (
+                VectisError::TokenDecodeBatchTooLarge,
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "token decode batch exceeds maximum allowed envelope size",
+            ),
+            (
+                VectisError::Overloaded("crypto queue full".into()),
+                StatusCode::TOO_MANY_REQUESTS,
+                "too many requests",
+            ),
+        ];
+        for (err, expected_status, expected_message) in cases {
+            let (status, response) = error_response(&err);
+            assert_eq!(status, expected_status);
+            assert_eq!(
+                serde_json::to_value(response.0).unwrap(),
+                serde_json::json!({"error": expected_message})
+            );
+        }
+    }
 }

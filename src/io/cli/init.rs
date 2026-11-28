@@ -22,10 +22,22 @@ pub fn run_init(loader: &ConfigLoader) -> Result<String, DynError> {
             "VECTIS_INIT_KEYS_FILE and VECTIS_INIT_PUBLIC_KEYS_FILE must use different paths",
         ));
     }
-    if init_keys_path.try_exists()? || init_public_keys_path.try_exists()? {
-        return Err(crate::error::invalid_input(
-            "init keys files already exist; refusing to overwrite existing init material; delete both files manually before running init again",
-        ));
+    for (name, path) in [
+        ("VECTIS_INIT_KEYS_FILE", &init_keys_path),
+        ("VECTIS_INIT_PUBLIC_KEYS_FILE", &init_public_keys_path),
+    ] {
+        let origin = loader.origins().origin(name);
+        if path.try_exists().map_err(|err| {
+            origin.context(
+                "could not inspect init file",
+                &err,
+                crate::error::ConfigErrorCategory::Internal,
+            )
+        })? {
+            return Err(crate::error::invalid_input(format!(
+                "{origin}: init keys files already exist; refusing to overwrite existing init material; delete both files manually before running init again",
+            )));
+        }
     }
 
     let output = ops::init::create_encrypted_init_output_json(&config::bootstrap_config(loader)?)?;
@@ -34,6 +46,7 @@ pub fn run_init(loader: &ConfigLoader) -> Result<String, DynError> {
         &output.json,
         &init_public_keys_path,
         &output.public_json,
+        &loader.origins(),
     )?;
     info!(path = %init_keys_path.display(), "init keys written");
     info!(path = %init_public_keys_path.display(), "init public keys written");
@@ -61,7 +74,16 @@ pub fn run_init_public(loader: &ConfigLoader) -> Result<String, DynError> {
             "VECTIS_INIT_KEYS_FILE and VECTIS_INIT_PUBLIC_KEYS_FILE must use different paths",
         ));
     }
-    if init_public_keys_path.try_exists()? {
+    if init_public_keys_path.try_exists().map_err(|err| {
+        loader
+            .origins()
+            .origin("VECTIS_INIT_PUBLIC_KEYS_FILE")
+            .context(
+                "could not inspect init public keys file",
+                &err,
+                crate::error::ConfigErrorCategory::Internal,
+            )
+    })? {
         return Err(crate::error::invalid_input(
             "init public keys file already exists; refusing to overwrite verification material; delete it manually before regenerating",
         ));
@@ -69,7 +91,16 @@ pub fn run_init_public(loader: &ConfigLoader) -> Result<String, DynError> {
 
     let init_state = load_init_state(loader)?;
     let public_json = ops::init::init_public_keys_json(&init_state)?;
-    write_new_file_atomically(&init_public_keys_path, &public_json, 0o644)?;
+    write_new_file_atomically(&init_public_keys_path, &public_json, 0o644).map_err(|err| {
+        loader
+            .origins()
+            .origin("VECTIS_INIT_PUBLIC_KEYS_FILE")
+            .context(
+                "could not write init public keys file",
+                err.as_ref(),
+                crate::error::ConfigErrorCategory::Internal,
+            )
+    })?;
     info!(path = %init_public_keys_path.display(), "init public keys regenerated");
 
     Ok(init_public_keys_path.display().to_string())
@@ -80,13 +111,33 @@ fn write_init_files(
     init_keys_json: &str,
     init_public_keys_path: &Path,
     init_public_keys_json: &str,
+    origins: &crate::error::ConfigOrigins,
 ) -> Result<(), DynError> {
-    write_new_file_atomically(init_keys_path, init_keys_json, 0o600)?;
+    write_new_file_atomically(init_keys_path, init_keys_json, 0o600).map_err(|err| {
+        origins.origin("VECTIS_INIT_KEYS_FILE").context(
+            "could not write init keys file",
+            err.as_ref(),
+            crate::error::ConfigErrorCategory::Internal,
+        )
+    })?;
     if let Err(err) = write_new_file_atomically(init_public_keys_path, init_public_keys_json, 0o644)
+        .map_err(|err| {
+            origins.origin("VECTIS_INIT_PUBLIC_KEYS_FILE").context(
+                "could not write init public keys file",
+                err.as_ref(),
+                crate::error::ConfigErrorCategory::Internal,
+            )
+        })
     {
         return Err(with_rollback_result(
             err,
-            files::remove_created_file_and_sync(init_keys_path, "init key file"),
+            files::remove_created_file_and_sync(init_keys_path, "init key file").map_err(|err| {
+                origins.origin("VECTIS_INIT_KEYS_FILE").context(
+                    "could not roll back init keys file",
+                    err.as_ref(),
+                    crate::error::ConfigErrorCategory::Internal,
+                )
+            }),
         ));
     }
 
@@ -109,8 +160,17 @@ fn with_rollback_result(operation_error: DynError, rollback: Result<(), DynError
 pub fn load_init_state(loader: &ConfigLoader) -> Result<ops::init::ValidatedInitState, DynError> {
     let init_keys_path = config::init_keys_file_path(loader)?;
     let key_hex = unseal::read_unseal_key(loader, "VECTIS_UNSEAL_KEY:")?;
-    validate_init_keys_file_permissions(&init_keys_path)?;
-    let encrypted_json = read_init_keys_file(&init_keys_path)?;
+    let origin = loader.origins().origin("VECTIS_INIT_KEYS_FILE");
+    validate_init_keys_file_permissions(&init_keys_path).map_err(|err| {
+        contextualize_init_file_check(origin, err.as_ref(), INIT_KEYS_FILE_PERMISSION_ERROR)
+    })?;
+    let encrypted_json = read_init_keys_file(&init_keys_path).map_err(|err| {
+        origin.context(
+            "could not read init keys file",
+            err.as_ref(),
+            crate::error::ConfigErrorCategory::Internal,
+        )
+    })?;
     let init_state = ops::init::load_validated_init_state(
         &config::bootstrap_config(loader)?,
         &encrypted_json,
@@ -126,13 +186,36 @@ pub fn load_init_public_state(
     loader: &ConfigLoader,
 ) -> Result<ops::init::ValidatedInitPublicState, DynError> {
     let init_public_keys_path = config::init_public_keys_file_path(loader)?;
-    validate_init_public_keys_file_permissions(&init_public_keys_path)?;
-    let public_json = read_init_public_keys_file(&init_public_keys_path)?;
+    let origin = loader.origins().origin("VECTIS_INIT_PUBLIC_KEYS_FILE");
+    validate_init_public_keys_file_permissions(&init_public_keys_path).map_err(|err| {
+        contextualize_init_file_check(origin, err.as_ref(), INIT_PUBLIC_KEYS_FILE_PERMISSION_ERROR)
+    })?;
+    let public_json = read_init_public_keys_file(&init_public_keys_path).map_err(|err| {
+        origin.context(
+            "could not read init public keys file",
+            err.as_ref(),
+            crate::error::ConfigErrorCategory::Internal,
+        )
+    })?;
     let init_state = ops::init::load_validated_init_public_state(&public_json)?;
 
     info!(path = %init_public_keys_path.display(), "init public keys validated");
 
     Ok(init_state)
+}
+
+fn contextualize_init_file_check(
+    origin: crate::error::ConfigOrigin,
+    err: &(dyn std::error::Error + 'static),
+    permission_reason: &'static str,
+) -> DynError {
+    let reason = match err.downcast_ref::<crate::error::VectisError>() {
+        Some(crate::error::VectisError::InvalidInput(message)) if message == permission_reason => {
+            permission_reason
+        }
+        _ => "init file must be a readable regular file with allowed permissions",
+    };
+    origin.context(reason, err, crate::error::ConfigErrorCategory::Internal)
 }
 
 fn read_init_keys_file(path: &Path) -> Result<String, DynError> {
@@ -235,6 +318,7 @@ mod tests {
                 "private material",
                 &init_public_keys_path,
                 "new public material",
+                &Default::default(),
             )
             .is_err()
         );

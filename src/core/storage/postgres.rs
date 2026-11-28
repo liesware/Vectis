@@ -106,25 +106,71 @@ impl PostgresStorage {
         self.delete_token_for_subject(kid, hashid, None).await
     }
 
+    #[cfg(test)]
     pub async fn new(dsn: &str) -> Result<Self, DynError> {
+        Self::new_with_origin(
+            dsn,
+            crate::error::ConfigOrigins::default().origin("VECTIS_POSTGRES_DSN"),
+        )
+        .await
+    }
+
+    pub(super) async fn new_with_origin(
+        dsn: &str,
+        origin: crate::error::ConfigOrigin,
+    ) -> Result<Self, DynError> {
         let dsn_context = postgres_context(dsn);
         let pool = PgPoolOptions::new()
             .max_connections(10)
             .connect(dsn)
             .await
             .map_err(|err| {
-                crate::error::storage(format!(
-                    "failed to connect to ops postgres at {dsn_context}: {err}"
-                ))
+                origin.context(
+                    "could not connect to configured PostgreSQL storage",
+                    &err,
+                    crate::error::ConfigErrorCategory::Storage,
+                )
             })?;
         info!(dsn = %dsn_context, "connected to ops postgres");
 
-        validate_opskeys_schema(&pool, &dsn_context).await?;
+        validate_opskeys_schema(&pool, &dsn_context)
+            .await
+            .map_err(|err| {
+                origin.context(
+                    "configured storage has an incompatible or inaccessible opskeys schema",
+                    err.as_ref(),
+                    crate::error::ConfigErrorCategory::Storage,
+                )
+            })?;
         info!("validated opskeys postgres schema");
-        validate_tokens_schema(&pool, &dsn_context).await?;
-        validate_subjects_schema(&pool, &dsn_context).await?;
+        validate_tokens_schema(&pool, &dsn_context)
+            .await
+            .map_err(|err| {
+                origin.context(
+                    "configured storage has an incompatible or inaccessible tokens schema",
+                    err.as_ref(),
+                    crate::error::ConfigErrorCategory::Storage,
+                )
+            })?;
+        validate_subjects_schema(&pool, &dsn_context)
+            .await
+            .map_err(|err| {
+                origin.context(
+                    "configured storage has an incompatible or inaccessible subjects schema",
+                    err.as_ref(),
+                    crate::error::ConfigErrorCategory::Storage,
+                )
+            })?;
         info!("validated tokens postgres schema");
-        validate_indexes_schema(&pool, &dsn_context).await?;
+        validate_indexes_schema(&pool, &dsn_context)
+            .await
+            .map_err(|err| {
+                origin.context(
+                    "configured storage has an incompatible or inaccessible indexes schema",
+                    err.as_ref(),
+                    crate::error::ConfigErrorCategory::Storage,
+                )
+            })?;
         info!("validated indexes postgres schema");
 
         Ok(Self { pool, dsn_context })

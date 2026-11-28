@@ -7,7 +7,7 @@ import tempfile
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from campaign import RunSummary, TargetMetrics, resolve_seed, select_targets, target_rng, target_seed
 from client import FuzzResponse
@@ -891,12 +891,100 @@ def self_check():
     expect(time_attest_source_unavailable_semantic(time_case), "time attest flags partial source output")
 
     campaign_self_check(expect)
+    config_self_check(expect)
     io_self_check(expect)
 
     for label in failures:
         print(f"SELF-CHECK FAIL: {label}")
     print(f"SUMMARY self-check passed={total - len(failures)} failed={len(failures)}")
     return 1 if failures else 0
+
+
+def config_self_check(expect):
+    from oracle import ALLOWED_STATUS, CONFIG_FILE_MAX_SIZES, config_oracle, config_read_failure_expected
+    from targets import run_config
+
+    generic = '{"error":"internal server error"}'
+    for file, limit in CONFIG_FILE_MAX_SIZES.items():
+        for size, rejected in ((limit - 1, False), (limit, False), (limit + 1, True)):
+            content = b"a" * size
+            expect(config_read_failure_expected(file, content) == rejected,
+                   f"config file byte boundary {file}/{size}")
+            expect(bool(config_oracle(file, content, 500, generic, "", "")) != rejected,
+                   f"config 500 only for read failures {file}/{size}")
+        unicode_content = ("é" * (limit // 2)).encode("utf-8")
+        expect(not config_read_failure_expected(file, unicode_content), "config measures Unicode bytes inclusively")
+        expect(config_read_failure_expected(file, unicode_content + b"a"), "config Unicode byte overflow")
+        for content in (b"\xff", b"\xc3", b"\xc0\x80"):
+            expect(not config_oracle(file, content, 500, generic, "AUTH-SECRET", "UNSEAL-SECRET"),
+                   f"config accepts generic UTF-8 read rejection {file}/{content!r}")
+            for status in (0, 200, 400, 403, 404, 413):
+                expect(config_oracle(file, content, status, generic, "", ""),
+                       f"config requires 500 for read failure, not {status}")
+        for content in (b"{}", b"not JSON", b'{"signature":"invalid"}', b"\x00", "é".encode()):
+            expect(config_oracle(file, content, 500, generic, "", ""), "config valid UTF-8 cannot excuse 500")
+            expect(not config_oracle(file, content, 400, '{"error":"invalid"}', "", ""),
+                   "config semantic rejection stays valid")
+    for index, offset in ((6, 977), (73, 335)):
+        content = b"a" * offset + b"\x80" + b"a" * (3788 - offset)
+        expect(not config_oracle("config_sign.json", content, 500, generic, "", ""),
+               f"config seed 6150189876594438767 case {index} UTF-8 regression")
+    for body in ('not JSON', '{}', '{"error":"detail"}',
+                 '{"error":"internal server error","detail":"path"}',
+                 '{"error":"AUTH-SECRET"}', '{"error":"UNSEAL-SECRET"}'):
+        expect(config_oracle("config.json", b"\xff", 500, body, "AUTH-SECRET", "UNSEAL-SECRET"),
+               "config read failure requires exact safe error object")
+    expect(500 not in ALLOWED_STATUS, "config exception does not change the global oracle")
+
+    baseline_cfg, baseline_sig = b'{"version":"v1"}', b'{"signature":"synthetic"}'
+    scenarios = ("stable", "changed", "probe-failure", "bad-listing", "unexpected-500", "exception")
+    for scenario, mutated_file in ((scenario, file) for scenario in scenarios for file in CONFIG_FILE_MAX_SIZES):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path, sign_path = Path(directory) / "config.json", Path(directory) / "config_sign.json"
+            client, rng = MagicMock(), MagicMock()
+            rng.random.side_effect = [0.1 if mutated_file == "config.json" else 0.9, 0.9]
+            content = b"{}" if scenario == "unexpected-500" else b"\xff"
+
+            def reload_config(*args, **kwargs):
+                expected_cfg = content if mutated_file == "config.json" else baseline_cfg
+                expected_sig = content if mutated_file == "config_sign.json" else baseline_sig
+                expect(config_path.read_bytes() == expected_cfg and sign_path.read_bytes() == expected_sig,
+                       "config runner sends the selected mutated file")
+                if scenario == "exception":
+                    raise RuntimeError("synthetic request failure")
+                return 500, generic
+
+            client.post_json.side_effect = reload_config
+            before = [(200, '{"clients":[{"client":"synthetic"}]}'),
+                      (200, '{"routes":[]}'), (200, '{"routes":[]}')]
+            after = list(before)
+            if scenario == "changed":
+                after[0] = (200, '{"clients":[]}')
+            elif scenario == "probe-failure":
+                after[0] = (0, "")
+            elif scenario == "bad-listing":
+                after[0] = (200, '{}')
+            client.request.side_effect = before + after
+            args = SimpleNamespace(iterations=1, progress_every=0, metrics=MagicMock())
+            with patch("targets.CONFIG_PATH", config_path), patch("targets.CONFIG_SIGN_PATH", sign_path), \
+                 patch("targets.build_config_baseline", return_value=(baseline_cfg, baseline_sig)), \
+                 patch("targets.mutate_raw", return_value=content), \
+                 patch("targets.check_and_record", return_value=False) as record:
+                try:
+                    run_config({"name": "config"}, client, rng, args, ("AUTH-SECRET", "UNSEAL-SECRET"))
+                except RuntimeError:
+                    expect(scenario == "exception", "config runner propagates request failures")
+                else:
+                    expect(scenario != "exception", "config runner does not swallow request failures")
+                    findings = record.call_args.args[5]
+                    expect(bool(findings) == (scenario != "stable"), f"config runner oracle {scenario}")
+                    expect(client.request.call_count == (0 if scenario == "unexpected-500" else 6),
+                           "config snapshot probes are scoped to predicted read failures")
+                    if scenario == "changed":
+                        expect(any("changed permissions or routes" in finding for finding in findings),
+                               "config runner detects changed state after rejected reload")
+                expect(config_path.read_bytes() == baseline_cfg and sign_path.read_bytes() == baseline_sig,
+                       "config runner restores both files on every exit")
 
 
 def io_self_check(expect):

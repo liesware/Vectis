@@ -340,7 +340,16 @@ impl HttpState {
                         &config.config_sign_path,
                     );
                     let signature_content =
-                        crate::core::config_file::read_config_signature_file(&config_sign_path)?;
+                        crate::core::config_file::read_config_signature_file(&config_sign_path)
+                            .map_err(|err| {
+                                config
+                                    .origins
+                                    .origin("VECTIS_CONFIG_SIGN_PATH")
+                                    .internal_context(
+                                        "could not read config signature file",
+                                        err.as_ref(),
+                                    )
+                            })?;
                     crate::ops::sign::verify_config_file_signature(
                         &init_state,
                         config_path,

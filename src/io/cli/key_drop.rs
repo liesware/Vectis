@@ -5,9 +5,7 @@ use crate::error::{self, DynError};
 use crate::ops::{internal_keys::InternalDerivedKeysState, keys};
 use serde::Serialize;
 use sqlx::postgres::PgConnectOptions;
-use std::fs::{File, OpenOptions};
 use std::io::{self, IsTerminal, Read, Write};
-use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use zeroize::Zeroizing;
@@ -123,16 +121,6 @@ fn destination(storage: &config::StorageConfig) -> Result<String, DynError> {
     Ok(display)
 }
 
-fn audit_file(config: &logging::LoggingConfig) -> Result<File, DynError> {
-    std::fs::create_dir_all(&config.dir)
-        .map_err(|_| error::internal("could not prepare mandatory purge audit directory"))?;
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(Path::new(&config.dir).join(&config.audit_file))
-        .map_err(|_| error::internal("could not prepare mandatory purge audit file"))
-}
-
 #[derive(Serialize)]
 struct DropOutput<'a> {
     kid: &'a str,
@@ -185,9 +173,9 @@ async fn persist_event(event: audit_chain::AuditEvent) -> bool {
     failure.lock().map(|cell| cell.is_none()).unwrap_or(false)
 }
 
-async fn shutdown_audit_after_error() {
+async fn shutdown_audit_after_error(origin: crate::error::ConfigOrigin) {
     if audit_chain::shutdown().await.is_err() {
-        eprintln!("Additional error: purge audit shutdown failed");
+        eprintln!("Additional error: {origin}: purge audit shutdown failed");
     }
 }
 
@@ -213,39 +201,53 @@ pub(super) async fn run(
     require_file_logging(logging.target)?;
     let storage_config = config::storage_config(loader)?;
     let destination = destination(&storage_config)?;
-    let storage = StorageState::from_config(&storage_config).await
-        .map_err(|_| error::storage("could not open configured database; check existence, schema and maintenance privileges"))?;
+    let storage =
+        StorageState::from_config_with_origins(&storage_config, &loader.origins()).await?;
     let init = super::init::load_init_state(loader)?;
     let internal = Zeroizing::new(InternalDerivedKeysState::from_init_state(&init)?);
     let prepared = keys::prepare_key_drop(&storage, &internal, kid).await?;
     drop(internal);
     let signer = audit_chain::AuditCheckpointSigner::from_init(&init);
     drop(init);
-    let audit_lock = audit_file(&logging)?;
+    let audit_lock = audit_chain::open_audit_log(&logging).map_err(|err| {
+        error::with_prefix(
+            "could not prepare mandatory purge audit; nothing was deleted",
+            err,
+        )
+    })?;
     let prompt = format!(
         "Database: {destination}\nKID: {kid}\nState: destroyed\nThis will delete the key record and its tokens, subjects, and indexes.\nAll nodes using this database must be stopped; this has not been verified.\nRemove references from signed configurations before restarting; configurations will not be modified.\nBackups, WAL, recoverable pages, exported files and process memory will not be deleted.\n\nType 'delete' to confirm:\n"
     );
     confirm(&prompt).await?;
-    audit_lock.try_lock().map_err(|_| {
-        error::internal("purge audit file is busy or cannot be locked; nothing was deleted")
+    audit_lock.try_lock().map_err(|err| {
+        logging.origins.origin("VECTIS_AUDIT_LOG_FILE").context(
+            "purge audit file is busy or cannot be locked; nothing was deleted",
+            &err,
+            error::ConfigErrorCategory::Internal,
+        )
     })?;
-    audit_chain::initialize_prepared(&logging, signer).map_err(|_| {
-        error::internal("could not initialize mandatory purge audit; nothing was deleted")
-    })?;
+    let audit_origin = logging.origins.origin("VECTIS_AUDIT_LOG_FILE");
+    let audit_writer = audit_lock
+        .try_clone()
+        .map_err(|err| audit_initialization_error(audit_origin, &err))?;
+    audit_chain::initialize_prepared_file(&logging, signer, audit_writer)
+        .map_err(|err| audit_initialization_error(audit_origin, err.as_ref()))?;
     if !persist_event(started_event(kid, &destination)).await {
-        shutdown_audit_after_error().await;
-        return Err(error::internal(
-            "could not persist mandatory purge audit; nothing was deleted",
-        ));
+        shutdown_audit_after_error(audit_origin).await;
+        return Err(error::internal(format!(
+            "{audit_origin}: could not persist mandatory purge audit; nothing was deleted",
+        )));
     }
     eprintln!("Deleting; interrupts are ignored until the purge finishes.");
     let counts = match prepared.execute(&storage).await {
         Ok(counts) => counts,
         Err(cause) => {
             if !persist_event(failed_event(kid, &cause)).await {
-                eprintln!("Additional error: purge failure audit could not be persisted");
+                eprintln!(
+                    "Additional error: {audit_origin}: purge failure audit could not be persisted"
+                );
             }
-            shutdown_audit_after_error().await;
+            shutdown_audit_after_error(audit_origin).await;
             return Err(cause);
         }
     };
@@ -255,7 +257,7 @@ pub(super) async fn run(
         return Err(post_commit_error(
             kid,
             counts,
-            "mandatory audit persistence or checkpoint failed",
+            &format!("{audit_origin}: mandatory audit persistence or checkpoint failed"),
         ));
     }
     http::print_serializable_response(
@@ -268,9 +270,37 @@ pub(super) async fn run(
     .map_err(|_| post_commit_error(kid, counts, "could not publish the result"))
 }
 
+fn audit_initialization_error(
+    origin: crate::error::ConfigOrigin,
+    err: &(dyn std::error::Error + 'static),
+) -> DynError {
+    origin.internal_context(
+        "could not initialize mandatory purge audit; nothing was deleted",
+        err,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audit_initialization_failure_identifies_pre_delete_phase() {
+        let origin = crate::error::ConfigOrigin {
+            name: "VECTIS_AUDIT_LOG_FILE",
+            source: crate::error::ConfigSource::EnvFile { line: 4 },
+        };
+        let cause = io::Error::new(io::ErrorKind::PermissionDenied, "secret-canary");
+        let err = audit_initialization_error(origin, &cause);
+        assert!(matches!(
+            err.downcast_ref::<crate::error::VectisError>(),
+            Some(crate::error::VectisError::Internal(_))
+        ));
+        assert_eq!(
+            err.to_string(),
+            "VECTIS_AUDIT_LOG_FILE (env_file line 4): could not initialize mandatory purge audit; nothing was deleted (PermissionDenied)"
+        );
+    }
 
     #[test]
     fn confirmation_is_exact_and_bounded() {

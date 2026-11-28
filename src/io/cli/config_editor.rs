@@ -772,7 +772,13 @@ pub fn init_config(loader: &ConfigLoader, output: OutputFormat) -> Result<(), Dy
             ));
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => return Err(Box::new(err)),
+        Err(err) => {
+            return Err(app.origins.origin("VECTIS_CONFIG_PATH").context(
+                "could not inspect config file",
+                &err,
+                crate::error::ConfigErrorCategory::Internal,
+            ));
+        }
     }
 
     let local = LocalConfig {
@@ -1789,7 +1795,13 @@ fn load_local_config(loader: &ConfigLoader) -> Result<LocalConfig, DynError> {
                 "could not read config file; run `vectis config init` first",
             ));
         }
-        Err(err) => return Err(err),
+        Err(err) => {
+            return Err(app.origins.origin("VECTIS_CONFIG_PATH").context(
+                "could not read config file",
+                err.as_ref(),
+                crate::error::ConfigErrorCategory::Internal,
+            ));
+        }
     };
 
     let mut local = LocalConfig { app, value };
@@ -1909,6 +1921,13 @@ fn write_local_config(local: &LocalConfig) -> Result<(), DynError> {
         &local.app.config_path,
         &serde_json::to_string_pretty(&local.value)?,
     )
+    .map_err(|err| {
+        local.app.origins.origin("VECTIS_CONFIG_PATH").context(
+            "could not write config file",
+            err.as_ref(),
+            crate::error::ConfigErrorCategory::Internal,
+        )
+    })
 }
 
 async fn fetch_public_keys(
@@ -2207,6 +2226,7 @@ mod tests {
     fn local_config() -> LocalConfig {
         LocalConfig {
             app: config::LocalConfigSettings {
+                origins: Default::default(),
                 config_path: std::path::PathBuf::from("config.json"),
                 config_sign_path: std::path::PathBuf::from("config_sign.json"),
                 final_app_addr: String::from("localhost:3999"),

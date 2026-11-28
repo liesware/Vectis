@@ -3,11 +3,12 @@ pub use crate::core::config_loader::{
     ENV_FILE_MAX_SIZE_BYTES, ENV_NAME_MAX_SIZE_BYTES, ENV_VALUE_MAX_SIZE_BYTES,
 };
 use crate::core::{crypto, validation};
-use crate::error::DynError;
+use crate::error::{ConfigOrigins, DynError};
 use std::collections::HashMap;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 use zeroize::Zeroizing;
 
 pub const INTERNAL_KEYS_CIPHER: &str = "AES-256/GCM";
@@ -78,6 +79,7 @@ pub const AUDIT_CHECKPOINT_EVENT_COUNT: u64 = 10_000;
 
 #[derive(Clone)]
 pub struct AppConfig {
+    pub origins: Arc<ConfigOrigins>,
     pub http_bind_addr: SocketAddr,
     pub mode: String,
     pub server_scheme: String,
@@ -110,6 +112,7 @@ pub struct AppConfig {
 #[cfg(test)]
 pub(crate) fn test_app_config() -> AppConfig {
     AppConfig {
+        origins: Arc::default(),
         http_bind_addr: "127.0.0.1:0".parse().unwrap(),
         mode: String::from("dev"),
         server_scheme: String::from("http"),
@@ -210,6 +213,7 @@ fn parse_crypto_queue_timeout(value: &str) -> Result<std::time::Duration, DynErr
 }
 
 pub struct LocalConfigSettings {
+    pub origins: Arc<ConfigOrigins>,
     pub config_path: PathBuf,
     pub config_sign_path: PathBuf,
     pub final_app_addr: String,
@@ -368,6 +372,7 @@ pub fn app_config(loader: &ConfigLoader) -> Result<AppConfig, DynError> {
         })?;
     }
     Ok(AppConfig {
+        origins: loader.origins(),
         http_bind_addr,
         mode,
         remote_scheme: server_scheme.clone(),
@@ -400,6 +405,7 @@ pub fn app_config(loader: &ConfigLoader) -> Result<AppConfig, DynError> {
 
 pub fn local_config(loader: &ConfigLoader) -> Result<LocalConfigSettings, DynError> {
     Ok(LocalConfigSettings {
+        origins: loader.origins(),
         config_path: configured_path(loader, "VECTIS_CONFIG_PATH")?,
         config_sign_path: configured_path(loader, "VECTIS_CONFIG_SIGN_PATH")?,
         final_app_addr: loader.parse("VECTIS_FINAL_APP_ADDR", "must be host:port", |v| {

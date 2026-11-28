@@ -8,6 +8,7 @@ import pty
 import resource
 import select
 import signal
+import socket
 import sqlite3
 import subprocess
 import tempfile
@@ -217,6 +218,73 @@ def key_drop_offline_cases(env, kids, directory):
         audit.mkdir(parents=True)
         code, _, _ = TerminalDrop(child, target, prompt=False).finish(None)
         require(code != 0 and _snapshot(database) == before, "unavailable audit must block deletion")
+
+        for kind in ("symlink-inside", "symlink-outside", "symlink-missing", "fifo", "fifo-reader", "socket"):
+            child, database = fixture()
+            before = _snapshot(database)
+            with tempfile.TemporaryDirectory(prefix="va-", dir="/tmp") as audit_directory:
+                audit_directory = Path(audit_directory)
+                child["VECTIS_LOG_DIR"] = str(audit_directory)
+                audit = audit_directory / "audit.log"
+                target_path = (audit_directory if kind == "symlink-inside" else database.parent) / "secret-canary-target"
+                reader = None
+                listener = None
+                if kind.startswith("symlink"):
+                    if kind != "symlink-missing":
+                        target_path.write_bytes(b"secret-canary unchanged")
+                    audit.symlink_to(target_path)
+                elif kind.startswith("fifo"):
+                    os.mkfifo(audit)
+                    if kind == "fifo-reader":
+                        reader = os.open(audit, os.O_RDONLY | os.O_NONBLOCK)
+                else:
+                    listener = socket.socket(socket.AF_UNIX)
+                    listener.bind(str(audit))
+                try:
+                    code, output, errors = TerminalDrop(child, target, prompt=False).finish(None)
+                    require(code != 0 and output == "" and _snapshot(database) == before,
+                            f"unsafe audit destination must block deletion ({kind})")
+                    require("VECTIS_AUDIT_LOG_FILE" in errors and "nothing was deleted" in errors,
+                            f"unsafe audit failure must identify its pre-delete phase ({kind})")
+                    require("secret-canary" not in errors and str(audit) not in errors,
+                            "audit errors must not disclose paths or target contents")
+                    if kind.startswith("symlink"):
+                        if kind == "symlink-missing":
+                            require(not target_path.exists(), "dangling audit symlink target was created")
+                        else:
+                            require(target_path.read_bytes() == b"secret-canary unchanged", "audit symlink target was modified")
+                    if reader is not None:
+                        require(os.read(reader, 65536) == b"", "non-regular audit received data")
+                finally:
+                    if reader is not None:
+                        os.close(reader)
+                    if listener is not None:
+                        listener.close()
+
+        child, database = fixture()
+        process = TerminalDrop(child, target)
+        audit = Path(child["VECTIS_LOG_DIR"]) / "audit.log"
+        saved = audit.with_name("saved-audit.log")
+        destination_file = database.parent / "secret-canary-destination"
+        destination_file.write_bytes(b"unchanged")
+        audit.rename(saved)
+        audit.symlink_to(destination_file)
+        code, _, errors = process.finish()
+        require(code == 0, "purge must use its already-open locked audit descriptor: " + errors)
+        require(destination_file.read_bytes() == b"unchanged", "purge reopened the replaced audit path")
+        require(not any(row[0] == target for row in _snapshot(database)["opskeys"]), "descriptor-preserving purge did not complete")
+        records = [json.loads(line) for line in saved.read_text().splitlines()]
+        require(_drop_events(records, target) == ["key.drop.started", "key.drop.completed"], "purge audit was not written to the locked file")
+        run_cli(["audit", "verify", "--file", str(saved)], child)
+
+        child, database = fixture()
+        logs = Path(child["VECTIS_LOG_DIR"])
+        real_logs = database.parent / "real-logs"
+        real_logs.mkdir()
+        logs.symlink_to(real_logs, target_is_directory=True)
+        code, _, errors = TerminalDrop(child, target).finish()
+        require(code == 0, "trusted symlinked log directory must remain supported: " + errors)
+        run_cli(["audit", "verify", "--file", str(real_logs / "audit.log")], child)
 
         child, database = fixture()
         before = _snapshot(database)

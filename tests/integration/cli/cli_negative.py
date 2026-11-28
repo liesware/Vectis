@@ -74,7 +74,7 @@ def unused_local_url():
 
 def expect_server_down_json_error(env):
     test_env = env.copy()
-    base_url = unused_local_url()
+    base_url = unused_local_url().replace("://", "://synthetic-user:secret-canary@")
     test_env["VECTIS_API_URL"] = base_url
     result = run_cli(
         ["health", "ready", "--output", "json"],
@@ -83,19 +83,21 @@ def expect_server_down_json_error(env):
     )
     require(result.stdout == "", "server down JSON error must not write stdout")
     payload = json.loads(result.stderr)
-    expected = f"cannot reach Vectis at {base_url}"
+    expected = "VECTIS_API_URL (process): cannot reach Vectis"
     require(
         expected in payload.get("error", ""),
-        f"JSON server down error must mention base URL: {payload}",
+        f"JSON server down error must identify configuration origin: {payload}",
     )
     require(
-        "is the server running? (VECTIS_API_URL)" in payload["error"],
+        "is the server running?" in payload["error"],
         f"JSON server down error must mention VECTIS_API_URL: {payload}",
     )
     require(
         "error sending request" not in payload["error"],
         f"JSON server down error must hide reqwest detail: {payload}",
     )
+    require(base_url not in payload["error"] and "secret-canary" not in payload["error"],
+            "transport errors must not disclose configured URLs or credentials")
 
 
 def expect_server_down_human_error(env):
@@ -105,11 +107,11 @@ def expect_server_down_human_error(env):
     result = run_cli(["health", "ready"], test_env, expect_success=False)
     require(result.stdout == "", "server down human error must not write stdout")
     require(
-        f"Error: cannot reach Vectis at {base_url}" in result.stderr,
-        f"human server down error must mention base URL: {result.stderr}",
+        "Error: VECTIS_API_URL (process): cannot reach Vectis" in result.stderr,
+        f"human server down error must identify configuration origin: {result.stderr}",
     )
     require(
-        "is the server running? (VECTIS_API_URL)" in result.stderr,
+        "is the server running?" in result.stderr,
         f"human server down error must mention VECTIS_API_URL: {result.stderr}",
     )
     require(
@@ -445,7 +447,7 @@ def main():
             )
             write_config(env, empty_config())
 
-        def config_sign_empty_sqlite_schema_reports_path():
+        def config_sign_empty_sqlite_schema_reports_origin():
             init_material(env)
             write_config(env, empty_config())
             empty_db = Path(env["VECTIS_SQLITE_PATH"]).with_name("empty-schema.db")
@@ -455,12 +457,13 @@ def main():
             local_env["VECTIS_SQLITE_PATH"] = str(empty_db)
             payload = expect_json_error(local_env, ["config", "sign"])
             require(
-                "sqlite schema is missing opskeys table" in payload["error"],
-                f"schema error must describe missing opskeys table: {payload}",
+                "incompatible or inaccessible opskeys schema" in payload["error"],
+                f"schema error must identify affected schema: {payload}",
             )
             require(
-                str(empty_db) in payload["error"],
-                f"schema error must include sqlite path: {payload}",
+                "VECTIS_SQLITE_PATH (process)" in payload["error"]
+                and str(empty_db) not in payload["error"],
+                f"schema error must include origin without sqlite path: {payload}",
             )
 
         def duplicate_route_name():
@@ -791,8 +794,8 @@ def main():
                 config_sign_invalid_config_does_not_write_signature,
             ),
             (
-                "config sign empty sqlite schema reports path",
-                config_sign_empty_sqlite_schema_reports_path,
+                "config sign empty sqlite schema reports origin",
+                config_sign_empty_sqlite_schema_reports_origin,
             ),
             ("duplicate routes.name fails without rewrite", duplicate_route_name),
             ("duplicate permissions.client fails without rewrite", duplicate_permission_client),

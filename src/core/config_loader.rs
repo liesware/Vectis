@@ -1,12 +1,13 @@
 mod env_file;
 
 use crate::core::{blocking, files};
-use crate::error::{DynError, invalid_input};
+use crate::error::{ConfigOrigins, ConfigSource, DynError, invalid_input};
 use env_file::FileValue;
 pub use env_file::{ENV_FILE_MAX_SIZE_BYTES, ENV_NAME_MAX_SIZE_BYTES, ENV_VALUE_MAX_SIZE_BYTES};
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use zeroize::Zeroizing;
 
 pub const SYNTHETIC_CRYPTO_CONCURRENCY: usize = 4;
@@ -97,6 +98,7 @@ pub struct ConfigLoader {
     file: HashMap<String, FileValue>,
     sqlite_default: Zeroizing<String>,
     crypto_default: Option<usize>,
+    origins: Arc<ConfigOrigins>,
 }
 
 impl ConfigLoader {
@@ -137,25 +139,35 @@ impl ConfigLoader {
                 )));
             }
         }
+        let process: HashMap<_, _> = VARIABLES
+            .iter()
+            .filter_map(|v| process(v.name).map(|value| (v.name, NativeValue::capture(value))))
+            .collect();
+        let origins = Arc::new(ConfigOrigins::new(VARIABLES.iter().map(|variable| {
+            let source = if process.contains_key(variable.name) {
+                ConfigSource::Process
+            } else if let Some(entry) = file.get(variable.name) {
+                ConfigSource::EnvFile { line: entry.line }
+            } else {
+                ConfigSource::Default
+            };
+            (variable.name, source)
+        })));
         Ok(Self {
-            process: VARIABLES
-                .iter()
-                .filter_map(|v| process(v.name).map(|value| (v.name, NativeValue::capture(value))))
-                .collect(),
+            process,
             file,
             sqlite_default: Zeroizing::new(sqlite_default),
             crypto_default,
+            origins,
         })
     }
 
     pub fn source(&self, name: &str) -> String {
-        if self.process.contains_key(name) {
-            "process".into()
-        } else if let Some(entry) = self.file.get(name) {
-            format!("env_file line {}", entry.line)
-        } else {
-            "default".into()
-        }
+        self.origins.source(name).to_string()
+    }
+
+    pub fn origins(&self) -> Arc<ConfigOrigins> {
+        Arc::clone(&self.origins)
     }
 
     pub fn is_present(&self, name: &str) -> bool {
